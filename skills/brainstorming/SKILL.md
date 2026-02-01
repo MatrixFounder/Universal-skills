@@ -70,7 +70,7 @@ Before asking for approval, explicitly check these in your internal thought proc
 | :--- | :--- |
 | "It's faster to just code it." | **WRONG**. Reworking bugs is slower. Validate first. |
 | "I skipped options because it's trivial." | **OK**, but state: *"This is trivial, I propose X. Proceed?"* |
-| "The user ignored my question." | **RISY**. Don't guess. Ask again: *"To avoid breaking X, I need to know Y."* |
+| "The user ignored my question." | **RISKY**. Don't guess. Ask again: *"To avoid breaking X, I need to know Y."* |
 | "I can't see the file." | **STOP**. Ask for it. Do not hallucinate file contents. |
 | "This seems standard." | **VERIFY**. Is it standard *for this project*? Check `package.json`. |
 
