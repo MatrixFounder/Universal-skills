@@ -1,80 +1,82 @@
 ---
 name: brainstorming
-description: Use when you need to explore user intent, clarify requirements, and design a solution before writing any code.
+description: Use for ideation, requirements clarification, and architectural design. Adapts to task complexity (Trivial/Medium/Complex).
 tier: 2
-version: 1.1
+version: 2.1
+status: active
+changelog: Upgraded to Universal Gold Standard v2.1 (2026) - Added 3-Tier Assessment, Tool Agnosticism, and Safety Guardrails.
 ---
 
-# Brainstorming Ideas Into Designs
+# Universal Brainstorming Protocol
 
-**Purpose**: Use when you need to explore user intent, clarify requirements, and design a solution before writing any code.
+**Purpose**: Bridge the gap between user intent ("Make it pop") and technical specification ("CSS Box Shadow").
+**Core Rule**: Do NOT write code until you have a confirmed design (except for Trivial tasks).
 
-## 1. Red Flags (Anti-Rationalization)
+## Phase 1: Assess & Understand
 
-**STOP and READ THIS if you are thinking:**
-- "I'll just write the code, it's simple enough" -> **WRONG**. Assumptions cause bugs. Validate the design first.
-- "I MUST ask a question even if I know the answer" -> **WRONG**. Don't be a robot. If the user provided requirements, acknowledge them and move on.
-- "I don't need to check existing files, I'll just guess" -> **WRONG**. You must anchor your design in the current reality.
-- "I'll skip the summary and just start implementing" -> **WRONG**. You must get explicit approval on the plan (Approach > Design > Implementation).
+**1. Complexity Assessment (MANDATORY)**
+At the start, classify the task to determine your mode:
 
-## 2. Capabilities
-- **Clarify**: Turn vague requests into concrete requirements through targeted Q&A.
-- **Design**: Propose architectural approaches and detailed technical specifications.
-- **Validate**: Ensure the proposed solution matches user expectations before committing to code.
+| Level | Criteria | Protocol | Reference |
+| :--- | :--- | :--- | :--- |
+| **TRIVIAL** | Clear requirements, standard pattern, single component (e.g., "Fix typo", "Add log"). | **Fast Path**: Skip deep research. Confirm plan in chat. Go. | `examples/demo_trivial.md` |
+| **MEDIUM** | Standard task but open details (e.g., "Add button", "Refactor function"). | **Standard**: 1-2 clarifying questions, 2 options, brief confirmation. | `examples/demo_medium.md` |
+| **COMPLEX** | High uncertainty, architectural impact, multiple components (e.g., "New System"). | **Deep Dive**: Research -> Mermaid -> Trade-offs -> Design Doc -> Sign-off. | `examples/demo_complex.md` |
 
-## 3. Instructions
+**2. Context Gathering (Tool Agnostic)**
+*   **Search**: Use your environment's search capability (e.g., `grep`, `search_code`) to understand existing patterns.
+    *   *Guardrail*: **IF NO SEARCH TOOLS EXIST**, do NOT guess. Explicitly ask the user: *"I cannot scan the repo. Could you share `package.json` and relevant files?"*
+*   **Reading**: Preferentially read `task.md`, `README.md`, or `.cursorrules` to align with project standards.
 
-### Phase 1: Understand (The "Why")
-1.  **Context Check**:
-    *   **EXECUTE**: Read `task.md` (to get the goal) and `package.json` / `requirements.txt` (to get the stack).
-    *   **GOAL**: Understand where this new feature fits.
-2.  **Domain Investigation**:
-    *   **IF** the topic is specific (e.g., "React", "AWS", "gRPC") and you lack full context:
-    *   **EXECUTE**: Use `grep_search` or `read_url_content` (if available) to understand existing patterns/best practices in the repo.
-    *   **CONSTRAINT**: Do NOT guess implementation details for specific technologies.
-3.  **Iterative Q&A**:
-    *   **EXECUTE**: Ask *one* clarifying question at a time.
-    *   **EXCEPTION**: If the user's prompt was comprehensive, SKIP questioning and move to Phase 2.
-    *   **CONSTRAINT**: Do NOT ask multiple questions unless they are trivial nuances of the same topic.
+---
 
-### Phase 2: Explore (The "How")
-1.  **Propose Options**:
-    *   **EXECUTE**: Present 2-3 technical approaches with trade-offs.
-    *   **EXCEPTION**: If the task is trivial (e.g., "delete a file") or strictly defined (e.g., "use library X version Y"), SKIP options and just confirm the plan.
-2.  **YAGNI Check**:
-    *   **VERIFY**: Are you adding unnecessary complexity? Strip it out. Simple is better.
+## Phase 2: Explore & Visualize (The "How")
 
-### Phase 3: Present (The "What")
-1.  **Adversarial Self-Review**:
-    *   **EXECUTE**: Before outputting, critique your own design:
-        *   "Is this too complex?"
-        *   "Did I hallucinate an API?"
-        *   "Does this match the user's stack (e.g., Tailwind vs CSS)?"
-    *   **ACTION**: Fix any issues found *before* showing the user.
-2.  **Incremental Design**:
-    *   **EXECUTE**: Present the design in logical chunks (e.g., Data Model, then API, then UI).
-    *   **CONSTRAINT**: Keep chunks concise. Avoid "Wall of Text".
-    *   **CHECKPOINT**: Ask "Does this look right so far?" (or similar) after each chunk.
-3.  **Final Polish**:
-    *   **EXECUTE**: Once agreed, write the final design to a file (e.g., `docs/plans/feature-design.md`) if it's substantial.
-    *   **TRANSITION**: Ask "Ready to move to implementation?".
+**1. Smart Questions**
+*   Ask **ONE** critical question at a time.
+*   *Template*: "To match your existing patterns for [X], do you prefer [Option A] or [Option B]?"
 
-## 4. Best Practices
+**2. Visual Thinking**
+*   **Constraint**: For **MEDIUM/COMPLEX** tasks, you MUST visualize the flow.
+*   **Primary**: **Mermaid** (Flowcharts/Sequence) *only if* confident the user's UI supports it.
+*   **Fallback**: **ASCII Art** or **Bullet Lists** if the environment is restricted (e.g., standard terminal).
 
-| DO THIS | DO NOT DO THIS |
+**3. The "Design Doc" Rule**
+*   **Trivial**: No doc needed. Chat confirmation is enough.
+*   **Medium/Complex**: You **MUST** produce a Design Document (e.g., `docs/design/feature-name.md`).
+    *   *No File Access?*: Output the full Markdown in chat and ask user to save it.
+
+---
+
+## Phase 3: Converge & Verify (The "Gate")
+
+**1. Adversarial CoT Checklist (The "Final Gate")**
+Before asking for approval, explicitly check these in your internal thought process:
+- [ ] **Red Flags**: Did I ignore any user constraints?
+- [ ] **YAGNI**: Is this the simplest possible solution?
+- [ ] **Alignment**: Does this match the project's tech stack (e.g., not suggesting React for a Vue app)?
+- [ ] **Confirmation**: Did the user explicitly say "Yes" to *this specific design*?
+
+**2. Handover Templates**
+*   **Presentation**: *"I have analyzed the options. Here is the proposed design for [Feature]: [Link to Doc / Summary]. Trade-offs considered: [A vs B]."*
+*   **Checkpoint**: *"Please confirm this approach matches your expectation before I proceed to implementation."*
+*   **Rejection**: *"Understood. You prefer [B]. I will pivot the design to focus on [B]. New plan..."*
+
+---
+
+## Rationalization Table (Anti-Patterns)
+
+| Agent Excuse | Reality / Correct Action |
 | :--- | :--- |
-| **Smart Questions**: "You mentioned X, does that mean Y?" | **Robotic Questions**: Asking "What language?" when `package.json` says "Typescript". |
-| **Research**: checking `grep "Auth"` before designing login. | **Guessing**: Designing a JWT flow when the app uses Session Cookies. |
-| **Self-Correction**: "I initially thought X, but looking at Y..." | **Stubbornness**: Sticking to a wrong design despite evidence. |
+| "It's faster to just code it." | **WRONG**. Reworking bugs is slower. Validate first. |
+| "I skipped options because it's trivial." | **OK**, but state: *"This is trivial, I propose X. Proceed?"* |
+| "The user ignored my question." | **RISY**. Don't guess. Ask again: *"To avoid breaking X, I need to know Y."* |
+| "I can't see the file." | **STOP**. Ask for it. Do not hallucinate file contents. |
+| "This seems standard." | **VERIFY**. Is it standard *for this project*? Check `package.json`. |
 
-### Rationalization Table
-| Agent Excuse | Reality / Counter-Argument |
-| :--- | :--- |
-| "It's faster to just code it." | It's slower to rewrite it 3 times because you misunderstood the goal. |
-| "I skipped options because it's trivial." | Valid. But say "This is straightforward, I propose we do X." (Explicit alignment). |
-| "I didn't research because I know React." | You don't know *this project's* React patterns (Hooks vs Class, Redux vs Context). |
-| "The user knows what they want." | Users often have a goal but not a spec. Your job is to bridge that gap. |
+---
 
-## 5. Examples (Few-Shot)
-> [!TIP]
-> See `examples/brainstorming_demo.md` for a good example of an iterative brainstorming flow.
+## Edge Cases
+*   **User provides full design**: Summarize understanding, verify 1-2 assumptions, then Fast Track.
+*   **Non-Code Idea**: Switch to "Strategy" mode. Output a "Strategy Doc" instead of "Technical Spec".
+*   **Legacy Code**: If context is massive, ask user: *"Which specific files should I anchor my design on?"*

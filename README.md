@@ -74,7 +74,7 @@ Skills are automatically loaded from these locations:
 
 | Skill | Description | Tier |
 | :--- | :--- | :--- |
-| **[Brainstorming](skills/brainstorming/SKILL.md)** | **Platinum Level (10/10)**. Explores user intent, clarifies requirements, and designs solutions with domain-specific research and self-correction. Use before writing code. | 2 |
+| **[Brainstorming](skills/brainstorming/SKILL.md)** | Explores user intent, clarifies requirements, and designs solutions with domain-specific research and self-correction. Use before writing code. | 2 |
 | **[Skill Enhancer](skills/skill-enhancer/SKILL.md)** | A meta-skill to audit, fix, and improve other skills. Enforces "Gold Standard" compliance (TDD, CSO, Script-First). | 2 |
 | **[Skill Creator](/skills/skill-creator/SKILL.md)** | Authoritative guidelines for creating NEW skills. Ensures compliant directory structure and philosophy. | 2 |
 
