@@ -43,3 +43,4 @@ ENV/
 # Project Specific
 .agent
 archieve
+test-posts

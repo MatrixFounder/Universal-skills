@@ -14,6 +14,7 @@ Unlike standard prompts, these skills are **Agent-Agnostic** and **Architecture-
   - [Skill Registry](#skill-registry)
     - [Core Meta-Skills](#core-meta-skills)
     - [Development Skills](#development-skills)
+    - [Content Skills](#content-skills)
     - [Verification Skills (VDD)](#verification-skills-vdd)
   - [Documentation](#documentation)
 
@@ -83,8 +84,14 @@ Skills are automatically loaded from these locations:
 | Skill | Description | Tier |
 | :--- | :--- | :--- |
 | **[MCP Builder](skills/mcp-builder/SKILL.md)** | Comprehensive guide for building Model Context Protocol (MCP) servers in Python or TypeScript. Includes best practices for tool design. | - |
-| **[Text Humanizer](skills/text-humanizer/SKILL.md)** | Rewrites text to remove "AI slop" or generates prompt tailored to specific genres (Wiki, Crypto, etc.). | 2 |
 | **[Hooks Creator](skills/hooks-creator/SKILL.md)** | Generates secure, compliant Gemini CLI hooks (Bash/Node) with automated config and VDD-verified security gates. | 2 |
+
+### Content Skills
+
+| Skill | Description | Tier |
+| :--- | :--- | :--- |
+| **[Post Writing](skills/post-writing/SKILL.md)** | 4-step editorial pipeline for LinkedIn/Telegram posts: analyze → hook → draft → review. Includes brand voice guides (RU/EN), 7 hook formulas, platform formatting, and review checklist. | 2 |
+| **[Text Humanizer](skills/text-humanizer/SKILL.md)** | Rewrites text to remove "AI slop" or generates prompt tailored to specific genres (Wiki, Crypto, etc.). | 2 |
 
 ### Verification Skills (VDD)
 
@@ -98,5 +105,6 @@ Skills are automatically loaded from these locations:
 Detailed manuals for specific components can be found in `docs/Manuals`:
 
 - **[Text Humanizer Manual](docs/Manuals/text_humanizer_manual.md)**: Deep dive into the Humanizer's taxonomy and patterns.
+- **[Post Writing Manual](docs/Manuals/post-writing_manual.md)**: Prompt formulas, IDE/Agent examples, and automated content pipeline architecture.
 - **[Skill Writing Manual](docs/Manuals/skill-writing_manual.md)**: Detailed guide on the philosophy of "Rich Skills".
 - **[Hooks Creator Manual](docs/Manuals/hooks-creator_manual.md)**: Guide to generating lifecycle hooks and security blockers.
