@@ -109,19 +109,17 @@ skill-validator/
 
 ```mermaid
 graph LR
-    A[Skill Directory] --> B[validate.py]
+    A[Skill Directory] --> B[validate.py / full_audit.py]
     B --> C[structure_check]
-    C --> C2[File Integrity Cross-Ref]
     B --> D[os.walk — single pass]
-    D --> D2[Polyglot Check]
     D --> E[bash_scanner]
     D --> F[static_analyzer]
+    F --> G[Base64/Hex Decode + Re-scan]
+    G --> P[PII & Credential Check]
     D -.->|--ai-scan| I[ai_scanner]
-    I --> H
-    F --> G[Base64 decode + re-scan]
-    F --> G2[Hex decode + re-scan]
-    C & C2 & D2 & E & F & G & G2 --> H[Risk Level: SAFE / CAUTION / DANGER]
-    H --> I[Text or JSON Report]
+    C & E & F & G & P & I --> H[Risk Level Calculation]
+    H --> R[Report & Prompt Instructions]
+    R --> V{Agent Phase 3}
 ```
 
 ## 🔍 Detection Catalog

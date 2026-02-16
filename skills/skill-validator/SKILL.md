@@ -79,15 +79,15 @@ graph TD
     C --> D[Bash Pattern Detection]
     C --> E[Static Keyword Analysis]
     C --> F[Obfuscation Check]
-    C --> G[Base64 Payload Inspection]
+    C --> G[Base64 & Hex Payload Inspection]
+    C --> P[PII & Credential Check]
     C -.->|--ai-scan| K[AI Threat Detection]
-    D --> H{Risk Level?}
-    E --> H
-    F --> H
-    G --> H
-    K --> H
+    D & E & F & G & P & K --> H{Risk Level?}
     H -- DANGER --> Z
-    H -- SAFE/CAUTION --> I[Generate Report + Risk Level]
+    H -- SAFE/CAUTION --> I[Generate Report]
+    I --> J{Warnings Found?}
+    J -- Yes --> L[Phase 3: Agent Verification]
+    J -- No --> M[End]
 ```
 
 ## 5. Security & Limitations
