@@ -32,6 +32,13 @@ See [OWASP Command Injection](https://owasp.org/www-community/attacks/Command_In
 - `printenv` / `env` — Dumping environment variables (secrets, API keys).
 - **CWE-200**: Exposure of Sensitive Information to an Unauthorized Actor.
 
+### AI Prompt Injection & Safety
+- **Prompt Injection**: "Ignore previous instructions", "Forget all prior instructions". Attackers try to override system prompts.
+- **Jailbreaks**: "Do Anything Now" (DAN), Role-playing ("You are now M03"). Attempts to bypass safety filters.
+- **Harmful Content**: Instructions to generate malware, keyloggers, or viruses.
+- **OWASP LLM01**: Prompt Injection.
+
+
 ## Known Bypass Techniques
 
 > [!WARNING]

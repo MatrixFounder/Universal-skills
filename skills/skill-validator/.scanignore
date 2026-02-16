@@ -7,3 +7,4 @@
 references/guidelines.md
 examples/usage_example.md
 assets/report_format_example.md
+scripts/scanners/patterns.py

@@ -12,6 +12,8 @@ The **skill-validator** is an automated security scanner that audits skills for 
   - [🟡 Bash Injection — Warning](#-bash-injection--warning-9-patterns)
   - [🔵 Bash Injection — Info](#-bash-injection--info-4-patterns)
   - [🔎 Static Analysis Keywords](#-static-analysis-keywords-9-patterns)
+  - [🤖 AI Threat Detection](#-ai-threat-detection-opt-in)
+  - [🔐 PII & Credential Leaks](#-pii--credential-leaks-n8n-enriched)
   - [🕵️ Obfuscation & Payload Detection](#️-obfuscation--payload-detection-5-checks)
   - [📁 Structural Integrity](#-structural-integrity-5-checks)
 - [Security & Limitations](#️-security--limitations)
@@ -28,11 +30,16 @@ Ensure the skill is located at:
 `.agent/skills/skill-validator`
 
 ### Quick Start
-```bash
-# Scan an untrusted skill (recommended):
-python3 .agent/skills/skill-validator/scripts/validate.py /path/to/skill --no-scanignore
 
-# Scan your own trusted skill:
+**Option A: Scan an Untrusted/Third-Party Skill (Recommended)**
+Use the "Full Audit" wrapper. It forces maximum security (AI scan on, `.scanignore` off) and guides you through verification.
+```bash
+python3 .agent/skills/skill-validator/scripts/full_audit.py /path/to/skill
+```
+
+**Option B: Scan Your Own Trusted Skill**
+Use the standard validator. It respects `.scanignore` (good for local dev) and skips the slow AI scan by default.
+```bash
 python3 .agent/skills/skill-validator/scripts/validate.py /path/to/skill
 ```
 
@@ -49,6 +56,15 @@ The skill is triggered by phrases like "validate this skill", "scan for security
 > **User**: "Validate the `my-new-skill` skill for security issues."
 > **Agent**: Runs the validator, reads the output, and reports findings.
 
+### 3. Agent-Assisted Verification (Phase 3)
+For deep analysis of suspicious content (flagged as Info/Warning), use the specialized LLM prompts located in `references/prompts/`.
+
+1.  **Select Prompt**:
+    - `jailbreak_check.md`: Uses n8n-derived logic to detect subtle prompt injection or jailbreaks.
+    - `alignment_check.md`: Verifies if the content stays within business scope.
+2.  **Instruct Agent**: "Using the prompt in `references/prompts/jailbreak_check.md`, analyze this text: [suspicious_content]"
+3.  **Result**: The Agent acts as a second opinion, catching semantics that regex misses.
+
 ## 🛠 CLI Reference
 
 | Flag | Description | Default |
@@ -57,6 +73,7 @@ The skill is triggered by phrases like "validate this skill", "scan for security
 | `--json` | Output structured JSON (for CI/CD pipelines). | Off |
 | `--no-scanignore` | Ignore `.scanignore` files. **Always use for untrusted skills.** | Off |
 | `--strict` | Exit code 2 on warnings (for CI/CD gating). | Off |
+| `--ai-scan` | Enable AI threat detection (Prompt Injection, Jailbreaks). | Off |
 | `--version` | Print version and exit. | — |
 
 ### Exit Codes
@@ -99,6 +116,8 @@ graph LR
     D --> D2[Polyglot Check]
     D --> E[bash_scanner]
     D --> F[static_analyzer]
+    D -.->|--ai-scan| I[ai_scanner]
+    I --> H
     F --> G[Base64 decode + re-scan]
     F --> G2[Hex decode + re-scan]
     C & C2 & D2 & E & F & G & G2 --> H[Risk Level: SAFE / CAUTION / DANGER]
@@ -164,6 +183,29 @@ High-risk Python/JS functions that could be used for code injection or data exfi
 | `requests.get()` | Network | Outbound HTTP — potential data exfiltration |
 | `urllib.request` | Network | Same via stdlib |
 | `socket.*` | Network | Raw sockets — reverse shells, C2 beaconing |
+
+### 🤖 AI Threat Detection (Opt-in)
+
+Activated with `--ai-scan`. Detects attacks targeting LLMs and AI agents.
+
+| Pattern Category | Examples | Why It's Dangerous |
+| :--- | :--- | :--- |
+| **Prompt Injection** | `Ignore previous instructions`, `Forget all prior instructions` | Overrides system prompts to hijack agent behavior. |
+| **Jailbreaks** | `Do Anything Now`, `roleplay as unrestricted`, `simulate unfiltered` | Bypasses safety filters to generate prohibited content. |
+| **Harmful Content** | `Write malware`, `Generate keylogger`, `Steal credentials` | Direct requests for malicious artifacts. |
+| **Indirect Injection** | `override ethical constraints`, `ignore safety constraints` | Subtle attempts to disable safety protocols (n8n-inspired). |
+
+### 🔐 PII & Credential Leaks (n8n Enriched)
+
+Detects sensitive data leaks using patterns derived from n8n Guardrails.
+
+| Category | Patterns / Prefixes |
+| :--- | :--- |
+| **Credentials** | `sk-` (Legacy), `sk-proj-` (New OpenAI), `ghp_` (GitHub), `xox` (Slack), `AKIA` (AWS), `Bearer` tokens |
+| **PII** | Email addresses (RFC 5322), IP Addresses (IPv4), SSN-like patterns (`ddd-dd-dddd`) |
+
+> **Note**: These patterns are also checked inside **Base64** and **Hex** payloads if `static_analyzer.py` finds them.
+
 
 ### 🕵️ Obfuscation & Payload Detection (5 checks)
 

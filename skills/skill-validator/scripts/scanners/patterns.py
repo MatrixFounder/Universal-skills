@@ -57,3 +57,45 @@ _RAW_KEYWORD_PATTERNS = [
 ]
 
 KEYWORD_PATTERNS = [(re.compile(p), msg) for p, msg in _RAW_KEYWORD_PATTERNS]
+
+# --- AI Threat Patterns ---
+# Patterns for prompt injection, jailbreaks, and harmful content generation.
+# Base64-encoded to prevent self-flagging.
+_RAW_AI_PATTERNS = [
+    # --- Prompt Injection ---
+    (base64.b64decode("SWdub3JlIHByZXZpb3VzIGluc3RydWN0aW9ucw==").decode("utf-8"), "AI_RISK", "Prompt Injection: 'Ignore previous instructions' detected"),
+    (base64.b64decode("Rm9yZ2V0IGFsbCBwcmlvciBpbnN0cnVjdGlvbnM=").decode("utf-8"), "AI_RISK", "Prompt Injection: 'Forget all prior instructions' detected"),
+    # --- Jailbreaks ---
+    (base64.b64decode("WW91IGFyZSBub3c=").decode("utf-8"), "AI_RISK", "Jailbreak Attempt: Role-play 'You are now' pattern"),
+    (base64.b64decode("RG8gQW55dGhpbmcgTm93").decode("utf-8"), "AI_RISK", "Jailbreak Attempt: 'Do Anything Now' (DAN) pattern"),
+    # --- Harmful Intents ---
+    (base64.b64decode("V3JpdGUgbWFsd2FyZQ==").decode("utf-8"), "AI_RISK", "Harmful Content: Request to 'Write malware'"),
+    (base64.b64decode("R2VuZXJhdGUga2V5bG9nZ2Vy").decode("utf-8"), "AI_RISK", "Harmful Content: Request to 'Generate keylogger'"),
+    (base64.b64decode("QnlwYXNzIGZpbHRlcg==").decode("utf-8"), "AI_RISK", "Harmful Content: Request to 'Bypass filter'"),
+    (base64.b64decode("Q3JlYXRlIHZpcnVz").decode("utf-8"), "AI_RISK", "Harmful Content: Request to 'Create virus'"),
+    (base64.b64decode("U3RlYWwgY3JlZGVudGlhbHM=").decode("utf-8"), "AI_RISK", "Harmful Content: Request to 'Steal credentials'"),
+    # --- n8n Guardrails: Jailbreak Concepts ---
+    (base64.b64decode("c2ltdWxhdGUgdW5maWx0ZXJlZA==").decode("utf-8"), "AI_RISK", "Jailbreak Attempt: 'simulate unfiltered'"),
+    (base64.b64decode("b3ZlcnJpZGUgZXRoaWNhbA==").decode("utf-8"), "AI_RISK", "Jailbreak Attempt: 'override ethical' constraints"),
+    (base64.b64decode("aWdub3JlIHNhZmV0eSBjb25zdHJhaW50cw==").decode("utf-8"), "AI_RISK", "Jailbreak Attempt: 'ignore safety constraints'"),
+    (base64.b64decode("cm9sZXBsYXkgYXMgdW5yZXN0cmljdGVk").decode("utf-8"), "AI_RISK", "Jailbreak Attempt: 'roleplay as unrestricted'"),
+]
+
+AI_PATTERNS = [(re.compile(p, re.IGNORECASE), sev, msg) for p, sev, msg in _RAW_AI_PATTERNS]
+
+# --- PII & Secret Patterns (n8n inspired) ---
+_RAW_PII_PATTERNS = [
+    # --- Credentials ---
+    (base64.b64decode("c2stcHJvai1bYS16QS1aMC05XC1dezIwLH0=").decode("utf-8"), "PII_LEAK", "Credential Leak: Potential OpenAI Project Key (sk-proj-...)"),
+    (base64.b64decode("c2stW2EtekEtWjAtOV17MjAsfQ==").decode("utf-8"), "PII_LEAK", "Credential Leak: Potential Legacy OpenAI Key (sk-...)"),
+    (base64.b64decode("Z2hwX1thLXpBLVowLTldezIwLH0=").decode("utf-8"), "PII_LEAK", "Credential Leak: Potential GitHub Personal Access Token (ghp_...)"),
+    (base64.b64decode("eG94W2JhcHJzXS1bYS16QS1aMC05XXsxMCx9").decode("utf-8"), "PII_LEAK", "Credential Leak: Potential Slack Token (xox...)"),
+    (base64.b64decode("QUtJQVswLTlBLVpdezE2fQ==").decode("utf-8"), "PII_LEAK", "Credential Leak: Potential AWS Access Key (AKIA...)"),
+    (base64.b64decode("QmVhcmVyIFthLXpBLVowLTlcLVxfXC5dKw==").decode("utf-8"), "PII_LEAK", "Credential Leak: Potential Bearer Token"),
+    # --- Personal Data ---
+    (base64.b64decode("XGJcZHszfS1cZHsyfS1cZHs0fVxi").decode("utf-8"), "PII_LEAK", "PII Leak: Potential SSN pattern"),
+    (base64.b64decode("XGJbQS1aYS16MC05Ll8lKy1dK0BbQS1aYS16MC05Li1dK1wuW0EtWnxhLXpdezIsfVxi").decode("utf-8"), "PII_LEAK", "PII Leak: Email Address"),
+    (base64.b64decode("XGIoPzpbMC05XXsxLDN9XC4pezN9WzAtOV17MSwzfVxi").decode("utf-8"), "PII_LEAK", "PII Leak: IP Address"),
+]
+
+PII_PATTERNS = [(re.compile(p), sev, msg) for p, sev, msg in _RAW_PII_PATTERNS]

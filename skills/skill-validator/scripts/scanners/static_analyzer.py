@@ -4,14 +4,14 @@ import math
 import base64
 from collections import Counter
 
-from scanners.patterns import KEYWORD_PATTERNS, BASH_PATTERNS
+from scanners.patterns import KEYWORD_PATTERNS, BASH_PATTERNS, AI_PATTERNS, PII_PATTERNS
 
 # Regex to find Base64-encoded strings:
 #   - Must be at a word boundary
 #   - 20+ chars from the Base64 alphabet
 #   - Length must be a multiple of 4 (valid Base64 padding)
 #   - Optional trailing = or == padding
-_B64_RE = re.compile(r'\b(?:[A-Za-z0-9+/]{4}){5,}(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?\b')
+_B64_RE = re.compile(r'(?:[A-Za-z0-9+/]{4}){3,}(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?')
 
 # Regex to find hex-encoded strings: 4+ consecutive \xNN sequences
 _HEX_RE = re.compile(r'(?:\\x[0-9a-fA-F]{2}){4,}')
@@ -106,6 +106,24 @@ def scan_base64_payloads(content, filename):
                     "line": content[:match.start()].count('\n') + 1,
                 })
 
+        # Re-scan decoded content against AI threat patterns
+        for compiled_re, severity, msg in AI_PATTERNS:
+            if compiled_re.search(decoded):
+                issues.append({
+                    "type": "warning",
+                    "message": f"Hidden {msg} found inside Base64 payload at offset {match.start()} in {filename}",
+                    "line": content[:match.start()].count('\n') + 1,
+                })
+
+        # Re-scan decoded content against PII patterns
+        for compiled_re, severity, msg in PII_PATTERNS:
+            if compiled_re.search(decoded):
+                issues.append({
+                    "type": "warning",
+                    "message": f"Hidden {msg} found inside Base64 payload at offset {match.start()} in {filename}",
+                    "line": content[:match.start()].count('\n') + 1,
+                })
+
     return issues
 
 
@@ -118,10 +136,10 @@ def scan_hex_encoded(content, filename):
     for match in _HEX_RE.finditer(content):
         hex_str = match.group(0)
         try:
-            # Convert \\x41\\x42 -> AB
-            decoded = bytes(
-                int(h, 16) for h in re.findall(r'\\x([0-9a-fA-F]{2})', hex_str)
-            ).decode("utf-8", errors="strict")
+            # Normalize: remove \x prefixes -> 4142...
+            clean_hex = hex_str.replace(r'\x', '')
+            # Efficient decoding
+            decoded = bytes.fromhex(clean_hex).decode("utf-8", errors="strict")
         except Exception:
             continue
 
@@ -144,6 +162,24 @@ def scan_hex_encoded(content, filename):
             if compiled_re.search(decoded):
                 issues.append({
                     "type": "critical",
+                    "message": f"Hidden {msg} found inside hex-encoded string at line {line_num} in {filename}",
+                    "line": line_num,
+                })
+
+        # Re-scan decoded content against AI threat patterns
+        for compiled_re, severity, msg in AI_PATTERNS:
+            if compiled_re.search(decoded):
+                issues.append({
+                    "type": "warning",
+                    "message": f"Hidden {msg} found inside hex-encoded string at line {line_num} in {filename}",
+                    "line": line_num,
+                })
+
+        # Re-scan decoded content against PII patterns
+        for compiled_re, severity, msg in PII_PATTERNS:
+            if compiled_re.search(decoded):
+                issues.append({
+                    "type": "warning",
                     "message": f"Hidden {msg} found inside hex-encoded string at line {line_num} in {filename}",
                     "line": line_num,
                 })

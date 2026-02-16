@@ -15,6 +15,8 @@ version: 1.3
 - "It's just a simple skill, no need to scan" -> **WRONG**. Simple skills are the easiest vector for supply chain attacks.
 - "The validator found 0 issues, it must be safe" -> **WRONG**. The validator is a *static analysis* tool. It cannot catch everything. Use your judgment.
 - "I'll skip the bash scanner because there are no .sh files" -> **WRONG**. Bash code can be embedded in `SKILL.md` examples or Python strings.
+- "Prompts are just text, they can't be dangerous" -> **WRONG**. Prompt injection can override system instructions or generate harmful content.
+
 
 ## 2. Capabilities
 - **Structure Audit**: Verifies `SKILL.md` frontmatter, required directories, and file integrity.
@@ -22,17 +24,22 @@ version: 1.3
 - **Static Analysis**: Flags high-risk keywords (`eval`, `exec`, `subprocess`, `os.system`) across all files.
 - **Obfuscation Detection**: Flags high-entropy strings and long lines that might hide malware.
 - **Base64 Payload Inspection**: Decodes Base64 strings and re-scans decoded content for hidden threats.
+- **AI Safety Analysis**: Detects prompt injection, jailbreak attempts ("DAN", "simulate unfiltered"), and harmful content instructions (opt-in via `--ai-scan`).
+- **PII & Credential Detection**: Flags potential API keys (OpenAI, GitHub, AWS), emails, and IP addresses.
 - **Risk Level**: Reports a risk assessment (SAFE/CAUTION/DANGER) based on scan findings.
 
 ## 3. Instructions
 
 ### Phase 1: Scan
-1.  **Run Validator**: Execute the validation script on the target skill directory.
+1.  **Run Full Audit (Recommended for Untrusted Skills)**:
+    This script runs all checks (including AI Scan), ignores `.scanignore`, and prompts you for Phase 3 verification if needed.
     ```bash
-    # For untrusted/third-party skills (recommended):
-    python3 scripts/validate.py <path-to-skill> --no-scanignore
+    python3 scripts/full_audit.py <path-to-skill>
+    ```
 
-    # For your own trusted skills:
+2.  **Run Standard Scan (For Your Own Trusted Skills)**:
+    This respects `.scanignore` and runs faster (no AI scan by default).
+    ```bash
     python3 scripts/validate.py <path-to-skill>
     ```
 2.  **Analyze Report**: Review the output.
@@ -47,12 +54,19 @@ version: 1.3
     - Check for environment variable exfiltration.
 2.  **Verify Obfuscation**: If the validator flagged "High Entropy", check those lines. Are they legitimate assets (images/keys) or hidden code?
 
+### Phase 3: Agent-Assisted Verification (Advanced)
+For deep analysis of prompts or suspicious text, use the extracted LLM prompts in `references/prompts/`.
+1.  **Select Prompt**: Choose `jailbreak_check.md` or `alignment_check.md`.
+2.  **Instruct Agent**: "Reference `references/prompts/jailbreak_check.md` and analyze the following text: [Text from Skill]"
+3.  **Evaluate**: The Agent will use the specialized prompt to detect subtle manipulation attempts that regex missed.
+
 ### CLI Options
 | Flag | Description |
 | :--- | :--- |
 | `--json` | Output results in structured JSON format (for CI/CD). |
 | `--no-scanignore` | Ignore `.scanignore` files. **Use for untrusted skills.** |
 | `--strict` | Exit code 2 on warnings (for CI/CD gating). |
+| `--ai-scan` | Enable AI threat detection (prompt injection, jailbreaks). |
 | `--version` | Print validator version. |
 
 ## 4. Workflows
@@ -66,10 +80,12 @@ graph TD
     C --> E[Static Keyword Analysis]
     C --> F[Obfuscation Check]
     C --> G[Base64 Payload Inspection]
+    C -.->|--ai-scan| K[AI Threat Detection]
     D --> H{Risk Level?}
     E --> H
     F --> H
     G --> H
+    K --> H
     H -- DANGER --> Z
     H -- SAFE/CAUTION --> I[Generate Report + Risk Level]
 ```
@@ -93,7 +109,11 @@ graph TD
   - `patterns.py`: Shared pattern definitions.
   - `bash_scanner.py`: Bash-specific scanner.
   - `static_analyzer.py`: Static analysis, obfuscation, Base64 inspection.
+  - `ai_scanner.py`: AI threat detection (prompt injection, jailbreaks).
   - `structure_check.py`: Structural validation.
 - `references/guidelines.md`: OWASP patterns, CWE references, known bypass techniques.
 - `examples/usage_example.md`: Complete usage walkthrough with sample outputs.
 - `assets/report_format_example.md`: Suggested report format for downstream consumers.
+- `references/prompts/`: LLM prompts for agent-assisted verification.
+  - `jailbreak_check.md`: Detects adversarial attacks.
+  - `alignment_check.md`: Verifies topical scope.

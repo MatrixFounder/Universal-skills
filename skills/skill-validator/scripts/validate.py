@@ -12,13 +12,14 @@ import json
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 try:
-    from scanners import structure_check, bash_scanner, static_analyzer
+    from scanners import structure_check, bash_scanner, static_analyzer, ai_scanner
 except ImportError as e:
     # Defer error reporting until we know the output format
     _import_error = str(e)
     structure_check = None
     bash_scanner = None
     static_analyzer = None
+    ai_scanner = None
 else:
     _import_error = None
 
@@ -124,14 +125,14 @@ def load_scanignore(skill_path, honor_scanignore):
     return ignored
 
 
-def walk_and_scan(skill_path, honor_scanignore):
+def walk_and_scan(skill_path, honor_scanignore, enable_ai_scan=False):
     """Single os.walk pass that feeds each file to all scanners.
 
     Respects .scanignore only when honor_scanignore is True.
     Enforces MAX_FILE_SIZE limit per file.
 
     Returns:
-        List of issue dicts from bash_scanner and static_analyzer.
+        List of issue dicts from bash_scanner, static_analyzer, and optionally ai_scanner.
     """
     ignored_paths = load_scanignore(skill_path, honor_scanignore)
     all_issues = []
@@ -177,9 +178,12 @@ def walk_and_scan(skill_path, honor_scanignore):
             # P6: Check for polyglot files (magic number vs text extension)
             all_issues.extend(check_polyglot(file_path, rel_path))
 
-            # Feed content to both scanners
+            # Feed content to scanners
             all_issues.extend(bash_scanner.scan_file_content(content, rel_path))
             all_issues.extend(static_analyzer.scan_file_content(content, rel_path))
+            
+            if enable_ai_scan:
+                all_issues.extend(ai_scanner.scan_file_content(content, rel_path))
 
     return all_issues
 
@@ -215,6 +219,10 @@ def main():
         "--strict", action="store_true",
         help="Exit with code 2 if warnings are found (useful for CI/CD)",
     )
+    parser.add_argument(
+        "--ai-scan", action="store_true",
+        help="Enable AI threat detection (prompt injection, jailbreaks)",
+    )
     args = parser.parse_args()
 
     # Handle import errors in the correct output format
@@ -240,16 +248,17 @@ def main():
     # 1. Structure Check
     all_issues.extend(structure_check.check_structure(skill_path))
 
-    # 2. Single-pass file scanning (bash + static analysis)
+    # 2. Single-pass file scanning (bash + static analysis + optional AI scan)
     # .scanignore from the scanned skill is honored by default.
     # Use --no-scanignore to disable it when scanning untrusted skills.
     honor_scanignore = not args.no_scanignore
-    all_issues.extend(walk_and_scan(skill_path, honor_scanignore))
+    all_issues.extend(walk_and_scan(skill_path, honor_scanignore, args.ai_scan))
 
     # 3. Compute risk level
     risk_level = compute_risk_level(all_issues)
 
     critical_count = len([i for i in all_issues if i.get("type") == "critical"])
+
     error_count = len([i for i in all_issues if i.get("type") == "error"])
     warning_count = len([i for i in all_issues if i.get("type") == "warning"])
     info_count = len([i for i in all_issues if i.get("type") == "info"])
