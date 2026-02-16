@@ -1,0 +1,9 @@
+# Files to exclude from content scanning (bash + static analysis).
+# These files are documentation/reference material, not executable code.
+# Structure checks still apply to the entire skill directory.
+#
+# SECURITY NOTE: When scanning untrusted skills, use --no-scanignore
+# to prevent attackers from using .scanignore to hide malicious files.
+references/guidelines.md
+examples/usage_example.md
+assets/report_format_example.md

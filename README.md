@@ -99,6 +99,7 @@ Skills are automatically loaded from these locations:
 | :--- | :--- | :--- |
 | **[VDD Adversarial](skills/vdd-adversarial/SKILL.md)** | Verification-Driven Development. Challenges assumptions, simulates failures, and rejects "happy path" thinking. | 2 |
 | **[VDD Sarcastic](skills/vdd-sarcastic/SKILL.md)** | The "Sarcasmotron". Same rigor as VDD Adversarial, but with a provocative tone to force the agent/user to defend their logic. | 2 |
+| **[Skill Validator](skills/skill-validator/SKILL.md)** | Automated security & compliance scanner for skills. Detects malware, obfuscation, Base64 payloads, and structural violations. | 2 |
 
 ## Documentation
 
@@ -108,3 +109,4 @@ Detailed manuals for specific components can be found in `docs/Manuals`:
 - **[Post Writing Manual](docs/Manuals/post-writing_manual.md)**: Prompt formulas, IDE/Agent examples, and automated content pipeline architecture.
 - **[Skill Writing Manual](docs/Manuals/skill-writing_manual.md)**: Detailed guide on the philosophy of "Rich Skills".
 - **[Hooks Creator Manual](docs/Manuals/hooks-creator_manual.md)**: Guide to generating lifecycle hooks and security blockers.
+- **[Skill Validator Manual](docs/Manuals/skill-validator_manual.md)**: Security auditing guide — CLI reference, architecture, pattern catalog, and CI/CD integration.
