@@ -108,18 +108,38 @@ skill-validator/
 ### Data Flow
 
 ```mermaid
-graph LR
-    A[Skill Directory] --> B[validate.py / full_audit.py]
-    B --> C[structure_check]
-    B --> D[os.walk — single pass]
-    D --> E[bash_scanner]
-    D --> F[static_analyzer]
-    F --> G[Base64/Hex Decode + Re-scan]
-    G --> P[PII & Credential Check]
-    D -.->|--ai-scan| I[ai_scanner]
-    C & E & F & G & P & I --> H[Risk Level Calculation]
-    H --> R[Report & Prompt Instructions]
-    R --> V{Agent Phase 3}
+graph TD
+    subgraph Phase1 [Phase 1: Automated Scan]
+        A[Skill Directory] --> B[validate.py]
+        B --> C[structure_check]
+        B --> D[os.walk]
+        D --> E[bash_scanner]
+        D --> F[static_analyzer]
+        F --> G[Deep Inspection: Decode & Re-scan]
+        D -.->|--ai-scan| H[ai_scanner]
+        C & E & F & G & H --> I[Generate Report]
+    end
+
+    I --> J{High Risk?}
+    J -- No --> Z1[Safe]
+    J -- Yes --> K
+
+    subgraph Phase2 [Phase 2: Manual Review]
+        K[Manual Review of Scripts/Entropy]
+        K --> L{Malicious?}
+        L -- Yes --> Z2[Block]
+        L -- No --> Z1
+        L -- Unsure --> M
+    end
+
+    subgraph Phase3 [Phase 3: Agent Verification]
+        M[Ambiguous Content]
+        M --> N[Agent-Assisted Prompt Analysis]
+    end
+
+    N --> O[Final Verdict]
+    O --> Z1
+    O --> Z2
 ```
 
 ## 🔍 Detection Catalog

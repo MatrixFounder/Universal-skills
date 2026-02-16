@@ -73,21 +73,39 @@ For deep analysis of prompts or suspicious text, use the extracted LLM prompts i
 
 ```mermaid
 graph TD
-    A[Start: Skill Path] --> B{Structure Check}
-    B -- Fail --> Z[Report Error]
-    B -- Pass --> C[Single-Pass File Scan]
-    C --> D[Bash Pattern Detection]
-    C --> E[Static Keyword Analysis]
-    C --> F[Obfuscation Check]
-    C --> G[Base64 & Hex Payload Inspection]
-    C --> P[PII & Credential Check]
-    C -.->|--ai-scan| K[AI Threat Detection]
-    D & E & F & G & P & K --> H{Risk Level?}
-    H -- DANGER --> Z
-    H -- SAFE/CAUTION --> I[Generate Report]
-    I --> J{Warnings Found?}
-    J -- Yes --> L[Phase 3: Agent Verification]
-    J -- No --> M[End]
+    subgraph Phase1 [Phase 1: Automated Scan]
+        A[Start: Skill Path] --> B{Structure Check}
+        B -- Pass --> C[File Scan]
+        C --> D[Bash Scanner]
+        C --> E[Static Analyzer]
+        E --> F[Payload Decoder]
+        F --> G[Re-Scan Content]
+        C -.->|--ai-scan| H[AI Threat Scanner]
+        D & E & G & H --> I{Risk Calculation}
+        I --> J[Generate Report]
+    end
+
+    J --> K{High Risk / Warnings?}
+    K -- No --> Z1[End: Safe]
+    K -- Yes --> L
+
+    subgraph Phase2 [Phase 2: Manual Review]
+        L[Check Scripts & Obfuscation]
+        L --> M{Is Malicious?}
+        M -- Yes --> Z2[End: Block/Fix]
+        M -- No --> Z1
+        M -- Unsure --> N
+    end
+
+    subgraph Phase3 [Phase 3: Agent Verification]
+        N[Suspicious/Ambiguous Content]
+        N --> O[Agent-Assisted Prompt Analysis]
+        O --> P[Agent Opinion]
+    end
+
+    P --> Q{Final Verdict}
+    Q -- Safe --> Z1
+    Q -- Unsafe --> Z2
 ```
 
 ## 5. Security & Limitations
