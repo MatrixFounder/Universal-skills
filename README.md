@@ -22,7 +22,7 @@ Unlike standard prompts, these skills are **Agent-Agnostic** and **Architecture-
 
 First, clone this repository to your machine:
 ```bash
-git clone https://github.com/sergey/Universal-skills.git
+git clone https://github.com/MatrixFounder/Universal-skills
 ```
 
 Then, choose your platform below.
