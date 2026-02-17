@@ -73,6 +73,7 @@ For deep analysis of prompts or suspicious text, use the extracted LLM prompts i
 
 ```mermaid
 graph TD
+    %% Phase Definitions
     subgraph Phase1 [Phase 1: Automated Scan]
         A[Start: Skill Path] --> B{Structure Check}
         B -- Pass --> C[File Scan]
@@ -85,16 +86,9 @@ graph TD
         I --> J[Generate Report]
     end
 
-    J --> K{High Risk / Warnings?}
-    K -- No --> Z1[End: Safe]
-    K -- Yes --> L
-
     subgraph Phase2 [Phase 2: Manual Review]
         L[Check Scripts & Obfuscation]
         L --> M{Is Malicious?}
-        M -- Yes --> Z2[End: Block/Fix]
-        M -- No --> Z1
-        M -- Unsure --> N
     end
 
     subgraph Phase3 [Phase 3: Agent Verification]
@@ -103,9 +97,27 @@ graph TD
         O --> P[Agent Opinion]
     end
 
+    subgraph Phase4 [Phase 4: Final Verdict]
+        EndSafe[End: Safe]
+        EndBlock[End: Block/Fix]
+    end
+
+    %% Connections
+    J --> K{High Risk / Warnings?}
+    K -- No --> EndSafe
+    K -- Yes --> L
+    
+    M -- Yes --> EndBlock
+    M -- No --> EndSafe
+    M -- Unsure --> N
+
     P --> Q{Final Verdict}
-    Q -- Safe --> Z1
-    Q -- Unsafe --> Z2
+    Q -- Safe --> EndSafe
+    Q -- Unsafe --> EndBlock
+
+    %% Styling
+    style EndSafe fill:#d4edda,stroke:#155724,stroke-width:2px
+    style EndBlock fill:#f8d7da,stroke:#721c24,stroke-width:2px
 ```
 
 ## 5. Security & Limitations

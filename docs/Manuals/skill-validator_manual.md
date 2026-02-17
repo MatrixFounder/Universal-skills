@@ -109,6 +109,7 @@ skill-validator/
 
 ```mermaid
 graph TD
+    %% Phase Definitions
     subgraph Phase1 [Phase 1: Automated Scan]
         A[Skill Directory] --> B[validate.py]
         B --> C[structure_check]
@@ -120,16 +121,9 @@ graph TD
         C & E & F & G & H --> I[Generate Report]
     end
 
-    I --> J{High Risk?}
-    J -- No --> Z1[Safe]
-    J -- Yes --> K
-
     subgraph Phase2 [Phase 2: Manual Review]
         K[Manual Review of Scripts/Entropy]
         K --> L{Malicious?}
-        L -- Yes --> Z2[Block]
-        L -- No --> Z1
-        L -- Unsure --> M
     end
 
     subgraph Phase3 [Phase 3: Agent Verification]
@@ -137,9 +131,27 @@ graph TD
         M --> N[Agent-Assisted Prompt Analysis]
     end
 
+    subgraph Phase4 [Phase 4: Final Verdict]
+        EndSafe[Safe]
+        EndBlock[Block/Fix]
+    end
+
+    %% Connections
+    I --> J{High Risk?}
+    J -- No --> EndSafe
+    J -- Yes --> K
+
+    L -- Yes --> EndBlock
+    L -- No --> EndSafe
+    L -- Unsure --> M
+
     N --> O[Final Verdict]
-    O --> Z1
-    O --> Z2
+    O --> EndSafe
+    O --> EndBlock
+
+    %% Styling
+    style EndSafe fill:#d4edda,stroke:#155724,stroke-width:2px
+    style EndBlock fill:#f8d7da,stroke:#721c24,stroke-width:2px
 ```
 
 ## 🔍 Detection Catalog
