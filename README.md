@@ -16,6 +16,8 @@ Unlike standard prompts, these skills are **Agent-Agnostic** and **Architecture-
     - [Development Skills](#development-skills)
     - [Content Skills](#content-skills)
     - [Verification Skills (VDD)](#verification-skills-vdd)
+    - [Agentic Workflows](#agentic-workflows)
+    - [Custom Commands Deployment](#custom-commands-deployment)
   - [Documentation](#documentation)
 
 ## Installation
@@ -31,8 +33,9 @@ Then, choose your platform below.
 **Where skills live**
 | Location | Scope |
 | :--- | :--- |
-| `<workspace-root>/.agent/skills/<skill-folder>/` | Workspace-specific |
-| `~/.gemini/antigravity/global_skills/<skill-folder>/` | Global (all workspaces) |
+| `<workspace-root>/.agent/skills/<skill-folder>/` | Workspace-specific (Skills) |
+| `<workspace-root>/.agent/workflows/<workflow.md>` | Workspace-specific (Workflows) |
+| `~/.gemini/antigravity/global_skills/<skill-folder>/` | Global (Skills) |
 
 **Setup**
 1.  Copy the `skills` folder content into one of the locations above.
@@ -101,6 +104,36 @@ Skills are automatically loaded from these locations:
 | **[VDD Sarcastic](skills/vdd-sarcastic/SKILL.md)** | The "Sarcasmotron". Same rigor as VDD Adversarial, but with a provocative tone to force the agent/user to defend their logic. | 2 |
 | **[Skill Validator](skills/skill-validator/SKILL.md)** | Automated security & compliance scanner for skills. Detects malware, obfuscation, Base64 payloads, and structural violations. | 2 |
 
+### Agentic Workflows
+
+| Workflow | Description |
+| :--- | :--- |
+| **[Auto-Healing Skill](.agent/workflows/auto-heal-skill.md)** | Automated "Doctor" loop. Runs `skill-validator` to find issues, then activates `skill-enhancer` to fix them using VDD-verified patterns. |
+
+### Custom Commands Deployment
+
+To make the **Auto-Healing Workflow** available as a native command (`/auto-heal-external-skill`), follow these steps:
+
+#### Gemini CLI
+Create a symlink to the custom command definition:
+
+```bash
+mkdir -p ~/.gemini/commands
+ln -s $(pwd)/custom-commands/auto-heal-external-skill.toml ~/.gemini/commands/auto-heal-external-skill.toml
+```
+
+**Usage**: `/auto-heal-external-skill <path/to/skill>`
+
+#### Claude
+Create a symlink to the slash command definition:
+
+```bash
+mkdir -p ~/.claude/commands
+ln -s $(pwd)/commands/auto-heal-external-skill.md ~/.claude/commands/auto-heal-external-skill.md
+```
+
+**Usage**: `/auto-heal-external-skill <path/to/skill>`
+
 ## Documentation
 
 Detailed manuals for specific components can be found in `docs/Manuals`:
@@ -110,3 +143,4 @@ Detailed manuals for specific components can be found in `docs/Manuals`:
 - **[Skill Writing Manual](docs/Manuals/skill-writing_manual.md)**: Detailed guide on the philosophy of "Rich Skills".
 - **[Hooks Creator Manual](docs/Manuals/hooks-creator_manual.md)**: Guide to generating lifecycle hooks and security blockers.
 - **[Skill Validator Manual](docs/Manuals/skill-validator_manual.md)**: Security auditing guide — CLI reference, architecture, pattern catalog, and CI/CD integration.
+- **[Auto-Healing Workflow](docs/manuals/auto-fix-workflow.md)**: Guide to using the automated repair loop for skills.

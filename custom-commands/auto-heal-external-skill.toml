@@ -1,0 +1,20 @@
+description = "Auto-Heal an external skill using the validator loop"
+prompt = """
+Target Skill Path: '{{args}}'
+
+# Workflow Protocol
+1. **Audit Phase**:
+   - Use `skill-validator` skill to audit the '{{args}}' path.
+   - Use `skill-enhancer` skill to analyze gaps in '{{args}}'.
+
+2. **Refinement Loop** (Max 3 Iterations):
+   - Analyze reports.
+   - If Critical Issues or Gaps found:
+     - Switch to `skill-enhancer` persona.
+     - Apply fixes (Security first, then Compliance).
+     - Re-run the Audit Phase to verify.
+   - If No Issues: Stop.
+
+3. **Report**:
+   - Summarize fixes and final status.
+"""
