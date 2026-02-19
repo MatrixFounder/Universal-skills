@@ -87,7 +87,7 @@ def validate_skill(skill_path, config):
             errors.append(f"Prohibited file found: {item} (See .agent/rules/skill_standards.yaml)")
 
     # 3. Check Directory Structure (Standard)
-    allowed_dirs = ["scripts", "examples", "assets", "references"]
+    allowed_dirs = ["scripts", "examples", "assets", "references", "config"]
     for item in os.listdir(skill_path):
         item_path = os.path.join(skill_path, item)
         if os.path.isdir(item_path):
@@ -123,14 +123,17 @@ def validate_skill(skill_path, config):
                     errors.append("Frontmatter missing 'description'")
                 else:
                     desc = meta['description']
-                    # CSO Rule 1: Configured Prefixes
+                    # CSO Rule 1: Configured Prefixes (optional, configurable)
+                    enforce_cso_prefix = validation_config.get('enforce_cso_prefix', True)
                     allowed_prefixes = validation_config.get('allowed_cso_prefixes', [])
-                    # Fallback if empty to generic safe defaults? No, config should have it.
-                    if not allowed_prefixes: allowed_prefixes = ["Use when"] # minimal safety
-                     
-                    desc_lower = desc.lower().strip()
-                    if not any(desc_lower.startswith(prefix.lower()) for prefix in allowed_prefixes):
-                        errors.append(f"CSO Violation: Description MUST start with one of {allowed_prefixes}. Found: " + desc[:30] + "...")
+                    if enforce_cso_prefix:
+                        # Fallback to minimal safe default only when enforcement is enabled.
+                        if not allowed_prefixes:
+                            allowed_prefixes = ["Use when"]
+
+                        desc_lower = desc.lower().strip()
+                        if not any(desc_lower.startswith(prefix.lower()) for prefix in allowed_prefixes):
+                            errors.append(f"CSO Violation: Description MUST start with one of {allowed_prefixes}. Found: " + desc[:30] + "...")
                     
                     # CSO Rule 2: Token Efficiency
                     max_words = quality_config.get('max_description_words', 50)
