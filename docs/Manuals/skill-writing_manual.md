@@ -2,123 +2,157 @@
 
 **Tools for Agentic Development**
 
-This manual describes how to use the **Skill Creator** and **Skill Enhancer** tools to build authoritative, high-quality agent skills. These tools are designed to be project-agnostic and configurable.
+This manual describes how to use **Skill Creator** and **Skill Enhancer** to build authoritative, high-quality agent skills. The tooling is project-agnostic and configurable.
 
 ---
 
 ## 1. Overview
 
-The Meta-Skill system consists of two primary components:
+The meta-skill toolchain has two primary components:
 
-1.  **Skill Creator**: Bootstraps new skills with a standardized structure (`scripts/`, `examples/`, `resources/`) and validates them against compliance rules.
-    *   *Scripts*: `init_skill.py`, `validate_skill.py`
-2.  **Skill Enhancer**: Analyzes existing skills for "gaps" (weak language, missing sections, poor examples) and guides refactoring.
-    *   *Scripts*: `analyze_gaps.py`
+1. **Skill Creator**: bootstraps new skills with a standardized structure and validates base compliance.
+   - Scripts: `init_skill.py`, `validate_skill.py`, `skill_utils.py`
+2. **Skill Enhancer**: analyzes existing skills for quality/compliance gaps and suggests refactoring direction.
+   - Script: `analyze_gaps.py`
+
+Standard rich-skill structure:
+
+```text
+skill-name/
+├── SKILL.md
+├── scripts/
+├── examples/
+├── assets/
+└── references/
+```
+
+Note: `resources/` is deprecated. Use `assets/` (output materials) and `references/` (knowledge materials).
 
 ---
 
-## 2. Configuration
+## 2. Configuration Model
 
-The tools are driven by a configuration file. This allows you to define your own project policies (e.g., specific Tiers, banned words).
+The tools are driven by merged configuration.
 
-### Locations
-The scripts look for configuration in the following order:
-1.  **Project Overlay**: `.agent/rules/skill_standards.yaml` (Recommended)
-2.  **Bundled Defaults**: `scripts/skill_standards_default.yaml` (Fallback)
+Resolution order:
 
-### Configuration Format
-The configuration file uses a JSON-compatible subset of YAML. 
-**Note:** Tiers are no longer referenced manually. You must use `init_skill.py --help` to see the active tiers for your project.
+1. Bundled defaults: `skills/skill-creator/scripts/skill_standards_default.yaml`
+2. Project overlay: `.agent/rules/skill_standards.yaml`
+3. Runtime fallbacks inside scripts (only when keys are missing)
 
-```yaml
-# .agent/rules/skill_standards.yaml
+### Why this matters
 
-project_config:
-  # Optional: Path to a master documentation file to list skills
-  catalog_file: "docs/SKILLS_CATALOG.md"
-  skills_root: "skills" # Default output dir
-
-taxonomy:
-  # Define your own Tier system (Overrides defaults)
-  tiers:
-    - value: 0
-      name: "Bootstrap"
-      description: "Critical system skills..."
-    - value: 1
-      name: "Phase-Triggered" 
-      description: "Auto-loaded..."
-    # ... Add your own tiers here ...
-
-validation:
-  allowed_cso_prefixes: 
-    - "Use when"
-    - "Guidelines for"
-    - "Standards for"
-  
-  quality_checks:
-    max_inline_lines: 12
-    max_description_words: 50
-    banned_words:
-      - "should"
-      - "can"
-      - "try to"
-```
+- New parameters may appear in defaults, overlay, or script-level fallback logic.
+- If you only inspect one file, you may miss active behavior.
 
 ---
 
-## 3. Usage Guide
+## 3. Default Parameters (Single Reference)
 
-### Creating a New Skill
-Use `init_skill.py` to generate a compliant skeleton.
+Use this file as the canonical quick reference for defaults and fallback behavior:
 
-**Crucial**: Run `init_skill.py --help` first to see which Tiers are available in your project.
+- `skills/skill-creator/references/default_parameters.md`
 
-```bash
-# Check available Tiers
-python3 .agent/skills/skill-creator/scripts/init_skill.py --help
+It documents:
 
-# Create Skill (Example: using Tier 2 or 3 as commonly configured)
-python3 .agent/skills/skill-creator/scripts/init_skill.py my-new-skill --tier 3
-```
+- full default key set,
+- runtime fallback values,
+- project-level extensions,
+- inspection command for effective merged config.
 
-**What it does:**
-- Creates directories: `scripts/`, `examples/`, `resources/`.
-- Generates `SKILL.md` from the template.
-- Checks if you need to update your Catalog File.
+### Mandatory maintenance rule
 
-### Validating a Skill
-Use `validate_skill.py` to check structural compliance (Metadata, Folders).
+When introducing any new config parameter in `init_skill.py`, `validate_skill.py`, or standards YAML, update:
 
-```bash
-python3 .agent/skills/skill-creator/scripts/validate_skill.py .agent/skills/my-new-skill
-```
+- `skills/skill-creator/references/default_parameters.md`
 
-**Checks:**
-- `SKILL.md` exists.
-- Frontmatter (YAML) is valid and matches config (Tiers).
-- No prohibited files (e.g., README.md).
-- Description starts with allowed prefixes.
-
-### Enhancing a Skill
-Use `analyze_gaps.py` to check for quality issues and "Antigravity" compliance.
-
-```bash
-python3 .agent/skills/skill-enhancer/scripts/analyze_gaps.py .agent/skills/my-new-skill
-```
-
-**Checks:**
-- **Weak Language**: Detects "passive" words like "should", "can".
-- **Structure**: Checks for required sections ("Red Flags").
-- **Token Efficiency**: Warns if inline code blocks > 12 lines.
-- **Richness**: Warns if `examples/` folder is empty.
+in the same change.
 
 ---
 
-## 4. Best Practices (The "Gold Standard")
+## 4. Inspect Effective Configuration
 
-To write effective skills that work across different LLMs (Anthropic, OpenAI, etc.):
+To see active merged configuration (defaults + project overlay):
 
-1.  **Script-First**: If logic requires > 5 lines of text explanation, write a Python script instead. Agents follow code better than text.
-2.  **Imperative Language**: Use "MUST", "EXECUTE", "VERIFY". Avoid "should", "try".
-3.  **Examples**: Provide real file examples in `examples/`. Do not force the agent to hallucinate content.
-4.  **Zero-Dependency**: Keep your skill scripts standard (Vanilla Python) so they run everywhere without setup.
+```bash
+python3 skills/skill-creator/scripts/skill_utils.py
+```
+
+Use this before debugging validation behavior or tier choices.
+
+---
+
+## 5. Usage Guide
+
+### 5.1 Create a New Skill
+
+Always inspect available tiers first:
+
+```bash
+python3 skills/skill-creator/scripts/init_skill.py --help
+```
+
+Then create the skill:
+
+```bash
+python3 skills/skill-creator/scripts/init_skill.py my-new-skill --tier 2
+```
+
+What it does:
+
+- creates `scripts/`, `examples/`, `assets/`, `references/`,
+- generates `SKILL.md` from template,
+- prints catalog update reminder (if configured).
+
+### 5.2 Validate a Skill
+
+Standard validation:
+
+```bash
+python3 skills/skill-creator/scripts/validate_skill.py skills/my-new-skill
+```
+
+Strict execution-policy mode:
+
+```bash
+python3 skills/skill-creator/scripts/validate_skill.py skills/my-new-skill --strict-exec-policy
+```
+
+Core checks:
+
+- `SKILL.md` and frontmatter correctness,
+- folder structure and prohibited files,
+- description prefix and metadata compliance,
+- inline efficiency limits,
+- execution-policy coverage (warning-first by default).
+
+### 5.3 Enhance an Existing Skill
+
+```bash
+python3 skills/skill-enhancer/scripts/analyze_gaps.py skills/my-new-skill
+```
+
+Gap analysis includes:
+
+- weak language,
+- missing required sections,
+- token-efficiency issues,
+- execution-policy gaps (missing contract/safety/evidence sections).
+
+---
+
+## 6. Best Practices (Gold Standard)
+
+1. **Script-first for logic**: if a step needs >5 lines of conditional text, move it to script.
+2. **Imperative language**: prefer `MUST`, `EXECUTE`, `VERIFY`; avoid weak modal wording.
+3. **Examples first**: keep realistic examples in `examples/`.
+4. **Deterministic evidence**: include validation commands and expected outputs.
+5. **No hidden defaults**: every new parameter must be documented in `references/default_parameters.md`.
+
+---
+
+## 7. Command Path Notes
+
+This repository uses paths like `skills/skill-creator/...`.
+
+If your project mounts skills under `.agent/skills/`, run the same scripts through that path layout. The behavior is identical; only root path differs.
