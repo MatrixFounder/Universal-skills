@@ -81,6 +81,7 @@ Skills are automatically loaded from these locations:
 | **[Brainstorming](skills/brainstorming/SKILL.md)** | Explores user intent, clarifies requirements, and designs solutions with domain-specific research and self-correction. Use before writing code. | 2 |
 | **[Skill Enhancer](skills/skill-enhancer/SKILL.md)** | A meta-skill to audit, fix, and improve other skills. Enforces "Gold Standard" compliance (TDD, CSO, Script-First). Implements rules from [Skill Execution Policy](docs/SKILL_EXECUTION_POLICY.md). | 2 |
 | **[Skill Creator](/skills/skill-creator/SKILL.md)** | Authoritative guidelines for creating NEW skills. Ensures compliant directory structure and philosophy. Implements rules from [Skill Execution Policy](docs/SKILL_EXECUTION_POLICY.md). | 2 |
+| **[Summarizing Meetings](skills/summarizing-meetings/SKILL.md)** | Meta-skill for generating meeting summaries from transcriptions. Auto-detects meeting type (standup, retro, discovery), selects template, and produces a two-level pyramid Markdown document optimized for people, AI agents, RAG, and Obsidian. | 2 |
 
 ### Development Skills
 
@@ -144,3 +145,4 @@ Detailed manuals for specific components can be found in `docs/Manuals`:
 - **[Hooks Creator Manual](docs/Manuals/hooks-creator_manual.md)**: Guide to generating lifecycle hooks and security blockers.
 - **[Skill Validator Manual](docs/Manuals/skill-validator_manual.md)**: Security auditing guide — CLI reference, architecture, pattern catalog, and CI/CD integration.
 - **[Auto-Healing Workflow](docs/manuals/auto-fix-workflow.md)**: Guide to using the automated repair loop for skills.
+- **[Summarizing Meetings Manual](docs/Manuals/summarizing-meetings_manual.md)**: Guide to the meeting summary meta-skill — templates, autodetect, tag taxonomy, and Obsidian integration.
