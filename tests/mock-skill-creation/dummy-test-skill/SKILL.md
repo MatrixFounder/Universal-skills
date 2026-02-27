@@ -1,10 +1,10 @@
 ---
-name: skill-[name]
+name: dummy-test-skill
 description: Use when [TRIGGER: specific symptoms or situations]...
-tier: [TIER_VALUE] # See .agent/rules/skill_standards.yaml
+tier: 2 # See .agent/rules/skill_standards.yaml
 version: 1.0
 ---
-# [Skill Name]
+# Dummy Test Skill
 
 **Purpose**: [Detailed explanation of WHY this skill exists and WHAT problem it solves]
 

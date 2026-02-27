@@ -1,0 +1,18 @@
+{
+    "pass": true,
+    "score": 1,
+    "assertions": [
+        {
+            "name": "Is valid Python syntax",
+            "pass": true
+        },
+        {
+            "name": "Function is named add_numbers",
+            "pass": true
+        },
+        {
+            "name": "Takes exactly two arguments",
+            "pass": true
+        }
+    ]
+}

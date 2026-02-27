@@ -1,0 +1,15 @@
+{
+    "pass": false,
+    "score": 0.5,
+    "assertions": [
+        {
+            "name": "Is valid Python syntax",
+            "pass": true
+        },
+        {
+            "name": "Throws TypeError on None input",
+            "pass": false,
+            "reason": "Caught Exception and returned 0 instead of throwing TypeError"
+        }
+    ]
+}
