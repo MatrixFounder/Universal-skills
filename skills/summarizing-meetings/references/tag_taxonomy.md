@@ -1,4 +1,4 @@
-# Tag Taxonomy for Meeting Summaries
+# Tag Taxonomy for Summaries
 
 All tags in the `tags:` frontmatter MUST be used ONLY from this list.
 If a new tag is needed — add it to this file first.
@@ -6,15 +6,15 @@ If a new tag is needed — add it to this file first.
 ## Rules
 
 1. Use **only** tags from the list below
-2. Every summary MUST have the `meeting` tag
-3. Add a meeting type tag from the **Meeting Type** section
+2. Every summary MUST have a **content type** tag: either `meeting` (for meeting summaries) or `lesson` (for educational content summaries)
+3. Add a type-specific tag from the **Meeting Type** or **Educational Type** section
 4. Add 1–3 tags from the **Domain** section based on content
 5. Add a project tag from **Project** if applicable
 6. Tags are all lowercase, hyphen-separated
 
 ## Meeting Type
 
-- `meeting` — base tag (MANDATORY)
+- `meeting` — base tag for meeting summaries (MANDATORY for meetings)
 - `standup` — daily/weekly standup
 - `retrospective` — retrospective
 - `discovery` — discovery / brainstorm
@@ -25,6 +25,15 @@ If a new tag is needed — add it to this file first.
 - `incident` — incident review / postmortem
 - `demo` — demo / showcase
 - `kickoff` — project kickoff
+
+## Educational Type
+
+- `lesson` — base tag for educational content summaries (MANDATORY for lessons)
+- `lecture` — recorded lecture / webinar
+- `workshop` — hands-on workshop / masterclass
+- `course-material` — part of a structured course
+- `tutorial` — step-by-step tutorial
+- `case-study` — case study analysis
 
 ## Domain
 
