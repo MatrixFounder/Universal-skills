@@ -26,7 +26,33 @@ Specific vocabulary and tone rules applied *on top* of the structure.
 | **Science** | Measured, hypothesis-driven. | *Encyclopedic* or *Objective* |
 | **Food** | Sensory, evocative. | *Opinionated* |
 
-## 3. Combinations (Examples)
+## 3. Editing Intensity (The Throttle)
+
+Intensity controls HOW MANY patterns to fix, based on text type. Works with priority tags [A]-[D] on each pattern.
+
+| Intensity | Fix Priorities | Best For | Notes |
+| :--- | :--- | :--- | :--- |
+| **max** | A + B + C + D | Marketing, social media, blog posts | Full rewrite. Every pattern addressed. |
+| **high** | A + B + C | Expert content (articles, Substack, Medium) | Strong editing, preserves structure. |
+| **medium** | A + B | Business correspondence, product docs | Removes obvious AI markers, keeps formality. |
+| **low** | A only | Technical documentation, specifications | Only critical patterns. Preserves precision. |
+| **minimal** | A only (cautiously) | Legal, regulatory, compliance text | Touch as little as possible. Never change meaning. |
+
+**Auto-detection** (when `--intensity auto` or omitted):
+
+| Genre | Default Intensity |
+| :--- | :--- |
+| marketing, social | max |
+| blog, food, crypto | high |
+| corporate, journalistic, encyclopedic, academic, science | medium |
+| technical | low |
+
+**Special rules:**
+*   **Direct quotes** inside any text: intensity = zero. Never edit someone else's words.
+*   **Short texts** (<100 words): Don't overload with fixes. 2-3 key markers is enough.
+*   **Already good text**: Say so. Don't edit for the sake of editing.
+
+## 4. Combinations (Examples)
 *   **Whitepaper**: `Genre: Encyclopedic` + `Style: Crypto`
 *   **Tech Blog**: `Genre: Opinionated` + `Style: Technical`
 *   **Press Release**: `Genre: Objective` + `Style: Corporate`
