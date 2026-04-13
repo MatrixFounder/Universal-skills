@@ -215,12 +215,35 @@ marp -s ./slides/ --port 3000
 Подключение внешнего CSS-файла темы:
 
 ```bash
-# Use custom theme
+# Подключить одну кастомную тему
 marp --theme ./my-theme.css slides.md -o slides.html
 
-# Use theme from URL
+# Тема по URL
 marp --theme https://example.com/theme.css slides.md
+
+# Загрузить папку с темами (использовать любую по имени в frontmatter)
+marp --theme-set ./themes/ slides.md --pdf
 ```
+
+**Где найти темы от сообщества:**
+
+| Источник | Описание |
+|:---|:---|
+| [Awesome Marp](https://github.com/marp-team/awesome-marp) | Официальный каталог |
+| [Marp Community Themes](https://rnd195.github.io/marp-community-themes/) | Галерея с визуальным превью |
+| [MarpX](https://github.com/cunhapaulo/MarpX) | Профессиональные академические темы |
+| [GitHub: marp-themes](https://github.com/topics/marp-themes) | Все репозитории сообщества |
+
+**Быстрый старт с внешней темой:**
+```bash
+# Скачать тему из сообщества
+curl -O https://raw.githubusercontent.com/rnd195/my-marp-themes/main/themes/academic.css
+
+# Рендер с ней
+marp --theme ./academic.css slides.md -o slides.html
+```
+
+> Подробные руководства по разработке кастомных тем и расширению скилла marp-slide — см. [Marp Slide Creator Manual](marp-slide_manual.md#developing-custom-themes).
 
 ### Batch Processing
 

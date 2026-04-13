@@ -215,12 +215,35 @@ Open `http://localhost:8080` (or the specified port) in a browser.
 Load an external CSS theme file:
 
 ```bash
-# Use custom theme
+# Use a single custom theme
 marp --theme ./my-theme.css slides.md -o slides.html
 
 # Use theme from URL
 marp --theme https://example.com/theme.css slides.md
+
+# Load a folder of themes (use any by name in frontmatter)
+marp --theme-set ./themes/ slides.md --pdf
 ```
+
+**Where to find community themes:**
+
+| Source | Description |
+|:---|:---|
+| [Awesome Marp](https://github.com/marp-team/awesome-marp) | Official curated list |
+| [Marp Community Themes](https://rnd195.github.io/marp-community-themes/) | Visual gallery with previews |
+| [MarpX](https://github.com/cunhapaulo/MarpX) | Professional academic themes |
+| [GitHub: marp-themes](https://github.com/topics/marp-themes) | All community repos |
+
+**Quick start with an external theme:**
+```bash
+# Download a community theme
+curl -O https://raw.githubusercontent.com/rnd195/my-marp-themes/main/themes/academic.css
+
+# Render with it
+marp --theme ./academic.css slides.md -o slides.html
+```
+
+> For detailed guides on developing custom themes and extending the marp-slide skill, see the [Marp Slide Creator Manual](marp-slide_manual.md#developing-custom-themes).
 
 ### Batch Processing
 

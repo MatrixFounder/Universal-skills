@@ -4,13 +4,35 @@ The **marp-slide** skill creates professional Marp presentation slides with 7 pr
 
 ## Table of Contents
 - [Getting Started](#getting-started)
+  - [Prerequisites](#prerequisites)
+  - [Quick Usage](#quick-usage)
+  - [Rendering Output](#rendering-output)
 - [Theme Selection](#theme-selection)
+  - [Decision Flow](#decision-flow)
+  - [Theme Files](#theme-files)
 - [Slide Structure](#slide-structure)
+  - [Title Slide](#title-slide)
+  - [Content Slides](#content-slides)
+  - [Guidelines](#guidelines)
+  - [Recommended Flow](#recommended-flow)
 - [Image Patterns](#image-patterns)
-- [Custom Themes](#custom-themes)
+  - [Common Layouts](#common-layouts)
+  - [Filters](#filters)
+- [Using External Themes](#using-external-themes)
+  - [Where to Find Themes](#where-to-find-themes)
+  - [How to Use an External Theme](#how-to-use-an-external-theme)
+- [Adding New Themes to the Skill](#adding-new-themes-to-the-skill)
+- [Developing Custom Themes](#developing-custom-themes)
+  - [Theme Structure](#theme-structure)
+  - [Minimal Theme Skeleton](#minimal-theme-skeleton)
+  - [Extending an Official Theme](#extending-an-official-theme)
+  - [CSS Custom Properties (Variables)](#css-custom-properties-variables)
+  - [Custom Slide Classes](#custom-slide-classes)
+  - [Design Checklist](#design-checklist)
 - [Quality Checklist](#quality-checklist)
 - [Advanced Features](#advanced-features)
 - [Troubleshooting](#troubleshooting)
+- [Skill Resources](#skill-resources)
 
 ## Getting Started
 
@@ -175,35 +197,350 @@ Apply CSS-like filters to background images:
 ![bg sepia:0.8](vintage-photo.png)    <!-- sepia tone -->
 ```
 
-## Custom Themes
+## Using External Themes
 
-For advanced customization beyond the 7 built-in themes, consult `references/theme-css-guide.md`.
+Beyond the 7 built-in themes, the Marp community offers dozens of ready-made themes.
 
-### Quick CSS Override
-Add a `<style>` block to override specific properties without modifying the theme:
+### Where to Find Themes
+
+| Source | Description |
+|:---|:---|
+| [Awesome Marp](https://github.com/marp-team/awesome-marp) | Official curated list — themes, plugins, tools |
+| [Marp Community Themes](https://rnd195.github.io/marp-community-themes/) | Visual gallery with live previews |
+| [MarpX](https://github.com/cunhapaulo/MarpX) | Professional themes for academics and researchers |
+| [Marpstyle](https://github.com/cunhapaulo/marpstyle) | Clean, minimalist designs |
+| [Awesome-Marp (favourhong)](https://github.com/favourhong/Awesome-Marp) | LaTeX Beamer replacement — 12+ academic themes |
+| [GitHub: marp-themes](https://github.com/topics/marp-themes) | All community repos tagged `marp-themes` |
+
+Notable individual themes: **Beam** (LaTeX Beamer), **Dracula** (dark), **Nord** (cold palette), **Rose Pine** (soft dark), **Graph Paper** (grid background).
+
+### How to Use an External Theme
+
+**Method 1: Download CSS and apply via CLI**
+```bash
+# Download theme
+curl -O https://raw.githubusercontent.com/rnd195/my-marp-themes/main/themes/academic.css
+
+# Apply when converting
+marp --theme ./academic.css slides.md -o slides.html
+```
+
+**Method 2: Use --theme-set for a folder of themes**
+```bash
+# Place multiple .css files in a folder
+marp --theme-set ./themes/ slides.md --pdf
+```
+
+**Method 3: Embed CSS directly in the Markdown file**
+
+Download the theme CSS, then paste it inside a `<style>` block. This makes the file self-contained — no external files needed at render time:
 ```markdown
 ---
 marp: true
 theme: default
+paginate: true
 ---
 
 <style>
-section {
-  background-color: #1e3a5f;
-  color: #ffffff;
-}
-h2 { color: #ffd700; }
+/* Paste the full theme CSS here */
+section { background: #1a1a2e; color: #eee; }
+h1, h2 { color: #e94560; }
+/* ... */
 </style>
+
+<!-- _class: lead -->
+# My Presentation
 ```
 
-### Key CSS Selectors
-| Selector | Target |
-|:---|:---|
-| `section` | Each slide |
-| `section h1, h2, h3` | Headings |
-| `section ul, ol` | Lists |
-| `section.lead` | Title/lead slides |
-| `section::after` | Page numbers |
+> **Tip:** Method 3 is what the `marp-slide` skill uses — all 7 built-in templates embed their CSS directly so the output file has zero external dependencies.
+
+### Security Note
+
+Only use themes from trusted sources. A malicious CSS file can exfiltrate data via external URL requests (see `content: url("https://evil.com/...")`). Review CSS before applying. The built-in skill themes in `assets/` are safe.
+
+## Adding New Themes to the Skill
+
+To extend the `marp-slide` skill with a new theme:
+
+### Step 1: Create the CSS File
+
+Save the theme CSS to `assets/theme-<name>.css`:
+
+```css
+/* @theme my-corporate */
+
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap');
+
+section {
+  background-color: #ffffff;
+  color: #1a1a1a;
+  font-family: 'Inter', sans-serif;
+  font-size: 22px;
+  padding: 60px;
+}
+
+h1, h2 { color: #0066cc; font-weight: 700; }
+
+h2 {
+  border-bottom: 2px solid #0066cc;
+  padding-bottom: 8px;
+  margin-bottom: 32px;
+}
+
+section.lead {
+  background: linear-gradient(135deg, #0066cc, #004499);
+  color: #ffffff;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+}
+
+section.lead h1, section.lead h2 { color: #ffffff; }
+```
+
+### Step 2: Create the Template
+
+Save a ready-to-use Markdown template to `assets/template-<name>.md`:
+
+```markdown
+---
+marp: true
+theme: default
+paginate: true
+---
+
+<style>
+/* Paste the FULL CSS from theme-<name>.css here */
+</style>
+
+<!-- _class: lead -->
+
+# Presentation Title
+## Subtitle
+
+Author | Date
+
+---
+
+## Agenda
+
+- Topic 1
+- Topic 2
+- Topic 3
+
+---
+
+## Slide Title
+
+- Key point 1
+- Key point 2
+- Key point 3
+```
+
+The template must embed the full CSS — this ensures the output file is self-contained.
+
+### Step 3: Register in SKILL.md
+
+Add the new theme to the "Available Themes" section and the theme selection rules:
+
+```markdown
+### 8. Corporate Theme
+**Colors**: White background, blue headings, Inter font
+**Style**: Clean corporate with gradient lead slides
+**Use for**: Internal presentations, corporate reports
+**Template**: `template-corporate.md`
+```
+
+Update the Quick Start theme selection:
+```markdown
+- **Corporate/Internal** → corporate theme
+```
+
+### Step 4: Verify
+
+- Open the template in VS Code with Marp extension (`Cmd+Shift+V`)
+- Check that lead slides, content slides, lists, and code blocks render correctly
+- Export to PDF: `marp --theme ./assets/theme-<name>.css template-<name>.md --pdf`
+
+## Developing Custom Themes
+
+Full CSS reference: `references/theme-css-guide.md` and [Marpit Theme CSS docs](https://marpit.marp.app/theme-css).
+
+### Theme Structure
+
+Every Marp theme CSS file must start with the `@theme` metadata comment:
+
+```css
+/* @theme my-theme */
+```
+
+Without this line, Marp will not recognize the file as a theme.
+
+### Minimal Theme Skeleton
+
+```css
+/* @theme my-theme */
+
+/* --- Base slide --- */
+section {
+  background-color: #ffffff;
+  color: #333333;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  font-size: 22px;
+  padding: 60px;
+  width: 1280px;          /* 16:9 default */
+  height: 720px;
+}
+
+/* --- Typography --- */
+h1 { font-size: 48px; color: #1a1a1a; }
+h2 { font-size: 36px; color: #333333; margin-bottom: 24px; }
+h3 { font-size: 28px; color: #555555; }
+
+/* --- Lists --- */
+ul, ol { padding-left: 1.5em; }
+li { margin-bottom: 8px; }
+li::marker { color: #3b82f6; }
+
+/* --- Code --- */
+pre {
+  background-color: #f5f5f5;
+  border-radius: 6px;
+  padding: 16px;
+  font-size: 16px;
+}
+code {
+  font-family: 'Fira Code', monospace;
+  background-color: #f0f0f0;
+  padding: 2px 6px;
+  border-radius: 3px;
+}
+
+/* --- Lead (title) slides --- */
+section.lead {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  text-align: center;
+}
+
+/* --- Page numbers --- */
+section::after {
+  content: attr(data-marpit-pagination) ' / ' attr(data-marpit-pagination-total);
+  position: absolute;
+  right: 30px;
+  bottom: 20px;
+  font-size: 14px;
+  color: #999;
+}
+```
+
+### Extending an Official Theme
+
+Instead of writing from scratch, inherit from an official theme and override:
+
+```css
+/* @theme my-extended-default */
+@import-theme 'default';
+
+/* Override just what you need */
+section {
+  font-family: 'Inter', sans-serif;
+  background-color: #fafafa;
+}
+
+h1, h2 { color: #0055aa; }
+
+section.lead {
+  background: linear-gradient(135deg, #0055aa, #003377);
+  color: #fff;
+}
+section.lead h1 { color: #fff; }
+```
+
+Available base themes: `default`, `gaia`, `uncover`.
+
+### CSS Custom Properties (Variables)
+
+Use variables for consistent theming and easy customization:
+
+```css
+/* @theme configurable */
+
+:root {
+  --bg: #ffffff;
+  --fg: #333333;
+  --heading: #0066cc;
+  --accent: #e94560;
+  --font: 'Inter', sans-serif;
+  --font-code: 'Fira Code', monospace;
+}
+
+section { background: var(--bg); color: var(--fg); font-family: var(--font); }
+h1, h2 { color: var(--heading); }
+strong { color: var(--accent); }
+code { font-family: var(--font-code); }
+```
+
+Users can then override variables per-slide with `<style scoped>`:
+```markdown
+<style scoped>
+:root { --bg: #1a1a2e; --fg: #eee; --heading: #e94560; }
+</style>
+
+## This Slide Has Dark Background
+```
+
+### Custom Slide Classes
+
+Define reusable class variations beyond `lead` and `invert`:
+
+```css
+/* Section break slide */
+section.section-break {
+  background: linear-gradient(135deg, var(--heading), var(--accent));
+  color: #fff;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+}
+
+/* Quote slide */
+section.quote {
+  background-color: #f8f8f8;
+  font-style: italic;
+  font-size: 28px;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+}
+```
+
+Use in Markdown:
+```markdown
+<!-- _class: section-break -->
+# Part 2: Implementation
+
+---
+
+<!-- _class: quote -->
+> "Any sufficiently advanced technology is indistinguishable from magic."
+> — Arthur C. Clarke
+```
+
+### Design Checklist
+
+Before finalizing a custom theme, verify:
+
+- [ ] Contrast ratio between background and text is 4.5:1 or higher
+- [ ] Body font size is 22-24px, h1 is 40-60px
+- [ ] Padding is 60px or more (content should not touch edges)
+- [ ] `section.lead` class is styled for title slides
+- [ ] `section::after` is styled for page numbers
+- [ ] Code blocks (`pre`, `code`) have distinct background
+- [ ] Lists (`ul`, `ol`, `li::marker`) are styled
+- [ ] Fallback fonts are specified (system fonts after web fonts)
+- [ ] Theme renders correctly in both HTML preview and PDF export
 
 ### Google Fonts
 All built-in templates import Noto Sans JP for Japanese support:
