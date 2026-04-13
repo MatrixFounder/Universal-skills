@@ -96,6 +96,7 @@ Skills are automatically loaded from these locations:
 | :--- | :--- | :--- |
 | **[Post Writing](skills/post-writing/SKILL.md)** | 4-step editorial pipeline for LinkedIn/Telegram posts: analyze → hook → draft → review. Includes brand voice guides (RU/EN), 7 hook formulas, platform formatting, and review checklist. | 2 |
 | **[Text Humanizer](skills/text-humanizer/SKILL.md)** | Rewrites text to remove "AI slop" or generates prompt tailored to specific genres (Wiki, Crypto, etc.). | 2 |
+| **[Marp Slide Creator](skills/marp-slide/SKILL.md)** | Creates professional Marp presentation slides with 7 pre-designed themes. Supports image layouts, custom CSS, and "make it look good" requests with automatic theme inference. | 2 |
 
 ### Verification Skills (VDD)
 
@@ -146,3 +147,5 @@ Detailed manuals for specific components can be found in `docs/Manuals`:
 - **[Skill Validator Manual](docs/Manuals/skill-validator_manual.md)**: Security auditing guide — CLI reference, architecture, pattern catalog, and CI/CD integration.
 - **[Auto-Healing Workflow](docs/manuals/auto-fix-workflow.md)**: Guide to using the automated repair loop for skills.
 - **[Summarizing Meetings Manual](docs/Manuals/summarizing-meetings_manual.md)**: Guide to the meeting summary meta-skill — templates, autodetect, tag taxonomy, and Obsidian integration.
+- **[Marp Slide Creator Manual](docs/Manuals/marp-slide_manual.md)**: Guide to creating Marp presentations — theme selection, image patterns, CSS customization, and quality checklist.
+- **[Marp CLI Manual](docs/Manuals/marp-cli_manual.md)**: Installation, dependencies, core commands, configuration, and troubleshooting for Marp CLI renderer.
