@@ -100,13 +100,33 @@ EOF
 echo "[install.sh] Running smoke test via .venv Python..."
 ./.venv/bin/python "$SCRIPT_DIR/render.py" "$TMPDIR/smoke.md" --format pdf --output "$TMPDIR/smoke.pdf"
 
-if [ -s "$TMPDIR/smoke.pdf" ]; then
-    SMOKE_SIZE=$(stat -f%z "$TMPDIR/smoke.pdf" 2>/dev/null || stat -c%s "$TMPDIR/smoke.pdf")
-    echo "[install.sh] OK — smoke test produced $SMOKE_SIZE bytes"
-else
+if [ ! -s "$TMPDIR/smoke.pdf" ]; then
     echo "[install.sh] ERROR: smoke test produced empty or missing PDF." >&2
     exit 1
 fi
+SMOKE_SIZE=$(stat -f%z "$TMPDIR/smoke.pdf" 2>/dev/null || stat -c%s "$TMPDIR/smoke.pdf")
+
+# Positive assertion: preprocessing must have written an SVG under smoke_assets/.
+# Catches the regression class where the SVG reference is wrong and marp silently
+# drops the missing image (non-empty but diagram-less PDF).
+SVG_COUNT=$(find "$TMPDIR/smoke_assets" -name 'diagram-*.svg' 2>/dev/null | wc -l | tr -d ' ')
+if [ "$SVG_COUNT" -lt 1 ]; then
+    echo "[install.sh] ERROR: smoke test did not produce any SVG under smoke_assets/." >&2
+    echo "            The mermaid-preprocessing path is broken." >&2
+    exit 1
+fi
+
+# Defensive size floor. SVG_COUNT alone can't catch the SVG-reference-path bug class:
+# mmdc succeeds (SVG exists) but marp can't find it, so the embedded image is missing
+# and the PDF shrinks. Observed sizes: broken ≈ 6.8 KB, fixed ≈ 12 KB. 10 KB separates them.
+if [ "$SMOKE_SIZE" -lt 10000 ]; then
+    echo "[install.sh] ERROR: smoke test PDF suspiciously small ($SMOKE_SIZE bytes; expected >10KB)." >&2
+    echo "            SVG is present under smoke_assets/ but the PDF is missing it — " >&2
+    echo "            preprocessing wrote the wrong relative path. Check render.py." >&2
+    exit 1
+fi
+
+echo "[install.sh] OK — smoke test produced $SMOKE_SIZE bytes, $SVG_COUNT SVG(s) cached"
 
 echo ""
 echo "[install.sh] All dependencies installed and verified."

@@ -49,6 +49,7 @@ Use this skill when the user:
 - **Output Location**: Save output to the user's working directory or the location they specify. Do not hardcode output paths.
 - **No External Fetching**: Do not download images or external resources unless the user explicitly provides URLs and requests it.
 - **Template Integrity**: Read templates from `assets/` as references. Never overwrite them.
+- **Rendering Trust**: `scripts/render.py` always invokes marp with `--allow-local-files`, so marp can embed any file the current user can read. Only render `.md` files you trust; do not run the renderer on decks from untrusted sources.
 
 ## Validation Evidence
 - **Primary**: The output `.md` file contains valid Marp frontmatter (`marp: true`, `theme`, `paginate` directives).
@@ -253,13 +254,18 @@ Set these env vars before running `install.sh` on networks that block the Puppet
 
 ### Cyrillic / CJK / RTL text in mermaid diagrams
 
-`mmdc`'s default font does not contain all Unicode ranges — non-Latin text in a mermaid diagram may render as boxes. Fix by creating a mermaid config:
+`mmdc`'s default font does not contain all Unicode ranges — non-Latin text in a mermaid diagram may render as boxes. Fix via a mermaid config JSON, applied one of two ways:
 
-    cat > mermaid-config.json <<'EOF'
+**Auto-load:** drop a `mermaid-config.json` into `scripts/`; `render.py` picks it up on every run.
+
+**Per-run:** pass `--mermaid-config PATH` to `scripts/render`.
+
+    # Example config
+    cat > scripts/mermaid-config.json <<'EOF'
     { "theme": "default", "themeVariables": { "fontFamily": "Arial, sans-serif" } }
     EOF
 
-and editing `scripts/render.py` to add `-c mermaid-config.json` to the `mmdc` invocation. See `scripts/README.md` troubleshooting.
+The config content + `mmdc --version` are folded into the SHA1 cache key, so cached SVGs invalidate automatically when either changes. See `scripts/README.md` for details.
 
 ## References
 

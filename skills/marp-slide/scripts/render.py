@@ -11,6 +11,7 @@ External tools (installed locally under ``scripts/node_modules/`` by ``install.s
 Usage:
   render.py INPUT.md [--format pptx|pdf|html|png|jpeg] [--output OUTPUT]
                      [--no-mermaid] [--strict-mermaid] [--theme NAME]
+                     [--mermaid-config PATH]
 
 Examples:
   render.py deck.md                               # -> deck.pptx, mermaid pre-rendered
@@ -18,13 +19,18 @@ Examples:
   render.py deck.md --output /tmp/out.pptx        # explicit output path
   render.py deck.md --no-mermaid                  # skip preprocessing (diagrams stay as code)
   render.py deck.md --theme business              # override frontmatter theme
+  render.py deck.md --mermaid-config conf.json    # pass -c to mmdc (Cyrillic/CJK font fix)
 
 Exit codes:
   0 — success
   1 — bad args or input
   2 — marp CLI not installed (fatal)
-  3 — marp rendering failed
+  3 — marp rendering failed or timed out
   4 — mermaid preprocessing failed AND --strict-mermaid was set
+
+Security note:
+  render.py always invokes marp with --allow-local-files, which lets marp embed any file
+  the current user can read. Render only Marp `.md` files you trust.
 """
 from __future__ import annotations
 import argparse
@@ -34,13 +40,16 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 LOCAL_BIN = SCRIPT_DIR / 'node_modules' / '.bin'
+DEFAULT_MERMAID_CONFIG = SCRIPT_DIR / 'mermaid-config.json'
 
 MERMAID_BLOCK_RE = re.compile(r'```mermaid\s*\n(.*?)\n```', re.DOTALL)
 SUPPORTED_FORMATS = ('pptx', 'pdf', 'html', 'png', 'jpeg')
+SUBPROCESS_TIMEOUT = 300  # seconds per marp / mmdc invocation
 
 
 def die(code: int, msg: str) -> None:
@@ -49,16 +58,15 @@ def die(code: int, msg: str) -> None:
 
 
 def _tool_path(name: str) -> Path | None:
-    """Resolve a CLI tool, preferring local node_modules/.bin over system PATH."""
+    """Resolve a CLI tool, preferring local node_modules/.bin over system PATH.
+    The binary must exist AND be executable — a present-but-non-executable file
+    (e.g. permissions lost during tar restore) is treated as missing so the caller
+    gets the friendly "run install.sh" message instead of a raw PermissionError."""
     local = LOCAL_BIN / name
-    if local.exists():
+    if local.exists() and os.access(local, os.X_OK):
         return local
     found = shutil.which(name)
     return Path(found) if found else None
-
-
-def check_tool(name: str) -> bool:
-    return _tool_path(name) is not None
 
 
 def _subprocess_env() -> dict[str, str]:
@@ -69,7 +77,35 @@ def _subprocess_env() -> dict[str, str]:
     return env
 
 
-def preprocess_mermaid(md_text: str, assets_dir: Path, strict: bool = False) -> str:
+def _mmdc_cache_key(mmdc: Path, mermaid_config: Path | None, env: dict[str, str]) -> str:
+    """Fingerprint of the rendering toolchain: mmdc version + the flag set + the
+    config file content. Mixed into each diagram's SHA1 so cached SVGs are
+    invalidated when the user upgrades mmdc or changes the config."""
+    version = ''
+    try:
+        result = subprocess.run(
+            [str(mmdc), '--version'],
+            capture_output=True, text=True, check=False,
+            timeout=30, env=env,
+        )
+        version = (result.stdout or '').strip()
+    except (subprocess.SubprocessError, OSError):
+        pass
+    config_bytes = b''
+    if mermaid_config and mermaid_config.exists():
+        config_bytes = mermaid_config.read_bytes()
+    return hashlib.sha1(
+        version.encode('utf-8') + b'|-b|transparent|' + config_bytes
+    ).hexdigest()[:8]
+
+
+def preprocess_mermaid(
+    md_text: str,
+    assets_dir: Path,
+    *,
+    strict: bool = False,
+    mermaid_config: Path | None = None,
+) -> str:
     """Replace mermaid code blocks with SVG image references.
     If mmdc is unavailable, optionally warn and leave blocks untouched (degrades to code)."""
     if not MERMAID_BLOCK_RE.search(md_text):
@@ -84,25 +120,36 @@ def preprocess_mermaid(md_text: str, assets_dir: Path, strict: bool = False) -> 
               "Run scripts/install.sh to install mermaid-cli locally.", file=sys.stderr)
         return md_text
 
-    assets_dir.mkdir(parents=True, exist_ok=True)
     env = _subprocess_env()
-    # The rewritten .md sits next to the input, so SVG refs must be relative to input_md.parent
-    # (e.g. "deck_assets/diagram-<sha1>.svg"), not just the bare filename.
+    cache_key = _mmdc_cache_key(mmdc, mermaid_config, env)
+    assets_dir.mkdir(parents=True, exist_ok=True)
     ref_base = assets_dir.parent
 
     def replace(match: re.Match) -> str:
         body = match.group(1)
-        digest = hashlib.sha1(body.encode('utf-8')).hexdigest()[:10]
+        digest = hashlib.sha1(
+            body.encode('utf-8') + b'|' + cache_key.encode('ascii')
+        ).hexdigest()[:10]
         mmd_path = assets_dir / f'diagram-{digest}.mmd'
         svg_path = assets_dir / f'diagram-{digest}.svg'
         if not svg_path.exists():
             mmd_path.write_text(body, encoding='utf-8')
+            cmd = [str(mmdc), '-i', str(mmd_path), '-o', str(svg_path),
+                   '-b', 'transparent']
+            if mermaid_config:
+                cmd.extend(['-c', str(mermaid_config)])
             try:
                 subprocess.run(
-                    [str(mmdc), '-i', str(mmd_path), '-o', str(svg_path),
-                     '-b', 'transparent'],
-                    check=True, capture_output=True, env=env,
+                    cmd, check=True, capture_output=True, env=env,
+                    timeout=SUBPROCESS_TIMEOUT,
+                    stdin=subprocess.DEVNULL,
                 )
+            except subprocess.TimeoutExpired:
+                if strict:
+                    die(4, f"mmdc timed out after {SUBPROCESS_TIMEOUT}s on diagram {digest}.")
+                print(f"[render.py] WARN: mmdc timed out on diagram {digest}; keeping as code.",
+                      file=sys.stderr)
+                return match.group(0)
             except subprocess.CalledProcessError as exc:
                 stderr = exc.stderr.decode('utf-8', errors='replace') if exc.stderr else ''
                 if strict:
@@ -124,28 +171,51 @@ def render(
     use_mermaid: bool = True,
     strict_mermaid: bool = False,
     theme: str | None = None,
+    mermaid_config: Path | None = None,
 ) -> None:
     marp = _tool_path('marp')
     if marp is None:
         die(2, "'marp' CLI not found. Run scripts/install.sh to install marp-cli locally "
                "under scripts/node_modules/.")
 
-    if fmt not in SUPPORTED_FORMATS:
-        die(1, f"format must be one of {SUPPORTED_FORMATS}, got '{fmt}'")
-
     src = input_md.read_text(encoding='utf-8')
     assets_dir = input_md.parent / f'{input_md.stem}_assets'
-    processed = preprocess_mermaid(src, assets_dir, strict=strict_mermaid) if use_mermaid else src
+    processed = preprocess_mermaid(
+        src, assets_dir,
+        strict=strict_mermaid,
+        mermaid_config=mermaid_config,
+    ) if use_mermaid else src
 
-    rewritten_md = input_md.with_name(input_md.stem + '.rendered' + input_md.suffix)
-    rewritten_md.write_text(processed, encoding='utf-8')
+    # Write the rewritten markdown to a unique temp file next to the input.
+    # marp resolves relative asset paths (including our rewritten mermaid SVGs)
+    # against the input file's directory, so it has to live there. Using
+    # tempfile.NamedTemporaryFile avoids the silent-clobber risk that a fixed
+    # "<stem>.rendered.md" name carries if the user already owns such a file.
+    with tempfile.NamedTemporaryFile(
+        mode='w', encoding='utf-8',
+        dir=input_md.parent,
+        prefix=f'.{input_md.stem}.render-',
+        suffix=input_md.suffix,
+        delete=False,
+    ) as tmp:
+        tmp.write(processed)
+        rewritten_md = Path(tmp.name)
 
     cmd = [str(marp), f'--{fmt}', '--allow-local-files', str(rewritten_md), '-o', str(output)]
     if theme:
         cmd.extend(['--theme', theme])
 
     try:
-        subprocess.run(cmd, check=True, env=_subprocess_env())
+        # stdin=DEVNULL: when stdin is a pipe (CI/background), marp waits on it
+        # forever unless told otherwise. Use DEVNULL unconditionally — we never
+        # pipe markdown in, always pass it as a path arg.
+        subprocess.run(
+            cmd, check=True, env=_subprocess_env(),
+            timeout=SUBPROCESS_TIMEOUT,
+            stdin=subprocess.DEVNULL,
+        )
+    except subprocess.TimeoutExpired:
+        die(3, f"marp timed out after {SUBPROCESS_TIMEOUT}s")
     except subprocess.CalledProcessError as exc:
         die(3, f"marp failed (exit {exc.returncode}); see stderr above")
     finally:
@@ -156,7 +226,9 @@ def render(
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description='Render a Marp markdown with mermaid preprocessing.')
+    parser = argparse.ArgumentParser(
+        description='Render a Marp markdown with mermaid preprocessing.'
+    )
     parser.add_argument('input', type=Path, help='Input .md file')
     parser.add_argument('--format', default='pptx', choices=SUPPORTED_FORMATS,
                         help='Output format (default: pptx)')
@@ -167,16 +239,29 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument('--strict-mermaid', action='store_true',
                         help='Fail if mermaid blocks exist but cannot be rendered')
     parser.add_argument('--theme', default=None, help='Override theme (name or CSS path)')
+    parser.add_argument(
+        '--mermaid-config', type=Path, default=None,
+        help=f'Path to a mermaid config JSON (passed to mmdc via -c). '
+             f'If omitted, {DEFAULT_MERMAID_CONFIG.name} in scripts/ is auto-loaded when present. '
+             f'Useful for Cyrillic/CJK font fallbacks.',
+    )
     args = parser.parse_args(argv)
 
     if not args.input.exists():
         die(1, f"input file not found: {args.input}")
 
+    mermaid_config = args.mermaid_config
+    if mermaid_config is None and DEFAULT_MERMAID_CONFIG.exists():
+        mermaid_config = DEFAULT_MERMAID_CONFIG
+    if mermaid_config is not None and not mermaid_config.exists():
+        die(1, f"mermaid config not found: {mermaid_config}")
+
     output = args.output or args.input.with_suffix(f'.{args.format}')
     render(args.input, output, args.format,
            use_mermaid=not args.no_mermaid,
            strict_mermaid=args.strict_mermaid,
-           theme=args.theme)
+           theme=args.theme,
+           mermaid_config=mermaid_config)
     return 0
 
 

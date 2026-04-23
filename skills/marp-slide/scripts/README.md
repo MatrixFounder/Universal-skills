@@ -50,6 +50,7 @@ SHA1 cache means re-running the same source skips `mmdc` calls.
 | `--no-mermaid` | Skip mermaid preprocessing (faster; diagrams remain as code blocks). |
 | `--strict-mermaid` | Fail if mermaid blocks exist but cannot be rendered. Default: warn and continue. |
 | `--theme NAME` | Override the theme from frontmatter (name or CSS path). |
+| `--mermaid-config PATH` | Pass `-c PATH` to mmdc. `scripts/mermaid-config.json` is auto-loaded when present (see Cyrillic/CJK section below). |
 
 Exit codes:
 
@@ -58,8 +59,12 @@ Exit codes:
 | 0 | Success |
 | 1 | Bad arguments or missing input |
 | 2 | `marp` CLI not available (run `install.sh`) |
-| 3 | `marp` rendering failed |
-| 4 | Mermaid preprocessing failed AND `--strict-mermaid` was set |
+| 3 | `marp` rendering failed or timed out (5 min per invocation) |
+| 4 | Mermaid preprocessing failed / timed out AND `--strict-mermaid` was set |
+
+## Security
+
+`render.py` always invokes marp with `--allow-local-files`, which lets marp embed any file the current user can read (e.g. `![bg](/etc/passwd)` in a `.md` is read and embedded). **Render only decks you trust** — do not run this on `.md` files from untrusted sources.
 
 ## CI / sandboxed environments
 
@@ -72,17 +77,19 @@ Confirmed working with system Chrome at `/opt/google/chrome/chrome` (Linux) and 
 
 ## Cyrillic / CJK / RTL fonts in mermaid diagrams
 
-`mmdc`'s default font set may not contain non-Latin glyphs — diagrams can render as boxes. Workaround:
+`mmdc`'s default font set may not contain non-Latin glyphs — diagrams can render as boxes. Fix via a mermaid config JSON, applied in one of two ways:
 
-1. Create a mermaid config:
+**Option A (auto-load).** Drop a file named `mermaid-config.json` inside `scripts/`; `render.py` picks it up automatically on every run:
 
-        cat > /tmp/mermaid-config.json <<'EOF'
-        { "theme": "default", "themeVariables": { "fontFamily": "Arial, sans-serif" } }
-        EOF
+    cat > scripts/mermaid-config.json <<'EOF'
+    { "theme": "default", "themeVariables": { "fontFamily": "Arial, sans-serif" } }
+    EOF
 
-2. Edit `render.py`'s `mmdc` invocation to add `-c /tmp/mermaid-config.json`.
+**Option B (per-run).** Pass `--mermaid-config PATH` explicitly:
 
-(Left as an opt-in rather than default — English decks don't need it and the extra flag can confuse first-time users.)
+    scripts/render deck.md --mermaid-config /path/to/cfg.json
+
+Either option is folded into the SHA1 cache key, so cached SVGs are invalidated automatically when the config file content changes. `mmdc --version` is included in the same key so toolchain upgrades also bust the cache.
 
 ## Troubleshooting
 
@@ -97,7 +104,9 @@ Confirmed working with system Chrome at `/opt/google/chrome/chrome` (Linux) and 
 
 ## Validation
 
-`install.sh` runs an inline smoke test (1 mermaid mindmap → PDF) before exiting. For per-PR validation, add to CI:
+`install.sh` runs an inline smoke test (1-block mindmap → PDF). It now asserts three things: PDF non-empty, ≥1 SVG cached under `smoke_assets/`, and PDF size > 20 KB (catches the "SVG-reference broken → non-empty PDF without diagram" regression class).
+
+For per-PR validation, add to CI:
 
     bash scripts/install.sh
     scripts/render examples/fixture-mermaid-minimal.md --output /tmp/minimal.pptx
@@ -106,3 +115,10 @@ Confirmed working with system Chrome at `/opt/google/chrome/chrome` (Linux) and 
     [ -s /tmp/full.pptx ] || exit 1
     [ "$(find examples/fixture-mermaid-full-deck_assets -name '*.svg' 2>/dev/null | wc -l)" -gt 0 ] \
         || { echo "no SVG cache — mmdc likely failed"; exit 1; }
+
+    # Multi-block regex / dedup regression guard:
+    scripts/render examples/fixture-mermaid-multi.md --output /tmp/multi.pptx
+    [ -s /tmp/multi.pptx ] || exit 1
+    # Fixture has 3 blocks where #1 and #3 are identical — expect exactly 2 unique SVGs.
+    COUNT=$(find examples/fixture-mermaid-multi_assets -name 'diagram-*.svg' 2>/dev/null | wc -l | tr -d ' ')
+    [ "$COUNT" -eq 2 ] || { echo "expected 2 SVGs for multi fixture, got $COUNT"; exit 1; }
