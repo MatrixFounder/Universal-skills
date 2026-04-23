@@ -1,0 +1,10 @@
+{
+  "name": "marp-slide-renderer",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Local dependencies for the marp-slide skill renderer. Installed under scripts/node_modules/; never published.",
+  "dependencies": {
+    "@marp-team/marp-cli": "^4.3.1",
+    "@mermaid-js/mermaid-cli": "^11.4.0"
+  }
+}

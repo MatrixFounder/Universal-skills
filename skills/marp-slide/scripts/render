@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+# Thin wrapper: invoke render.py through the local venv Python.
+# Usage: scripts/render INPUT.md [--format pptx|pdf|html|png|jpeg] [--output OUT] [...]
+set -euo pipefail
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+if [ ! -x "$SCRIPT_DIR/.venv/bin/python" ]; then
+    echo "[render] local venv not found at $SCRIPT_DIR/.venv/. Run: bash $SCRIPT_DIR/install.sh" >&2
+    exit 1
+fi
+exec "$SCRIPT_DIR/.venv/bin/python" "$SCRIPT_DIR/render.py" "$@"

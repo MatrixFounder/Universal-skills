@@ -33,11 +33,16 @@ Use this skill when the user:
 | "I already checked best practices on a previous run" | Best practices are re-read per invocation. Memory does not persist between sessions. |
 
 ## Execution Mode
-- **Mode**: `prompt-first`
-- **Rationale**: This is a content-creation skill. All work is reading templates/references and generating Markdown. No scripts are needed.
+- **Mode**: `prompt-first` for content-creation; optional local-venv `scripts/render` for rendering.
+- **Rationale**: Content-creation (picking templates, writing Marp-compatible markdown) is prompt-first and needs no runtime. Rendering to `.pptx/.pdf/.html/.png/.jpeg` is handled by an optional Python wrapper (`scripts/render.py`, invoked through a local venv) that pre-processes mermaid diagrams with a locally-installed `mmdc` before calling a locally-installed `marp-cli`. All rendering dependencies live under `scripts/.venv/` and `scripts/node_modules/` — nothing is installed globally.
 
 ## Script Contract
-- **N/A** — prompt-first skill with no scripts. All logic is template selection and Markdown generation.
+- **Input**: a Marp-compatible `.md` file (positional arg to `scripts/render.py`).
+- **Flags**: `--format {pptx,pdf,html,png,jpeg}` (default `pptx`), `--output PATH`, `--no-mermaid`, `--strict-mermaid`, `--theme NAME`.
+- **Output**: single file in the requested format at `--output` (or `<input_stem>.<format>` next to the input).
+- **Side effects**: per-deck cache directory `<input_stem>_assets/` with `diagram-<sha1>.mmd` and `.svg` for each unique mermaid block. Re-runs reuse cached SVGs.
+- **Binary resolution**: `marp` and `mmdc` are resolved from `scripts/node_modules/.bin/` (local-venv install); falls back to `PATH` if absent. System-wide installs are **not** required.
+- **Exit codes**: `0` success · `1` bad args / missing input · `2` marp CLI unavailable (run `install.sh`) · `3` marp rendering failed · `4` mermaid preprocessing failed AND `--strict-mermaid` was set.
 
 ## Safety Boundaries
 - **Scope**: Create or modify only the Marp `.md` file the user requested. Do not modify existing templates or CSS assets in the skill directory.
@@ -94,6 +99,23 @@ For detailed theme selection guidance, read `references/theme-selection.md`.
 5. Add images if needed using patterns from `references/image-patterns.md`
 
 6. Save to the user's working directory (or their specified output path) with `.md` extension
+
+### Step 3: Render (optional)
+
+If the caller wants `.pptx`, `.pdf`, `.html`, or image output — not just the `.md` — use the skill's own renderer:
+
+    bash scripts/install.sh            # one-time: creates scripts/.venv + scripts/node_modules
+    scripts/render INPUT.md            # default: .pptx with mermaid pre-rendered
+    scripts/render INPUT.md --format pdf
+
+The renderer:
+- runs entirely from a **local** Python venv (`scripts/.venv/`) and **local** `node_modules/` (`scripts/node_modules/`) — nothing installed globally;
+- handles mermaid diagrams (pre-rendered to SVG via `mmdc` before marp sees them) — closes the marp-core gap that leaves mermaid as raw code blocks;
+- supports formats `pptx`, `pdf`, `html`, `png`, `jpeg`;
+- caches SVG diagrams in `<input>_assets/` by SHA1 of the mermaid source (re-runs skip `mmdc`);
+- degrades gracefully when `mmdc` is absent (prints a WARN, leaves mermaid as code).
+
+See `scripts/README.md` for CLI flags, CI integration, and troubleshooting. See `## Dependencies` below for what `install.sh` sets up.
 
 ## Available Themes
 
@@ -205,6 +227,40 @@ Before delivering slides, verify:
 - [ ] File saved to user's working directory or specified path
 - [ ] Content follows best practices
 
+## Dependencies
+
+The **content-creation** portion of this skill (picking templates, writing Marp-compatible markdown) has **no runtime dependencies** — it's prompt-first, produces a `.md` file, and is portable across any environment.
+
+The **rendering** portion (optional; see Step 3 above) is fully **local** — no global installs. `bash scripts/install.sh` sets up everything under `scripts/.venv/` and `scripts/node_modules/`:
+
+| Dependency | Where installed | How |
+|------------|-----------------|-----|
+| Python 3.10+ | host | system package manager |
+| Node.js 18+ | host | https://nodejs.org/ |
+| Python venv | `scripts/.venv/` | `install.sh` → `python3 -m venv` (stdlib only, no pip packages) |
+| `@marp-team/marp-cli` | `scripts/node_modules/` | `install.sh` → `npm install` (local, not `-g`) |
+| `@mermaid-js/mermaid-cli` | `scripts/node_modules/` | `install.sh` → `npm install` (local, not `-g`). Optional: without it mermaid degrades to code. |
+| Headless Chromium | Puppeteer cache | auto-downloaded by marp/mmdc on first `npm install` (~200 MB) |
+
+Run `bash scripts/install.sh` once to install and verify all of the above. The script is idempotent — safe to re-run. To fully uninstall, just delete `scripts/.venv/` and `scripts/node_modules/`.
+
+### CI / sandboxed environments
+
+Set these env vars before running `install.sh` on networks that block the Puppeteer Chromium download:
+
+    export PUPPETEER_SKIP_DOWNLOAD=true
+    export PUPPETEER_EXECUTABLE_PATH=/path/to/chromium
+
+### Cyrillic / CJK / RTL text in mermaid diagrams
+
+`mmdc`'s default font does not contain all Unicode ranges — non-Latin text in a mermaid diagram may render as boxes. Fix by creating a mermaid config:
+
+    cat > mermaid-config.json <<'EOF'
+    { "theme": "default", "themeVariables": { "fontFamily": "Arial, sans-serif" } }
+    EOF
+
+and editing `scripts/render.py` to add `-c mermaid-config.json` to the `mmdc` invocation. See `scripts/README.md` troubleshooting.
+
 ## References
 
 ### Core Documentation
@@ -221,6 +277,10 @@ Before delivering slides, verify:
 ### Templates & Assets
 - **Templates**: `assets/template-*.md` - Starting points with embedded CSS for each theme (7 themes)
 - **Standalone CSS**: `assets/theme-*.css` - CSS files for reference (already embedded in templates)
+
+### Renderer & Fixtures
+- **Renderer operator notes**: `scripts/README.md` — CLI flags, install, CI, troubleshooting
+- **Fixtures**: `examples/fixture-mermaid-minimal.md`, `examples/fixture-mermaid-full-deck.md` — smoke-test inputs for `scripts/render` (mermaid mindmap + Cyrillic)
 
 ### Official External Links
 - **Marp Official Site**: https://marp.app/
