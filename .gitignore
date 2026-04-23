@@ -46,3 +46,7 @@ archieve
 test-posts
 GEMINI.md
 tmp
+
+# Claude Code runtime state
+.claude/scheduled_tasks.lock
+.claude/*.lock
