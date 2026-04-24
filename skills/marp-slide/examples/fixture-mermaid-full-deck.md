@@ -4,6 +4,29 @@ theme: default
 paginate: true
 header: 'ACME Corp × ACME Analytics · Discovery · 20XX-XX-XX'
 footer: 'ACME Cloud · Confidential (sample fixture)'
+style: |
+  /* Density classes for table-heavy / bullet-heavy slides so content does
+     not overflow into header/footer. Apply via _class: dense directive. */
+  section.dense {
+    font-size: 22px;
+  }
+  section.dense h1,
+  section.dense h2 {
+    font-size: 28px;
+    margin-bottom: 0.4em;
+  }
+  section.dense table {
+    font-size: 18px;
+    line-height: 1.3;
+  }
+  section.dense th,
+  section.dense td {
+    padding: 5px 10px;
+  }
+  section.dense blockquote {
+    font-size: 16px;
+    margin-top: 0.6em;
+  }
 ---
 
 <!--
@@ -14,7 +37,7 @@ strings replaced with generic placeholders; regulatory references replaced with
 
 Exercises in ONE deck:
   - frontmatter: theme, header, footer, paginate
-  - custom class directive <!-- _class: narrow --> on slide 2
+  - custom class directive `_class: dense` on bullet-heavy and table-heavy slides
   - title slide + 6 content slides + 3 back-pocket slides = 10 total
   - mermaid mindmap (2-level, 5 clusters × 2-4 sub-bullets — the canonical shape)
   - markdown table (PPVVC card on slide 3)
@@ -41,7 +64,7 @@ Expected output when rendered:
 
 ---
 
-<!-- _class: narrow -->
+<!-- _class: dense -->
 
 # 1. Контекст встречи · 1 мин
 
@@ -54,6 +77,7 @@ Expected output when rendered:
 ---
 
 <!-- Slide 2: Pain Map mindmap (audience-matched, 2-level, 5 clusters × 2-4 sub-bullets) -->
+<!-- _class: dense -->
 
 # 2. Карта боёв на вашей стороне
 
@@ -85,6 +109,7 @@ mindmap
 ---
 
 <!-- Slide 3: PPVVC one-pager — markdown table -->
+<!-- _class: dense -->
 
 # 3. Что мы предлагаем (PPVVC в одном слайде)
 
@@ -99,6 +124,7 @@ mindmap
 ---
 
 <!-- Slide 4: Карта боя grid - iconostasis for customer self-selection -->
+<!-- _class: dense -->
 
 # 4. С какого блока начнём?
 
@@ -148,6 +174,8 @@ mindmap
 
 ---
 
+<!-- _class: dense -->
+
 # 7. Лок следующих 10 дней
 
 | День | Кто | Что |
@@ -183,6 +211,8 @@ mindmap
 > *Интеграция: 2-4 недели. Замена лицензий: ноль. Data residency: ACME Cloud RU DCs.*
 
 ---
+
+<!-- _class: dense -->
 
 # 9. (Back-pocket) TCO pay-per-minute vs on-prem
 
