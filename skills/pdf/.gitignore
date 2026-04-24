@@ -1,0 +1,13 @@
+# pdf skill — local runtime artifacts
+
+# Python — populated by `python3 -m venv scripts/.venv`
+scripts/.venv/
+scripts/__pycache__/
+scripts/*.pyc
+
+# User-produced outputs from ad-hoc runs
+*.pdf
+!examples/**/*.pdf
+
+# OS cruft
+.DS_Store

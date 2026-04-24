@@ -1,0 +1,26 @@
+# xlsx skill — local runtime artifacts
+
+# Python — populated by `python3 -m venv scripts/.venv`
+scripts/.venv/
+scripts/__pycache__/
+scripts/office/__pycache__/
+scripts/office/**/__pycache__/
+scripts/*.pyc
+
+# OOXML schema bundles — fetched on demand by scripts/office/schemas/fetch.sh.
+# Only W3C xml.xsd, schemas/README.md, and fetch.sh are committed.
+scripts/office/schemas/.tmp/
+scripts/office/schemas/ecma-376/
+scripts/office/schemas/microsoft/
+
+# Compiled AF_UNIX shim — built on demand by office/shim/build.sh
+scripts/office/shim/liblo_socket_shim.so
+scripts/office/shim/liblo_socket_shim.dylib
+scripts/office/shim/*.o
+
+# User-produced outputs from ad-hoc runs
+*.xlsx
+!examples/**/*.xlsx
+
+# OS cruft
+.DS_Store

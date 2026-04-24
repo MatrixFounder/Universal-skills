@@ -1,0 +1,13 @@
+{
+  "name": "universal-skills-pptx",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Runtime dependencies for the pptx skill scripts (md2pptx.js).",
+  "license": "Apache-2.0",
+  "dependencies": {
+    "@mermaid-js/mermaid-cli": "^10.9.0",
+    "image-size": "^2.0.0",
+    "marked": "^12.0.0",
+    "pptxgenjs": "^3.12.0"
+  }
+}

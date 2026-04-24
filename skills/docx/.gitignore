@@ -1,0 +1,33 @@
+# docx skill — local runtime artifacts
+
+# Node — populated by `cd scripts && npm install`
+scripts/node_modules/
+scripts/package-lock.json
+scripts/npm-debug.log*
+
+# Python — populated by `python3 -m venv scripts/.venv`
+scripts/.venv/
+scripts/__pycache__/
+scripts/office/__pycache__/
+scripts/office/**/__pycache__/
+scripts/*.pyc
+
+# OOXML schema bundles — fetched on demand by scripts/office/schemas/fetch.sh
+# Only the W3C xml.xsd, schemas/README.md, and fetch.sh are committed;
+# the ECMA-376 and Microsoft schema bundles are external standards and
+# stay local.
+scripts/office/schemas/.tmp/
+scripts/office/schemas/ecma-376/
+scripts/office/schemas/microsoft/
+
+# Compiled AF_UNIX shim — built on demand by office/shim/build.sh
+scripts/office/shim/liblo_socket_shim.so
+scripts/office/shim/liblo_socket_shim.dylib
+scripts/office/shim/*.o
+
+# User-produced outputs from ad-hoc runs — do not commit
+*.docx
+!examples/**/*.docx
+
+# OS cruft
+.DS_Store

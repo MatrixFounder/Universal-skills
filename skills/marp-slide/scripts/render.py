@@ -172,6 +172,7 @@ def render(
     strict_mermaid: bool = False,
     theme: str | None = None,
     mermaid_config: Path | None = None,
+    pptx_editable: bool = False,
 ) -> None:
     marp = _tool_path('marp')
     if marp is None:
@@ -204,6 +205,17 @@ def render(
     cmd = [str(marp), f'--{fmt}', '--allow-local-files', str(rewritten_md), '-o', str(output)]
     if theme:
         cmd.extend(['--theme', theme])
+    if pptx_editable and fmt == 'pptx':
+        # marp's default PPTX is rasterised (each slide becomes one PNG
+        # background, which drops externally-referenced images such as
+        # our pre-rendered mermaid diagrams). `--pptx-editable` emits a
+        # proper editable PPTX with separate image shapes, but requires
+        # LibreOffice (`soffice`) on PATH.
+        if shutil.which('soffice') is None:
+            die(2, "--pptx-editable requires LibreOffice (`soffice`) on PATH. "
+                   "Install it: `brew install --cask libreoffice` (macOS) or "
+                   "`apt install libreoffice --no-install-recommends` (Debian).")
+        cmd.append('--pptx-editable')
 
     try:
         # stdin=DEVNULL: when stdin is a pipe (CI/background), marp waits on it
@@ -245,6 +257,12 @@ def main(argv: list[str] | None = None) -> int:
              f'If omitted, {DEFAULT_MERMAID_CONFIG.name} in scripts/ is auto-loaded when present. '
              f'Useful for Cyrillic/CJK font fallbacks.',
     )
+    parser.add_argument(
+        '--pptx-editable', action='store_true',
+        help='For --format pptx: produce an editable PPTX with separate '
+             'text/image shapes instead of the default rasterised slide-as-PNG. '
+             'Requires LibreOffice (`soffice`) on PATH.',
+    )
     args = parser.parse_args(argv)
 
     if not args.input.exists():
@@ -261,7 +279,8 @@ def main(argv: list[str] | None = None) -> int:
            use_mermaid=not args.no_mermaid,
            strict_mermaid=args.strict_mermaid,
            theme=args.theme,
-           mermaid_config=mermaid_config)
+           mermaid_config=mermaid_config,
+           pptx_editable=args.pptx_editable)
     return 0
 
 

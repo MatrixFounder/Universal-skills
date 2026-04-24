@@ -34,6 +34,10 @@ ENV/
 .env
 .venv
 
+# Node / npm (universal — covers every skill)
+node_modules/
+npm-debug.log*
+
 # IDEs
 .idea/
 .vscode/
@@ -44,7 +48,6 @@ ENV/
 .agent
 archieve
 test-posts
-GEMINI.md
 tmp
 
 # Claude Code runtime state
