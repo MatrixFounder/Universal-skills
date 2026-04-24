@@ -24,6 +24,7 @@ scripts/office/schemas/microsoft/
 scripts/office/shim/liblo_socket_shim.so
 scripts/office/shim/liblo_socket_shim.dylib
 scripts/office/shim/*.o
+scripts/office/shim/.build.lock
 
 # User-produced outputs from ad-hoc runs — do not commit
 *.docx
