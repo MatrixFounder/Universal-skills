@@ -141,6 +141,41 @@ section.no-scaling {
 }
 ```
 
+## Mermaid Diagrams (skill renderer)
+
+**Marp Core does not natively render mermaid.** A fenced ` ```mermaid ` block passed to vanilla marp-cli comes out as an unstyled code block. The marp-slide skill's renderer (`scripts/render.py`) closes that gap: it scans the markdown for mermaid blocks, calls `mmdc` to turn each one into an SVG, caches the result under `<input>_assets/`, then substitutes the block with a Marp image directive before invoking marp-cli.
+
+### Before (source `.md`)
+
+    ```mermaid
+    flowchart LR
+      A --> B
+      B --> C
+    ```
+
+### After (what marp actually renders)
+
+    ![w:900](deck_assets/diagram-4089a29eb6.svg)
+
+### Flags
+
+| Flag | Effect |
+|------|--------|
+| *(default)* | Preprocess mermaid; warn and fall back to code if `mmdc` is missing |
+| `--no-mermaid` | Skip preprocessing entirely (faster; diagrams remain as raw code) |
+| `--strict-mermaid` | Fail (exit 4) if any mermaid block cannot be rendered |
+| `--mermaid-config PATH` | Pass `-c PATH` to `mmdc` (Cyrillic/CJK font fix; auto-loads `scripts/mermaid-config.json` when present) |
+
+### Cache
+
+Each SVG filename is `diagram-<sha1>.svg` where the hash includes the mermaid body, `mmdc --version`, and the mermaid-config content. Upgrading `mmdc` or changing the config invalidates the cache automatically. Delete the `_assets/` directory to force a full rebuild.
+
+### See also
+
+- `scripts/README.md` — install (`bash scripts/install.sh`), CLI reference, troubleshooting (including the Cyrillic/CJK font workaround)
+- `references/image-patterns.md` → "Renderer-Generated Diagrams (mermaid → SVG)"
+- `examples/fixture-mermaid-minimal.md` / `-full-deck.md` / `-multi.md`
+
 ## Using HTML Tags
 
 You can write HTML directly in Markdown.
@@ -189,6 +224,8 @@ Important content goes here
 ```
 
 ## Marp CLI Detailed Options
+
+> **Note:** the marp-slide skill ships its own local wrapper at `scripts/render` (see `scripts/README.md`). Prefer that — it invokes marp-cli from the skill's local `node_modules/.bin/` and adds mermaid preprocessing. The raw `marp` commands below document the underlying CLI for reference / power users.
 
 Official: https://github.com/marp-team/marp-cli
 

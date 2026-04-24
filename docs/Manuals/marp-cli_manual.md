@@ -275,27 +275,27 @@ options:
 ```
 
 > **Note:** `allowLocalFiles` and `html` are `false` by default for security reasons. Only enable them for trusted content — see the [Security](#security) section below.
+>
+> **Scope note:** `.marprc.yml` is honored only by direct marp-cli invocations. The marp-slide skill's renderer (`scripts/render.py`) does **not** read this file — its flags are hardcoded (`--allow-local-files` always on, theme/format set via CLI args). Override via `scripts/render.py`'s own flags.
 
 Supported configuration formats: `.marprc.yml`, `.marprc.yaml`, `.marprc.json`, `.marprc.js`, `marp.config.js`, `marp.config.mjs`.
 
 ## Integration with marp-slide Skill
 
-The `marp-slide` skill and Marp CLI work **independently** but complement each other:
+The `marp-slide` skill writes a Marp `.md` file, then its own `scripts/render` wrapper pre-processes mermaid blocks into SVGs before handing the file to marp-cli. Three stages in a single pipeline:
 
 ```
-┌─────────────────┐         ┌─────────────┐         ┌──────────────┐
-│   marp-slide    │         │  Marp CLI   │         │   Output     │
-│   (AI skill)    │ ──MD──▶ │  (renderer) │ ──▶──▶  │  HTML/PDF/   │
-│                 │         │             │         │  PPTX/PNG    │
-│ Generates .md   │         │ Converts to │         │              │
-│ with embedded   │         │ final format│         │ Ready to     │
-│ CSS & content   │         │             │         │ present      │
-└─────────────────┘         └─────────────┘         └──────────────┘
+┌──────────────┐   ┌──────────────────────────┐   ┌──────────────┐   ┌──────────────┐
+│  marp-slide  │──▶│ scripts/render (venv py) │──▶│   Marp CLI   │──▶│   Output     │
+│ (AI writes   │   │  mermaid → SVG via mmdc  │   │ (local bin)  │   │  pptx/pdf/   │
+│    .md)      │   │  SHA1 cache in _assets/  │   │              │   │  html/png    │
+└──────────────┘   └──────────────────────────┘   └──────────────┘   └──────────────┘
 ```
 
-- **marp-slide** generates the `.md` file with embedded CSS, structured content, and proper Marp markup
-- **Marp CLI** converts that file into the final format
-- **Alternative to CLI** — the Marp for VS Code extension (preview: `Cmd+Shift+V`, export via Command Palette)
+- **marp-slide** writes the `.md` file with embedded CSS, structured content, and proper Marp markup.
+- **`scripts/render`** (the skill's own wrapper at `skills/marp-slide/scripts/render`) runs marp-cli from a local venv + `node_modules/` — no global installs needed — and pre-processes mermaid blocks via `mmdc`.
+- **marp-cli** converts the rewritten markdown into the final format.
+- **Alternative** — the Marp for VS Code extension (preview: `Cmd+Shift+V`, export via Command Palette). Note: VS Code preview does **not** pre-process mermaid, so diagrams there stay as code.
 
 ### Typical Workflow
 
@@ -303,15 +303,36 @@ The `marp-slide` skill and Marp CLI work **independently** but complement each o
 # 1. Ask the AI to generate slides (marp-slide skill)
 # → Output: presentation.md
 
-# 2. Preview in VS Code
-#    Cmd+Shift+V
+# 2. One-time local dependency install
+#    (creates .venv/ + node_modules/ under skills/marp-slide/scripts/)
+bash skills/marp-slide/scripts/install.sh
 
-# 3. Export to PDF for sharing
+# 3. Render with mermaid preprocessing
+skills/marp-slide/scripts/render presentation.md --format pdf
+
+# 4. For power users: call marp-cli directly (no mermaid preprocessing)
 marp presentation.md --pdf
-
-# 4. Or start a dev server for live presentation
-marp -s . --port 3000
 ```
+
+### Exit codes (from `scripts/render`)
+
+| Code | Meaning |
+|------|---------|
+| 0 | Success |
+| 1 | Bad arguments or missing input file |
+| 2 | `marp` CLI not available — run `bash scripts/install.sh` |
+| 3 | `marp` rendering failed or timed out (300 s per invocation) |
+| 4 | Mermaid preprocessing failed AND `--strict-mermaid` was set |
+
+Full flag reference in `skills/marp-slide/scripts/README.md`.
+
+### Mermaid preprocessing
+
+marp-cli alone does **not** render mermaid — a fenced ` ```mermaid ` block passed to vanilla marp comes out as unstyled code. The marp-slide skill closes that gap: `scripts/render.py` invokes `mmdc` on each mermaid block, caches the SVG at `<input>_assets/diagram-<sha1>.svg`, and rewrites the block as a Marp image directive (`![w:900](<stem>_assets/diagram-<sha1>.svg)`) before calling marp.
+
+The cache key includes `mmdc --version` and the content of `scripts/mermaid-config.json` (if present), so toolchain upgrades or font-config edits invalidate cached SVGs automatically. For Cyrillic / CJK content drop a config with `fontFamily: Arial, sans-serif` at `skills/marp-slide/scripts/mermaid-config.json`; it is auto-loaded.
+
+See `skills/marp-slide/scripts/README.md` for install, flags (`--no-mermaid`, `--strict-mermaid`, `--mermaid-config`), CI integration, and troubleshooting.
 
 ## Security
 
@@ -338,6 +359,8 @@ By default, Marp CLI has **no access** to local files. This is intentional — t
 | With `--allow-local-files` | Access to **any** file on disk | A malicious `.md` can read `/etc/passwd`, `~/.ssh/id_rsa`, etc. |
 
 **Rule:** use `--allow-local-files` only with **trusted** Markdown files. For untrusted files, upload images online or encode them as base64.
+
+> **Note for skill users:** the `marp-slide` skill's `scripts/render.py` inverts this default — it passes `--allow-local-files` unconditionally so marp can embed the skill's own cached SVGs under `<input>_assets/`. **Treat every `.md` you render via `scripts/render` as trusted.** For untrusted decks, bypass the wrapper and call `marp` directly with default-safe flags.
 
 ### Custom Themes as Attack Vector
 

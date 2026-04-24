@@ -133,6 +133,39 @@ Use sparingly and avoid excessive decoration.
 - Point 2
 ```
 
+## Using Diagrams (Mermaid)
+
+Prefer a mermaid diagram over a bullet list when the content is inherently *relational*: a process flow, a system architecture, a 2-level mindmap ("карта боя"-style overview), a state machine, or a cause/effect chain. Bullets flatten structure that a diagram keeps visible.
+
+### When diagrams beat bullets
+
+| Use bullets | Use a mermaid diagram |
+|-------------|-----------------------|
+| 3–5 peer items, no relationship | Items with a flow, hierarchy, or dependency |
+| Checklist / feature list | "How this talks to that" |
+| Ranked list | 2-level mindmap with 5–7 branches × 2–5 leaves |
+
+### Authoring syntax
+
+Write mermaid inside a fenced code block — it lives directly in the Marp source:
+
+    ```mermaid
+    mindmap
+      root((Product))
+        Users
+          onboarding
+          retention
+        Engineering
+          reliability
+          performance
+    ```
+
+### What the skill does with it
+
+The skill's renderer (`scripts/render.py`) pre-processes every `` ```mermaid `` block via `mmdc` into an SVG under `<input>_assets/diagram-<sha1>.svg`, then substitutes the block with a Marp image directive before handing the file to marp-cli. **Marp Core does not render mermaid natively** — without the renderer step (e.g. content-only delivery of the `.md`), the block stays as raw code.
+
+See `examples/fixture-mermaid-minimal.md` (one-block smoke) and `examples/fixture-mermaid-multi.md` (three-block dedup test) for concrete sources; see `scripts/README.md` for install and CLI flags.
+
 ## Font Size Guidelines
 
 Defined in the theme:
@@ -158,3 +191,4 @@ After completing slides, verify:
 - [ ] Are images used effectively?
 - [ ] Is there overall consistency?
 - [ ] Is the slide count appropriate?
+- [ ] For complex relationships/flows, is a mermaid diagram used instead of a bullet list?

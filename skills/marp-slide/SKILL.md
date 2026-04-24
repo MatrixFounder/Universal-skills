@@ -286,7 +286,10 @@ The config content + `mmdc --version` are folded into the SHA1 cache key, so cac
 
 ### Renderer & Fixtures
 - **Renderer operator notes**: `scripts/README.md` — CLI flags, install, CI, troubleshooting
-- **Fixtures**: `examples/fixture-mermaid-minimal.md`, `examples/fixture-mermaid-full-deck.md` — smoke-test inputs for `scripts/render` (mermaid mindmap + Cyrillic)
+- **Fixtures**:
+  - `examples/fixture-mermaid-minimal.md` — minimal smoke (one mermaid mindmap)
+  - `examples/fixture-mermaid-full-deck.md` — realistic 10-slide deck with Cyrillic mermaid content
+  - `examples/fixture-mermaid-multi.md` — 3 mermaid blocks (2 unique + 1 duplicate), guards regex and SHA1 dedup
 
 ### Official External Links
 - **Marp Official Site**: https://marp.app/

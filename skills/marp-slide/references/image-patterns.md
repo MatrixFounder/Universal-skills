@@ -281,6 +281,41 @@ Subdued background with blur and darkness
 2. **Multiple Background Order**: They are placed from left to right (or top to bottom) in the order written
 3. **Filter Support**: Not all filters work in all environments
 4. **Relative Paths**: Image paths are specified relative to the Markdown file
+5. **Mermaid SVGs**: Diagrams produced by `scripts/render.py` follow the same relative-path rule — the renderer emits `![w:900](<stem>_assets/diagram-<sha1>.svg)`. See "Renderer-Generated Diagrams" below.
+
+## Renderer-Generated Diagrams (mermaid → SVG)
+
+The marp-slide skill's renderer (`scripts/render.py`) converts mermaid code blocks in your source `.md` into SVG files, then rewrites the block as a Marp image directive before handing the file to marp-cli. Marp Core itself does not render mermaid; this is the step that closes that gap.
+
+### What ends up on disk
+
+For an input `deck.md` containing a mermaid block, the renderer creates:
+
+    deck.md                                              # your source, untouched
+    deck_assets/
+      diagram-<sha1>.mmd                                 # mermaid source (for debugging)
+      diagram-<sha1>.svg                                 # SVG served to marp
+
+### What the rewritten markdown looks like
+
+The mermaid block is substituted with this directive (paths are relative to the source `.md`):
+
+    ![w:900](deck_assets/diagram-<sha1>.svg)
+
+That means the SVG obeys every rule in "Important Notes" above — it is a normal Marp image, and all the `bg`, `left`, `right`, filter, and split-background patterns apply if you post-process the rewritten markdown.
+
+### Cache behaviour
+
+- The `<sha1>` filename is derived from the mermaid source body plus a fingerprint of `mmdc --version` and the contents of `scripts/mermaid-config.json` (if present).
+- Re-running `scripts/render` with the same inputs reuses the cached SVG (no `mmdc` call).
+- Upgrading `mmdc` or changing the mermaid config invalidates the hash automatically; old SVGs stay on disk but are no longer referenced.
+- To force a full rebuild, delete the `<stem>_assets/` directory.
+
+### See also
+
+- `scripts/README.md` — install, flags, troubleshooting
+- `examples/fixture-mermaid-minimal.md` / `-full-deck.md` / `-multi.md` — concrete sources
+- `references/advanced-features.md` → "Mermaid Diagrams (skill renderer)"
 
 ## Official Reference
 

@@ -37,9 +37,14 @@ The **marp-slide** skill creates professional Marp presentation slides with 7 pr
 ## Getting Started
 
 ### Prerequisites
-- **Marp CLI** or **Marp for VS Code** for rendering slides
-- Install CLI: `npm install -g @marp-team/marp-cli`
-- VS Code: Install the "Marp for VS Code" extension
+
+Pick **one** of the two options:
+
+**Option 1 — Skill renderer (recommended, no global installs)**
+From the skill root, run `bash scripts/install.sh` once. It creates `scripts/.venv/` (Python venv) and `scripts/node_modules/` (local marp-cli + mermaid-cli + Puppeteer Chromium). All subsequent renders go through `scripts/render deck.md`. This is the only path that preprocesses mermaid diagrams.
+
+**Option 2 — Global marp-cli**
+`npm install -g @marp-team/marp-cli` (plus the "Marp for VS Code" extension for in-editor preview). Quick to set up, but mermaid blocks will render as raw code — marp-core has no mermaid support.
 
 ### Quick Usage
 Ask the agent to create a presentation:
@@ -56,17 +61,25 @@ The skill automatically:
 4. Outputs a ready-to-render `.md` file
 
 ### Rendering Output
+
+**Preferred — via the skill's renderer** (handles mermaid, runs from a local venv, no global installs):
+
 ```bash
-# HTML (for browser viewing)
+scripts/render presentation.md --format html       # → presentation.html
+scripts/render presentation.md --format pdf        # → presentation.pdf
+scripts/render presentation.md --format pptx       # → presentation.pptx (default)
+scripts/render presentation.md --format png        # → presentation.png
+scripts/render presentation.md --format jpeg       # → presentation.jpeg
+```
+
+Flags: `--output PATH`, `--no-mermaid` (skip preprocessing), `--strict-mermaid` (fail on mermaid error instead of warning), `--theme NAME`, `--mermaid-config PATH` (Cyrillic/CJK font fix). See `scripts/README.md` for the full reference and exit codes.
+
+**Alternative — raw marp-cli** (power users; no mermaid preprocessing):
+
+```bash
 marp presentation.md -o presentation.html
-
-# PDF (for sharing)
 marp presentation.md -o presentation.pdf
-
-# PowerPoint
 marp presentation.md -o presentation.pptx
-
-# PNG images (one per slide)
 marp presentation.md --images png
 ```
 
@@ -257,6 +270,8 @@ h1, h2 { color: #e94560; }
 ### Security Note
 
 Only use themes from trusted sources. A malicious CSS file can exfiltrate data via external URL requests (see `content: url("https://evil.com/...")`). Review CSS before applying. The built-in skill themes in `assets/` are safe.
+
+**Renderer security:** `scripts/render.py` invokes marp with `--allow-local-files` **unconditionally** — unlike raw marp-cli, where this flag is off by default. The flag is needed so marp can embed the skill's own cached SVGs under `<input>_assets/`, but a side effect is that a malicious `.md` can read any file the current user can read (e.g. `![bg](/etc/passwd)`). **Render only decks you trust** via `scripts/render`; for untrusted input, use raw `marp` with default-safe flags instead.
 
 ## Adding New Themes to the Skill
 
@@ -600,6 +615,38 @@ marp -w presentation.md -o presentation.html
 2. Press `Ctrl+Shift+V` (or `Cmd+Shift+V` on Mac)
 3. The Marp preview renders automatically
 
+### Mermaid Diagram Rendering
+
+**Marp Core does not render mermaid natively.** Mermaid fenced blocks passed to vanilla marp-cli come out as unstyled code. The skill's renderer (`scripts/render.py`) closes that gap: it calls `mmdc` on each ` ```mermaid ` block, produces SVGs under `<input>_assets/diagram-<sha1>.svg`, and rewrites the block as a Marp image directive before handing the file to marp-cli.
+
+**Before** (source `.md`):
+
+    ```mermaid
+    mindmap
+      root((Product))
+        Users
+          onboarding
+        Engineering
+          reliability
+    ```
+
+**After** (what marp actually embeds):
+
+    ![w:900](deck_assets/diagram-<sha1>.svg)
+
+Flags:
+
+| Flag | Effect |
+|------|--------|
+| *(default)* | Preprocess mermaid; warn and fall back to code if `mmdc` is missing |
+| `--no-mermaid` | Skip preprocessing entirely (faster; diagrams remain as raw code) |
+| `--strict-mermaid` | Exit 4 if any mermaid block cannot be rendered |
+| `--mermaid-config PATH` | Pass `-c PATH` to `mmdc` (auto-loads `scripts/mermaid-config.json` when present). Required for Cyrillic/CJK content. |
+
+The SVG cache key includes `mmdc --version` output and `mermaid-config.json` content, so toolchain upgrades or config edits invalidate cached SVGs automatically.
+
+See `scripts/README.md` for the full operator guide and `skills/marp-slide/examples/fixture-mermaid-{minimal,full-deck,multi}.md` for concrete sources.
+
 ## Troubleshooting
 
 | Problem | Cause | Fix |
@@ -610,6 +657,11 @@ marp -w presentation.md -o presentation.html
 | PDF export fails | Chromium not installed | Run `marp --pdf` which auto-downloads Chromium, or install manually |
 | Slides not splitting | Missing `---` separators | Add `---` between each slide |
 | Page numbers missing | `paginate` not set | Add `paginate: true` to YAML frontmatter |
+| Mermaid block renders as code, not a diagram | `mmdc` not on PATH or install didn't run | `bash scripts/install.sh`, or pass `--no-mermaid` for intentional fallback |
+| Diagram looks stale after editing the mermaid source | `<input>_assets/` SHA1 cache still points at an old SVG | Delete the `<input>_assets/` directory; next render will rebuild every SVG |
+| Cyrillic / CJK text in a mermaid diagram renders as boxes | `mmdc`'s default font lacks those glyphs | Create `scripts/mermaid-config.json` with `{ "themeVariables": { "fontFamily": "Arial, sans-serif" } }` (auto-loaded on next render) |
+| `scripts/render` exits with code 2 (`marp CLI not found`) | Local venv wasn't built | `bash scripts/install.sh` |
+| `scripts/render` exits with code 3 (`marp timed out after 300s`) | Headless Chromium hung, usually on a malformed slide | Check marp's stderr output; simplify the offending slide; re-run |
 
 ## Skill Resources
 
