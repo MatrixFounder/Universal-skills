@@ -39,6 +39,13 @@ LOCAL_BIN = SCRIPT_DIR / "node_modules" / ".bin"
 MERMAID_BLOCK_RE = re.compile(r"```mermaid\s*\n(.*?)\n```", re.DOTALL)
 MMDC_TIMEOUT = 300  # seconds per diagram
 
+# Default mermaid-config shipped with the skill — biased toward office
+# scenarios where Cyrillic / CJK labels are common. mmdc's built-in
+# default uses Trebuchet MS, which has spotty non-Latin coverage on
+# Linux servers; the bundled config switches to Arial Unicode MS with
+# fallbacks. Users override with --mermaid-config.
+DEFAULT_MERMAID_CONFIG = SCRIPT_DIR / "mermaid-config.json"
+
 
 def _mmdc_path() -> Path | None:
     """Resolve mmdc, preferring scripts/node_modules/.bin/mmdc over PATH.
@@ -51,16 +58,37 @@ def _mmdc_path() -> Path | None:
     return Path(found) if found else None
 
 
+def _mermaid_cache_key(mermaid_config: Path | None) -> str:
+    """Per-config fingerprint mixed into each diagram's SHA1 — switching
+    `--mermaid-config` (or editing it) must invalidate all cached PNGs,
+    otherwise the next run silently keeps the previous theme/font."""
+    if mermaid_config and mermaid_config.exists():
+        config_bytes = mermaid_config.read_bytes()
+    else:
+        config_bytes = b""
+    # Also include the renderer flags we pass to mmdc, so a future
+    # `--scale 3` would invalidate cache too.
+    flags = b"|-b|white|--scale|2"
+    return hashlib.sha1(config_bytes + flags).hexdigest()[:8]
+
+
 def preprocess_mermaid(
     md_text: str,
     assets_dir: Path,
     *,
     strict: bool = False,
+    mermaid_config: Path | None = None,
 ) -> str:
     """Replace fenced ```mermaid blocks with `![](...svg)` references.
     Renders each unique block once (SHA1-keyed cache) so repeated runs
     on the same input are cheap. Falls through unchanged when mmdc is
-    not on PATH and `strict=False`."""
+    not on PATH and `strict=False`.
+
+    `mermaid_config` is forwarded to `mmdc -c` so callers can pick a
+    theme / font / layout style without editing the script. The default
+    points at the bundled office-friendly config (Cyrillic-capable
+    fonts); pass an explicit path to override or `None` to use mmdc's
+    built-in defaults."""
     if not MERMAID_BLOCK_RE.search(md_text):
         return md_text
 
@@ -73,9 +101,17 @@ def preprocess_mermaid(
         print(f"[md2pdf] WARN: {msg} — diagrams will render as code.", file=sys.stderr)
         return md_text
 
+    if mermaid_config and not mermaid_config.exists():
+        msg = f"--mermaid-config {mermaid_config} does not exist"
+        if strict:
+            raise RuntimeError(msg)
+        print(f"[md2pdf] WARN: {msg} — falling back to mmdc defaults.", file=sys.stderr)
+        mermaid_config = None
+
     assets_dir.mkdir(parents=True, exist_ok=True)
     env = os.environ.copy()
     env["PATH"] = f"{LOCAL_BIN}{os.pathsep}{env.get('PATH', '')}"
+    config_fp = _mermaid_cache_key(mermaid_config)
 
     rendered = 0
     failures = 0
@@ -83,7 +119,9 @@ def preprocess_mermaid(
     def replace(match: re.Match) -> str:
         nonlocal rendered, failures
         body = match.group(1)
-        digest = hashlib.sha1(body.encode("utf-8")).hexdigest()[:10]
+        # Cache key mixes diagram body AND config fingerprint so a new
+        # config (or a tweak to the existing file) invalidates the PNG.
+        digest = hashlib.sha1(body.encode("utf-8") + b"|" + config_fp.encode()).hexdigest()[:10]
         mmd_path = assets_dir / f"diagram-{digest}.mmd"
         # PNG (not SVG): weasyprint renders mmdc's SVG without honouring
         # the diagram's font chain (text falls back to a glyphless face on
@@ -98,6 +136,8 @@ def preprocess_mermaid(
                 str(mmdc), "-i", str(mmd_path), "-o", str(png_path),
                 "-b", "white", "--scale", "2",
             ]
+            if mermaid_config:
+                cmd.extend(["-c", str(mermaid_config)])
             try:
                 subprocess.run(
                     cmd, check=True, capture_output=True, env=env,
@@ -221,6 +261,7 @@ def convert(
     base_url: str | None,
     use_mermaid: bool = True,
     strict_mermaid: bool = False,
+    mermaid_config: Path | None = None,
 ) -> None:
     md_text = input_path.read_text(encoding="utf-8")
     if use_mermaid:
@@ -230,7 +271,16 @@ def convert(
         # is the caller's responsibility — they can disable mermaid then.
         base_dir = Path(base_url) if base_url else input_path.parent
         assets_dir = base_dir / f"{output_path.stem}_assets"
-        md_text = preprocess_mermaid(md_text, assets_dir, strict=strict_mermaid)
+        # Default to the bundled office-friendly config (Cyrillic-capable
+        # fonts) when the user didn't pick one explicitly. None means
+        # "let mmdc use its built-in defaults".
+        if mermaid_config is None and DEFAULT_MERMAID_CONFIG.exists():
+            mermaid_config = DEFAULT_MERMAID_CONFIG
+        md_text = preprocess_mermaid(
+            md_text, assets_dir,
+            strict=strict_mermaid,
+            mermaid_config=mermaid_config,
+        )
     html_body = markdown2.markdown(
         md_text,
         extras=["fenced-code-blocks", "tables", "strike", "cuddled-lists", "code-friendly"],
@@ -264,6 +314,9 @@ def main(argv: list[str] | None = None) -> int:
                         help="Skip mermaid preprocessing (diagrams stay as code blocks).")
     parser.add_argument("--strict-mermaid", action="store_true",
                         help="Fail (exit 4) if any mermaid block can't be rendered.")
+    parser.add_argument("--mermaid-config", type=Path, default=None,
+                        help="JSON config passed to mmdc -c (theme, fontFamily, etc.). "
+                             "Default: scripts/mermaid-config.json (office-friendly, Cyrillic-capable).")
     args = parser.parse_args(argv)
 
     if not args.input.is_file():
@@ -279,6 +332,7 @@ def main(argv: list[str] | None = None) -> int:
             base_url=args.base_url,
             use_mermaid=not args.no_mermaid,
             strict_mermaid=args.strict_mermaid,
+            mermaid_config=args.mermaid_config,
         )
     except Exception as exc:
         print(f"Conversion failed: {exc}", file=sys.stderr)

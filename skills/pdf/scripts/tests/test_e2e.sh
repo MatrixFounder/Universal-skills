@@ -169,6 +169,40 @@ MD
     [ -d "$TMP/with_mermaid_assets" ] && [ "$(ls "$TMP/with_mermaid_assets"/*.png 2>/dev/null | wc -l)" -gt 0 ] \
         && ok "mermaid block → PNG asset rendered" \
         || nok "mermaid → PNG" "no png in assets dir"
+
+    # Bundled mermaid-config.json must exist and be valid JSON — the
+    # default-config path is opted into automatically by md2pdf, so a
+    # broken file here would silently degrade every Cyrillic diagram.
+    [ -s mermaid-config.json ] && "$PY" -c "import json; json.load(open('mermaid-config.json'))" \
+        && ok "bundled mermaid-config.json exists and parses" \
+        || nok "bundled mermaid-config" "missing or invalid JSON"
+
+    # --mermaid-config with a non-existent path: warn + degrade (not strict)
+    set +e
+    err=$("$PY" md2pdf.py "$TMP/with_mermaid.md" "$TMP/cfg_warn.pdf" \
+              --mermaid-config "$TMP/does_not_exist.json" 2>&1 >/dev/null)
+    rc=$?
+    set -e
+    [ "$rc" -eq 0 ] && echo "$err" | grep -q "does not exist" \
+        && ok "missing --mermaid-config → warn + degrade" \
+        || nok "missing config handling" "exit $rc / msg: $err"
+
+    # Cache key honours config: switching config (or its content) must
+    # produce a NEW digest, so a stale PNG can never sneak through.
+    # The assets dir is named after OUTPUT stem, so the two runs land
+    # in DIFFERENT dirs (wm_default_assets vs wm_alt_assets) and we
+    # compare the digests in the filenames.
+    cat > "$TMP/alt_cfg.json" <<'JSON'
+{"theme": "dark", "fontFamily": "monospace"}
+JSON
+    "$PY" md2pdf.py "$TMP/with_mermaid.md" "$TMP/wm_default.pdf" >/dev/null 2>&1
+    digest_default=$(ls "$TMP/wm_default_assets"/*.png | head -1 | xargs basename)
+    "$PY" md2pdf.py "$TMP/with_mermaid.md" "$TMP/wm_alt.pdf" \
+          --mermaid-config "$TMP/alt_cfg.json" >/dev/null 2>&1
+    digest_alt=$(ls "$TMP/wm_alt_assets"/*.png | head -1 | xargs basename)
+    [ "$digest_default" != "$digest_alt" ] \
+        && ok "config change invalidates PNG cache (digest differs)" \
+        || nok "cache invalidation" "same digest: $digest_default"
 fi
 
 echo

@@ -50,7 +50,7 @@
 |---|---|---|---|---|---|---|
 | pptx-1 | `pptx_clean.py` ✅ DONE | Удалить осиротевшие slides/media/charts/themes из PPTX через BFS по графу `.rels`. Опционально `--dry-run`. Содержит обновление `[Content_Types].xml`. E2E: 4 проверки. | M | M | — | Своя реализация по ECMA-376 / OOXML §10. |
 | pptx-2 | `pptx_apply_theme.py` | Сменить тему/палитру/шрифты целиком. Часто нужно для «привести презентацию из template-1 в брендинг template-2». | L | M | pptx-1 | Сложно: переносить layout-mappings + theme.xml + slideMasters. |
-| pptx-3 | `outline2pptx.py` | Markdown-outline (только заголовки) → каркас презентации с пустыми слайдами. Удобно для брейншторма «накидать структуру». | S | L | — | По сути: упрощённая `md2pptx`. |
+| pptx-3 | `outline2pptx.js` ✅ DONE | Markdown-outline (только заголовки) → каркас презентации с пустыми слайдами. `#` → title slide; `##` → content slide с placeholder; `###+` → bullets. Использует pptxgenjs, валидируется через office.validate. E2E: 4 проверки. | S | L | — | Реализован как .js (для использования pptxgenjs без bridge). |
 | pptx-4 | XSD-валидаторы для pptx | Сейчас `office/validators/pptx.py` — заглушка. Доделать full schema-валидацию (ECMA-376 part 1, dml/pml/sml). | L | M | — | Полезно после ручных правок XML. |
 | pptx-5 | Presenter notes export | При pptx2md выгружать заметки докладчика отдельным разделом (или сайдкар). | S | L | — | Покрывает use-case: репетировать с notes отдельно. |
 
@@ -73,7 +73,7 @@
 | pdf-3 | `pdf_compress.py` | Снизить вес PDF: пересжать встроенные изображения, убрать дубли. | M | M | — | gs (ghostscript) делает это лучше — обёртка вокруг него. |
 | pdf-4 | `pdf_ocr.py` | OCR scanned PDF через `tesseract` или `ocrmypdf`. Нужно для legacy-документов. | M | M | — | Системная зависимость на tesseract. |
 | pdf-5 | `html2pdf.py` | Параллель к md2pdf, но HTML-on-input. Часто запрашивают для отчётов из BI-дашбордов. | S | L | — | Тонкая обёртка над тем же weasyprint. |
-| pdf-6 | Mermaid: dark-theme и custom config | `--mermaid-config` flag для md2pdf, прокинуть в mmdc. Сейчас всегда default-tema. | S | L | mermaid done | Аналогично marp-slide render.py. |
+| pdf-6 | Mermaid: dark-theme и custom config ✅ DONE | `--mermaid-config PATH` в md2pdf, прокидывается в `mmdc -c`. Cache key включает SHA1 контента конфига → смена темы / шрифта инвалидирует кеш PNG. Missing-path → warn + degrade (или fail в `--strict-mermaid`). E2E: 3 проверки. | S | L | mermaid done | Аналог в `md2pptx.js`: `--mermaid-config` / `--no-mermaid-config`. |
 | pdf-7 | TOC bookmarks (PDF outline) | weasyprint умеет: добавить `<h1-h6>` → PDF outline. Уже из коробки или нужен CSS-флаг? Проверить и при необходимости добавить. | S | M | — | Сейчас только in-page links. |
 
 ---
@@ -87,7 +87,7 @@
 | cross-3 | Encrypted/password-protected files ✅ DONE | `office/_encryption.py` детектирует CFB-magic; 8 reader-скриптов вызывают `assert_not_encrypted()` рано и возвращают exit 3 + понятное сообщение. E2E: 3 проверки (по одной на skill). | S | M | — | Замена `BadZipFile: not a zip file` на «password-protected, decrypt upstream». |
 | cross-4 | `.docm`/`.xlsm`/`.pptm` (с макросами) | Read-only поддержка: предупредить, что макросы будут потеряны при pack-обратно. | S | L | — | Корпоративные пользователи иногда дают такие файлы. |
 | cross-5 | Унифицированный error-reporting | Сейчас разные скрипты падают по-разному. Единый формат: код выхода + JSON-trace в stderr (опционально). | M | L | — | Полезно для обёрток-агентов. |
-| cross-6 | Cyrillic font preset для mermaid | Файл `mermaid-config.json` с `fontFamily: "Arial Unicode MS"` (или аналог) для офис-сценариев. Положить в `pdf` и `pptx`. | S | M | pdf-6 | Сейчас Chromium тянет system fonts — на macOS ок, на Linux может быть пусто. |
+| cross-6 | Cyrillic font preset для mermaid ✅ DONE | `scripts/mermaid-config.json` с font-stack `Arial Unicode MS → Noto Sans → DejaVu Sans → Liberation Sans → Arial → sans-serif`. Подключается автоматически в md2pdf и md2pptx; пользователь переопределяет через `--mermaid-config`. | S | M | pdf-6 | Файл байт-идентичен в `skills/pdf/scripts/` и `skills/pptx/scripts/`. |
 | cross-7 | Real password-protect (set/remove) | Поставить пароль на docx/xlsx через MS-OFB шифрование (msoffcrypto-tool). Нужен для compliance-сценариев. | L | L | — | Отдельная криптобиблиотека. |
 
 ---

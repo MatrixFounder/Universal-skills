@@ -1,0 +1,17 @@
+{
+  "_comment": "Office-friendly mermaid config: prioritises fonts with broad Unicode coverage (Cyrillic, CJK, Greek, math symbols) over mmdc's default Trebuchet MS, which has spotty non-Latin glyph coverage on Linux servers. Pass via md2pdf.py --mermaid-config to override or replace.",
+  "theme": "default",
+  "fontFamily": "\"Arial Unicode MS\", \"Noto Sans\", \"DejaVu Sans\", \"Liberation Sans\", Arial, sans-serif",
+  "themeVariables": {
+    "fontFamily": "\"Arial Unicode MS\", \"Noto Sans\", \"DejaVu Sans\", \"Liberation Sans\", Arial, sans-serif",
+    "fontSize": "16px"
+  },
+  "mindmap": {
+    "padding": 10
+  },
+  "flowchart": {
+    "diagramPadding": 8,
+    "nodeSpacing": 50,
+    "rankSpacing": 50
+  }
+}

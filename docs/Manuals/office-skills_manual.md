@@ -16,7 +16,7 @@ replication rule), see [CONTRIBUTING.md](../CONTRIBUTING.md).
 |---|---|---|
 | **docx** | Create, edit, convert, validate `.docx` (Word) | `md2docx.js`, `docx2md.js`, `docx_fill_template.py`, `docx_accept_changes.py`, `office/validate.py` |
 | **xlsx** | CSV/JSON → styled `.xlsx`, recalc formulas, scan errors, **add charts** | `csv2xlsx.py`, `xlsx_recalc.py`, `xlsx_validate.py`, `xlsx_add_chart.py` |
-| **pptx** | Markdown → `.pptx`, thumbnails, PDF, **clean orphans** | `md2pptx.js` (incl. `--via-marp`), `pptx_to_pdf.py`, `pptx_thumbnails.py`, `pptx_clean.py` |
+| **pptx** | Markdown → `.pptx`, thumbnails, PDF, **clean orphans**, **outline skeleton** | `md2pptx.js` (incl. `--via-marp`), `outline2pptx.js`, `pptx_to_pdf.py`, `pptx_thumbnails.py`, `pptx_clean.py` |
 | **pdf** | Markdown → PDF (with mermaid), merge, split, **fill AcroForms** | `md2pdf.py`, `pdf_merge.py`, `pdf_split.py`, `pdf_fill_form.py` |
 
 The four office skills are governed by a per-skill **Proprietary**
@@ -282,7 +282,26 @@ Pipeline: pptx → pdf (LibreOffice) → per-slide JPEGs (`pdftoppm`) →
 labelled grid (Pillow). Useful for visual QA and as a deliverable to
 sub-agents who can read images.
 
-### 5.5 Clean orphaned parts
+### 5.5 Markdown outline → slide skeleton
+
+```bash
+node skills/pptx/scripts/outline2pptx.js outline.md skeleton.pptx \
+    [--size 16:9|4:3] [--theme theme.json]
+```
+
+For brainstorming the deck *structure* before writing slide content.
+Promotion rules:
+
+- `#` → title slide (large heading, accent stripe)
+- `##` → content slide (heading + bulleted body, or `TODO: add content`
+  placeholder if no bullets follow)
+- `###`+ → demoted to **bold** bullets under the most-recent `##` slide
+- prose paragraphs / list items under a heading → bullets
+
+Output is a fully editable `.pptx` — open in PowerPoint / Keynote /
+LibreOffice and replace placeholders with real content.
+
+### 5.6 Clean orphaned parts
 
 ```bash
 ./.venv/bin/python skills/pptx/scripts/pptx_clean.py deck.pptx \
@@ -314,7 +333,7 @@ changes).
 ```bash
 ./.venv/bin/python skills/pdf/scripts/md2pdf.py doc.md doc.pdf \
     [--page-size letter|a4|legal] [--css extra.css] \
-    [--no-mermaid] [--strict-mermaid]
+    [--no-mermaid] [--strict-mermaid] [--mermaid-config PATH]
 ```
 
 Uses weasyprint. Default stylesheet includes `@page` margins, footer
@@ -324,14 +343,30 @@ to fit the page (`max-width: 100%; max-height: 7in`).
 Fenced ```mermaid blocks are pre-rendered to **PNG** (not SVG —
 weasyprint's SVG path doesn't honour mermaid's font chain, leaving
 Cyrillic / CJK text invisible). Rendering is cached by SHA1 of the
-diagram body in `<output_stem>_assets/`, so repeat runs are cheap.
+diagram body **mixed with the config fingerprint** in
+`<output_stem>_assets/`, so a config swap invalidates the cache
+automatically.
+
+Mermaid flags:
 
 - `--no-mermaid` skips the preprocessing entirely (blocks render as
   code).
 - `--strict-mermaid` exits non-zero if any block fails to render
   (default: warn and degrade to code).
+- `--mermaid-config PATH` overrides the default config. If omitted,
+  the bundled `scripts/mermaid-config.json` (Cyrillic-capable font
+  stack: Arial Unicode MS → Noto Sans → DejaVu Sans → Liberation
+  Sans → Arial) is used — perfect for non-English office documents
+  on Linux servers where mmdc's default Trebuchet MS has no Cyrillic
+  glyphs. A non-existent path triggers a warning and falls back to
+  mmdc's defaults (or fails in `--strict-mermaid`).
 - Without `mmdc` on `PATH` or in `scripts/node_modules/.bin/`, the
   step prints a friendly hint and falls through.
+
+The same `--mermaid-config` / bundled-default mechanism is mirrored
+in `md2pptx.js`; both skills ship a byte-identical `mermaid-config.json`
+so non-English diagrams render consistently across PDF and PPTX
+outputs.
 
 ### 6.2 Merge / split
 
@@ -508,8 +543,8 @@ What's covered:
 |---|---|
 | docx | `md2docx → docx → docx2md` round-trip, `office.validate` on output, `docx_fill_template` with nested JSON, encryption / legacy-CFB rejection on `docx_fill_template` and `docx_accept_changes`. |
 | xlsx | `csv2xlsx` + row count + `office.validate`, `xlsx_validate` (clean + injected `#DIV/0!` via lxml mutation), `xlsx_recalc` formula preservation, `xlsx_add_chart` (bar/line/pie variants + bad-range error), encryption rejection on `xlsx_validate`/`xlsx_add_chart`/`xlsx_recalc`. |
-| pptx | `md2pptx` + slide-count + `office.validate`, `pptx_thumbnails` (JPEG sanity), `pptx_to_pdf` (`%PDF` magic), `pptx_clean` (orphan slide + media removal, dry-run reports without writing), encryption rejection on `pptx_clean`/`pptx_thumbnails`/`pptx_to_pdf`. |
-| pdf | `md2pdf` + mermaid PNG render, `pdf_merge` (page-count = sum), `pdf_split --each-page`, `pdf_fill_form` (`--check` exit codes, fill round-trip, `--flatten` removes `/AcroForm`, `--extract-fields` stdout, malformed JSON / missing `-o` exit 2, typo'd field warning, int→`/Yes` checkbox coercion). |
+| pptx | `md2pptx` + slide-count + `office.validate`, `pptx_thumbnails` (JPEG sanity), `pptx_to_pdf` (`%PDF` magic), `pptx_clean` (orphan slide + media removal, dry-run reports without writing), `outline2pptx` (heading-only MD → 4 slides + validate + heading-less input fails clearly), bundled `mermaid-config.json` (parses, missing path fails clean), encryption rejection on `pptx_clean`/`pptx_thumbnails`/`pptx_to_pdf`. |
+| pdf | `md2pdf` + mermaid PNG render + bundled `mermaid-config.json` (parses, missing path warns, config change invalidates PNG cache), `pdf_merge` (page-count = sum), `pdf_split --each-page`, `pdf_fill_form` (`--check` exit codes, fill round-trip, `--flatten` removes `/AcroForm`, `--extract-fields` stdout, malformed JSON / missing `-o` exit 2, typo'd field warning, int→`/Yes` checkbox coercion). |
 
 The suite is fast (<60 sec total on a warm machine) and is the
 primary pre-commit / pre-release gate. Any failure here points at a

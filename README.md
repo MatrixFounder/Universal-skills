@@ -124,8 +124,8 @@ attribution is preserved in
 | :--- | :--- | :--- |
 | **[docx](skills/docx/SKILL.md)** | Create / edit / convert / validate `.docx`. Markdown ↔ DOCX, template fill (`{{placeholders}}`), accept tracked changes (LibreOffice), unpack/pack OOXML, **redlining validator** (`--compare-to ORIGINAL.docx`) catches "editor forgot Track Changes" scenarios. | 2 |
 | **[xlsx](skills/xlsx/SKILL.md)** | CSV → styled `.xlsx` (bold header, frozen row, auto-filter, leading-zero preservation), force formula recalculation via LibreOffice, scan for `#REF!`/`#DIV/0!` errors, attach bar/line/pie **charts** to a range (`xlsx_add_chart.py`). | 2 |
-| **[pptx](skills/pptx/SKILL.md)** | Markdown → PPTX (built-in pptxgenjs renderer with auto-pagination, mermaid diagrams, accent stripes — OR `--via-marp` delegation to marp-slide for editorial polish), pptx → PDF, slide thumbnail grids, **`pptx_clean.py`** to drop orphan slides/media after manual editing. | 2 |
-| **[pdf](skills/pdf/SKILL.md)** | Markdown → PDF (weasyprint, with optional ```mermaid → PNG via `mmdc`), PDF merge / split (by ranges, per-page, fixed chunks), AcroForm form **fill / inspect / flatten** (`pdf_fill_form.py`), TOC bookmarks preserved. | 2 |
+| **[pptx](skills/pptx/SKILL.md)** | Markdown → PPTX (built-in pptxgenjs renderer with auto-pagination, mermaid diagrams via bundled Cyrillic-capable config, accent stripes — OR `--via-marp` delegation to marp-slide for editorial polish), **`outline2pptx.js`** (heading-only outline → slide skeleton with TODO placeholders), pptx → PDF, slide thumbnail grids, **`pptx_clean.py`** to drop orphan slides/media after manual editing. | 2 |
+| **[pdf](skills/pdf/SKILL.md)** | Markdown → PDF (weasyprint, with optional ```mermaid → PNG via `mmdc` and bundled Cyrillic-capable `mermaid-config.json`), PDF merge / split (by ranges, per-page, fixed chunks), AcroForm form **fill / inspect / flatten** (`pdf_fill_form.py`), TOC bookmarks preserved. | 2 |
 
 The three OOXML skills (docx/xlsx/pptx) share an identical
 `scripts/office/` module + `_soffice.py` LibreOffice wrapper. The

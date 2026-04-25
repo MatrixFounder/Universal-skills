@@ -145,6 +145,66 @@ if command -v soffice >/dev/null 2>&1; then
         || nok "encrypted rejection (to_pdf)" "exit $rc / msg: $err"
 fi
 
+# --- outline2pptx (heading-only outline → slide skeleton) -----------------
+echo "outline2pptx:"
+cat > "$TMP/outline.md" <<'MD'
+# Q2 Strategy
+
+## Goals
+- Hit 20% growth
+- Launch 3 products
+
+## Risks
+
+### Short-term
+- Supplier squeeze
+
+### Long-term
+- Currency volatility
+
+## Next steps
+MD
+node outline2pptx.js "$TMP/outline.md" "$TMP/outline.pptx" >/dev/null 2>&1 \
+    && [ -s "$TMP/outline.pptx" ] && ok "outline → outline.pptx" \
+    || nok "outline → pptx" "missing or empty"
+
+# Slide count: 1 title + 3 content (## headings) = 4
+slides=$(unzip -l "$TMP/outline.pptx" 2>/dev/null | grep -cE "ppt/slides/slide[0-9]+\.xml$" || true)
+[ "$slides" -eq 4 ] \
+    && ok "outline → 4 slides (1 title + 3 content)" \
+    || nok "outline slide count" "expected 4, got $slides"
+
+# Output must validate via office.validate
+"$PY" -m office.validate "$TMP/outline.pptx" >/dev/null 2>&1 \
+    && ok "outline.pptx validates" \
+    || nok "outline validate" "rejected"
+
+# Empty / heading-less input → fail with clear error
+echo "no headings here, just prose" > "$TMP/no_headings.md"
+set +e
+err=$(node outline2pptx.js "$TMP/no_headings.md" "$TMP/_x.pptx" 2>&1 >/dev/null)
+rc=$?
+set -e
+[ "$rc" -ne 0 ] && echo "$err" | grep -q "No headings" \
+    && ok "outline2pptx fails clearly on heading-less input" \
+    || nok "no-headings handling" "exit $rc / msg: $err"
+
+# --- mermaid config bundling (cross-6) -----------------------------------
+echo "bundled mermaid-config:"
+[ -s mermaid-config.json ] && "$PY" -c "import json; json.load(open('mermaid-config.json'))" \
+    && ok "bundled mermaid-config.json exists and parses" \
+    || nok "bundled mermaid-config" "missing or invalid JSON"
+
+# md2pptx --mermaid-config: pointing at non-existent file should fail cleanly
+set +e
+err=$(node md2pptx.js ../examples/fixture-slides.md "$TMP/_x.pptx" \
+          --mermaid-config "$TMP/missing.json" 2>&1 >/dev/null)
+rc=$?
+set -e
+[ "$rc" -ne 0 ] && echo "$err" | grep -q "does not exist" \
+    && ok "md2pptx --mermaid-config: missing path exits non-zero" \
+    || nok "md2pptx missing config" "exit $rc / msg: $err"
+
 echo
 echo "$pass passed, $fail failed"
 [ "$fail" -eq 0 ]

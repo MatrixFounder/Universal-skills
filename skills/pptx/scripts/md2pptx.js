@@ -70,17 +70,31 @@ function mmdcPath() {
 }
 function hasMermaid() { return !!mmdcPath(); }
 
+// Module-level mermaid config path; CLI sets it once before rendering
+// starts. `null` means no config (mmdc defaults); a string path means
+// pass `-c <path>` to every mmdc invocation.
+let _mermaidConfigPath = null;
+function setMermaidConfig(p) { _mermaidConfigPath = p; }
+
 function renderMermaid(source) {
   const bin = mmdcPath();
   if (!bin) return null;
-  const hash = crypto.createHash("sha1").update(source).digest("hex").slice(0, 12);
+  // Cache key includes the config path so swapping fonts/themes
+  // invalidates the previously cached PNG.
+  const cfgFp = _mermaidConfigPath
+    ? crypto.createHash("sha1").update(fs.readFileSync(_mermaidConfigPath)).digest("hex").slice(0, 8)
+    : "default";
+  const hash = crypto.createHash("sha1").update(source + "|" + cfgFp).digest("hex").slice(0, 12);
   const mmdFile = path.join(MERMAID_CACHE_DIR, `${hash}.mmd`);
   const pngFile = path.join(MERMAID_CACHE_DIR, `${hash}.png`);
   if (fs.existsSync(pngFile)) return pngFile;
   fs.writeFileSync(mmdFile, source);
   try {
-    execSync(`"${bin}" -i "${mmdFile}" -o "${pngFile}" -s 2 -b white -t neutral`,
-             { stdio: "ignore" });
+    let cmd = `"${bin}" -i "${mmdFile}" -o "${pngFile}" -s 2 -b white -t neutral`;
+    if (_mermaidConfigPath) {
+      cmd += ` -c "${_mermaidConfigPath}"`;
+    }
+    execSync(cmd, { stdio: "ignore" });
     return fs.existsSync(pngFile) ? pngFile : null;
   } catch (e) {
     return null;
@@ -106,12 +120,23 @@ const DEFAULT_THEME = {
 const BODY_FONT_BASE = 15;
 const BODY_FONT_MIN = 11;
 
+// Office-friendly mermaid config bundled with the skill: prioritises
+// fonts with broad Unicode coverage (Cyrillic, CJK) over mmdc's default
+// Trebuchet MS. Used by `renderMermaid()` unless --mermaid-config
+// overrides on the CLI. Resolved once at module load so the path lookup
+// doesn't repeat per diagram.
+const DEFAULT_MERMAID_CONFIG = path.resolve(__dirname, "mermaid-config.json");
+
 function parseArgs(argv) {
   const out = {
     input: null, output: null, size: "16:9",
     themePath: null,
     viaMarp: false,
     marpTheme: null,
+    // null  → use bundled DEFAULT_MERMAID_CONFIG when it exists
+    // false → user explicitly opted out (--no-mermaid-config)
+    // <str> → user-supplied path
+    mermaidConfig: null,
   };
   const positionals = [];
   for (let i = 2; i < argv.length; i++) {
@@ -120,6 +145,8 @@ function parseArgs(argv) {
     else if (a === "--theme") out.themePath = argv[++i];
     else if (a === "--via-marp") out.viaMarp = true;
     else if (a === "--marp-theme") out.marpTheme = argv[++i];
+    else if (a === "--mermaid-config") out.mermaidConfig = argv[++i];
+    else if (a === "--no-mermaid-config") out.mermaidConfig = false;
     else if (a === "--help" || a === "-h") return null;
     else if (a.startsWith("--")) throw new Error(`Unknown flag: ${a}`);
     else positionals.push(a);
@@ -667,6 +694,22 @@ async function main() {
   if (!fs.existsSync(args.input)) {
     console.error(`Input not found: ${args.input}`);
     process.exit(1);
+  }
+
+  // Resolve mermaid config path: explicit --mermaid-config wins, then
+  // bundled DEFAULT_MERMAID_CONFIG (if present), else null (mmdc
+  // defaults). `false` means user explicitly opted out via
+  // --no-mermaid-config.
+  if (args.mermaidConfig === false) {
+    setMermaidConfig(null);
+  } else if (typeof args.mermaidConfig === "string") {
+    if (!fs.existsSync(args.mermaidConfig)) {
+      console.error(`--mermaid-config ${args.mermaidConfig} does not exist`);
+      process.exit(1);
+    }
+    setMermaidConfig(args.mermaidConfig);
+  } else if (fs.existsSync(DEFAULT_MERMAID_CONFIG)) {
+    setMermaidConfig(DEFAULT_MERMAID_CONFIG);
   }
 
   if (args.viaMarp) {

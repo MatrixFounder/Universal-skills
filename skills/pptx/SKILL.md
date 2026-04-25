@@ -23,7 +23,8 @@ removes that variance.
 - "I'll edit the .pptx with python-pptx, it's simpler." → **WRONG** for anything touching the slide master, theme, or relationships. Use `office/unpack.py` + hand-edit + `office/pack.py` for those — see [references/editing-workflow.md](references/editing-workflow.md).
 
 ## 2. Capabilities
-- Convert Markdown (split by `---`) into a `.pptx` with consistent typography, bullet styling, and theme via `md2pptx.js`.
+- Convert Markdown (split by `---`) into a `.pptx` with consistent typography, bullet styling, and theme via `md2pptx.js`. Mermaid diagrams render with a bundled Cyrillic-capable font stack via `scripts/mermaid-config.json` (override with `--mermaid-config PATH`).
+- Sketch a slide skeleton from a heading-only Markdown outline (`outline2pptx.js`) — `#` becomes a title slide, `##` becomes a content slide with TODO placeholder. Useful for brainstorming the deck structure before writing prose.
 - Convert a `.pptx` to PDF via headless LibreOffice for print, email, or review pipelines.
 - Produce a labelled thumbnail grid (JPEG) for rapid visual QA of all slides at once.
 - Drop orphan slides / media / charts / themes after manual editing or template substitution (`pptx_clean.py`, BFS over the `.rels` graph; `--dry-run` previews without writing).
@@ -38,7 +39,8 @@ removes that variance.
 ## 4. Script Contract
 
 - **Commands**:
-  - `node scripts/md2pptx.js INPUT.md OUTPUT.pptx [--size 16:9|4:3] [--theme theme.json] [--via-marp] [--marp-theme NAME]`
+  - `node scripts/md2pptx.js INPUT.md OUTPUT.pptx [--size 16:9|4:3] [--theme theme.json] [--via-marp] [--marp-theme NAME] [--mermaid-config PATH | --no-mermaid-config]`
+  - `node scripts/outline2pptx.js INPUT.md OUTPUT.pptx [--size 16:9|4:3] [--theme theme.json]`
   - `python3 scripts/pptx_to_pdf.py INPUT.pptx [OUTPUT.pdf] [--timeout 180]`
   - `python3 scripts/pptx_thumbnails.py INPUT.pptx OUTPUT.jpg [--cols 3] [--dpi 110]`
   - `python3 scripts/pptx_clean.py INPUT.pptx [--output OUT.pptx] [--dry-run]`
