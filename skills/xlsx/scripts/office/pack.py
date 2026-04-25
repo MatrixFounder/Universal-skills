@@ -33,10 +33,12 @@ if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
     from office._macros import (
         MACRO_EXT_FOR, NON_MACRO_EXTENSIONS, VBA_PROJECT_PARTS,
+        format_macro_loss_warning,
     )
 else:
     from ._macros import (
         MACRO_EXT_FOR, NON_MACRO_EXTENSIONS, VBA_PROJECT_PARTS,
+        format_macro_loss_warning,
     )
 
 
@@ -112,14 +114,16 @@ def pack(
 
     out_suffix = output_path.suffix.lower()
     if _tree_has_vba(input_dir) and out_suffix in NON_MACRO_EXTENSIONS:
+        # We don't have an "input file" suffix here (pack works on a
+        # tree), so synthesise the implied source extension from the
+        # output by mapping it to its macro twin. Reusing the shared
+        # `format_macro_loss_warning` keeps the wording in sync with
+        # the writer-script warnings users see elsewhere.
         suggested = MACRO_EXT_FOR.get(out_suffix, out_suffix)
-        print(
-            f"Warning: source tree contains vbaProject.bin (macro-enabled), "
-            f"but output {output_path.name} uses non-macro extension "
-            f"{out_suffix}. Office apps will drop the macros silently. "
-            f"Re-run with extension {suggested} to preserve.",
-            file=sys.stderr,
-        )
+        sys.stderr.write(format_macro_loss_warning(
+            in_suffix=suggested, out_suffix=out_suffix, suggested=suggested,
+        ))
+        sys.stderr.flush()
 
     members = _ordered_members(input_dir)
 

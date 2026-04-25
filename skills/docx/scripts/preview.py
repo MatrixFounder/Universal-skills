@@ -26,6 +26,7 @@ Requires:
 from __future__ import annotations
 
 import argparse
+import contextlib
 import os
 import re
 import shutil
@@ -64,7 +65,7 @@ def _find(binary_name: str, fallbacks: tuple[str, ...] = ()) -> str | None:
     return None
 
 
-def _convert_via_soffice(src: Path, out_dir: Path, *, timeout: int = 240) -> Path:
+def _convert_via_soffice(src: Path, out_dir: Path, *, timeout: int) -> Path:
     soffice = _find("soffice", _SOFFICE_LOCATIONS)
     if soffice is None:
         raise RuntimeError(
@@ -133,7 +134,14 @@ def _load_font(size: int) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
     ):
         if Path(candidate).is_file():
             return ImageFont.truetype(candidate, size)
-    return ImageFont.load_default()
+    # Fallback. Pillow >= 10.1 honours `size=` on `load_default`; older
+    # builds ignore it and produce a fixed-size bitmap, which would
+    # invalidate `label_h = label_font_size + 10` in the layout math.
+    # We try the modern signature first and fall back if Pillow rejects it.
+    try:
+        return ImageFont.load_default(size=size)
+    except TypeError:
+        return ImageFont.load_default()
 
 
 def _label_for(input_path: Path) -> str:
@@ -154,8 +162,13 @@ def _compose_grid(
     padding: int,
     label_font_size: int,
 ) -> None:
-    images = [Image.open(p) for p in tiles]
-    try:
+    # Open images one-at-a-time inside an ExitStack: if `Image.open(p_5)`
+    # raises, p_1..p_4 still get closed. The previous list-comprehension
+    # path leaked file descriptors on partial failure.
+    with contextlib.ExitStack() as stack:
+        images: list[Image.Image] = [
+            stack.enter_context(Image.open(p)) for p in tiles
+        ]
         thumb_w, thumb_h = images[0].size
         label_h = label_font_size + 10
         rows = (len(images) + cols - 1) // cols
@@ -176,9 +189,6 @@ def _compose_grid(
             draw.text((x + 4, y + thumb_h + 2), label,
                       fill="#1f2937", font=font)
         canvas.save(output, "JPEG", quality=92, optimize=True)
-    finally:
-        for img in images:
-            img.close()
 
 
 def build(
@@ -190,13 +200,14 @@ def build(
     gap: int,
     padding: int,
     label_font_size: int,
+    soffice_timeout: int,
 ) -> None:
     suffix = input_path.suffix.lower()
     label = _label_for(input_path)
     with tempfile.TemporaryDirectory(prefix="preview-") as tmp_dir:
         tmp = Path(tmp_dir)
         if suffix in SUPPORTED_OOXML:
-            pdf = _convert_via_soffice(input_path, tmp)
+            pdf = _convert_via_soffice(input_path, tmp, timeout=soffice_timeout)
         elif suffix in SUPPORTED_PDF:
             pdf = input_path
         else:
@@ -215,6 +226,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--gap", type=int, default=12)
     parser.add_argument("--padding", type=int, default=24)
     parser.add_argument("--label-font-size", type=int, default=14)
+    parser.add_argument("--soffice-timeout", type=int, default=240,
+                        help="Timeout (seconds) for the OOXML→PDF "
+                             "conversion. Increase for very large decks. "
+                             "Ignored on .pdf input. Default 240.")
     add_json_errors_argument(parser)
     args = parser.parse_args(argv)
     je = args.json_errors
@@ -229,6 +244,7 @@ def main(argv: list[str] | None = None) -> int:
         ("gap", args.gap, 0),
         ("padding", args.padding, 0),
         ("label-font-size", args.label_font_size, 1),
+        ("soffice-timeout", args.soffice_timeout, 1),
     ):
         if value < minimum:
             return report_error(
@@ -264,14 +280,23 @@ def main(argv: list[str] | None = None) -> int:
     # Encrypted/legacy CFB pre-flight for OOXML inputs. Imported lazily
     # because the pdf skill ships preview.py without `office/` — when
     # an OOXML file is fed to pdf's preview.py, the encryption check
-    # is best-effort: soffice itself fails clearly on encrypted input.
+    # is unavailable. Surface a one-line note so the user understands
+    # they may get a confusing soffice failure instead of a clear
+    # EncryptedFileError; do NOT promote it to a hard error, since
+    # most OOXML inputs to pdf-preview are perfectly valid.
     if suffix in SUPPORTED_OOXML:
         try:
             from office._encryption import (  # type: ignore[import-not-found]
                 EncryptedFileError, assert_not_encrypted,
             )
         except ImportError:
-            pass
+            print(
+                "Note: encryption pre-flight is unavailable in this skill "
+                "(no office/ module). If the input is password-protected "
+                "or a legacy .doc/.xls/.ppt, soffice will fail with an "
+                "opaque error rather than the usual exit-3 message.",
+                file=sys.stderr,
+            )
         else:
             try:
                 assert_not_encrypted(args.input)
@@ -285,7 +310,8 @@ def main(argv: list[str] | None = None) -> int:
         build(args.input, args.output,
               cols=args.cols, dpi=args.dpi, gap=args.gap,
               padding=args.padding,
-              label_font_size=args.label_font_size)
+              label_font_size=args.label_font_size,
+              soffice_timeout=args.soffice_timeout)
     except RuntimeError as exc:
         return report_error(str(exc), code=1, error_type="PreviewError",
                             json_mode=je)

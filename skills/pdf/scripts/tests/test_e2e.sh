@@ -249,9 +249,38 @@ err=$("$PY" pdf_merge.py "$TMP/_out.pdf" /nope1.pdf /nope2.pdf --json-errors 2>&
 rc=$?
 set -e
 [ "$rc" -eq 1 ] \
-    && echo "$err" | "$PY" -c "import sys, json; j=json.loads(sys.stdin.read()); assert j['code']==1 and j['type']=='FileNotFound' and len(j['details']['missing'])==2, j" 2>/dev/null \
-    && ok "pdf_merge --json-errors envelope (lists missing inputs)" \
+    && echo "$err" | "$PY" -c "import sys, json; j=json.loads(sys.stdin.read()); assert j['code']==1 and j['type']=='FileNotFound' and j['v']==1 and len(j['details']['missing'])==2, j" 2>/dev/null \
+    && ok "pdf_merge --json-errors envelope (lists missing + v=1)" \
     || nok "pdf_merge --json-errors" "exit=$rc msg=$err"
+
+# Parameterized cross-5: every plumbed pdf CLI emits a JSON envelope.
+for cli in md2pdf.py pdf_split.py pdf_fill_form.py preview.py; do
+    set +e
+    if [ "$cli" = "md2pdf.py" ]; then
+        out=$("$PY" "$cli" /nope.md /tmp/_x.pdf --json-errors 2>&1 >/dev/null)
+    elif [ "$cli" = "pdf_split.py" ]; then
+        out=$("$PY" "$cli" /nope.pdf --each-page /tmp/_split --json-errors 2>&1 >/dev/null)
+    elif [ "$cli" = "pdf_fill_form.py" ]; then
+        out=$("$PY" "$cli" --check /nope.pdf --json-errors 2>&1 >/dev/null)
+    else
+        out=$("$PY" "$cli" /nope.pdf /tmp/_x.jpg --json-errors 2>&1 >/dev/null)
+    fi
+    set -e
+    echo "$out" | "$PY" -c "import sys, json; json.loads(sys.stdin.read())" 2>/dev/null \
+        && ok "  $cli emits JSON envelope" \
+        || nok "  $cli envelope" "got: $out"
+done
+
+# LOW-3: an OOXML file fed to pdf-skill preview.py must emit a one-time
+# stderr note about the missing encryption pre-flight (since pdf has no
+# office/ module). Use a CFB fixture so soffice will fail predictably.
+"$PY" -c "from pathlib import Path; Path('$TMP/cfb.docx').write_bytes(b'\\xd0\\xcf\\x11\\xe0\\xa1\\xb1\\x1a\\xe1' + b'\\x00' * 100)"
+set +e
+err=$("$PY" preview.py "$TMP/cfb.docx" "$TMP/_y.jpg" 2>&1 >/dev/null)
+set -e
+echo "$err" | grep -q "encryption pre-flight is unavailable" \
+    && ok "OOXML→pdf-preview: emits encryption-skip note (LOW-3)" \
+    || nok "OOXML→pdf-preview note" "no note in stderr: $err"
 
 echo
 echo "$pass passed, $fail failed"

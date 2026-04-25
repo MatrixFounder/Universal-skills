@@ -8,10 +8,15 @@ Two modes:
 
 JSON envelope:
 
-    {"error": "<message>",
-     "code":  <int>,
+    {"v":     1,                       # schema version (always present)
+     "error": "<message>",
+     "code":  <int>,                   # NEVER 0 — see report_error guard
      "type":  "<ErrorClass>",          # optional
      "details": {<context>}}            # optional, free-form
+
+The schema version `v` is set so that wrappers can detect future
+breaking changes (e.g. renaming a field) and refuse old payloads
+gracefully. Bump only when the meaning of an existing field changes.
 
 Why this exists: agent wrappers (CI runners, skill harnesses, the
 ultrareview pipeline) parse stderr to surface failures back to the
@@ -29,6 +34,9 @@ import argparse
 import json
 import sys
 from typing import IO, Any
+
+
+SCHEMA_VERSION = 1
 
 
 def add_json_errors_argument(parser: argparse.ArgumentParser) -> None:
@@ -67,6 +75,7 @@ def add_json_errors_argument(parser: argparse.ArgumentParser) -> None:
         # better for wrappers).
         if "--json-errors" in sys.argv[1:]:
             envelope = {
+                "v": SCHEMA_VERSION,
                 "error": message,
                 "code": 2,
                 "type": "UsageError",
@@ -98,9 +107,28 @@ def report_error(
     `code` is returned as-is so the caller can `sys.exit(main())` and
     the exit status matches the JSON envelope's `code` field — wrappers
     don't have to reconcile two sources of truth.
+
+    Defensive coercion: `code=0` would mean "report an error then exit
+    success", which is a contradiction and almost always a typo. We
+    coerce to 1 and write a developer hint to stderr so the bug shows
+    up in tests instead of masquerading as success in production.
     """
+    if code == 0:
+        # Stay loud — wrappers and CI runners would silently succeed
+        # if we honoured a 0 here. A literal warning to stderr ensures
+        # whoever wrote `code=0` notices on first run.
+        sys.stderr.write(
+            "report_error: WARNING — caller passed code=0 with a "
+            "non-empty error message; coercing to 1 to avoid a "
+            "false-success exit.\n"
+        )
+        code = 1
     if json_mode:
-        envelope: dict[str, Any] = {"error": message, "code": code}
+        envelope: dict[str, Any] = {
+            "v": SCHEMA_VERSION,
+            "error": message,
+            "code": code,
+        }
         if error_type is not None:
             envelope["type"] = error_type
         if details:

@@ -143,6 +143,23 @@ def is_macro_enabled_file(path: Path) -> bool:
         return False
 
 
+def format_macro_loss_warning(
+    in_suffix: str, out_suffix: str, suggested: str
+) -> str:
+    """Return the canonical warning text for a macro-loss event.
+
+    Single source of truth so writer scripts AND `office.pack` emit the
+    same wording; callers should NOT inline-format their own copies.
+    """
+    return (
+        f"Warning: input is macro-enabled ({in_suffix}); output "
+        f"extension {out_suffix} will cause Office apps to silently drop "
+        f"macros even if vbaProject.bin survives in the ZIP. To preserve "
+        f"the macros, name the output with a macro-friendly extension "
+        f"(e.g. {suggested}).\n"
+    )
+
+
 def warn_if_macros_will_be_dropped(
     input_path: Path, output_path: Path, stream: IO[str]
 ) -> bool:
@@ -160,12 +177,6 @@ def warn_if_macros_will_be_dropped(
     if out_suffix not in NON_MACRO_EXTENSIONS:
         return False
     suggested = MACRO_EXT_FOR.get(in_suffix, in_suffix)
-    stream.write(
-        f"Warning: input is macro-enabled ({in_suffix}); output "
-        f"extension {out_suffix} will cause Office apps to silently drop "
-        f"macros even if vbaProject.bin survives in the ZIP. To preserve "
-        f"the macros, name the output with a macro-friendly extension "
-        f"(e.g. {suggested}).\n"
-    )
+    stream.write(format_macro_loss_warning(in_suffix, out_suffix, suggested))
     stream.flush()
     return True

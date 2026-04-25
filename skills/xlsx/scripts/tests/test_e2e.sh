@@ -219,9 +219,23 @@ err=$("$PY" xlsx_validate.py /nope.xlsx --json-errors 2>&1 >/dev/null)
 rc=$?
 set -e
 [ "$rc" -eq 2 ] \
-    && echo "$err" | "$PY" -c "import sys, json; j=json.loads(sys.stdin.read()); assert j['code']==2 and j['type']=='FileNotFound', j" 2>/dev/null \
-    && ok "xlsx_validate --json-errors envelope" \
+    && echo "$err" | "$PY" -c "import sys, json; j=json.loads(sys.stdin.read()); assert j['code']==2 and j['type']=='FileNotFound' and j['v']==1, j" 2>/dev/null \
+    && ok "xlsx_validate --json-errors envelope (v=1)" \
     || nok "xlsx_validate --json-errors" "exit=$rc msg=$err"
+
+# Parameterized cross-5: every plumbed xlsx CLI emits a JSON envelope.
+for cli in csv2xlsx.py xlsx_recalc.py xlsx_add_chart.py; do
+    set +e
+    if [ "$cli" = "xlsx_add_chart.py" ]; then
+        out=$("$PY" "$cli" /nope.xlsx --type bar --data "A1:B5" --json-errors 2>&1 >/dev/null)
+    else
+        out=$("$PY" "$cli" /nope.xlsx /tmp/_x.xlsx --json-errors 2>&1 >/dev/null)
+    fi
+    set -e
+    echo "$out" | "$PY" -c "import sys, json; json.loads(sys.stdin.read())" 2>/dev/null \
+        && ok "  $cli emits JSON envelope" \
+        || nok "  $cli envelope" "got: $out"
+done
 
 # --- cross-4: macro detection --------------------------------------------
 echo "cross-4 macro warnings:"

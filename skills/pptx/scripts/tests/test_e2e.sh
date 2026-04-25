@@ -212,9 +212,19 @@ err=$("$PY" pptx_to_pdf.py /nope.pptx --json-errors 2>&1 >/dev/null)
 rc=$?
 set -e
 [ "$rc" -eq 1 ] \
-    && echo "$err" | "$PY" -c "import sys, json; j=json.loads(sys.stdin.read()); assert j['code']==1 and j['type']=='FileNotFound', j" 2>/dev/null \
-    && ok "pptx_to_pdf --json-errors envelope" \
+    && echo "$err" | "$PY" -c "import sys, json; j=json.loads(sys.stdin.read()); assert j['code']==1 and j['type']=='FileNotFound' and j['v']==1, j" 2>/dev/null \
+    && ok "pptx_to_pdf --json-errors envelope (v=1)" \
     || nok "pptx_to_pdf --json-errors" "exit=$rc msg=$err"
+
+# Parameterized cross-5: every plumbed pptx CLI emits a JSON envelope.
+for cli in pptx_thumbnails.py pptx_clean.py; do
+    set +e
+    out=$("$PY" "$cli" /nope.pptx --json-errors 2>&1 >/dev/null)
+    set -e
+    echo "$out" | "$PY" -c "import sys, json; json.loads(sys.stdin.read())" 2>/dev/null \
+        && ok "  $cli emits JSON envelope" \
+        || nok "  $cli envelope" "got: $out"
+done
 
 # --- cross-4: macro detection (pptx) -------------------------------------
 echo "cross-4 macro warnings:"

@@ -125,9 +125,48 @@ err=$("$PY" docx_fill_template.py --json-errors 2>&1 >/dev/null)
 rc=$?
 set -e
 [ "$rc" -eq 2 ] \
-    && echo "$err" | "$PY" -c "import sys, json; j=json.loads(sys.stdin.read()); assert j['code']==2 and j['type']=='UsageError', j" 2>/dev/null \
-    && ok "argparse usage error routed to JSON envelope (UsageError)" \
+    && echo "$err" | "$PY" -c "import sys, json; j=json.loads(sys.stdin.read()); assert j['code']==2 and j['type']=='UsageError' and j['v']==1, j" 2>/dev/null \
+    && ok "argparse usage error routed to JSON envelope (UsageError + v=1)" \
     || nok "usage-error envelope" "exit=$rc msg=$err"
+
+# Schema version: every JSON envelope carries v=1 (regression for LOW-1).
+set +e
+err=$("$PY" docx_fill_template.py /nope.docx /nope.json /tmp/_z.docx --json-errors 2>&1 >/dev/null)
+set -e
+echo "$err" | "$PY" -c "import sys, json; assert json.loads(sys.stdin.read())['v']==1" 2>/dev/null \
+    && ok "domain-error envelope carries v=1" \
+    || nok "v=1 missing on domain error" "got: $err"
+
+# Defensive: report_error(code=0) must coerce to 1 (regression for MED-1).
+set +e
+out=$("$PY" -c "
+import sys
+sys.path.insert(0, '.')
+from _errors import report_error
+import io
+stream = io.StringIO()
+rc = report_error('boom', code=0, json_mode=True, stream=stream)
+print('rc=', rc)
+print('json=', stream.getvalue().strip())
+" 2>&1)
+set -e
+echo "$out" | grep -q "rc= 1" \
+    && echo "$out" | grep -q '"code": 1' \
+    && ok "report_error(code=0) coerced to 1 (no false-success exit)" \
+    || nok "code=0 coercion" "got: $out"
+
+# Parameterized cross-5: every plumbed CLI must emit a JSON envelope
+# with --json-errors when fed a missing-input failure (regression for
+# MED-6 — half of the plumbed scripts had no envelope coverage).
+echo "cross-5 envelope on every plumbed CLI:"
+for cli in docx_fill_template.py docx_accept_changes.py; do
+    set +e
+    out=$("$PY" "$cli" /nope.docx /nope.docx --json-errors 2>&1 >/dev/null)
+    set -e
+    echo "$out" | "$PY" -c "import sys, json; json.loads(sys.stdin.read())" 2>/dev/null \
+        && ok "  $cli emits JSON envelope" \
+        || nok "  $cli envelope" "got: $out"
+done
 
 # --- cross-4: macro detection (docx) --------------------------------------
 echo "cross-4 macro warnings:"
@@ -167,6 +206,40 @@ echo "$err" | grep -q "macro-enabled" \
     && echo "$err" | grep -q ".docm" \
     && ok "writer warns when .docm → .docx (macros lost)" \
     || nok "macro-loss warning" "no warning in stderr: $err"
+
+# MED-5: template macro extension (.dotm) must be detected as macro-
+# enabled and the warning helper must fire when packing into .dotx.
+"$PY" -c "
+import zipfile, shutil, sys, io
+sys.path.insert(0, '.')
+from office._macros import (
+    is_macro_enabled_file, warn_if_macros_will_be_dropped, MACRO_EXT_FOR,
+)
+from pathlib import Path
+shutil.copy('$TMP/out.docx', '$TMP/template.dotm')
+with zipfile.ZipFile('$TMP/template.dotm', 'r') as src:
+    data = {n: src.read(n) for n in src.namelist()}
+ct = data['[Content_Types].xml'].decode('utf-8')
+ct = ct.replace(
+    'application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml',
+    'application/vnd.ms-word.template.macroEnabledTemplate.main+xml',
+)
+data['[Content_Types].xml'] = ct.encode('utf-8')
+data['word/vbaProject.bin'] = b'fake-vba'
+with zipfile.ZipFile('$TMP/template.dotm', 'w', zipfile.ZIP_DEFLATED) as out:
+    for n, d in data.items():
+        out.writestr(n, d)
+
+assert is_macro_enabled_file(Path('$TMP/template.dotm')) is True, 'dotm not detected'
+buf = io.StringIO()
+fired = warn_if_macros_will_be_dropped(
+    Path('$TMP/template.dotm'), Path('$TMP/lossy.dotx'), buf,
+)
+assert fired is True, 'warning did not fire on .dotm → .dotx'
+assert '.dotm' in buf.getvalue() and '.dotx' in buf.getvalue(), buf.getvalue()
+" \
+    && ok ".dotm → .dotx triggers macro-loss warning (template path covered)" \
+    || nok ".dotm template macro warning" "MED-5 regression"
 
 # False-positive guard A: stray vbaProject.bin in a regular .docx must
 # NOT trip the detector. Office ignores the bin without the matching
