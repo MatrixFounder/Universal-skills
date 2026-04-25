@@ -134,6 +134,26 @@ class TestPptxValidatorClean(unittest.TestCase):
         self.assertFalse(report.errors, report.errors)
 
 
+class TestPptxValidatorInstanceIsolation(unittest.TestCase):
+    """Regression for VDD iter-4 HIGH: `xsd_map` was a class-level
+    mutable dict, so dynamic adds in `_validate_against_xsd` leaked
+    across instances and re-runs."""
+
+    def test_xsd_map_is_per_instance(self) -> None:
+        v1 = PptxValidator()
+        v2 = PptxValidator()
+        self.assertIsNot(v1.xsd_map, v2.xsd_map)
+        self.assertIsNot(v1.xsd_map, PptxValidator.xsd_map)
+
+    def test_dynamic_add_does_not_leak(self) -> None:
+        v1 = PptxValidator()
+        v1.xsd_map["ppt/slides/slide99.xml"] = "pml.xsd"
+        v2 = PptxValidator()
+        self.assertNotIn("ppt/slides/slide99.xml", v2.xsd_map)
+        # And the class itself is also untouched.
+        self.assertNotIn("ppt/slides/slide99.xml", PptxValidator.xsd_map)
+
+
 class TestPptxValidatorSlideChain(unittest.TestCase):
     def test_missing_slide_part_is_an_error(self) -> None:
         # Reference a slide in presentation.xml.rels that doesn't exist

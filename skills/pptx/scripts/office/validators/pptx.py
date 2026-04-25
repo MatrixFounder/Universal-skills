@@ -151,11 +151,20 @@ class PptxValidator(BaseSchemaValidator):
 
         `resolved_part` is the ZIP-relative path the relationship points
         to (External targets are skipped). Failure to parse is recorded
-        in `report` and an empty dict is returned.
+        in `report` and an empty dict is returned. Missing-file vs
+        parse-error are reported with distinct wording so the user
+        knows which problem to chase.
         """
         try:
-            root = etree.fromstring(archive.read(rels_path), _safe_parser())
-        except (KeyError, etree.XMLSyntaxError) as exc:
+            raw = archive.read(rels_path)
+        except KeyError:
+            report.errors.append(
+                f"{rels_path}: relationship file missing from package"
+            )
+            return {}
+        try:
+            root = etree.fromstring(raw, _safe_parser())
+        except etree.XMLSyntaxError as exc:
             report.errors.append(f"{rels_path}: parse error {exc}")
             return {}
         out: dict[str, tuple[str, str]] = {}
@@ -388,14 +397,22 @@ class PptxValidator(BaseSchemaValidator):
         name: str,
         report: ValidationReport,
     ) -> None:
-        # Bind every slideN.xml / slideLayoutN.xml / slideMasterN.xml
-        # to pml.xsd in addition to the static xsd_map entries. The
-        # base class only consults `self.xsd_map`, so synthesise an
-        # entry on the fly.
-        if name not in self.xsd_map:
-            if (name.startswith("ppt/slides/slide")
-                    or name.startswith("ppt/slideLayouts/slideLayout")
-                    or name.startswith("ppt/slideMasters/slideMaster")):
-                if name.endswith(".xml"):
-                    self.xsd_map[name] = "pml.xsd"
+        # Bind PresentationML parts to pml.xsd dynamically — the static
+        # map only declares presentation.xml. We extend to every part
+        # that uses the same schema namespace: slides + their layouts
+        # and masters, plus notes slides + their masters, plus theme.
+        # Self.xsd_map is per-instance (see BaseSchemaValidator.__init__)
+        # so this dynamic add does NOT leak to other instances.
+        _PML_PREFIXES = (
+            "ppt/slides/slide",
+            "ppt/slideLayouts/slideLayout",
+            "ppt/slideMasters/slideMaster",
+            "ppt/notesSlides/notesSlide",
+            "ppt/notesMasters/notesMaster",
+            "ppt/theme/theme",
+        )
+        if (name not in self.xsd_map
+                and name.endswith(".xml")
+                and any(name.startswith(p) for p in _PML_PREFIXES)):
+            self.xsd_map[name] = "pml.xsd"
         super()._validate_against_xsd(archive, name, report)

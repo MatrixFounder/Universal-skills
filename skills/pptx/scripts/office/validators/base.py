@@ -21,6 +21,7 @@ reports those as warnings, not errors, unless `strict=True`.
 
 from __future__ import annotations
 
+import urllib.parse
 import zipfile
 from collections import defaultdict
 from dataclasses import dataclass, field
@@ -65,6 +66,15 @@ def _resolve_zip_path(base_dir: str, target: str) -> str:
         _resolve_zip_path("xl", "/xl/worksheets/sheet1.xml")
             → "xl/worksheets/sheet1.xml"         # absolute (openpyxl)
     """
+    # Two cleanups before path-walk:
+    #   1. URI percent-decoding — OPC says Target is a URI reference, so
+    #      a slide called "slide 1.xml" is encoded as "slide%201.xml" in
+    #      the rels file. ZIP namelists hold the decoded form; without
+    #      decoding here we'd false-positive "missing slide".
+    #   2. Backslash → slash. OOXML says use forward slashes, but legacy
+    #      writers occasionally produce "slides\slide1.xml". Normalising
+    #      keeps us tolerant of those.
+    target = urllib.parse.unquote(target).replace("\\", "/")
     if target.startswith("/"):
         path = target
     else:
@@ -103,11 +113,20 @@ class ValidationReport:
 
 class BaseSchemaValidator:
     expected_parts: tuple[str, ...] = ()
+    # Class-level seed map; subclasses override to declare static
+    # part→xsd bindings. The instance gets its own copy in __init__ so
+    # subclasses that mutate `self.xsd_map` (e.g. PptxValidator adding
+    # per-slide entries on the fly) don't leak state across instances.
     xsd_map: dict[str, str] = {}
 
     def __init__(self, schemas_dir: Path | None = None, *, strict: bool = False) -> None:
         self.schemas_dir = schemas_dir
         self.strict = strict
+        # Per-instance dict — required because subclasses populate
+        # `self.xsd_map` dynamically during validation. Without this
+        # copy, every dynamic add would mutate the class attribute and
+        # leak into the next instance.
+        self.xsd_map = dict(self.__class__.xsd_map)
 
     def validate(self, input_path: Path) -> ValidationReport:
         report = ValidationReport()

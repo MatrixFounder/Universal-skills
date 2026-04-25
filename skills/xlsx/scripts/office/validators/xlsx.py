@@ -97,10 +97,17 @@ class XlsxValidator(BaseSchemaValidator):
     def _check_sheet_uniqueness(
         self, wb: etree._Element, report: ValidationReport
     ) -> None:
-        seen_names: set[str] = set()
+        # Excel folds case when comparing sheet names — `Sheet1` and
+        # `SHEET1` are treated as identical and the workbook fails to
+        # open. We mirror that by lower-casing before set membership;
+        # the original (case-preserved) name is used in the error
+        # message so the user sees what they wrote.
+        seen_names_lc: set[str] = set()
         seen_sheet_ids: set[str] = set()
         seen_rids: set[str] = set()
+        n_sheets = 0
         for sheet in wb.iter(f"{{{S_NS}}}sheet"):
+            n_sheets += 1
             name = sheet.get("name")
             sheet_id = sheet.get("sheetId")
             rid = sheet.get(f"{{{R_NS}}}id")
@@ -108,13 +115,14 @@ class XlsxValidator(BaseSchemaValidator):
                 report.errors.append(
                     "xl/workbook.xml: <sheet> missing @name"
                 )
-            elif name in seen_names:
+            elif name.lower() in seen_names_lc:
                 report.errors.append(
                     f"xl/workbook.xml: duplicate sheet name '{name}' "
-                    "(Excel refuses to open this file)"
+                    "(case-insensitive match — Excel refuses to open "
+                    "this file)"
                 )
             else:
-                seen_names.add(name)
+                seen_names_lc.add(name.lower())
             if sheet_id is None:
                 report.errors.append(
                     "xl/workbook.xml: <sheet> missing @sheetId"
@@ -135,19 +143,31 @@ class XlsxValidator(BaseSchemaValidator):
                 )
             else:
                 seen_rids.add(rid)
+        # Excel rejects a workbook with no sheets ("Excel found
+        # unreadable content"). Flag this loudly even though the rest
+        # of our chain checks would silently pass on an empty list.
+        if n_sheets == 0:
+            report.errors.append(
+                "xl/workbook.xml: no <sheet> elements (workbook must "
+                "contain at least one sheet — Excel refuses to open "
+                "an empty workbook)"
+            )
 
     def _check_defined_names(
         self, wb: etree._Element, report: ValidationReport
     ) -> None:
+        # definedName comparison is case-insensitive in Excel (same
+        # rule as sheet names — see _check_sheet_uniqueness for the
+        # rationale and message format).
         seen: set[tuple[str, str]] = set()
         for dn in wb.iter(f"{{{S_NS}}}definedName"):
             name = dn.get("name") or ""
             scope = dn.get("localSheetId") or "<workbook>"
-            key = (scope, name)
+            key = (scope, name.lower())
             if key in seen:
                 report.errors.append(
                     f"xl/workbook.xml: duplicate definedName '{name}' "
-                    f"in scope {scope}"
+                    f"in scope {scope} (case-insensitive match)"
                 )
             seen.add(key)
 
@@ -161,8 +181,18 @@ class XlsxValidator(BaseSchemaValidator):
         report: ValidationReport,
     ) -> dict[str, tuple[str, str]]:
         try:
-            root = etree.fromstring(archive.read(rels_path), _safe_parser())
-        except (KeyError, etree.XMLSyntaxError) as exc:
+            raw = archive.read(rels_path)
+        except KeyError:
+            # File missing entirely — distinguish from a parse error so
+            # the user doesn't go hunting for syntax issues in a file
+            # that never existed.
+            report.errors.append(
+                f"{rels_path}: relationship file missing from package"
+            )
+            return {}
+        try:
+            root = etree.fromstring(raw, _safe_parser())
+        except etree.XMLSyntaxError as exc:
             report.errors.append(f"{rels_path}: parse error {exc}")
             return {}
         out: dict[str, tuple[str, str]] = {}
@@ -293,26 +323,37 @@ class XlsxValidator(BaseSchemaValidator):
             for c in doc.iter(f"{{{S_NS}}}c"):
                 t_attr = c.get("t")
                 s_attr = c.get("s")
+                ref = c.get("r", "?")
                 # Shared-string index check
                 if t_attr == "s":
                     v = c.find(f"{{{S_NS}}}v")
-                    if v is not None and v.text is not None:
+                    if v is None or v.text is None:
+                        # ECMA-376 §18.3.1.4 requires <v> for t='s'.
+                        # Without it Excel shows blank and downstream
+                        # tools (pandas read_excel) may raise.
+                        report.errors.append(
+                            f"{sheet_part}: cell {ref} has t='s' but "
+                            "no <v> child (shared-string index "
+                            "required by ECMA-376 §18.3.1.4)"
+                        )
+                    else:
                         try:
                             idx = int(v.text)
                         except ValueError:
                             report.errors.append(
-                                f"{sheet_part}: cell {c.get('r','?')} type='s' "
+                                f"{sheet_part}: cell {ref} type='s' "
                                 f"but <v>{v.text}</v> is not an integer"
                             )
                             continue
                         if ss_count is None:
                             report.errors.append(
-                                f"{sheet_part}: cell {c.get('r','?')} references "
-                                "shared string but xl/sharedStrings.xml is absent"
+                                f"{sheet_part}: cell {ref} references "
+                                "shared string but xl/sharedStrings.xml "
+                                "is absent"
                             )
                         elif not (0 <= idx < ss_count):
                             report.errors.append(
-                                f"{sheet_part}: cell {c.get('r','?')} sst index "
+                                f"{sheet_part}: cell {ref} sst index "
                                 f"{idx} out of range [0, {ss_count})"
                             )
                 # Style index check
@@ -321,18 +362,27 @@ class XlsxValidator(BaseSchemaValidator):
                         s_idx = int(s_attr)
                     except ValueError:
                         report.errors.append(
-                            f"{sheet_part}: cell {c.get('r','?')} has "
+                            f"{sheet_part}: cell {ref} has "
                             f"non-integer s='{s_attr}'"
                         )
                         continue
                     if styles_count is None:
                         report.warnings.append(
-                            f"{sheet_part}: cell {c.get('r','?')} has style "
+                            f"{sheet_part}: cell {ref} has style "
                             "index but xl/styles.xml is absent"
+                        )
+                    elif styles_count == 0:
+                        # Distinct from "out of range [0, 0)" because
+                        # the user otherwise has no idea WHY 0 is out
+                        # of range. Real story: cellXfs is empty.
+                        report.errors.append(
+                            f"{sheet_part}: cell {ref} has style index "
+                            f"{s_idx} but xl/styles.xml has no "
+                            "<cellXfs> entries"
                         )
                     elif not (0 <= s_idx < styles_count):
                         report.errors.append(
-                            f"{sheet_part}: cell {c.get('r','?')} style "
+                            f"{sheet_part}: cell {ref} style "
                             f"index {s_idx} out of range [0, {styles_count})"
                         )
 
@@ -345,16 +395,22 @@ class XlsxValidator(BaseSchemaValidator):
         sheets: set[str],
         report: ValidationReport,
     ) -> None:
+        # All three sheet kinds (regular worksheet, chart sheet, dialog
+        # sheet) live in their own subdirectory; orphans in any of them
+        # bloat the package after manual editing.
+        sheet_dirs = (
+            "xl/worksheets/", "xl/chartsheets/", "xl/dialogsheets/",
+        )
         on_disk = {
             n for n in namelist
-            if n.startswith("xl/worksheets/")
+            if any(n.startswith(d) for d in sheet_dirs)
             and n.endswith(".xml")
             and "/_rels/" not in n
         }
         orphans = sorted(on_disk - sheets)
         for orphan in orphans:
             report.warnings.append(
-                f"Orphan worksheet '{orphan}' (not in workbook's <sheets>)"
+                f"Orphan sheet part '{orphan}' (not in workbook's <sheets>)"
             )
 
     # ------------------------------------------------------------------
@@ -366,9 +422,18 @@ class XlsxValidator(BaseSchemaValidator):
         name: str,
         report: ValidationReport,
     ) -> None:
-        if name not in self.xsd_map:
-            if (name.startswith("xl/worksheets/sheet")
-                    or name == "xl/sharedStrings.xml"
-                    or name == "xl/styles.xml") and name.endswith(".xml"):
-                self.xsd_map[name] = "sml.xsd"
+        # Bind SpreadsheetML parts to sml.xsd dynamically. Covers
+        # regular worksheets + chart sheets + dialog sheets, plus the
+        # shared strings and styles parts. Self.xsd_map is per-instance
+        # (see BaseSchemaValidator.__init__) so no class-level leak.
+        _SML_PREFIXES = (
+            "xl/worksheets/sheet",
+            "xl/chartsheets/sheet",
+            "xl/dialogsheets/sheet",
+        )
+        if (name not in self.xsd_map and name.endswith(".xml") and (
+                any(name.startswith(p) for p in _SML_PREFIXES)
+                or name == "xl/sharedStrings.xml"
+                or name == "xl/styles.xml")):
+            self.xsd_map[name] = "sml.xsd"
         super()._validate_against_xsd(archive, name, report)
