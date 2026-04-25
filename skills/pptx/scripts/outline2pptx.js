@@ -110,15 +110,21 @@ function parseOutline(md) {
       continue;
     }
     if (h3) {
-      // Sub-heading → bold-leading bullet on the current slide
-      if (cur) cur.bullets.push(`**${h3[1]}**`);
+      // Sub-heading → bold bullet on the current slide. Mark with a
+      // sentinel object instead of `**foo**` text — pptxgenjs renders
+      // strings verbatim (asterisks would show as literal characters);
+      // the renderer below converts the sentinel to bullet options.
+      if (cur) cur.bullets.push({ kind: "sub", text: h3[1] });
       continue;
     }
     const trimmed = rawLine.trim();
     if (!trimmed) continue;
-    // List item or bare paragraph → bullet
+    // Skip code-fence delimiters so a fenced block under a heading
+    // doesn't show ``` lines as bullets in the skeleton output.
+    if (/^```/.test(trimmed)) continue;
+    // List item or bare paragraph → plain bullet
     const bullet = trimmed.replace(/^[-*]\s+/, "");
-    if (cur) cur.bullets.push(bullet);
+    if (cur) cur.bullets.push({ kind: "plain", text: bullet });
   }
   flush();
   return slides;
@@ -141,6 +147,23 @@ function makeTitleSlide(pres, theme, slide, title) {
   });
 }
 
+function bulletToTextItem(bullet, theme) {
+  // Sub-headings (`### ...` in the source) become BOLD bullets via
+  // pptxgenjs' per-paragraph options — passing `**foo**` as a string
+  // would render the asterisks as literal characters.
+  if (bullet && bullet.kind === "sub") {
+    return {
+      text: bullet.text,
+      options: { bullet: true, bold: true },
+    };
+  }
+  // Plain bullets keep the default body styling.
+  return {
+    text: (bullet && bullet.text) || String(bullet || ""),
+    options: { bullet: true },
+  };
+}
+
 function makeContentSlide(pres, theme, slide, title, bullets) {
   slide.background = { color: theme.bg };
   // Accent stripe at top
@@ -159,7 +182,7 @@ function makeContentSlide(pres, theme, slide, title, bullets) {
   // Body: editor-friendly placeholder when no bullets were captured,
   // so the slide doesn't look empty in PowerPoint.
   const items = bullets.length > 0
-    ? bullets.map(b => ({ text: b, options: { bullet: true } }))
+    ? bullets.map(b => bulletToTextItem(b, theme))
     : [{ text: "TODO: add content",
          options: { bullet: true, color: theme.muted, italic: true } }];
 

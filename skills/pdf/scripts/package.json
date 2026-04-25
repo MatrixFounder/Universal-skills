@@ -5,6 +5,6 @@
   "description": "Optional Node CLI dep for the pdf skill: mermaid-cli renders ```mermaid blocks to SVG before weasyprint takes over.",
   "license": "SEE LICENSE IN ../LICENSE",
   "dependencies": {
-    "@mermaid-js/mermaid-cli": "^10.9.0"
+    "@mermaid-js/mermaid-cli": "^11.4.0"
   }
 }

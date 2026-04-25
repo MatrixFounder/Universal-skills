@@ -272,9 +272,13 @@ def convert(
         base_dir = Path(base_url) if base_url else input_path.parent
         assets_dir = base_dir / f"{output_path.stem}_assets"
         # Default to the bundled office-friendly config (Cyrillic-capable
-        # fonts) when the user didn't pick one explicitly. None means
-        # "let mmdc use its built-in defaults".
-        if mermaid_config is None and DEFAULT_MERMAID_CONFIG.exists():
+        # fonts) when caller passed neither `--mermaid-config` nor
+        # `--no-mermaid-config`. The literal sentinel False (set when
+        # --no-mermaid-config is on) means "skip the default and let
+        # mmdc use its built-in config".
+        if mermaid_config is False:
+            mermaid_config = None
+        elif mermaid_config is None and DEFAULT_MERMAID_CONFIG.exists():
             mermaid_config = DEFAULT_MERMAID_CONFIG
         md_text = preprocess_mermaid(
             md_text, assets_dir,
@@ -314,9 +318,13 @@ def main(argv: list[str] | None = None) -> int:
                         help="Skip mermaid preprocessing (diagrams stay as code blocks).")
     parser.add_argument("--strict-mermaid", action="store_true",
                         help="Fail (exit 4) if any mermaid block can't be rendered.")
-    parser.add_argument("--mermaid-config", type=Path, default=None,
-                        help="JSON config passed to mmdc -c (theme, fontFamily, etc.). "
-                             "Default: scripts/mermaid-config.json (office-friendly, Cyrillic-capable).")
+    cfg_group = parser.add_mutually_exclusive_group()
+    cfg_group.add_argument("--mermaid-config", type=Path, default=None,
+                           help="JSON config passed to mmdc -c (theme, fontFamily, etc.). "
+                                "Default: scripts/mermaid-config.json (office-friendly, Cyrillic-capable).")
+    cfg_group.add_argument("--no-mermaid-config", dest="no_mermaid_config",
+                           action="store_true",
+                           help="Render with mmdc's built-in defaults (skip the bundled config).")
     args = parser.parse_args(argv)
 
     if not args.input.is_file():
@@ -332,7 +340,10 @@ def main(argv: list[str] | None = None) -> int:
             base_url=args.base_url,
             use_mermaid=not args.no_mermaid,
             strict_mermaid=args.strict_mermaid,
-            mermaid_config=args.mermaid_config,
+            # `False` means user passed --no-mermaid-config; convert()
+            # interprets that as "skip the bundled default and let
+            # mmdc use its built-in config".
+            mermaid_config=False if args.no_mermaid_config else args.mermaid_config,
         )
     except Exception as exc:
         print(f"Conversion failed: {exc}", file=sys.stderr)

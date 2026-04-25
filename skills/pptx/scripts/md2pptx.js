@@ -32,7 +32,7 @@ const fs = require("fs");
 const path = require("path");
 const os = require("os");
 const crypto = require("crypto");
-const { execSync } = require("child_process");
+const { execSync, spawnSync } = require("child_process");
 const marked = require("marked");
 const pptxgen = require("pptxgenjs");
 
@@ -89,16 +89,17 @@ function renderMermaid(source) {
   const pngFile = path.join(MERMAID_CACHE_DIR, `${hash}.png`);
   if (fs.existsSync(pngFile)) return pngFile;
   fs.writeFileSync(mmdFile, source);
-  try {
-    let cmd = `"${bin}" -i "${mmdFile}" -o "${pngFile}" -s 2 -b white -t neutral`;
-    if (_mermaidConfigPath) {
-      cmd += ` -c "${_mermaidConfigPath}"`;
-    }
-    execSync(cmd, { stdio: "ignore" });
-    return fs.existsSync(pngFile) ? pngFile : null;
-  } catch (e) {
-    return null;
+  // spawnSync with an argv array (no shell) — paths with spaces or
+  // quote characters travel through unmodified, no shell-escaping
+  // bugs possible. The earlier execSync string-concat path was
+  // injection-prone for unusual config / cache paths.
+  const args = ["-i", mmdFile, "-o", pngFile, "-s", "2", "-b", "white", "-t", "neutral"];
+  if (_mermaidConfigPath) {
+    args.push("-c", _mermaidConfigPath);
   }
+  const result = spawnSync(bin, args, { stdio: "ignore" });
+  if (result.status === 0 && fs.existsSync(pngFile)) return pngFile;
+  return null;
 }
 
 const DEFAULT_THEME = {

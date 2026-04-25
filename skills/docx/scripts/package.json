@@ -5,7 +5,7 @@
   "description": "Runtime dependencies for the docx skill scripts (md2docx.js, docx2md.js).",
   "license": "SEE LICENSE IN ../LICENSE",
   "dependencies": {
-    "@mermaid-js/mermaid-cli": "^10.9.0",
+    "@mermaid-js/mermaid-cli": "^11.4.0",
     "docx": "^8.5.0",
     "image-size": "^2.0.0",
     "jszip": "^3.10.0",
