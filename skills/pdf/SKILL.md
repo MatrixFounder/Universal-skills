@@ -36,11 +36,14 @@ scripts that embed those choices removes the variance.
 ## 4. Script Contract
 
 - **Commands**:
-  - `python3 scripts/md2pdf.py INPUT.md OUTPUT.pdf [--page-size letter|a4|legal] [--css EXTRA.css] [--base-url DIR]`
+  - `python3 scripts/md2pdf.py INPUT.md OUTPUT.pdf [--page-size letter|a4|legal] [--css EXTRA.css] [--base-url DIR] [--no-mermaid] [--strict-mermaid]`
   - `python3 scripts/pdf_merge.py OUTPUT.pdf INPUT1.pdf INPUT2.pdf [INPUT3.pdf ...]`
   - `python3 scripts/pdf_split.py INPUT.pdf --ranges "1-5:part1.pdf,6-10:part2.pdf"`
   - `python3 scripts/pdf_split.py INPUT.pdf --each-page OUTDIR/`
   - `python3 scripts/pdf_split.py INPUT.pdf --every N OUTDIR/`
+  - `python3 scripts/pdf_fill_form.py --check INPUT.pdf` — exit 0/11/12 = AcroForm/XFA/none. (Custom codes start at 10 to leave 0–9 for argparse / shell convention.)
+  - `python3 scripts/pdf_fill_form.py --extract-fields INPUT.pdf -o fields.json`
+  - `python3 scripts/pdf_fill_form.py INPUT.pdf DATA.json -o OUTPUT.pdf [--flatten]`
 - **Inputs**: positional paths; optional flags per command.
 - **Outputs**: single PDF files (`md2pdf`, `pdf_merge`) or multiple PDFs under a directory (`pdf_split`). All stdout goes to the output path list.
 - **Failure semantics**: non-zero exit on missing inputs, invalid range specs, or library errors. Error detail to stderr.
@@ -55,7 +58,8 @@ scripts that embed those choices removes the variance.
 
 ## 6. Validation Evidence
 - **Local verification**:
-  - `python3 -m venv .venv && source .venv/bin/activate && pip install -r scripts/requirements.txt` — installs pypdf, pdfplumber, weasyprint, markdown2.
+  - `python3 -m venv .venv && source .venv/bin/activate && pip install -r scripts/requirements.txt` — installs pypdf, pdfplumber, weasyprint, markdown2, reportlab.
+  - `bash scripts/tests/test_e2e.sh` — runs the end-to-end smoke suite (md2pdf, merge, split, fill-form, mermaid).
   - `python3 scripts/md2pdf.py examples/fixture.md /tmp/invoice.pdf --page-size letter` — produces a non-empty PDF.
   - `python3 -c "from pypdf import PdfReader; r=PdfReader('/tmp/invoice.pdf'); print(len(r.pages))"` — returns at least 1.
   - `python3 scripts/pdf_merge.py /tmp/merged.pdf /tmp/invoice.pdf /tmp/invoice.pdf && python3 -c "from pypdf import PdfReader; print(len(PdfReader('/tmp/merged.pdf').pages))"` — 2× the page count.
