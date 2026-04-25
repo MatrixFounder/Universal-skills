@@ -601,6 +601,34 @@ python3 .claude/skills/skill-creator/scripts/validate_skill.py skills/<skill>
 
 All four skills currently pass `validate_skill.py`.
 
+### What `office/validate.py` actually checks
+
+Every container goes through the base structural pass: ZIP integrity,
+`[Content_Types].xml` presence, relationship targets exist, IDs that
+ECMA-376 declares unique are unique. On top of that each format adds
+its own structural-semantic layer:
+
+| Skill | Validator | Format-specific checks (in addition to base) |
+| :--- | :--- | :--- |
+| docx | `DocxValidator` | Tracked-change integrity (`<w:t>` inside `<w:del>` flagged); comment-marker pairing (`commentRangeStart`/`commentRangeEnd`/`commentReference` triples). Optional: `--compare-to` runs `RedliningValidator` to catch text changes that bypass `<w:ins>`/`<w:del>` (the "editor forgot to enable Track Changes" trap). |
+| xlsx | `XlsxValidator` | Sheet chain (`<sheet @r:id>` → workbook.rels → real `xl/worksheets/sheetN.xml`); sheet name + sheetId + r:id uniqueness (Excel hard-fail at duplicates); `definedName` uniqueness per scope; **shared-string index bounds** (`<c t="s"><v>N</v>` ≤ count of `<si>` in `xl/sharedStrings.xml`); **cell-style index bounds** (`<c s="N">` ≤ count of `cellXfs` in `xl/styles.xml`); orphan worksheets warning. |
+| pptx | `PptxValidator` | Slide chain (`<p:sldId>` → presentation.rels → real `ppt/slides/slideN.xml`); slide-id uniqueness + ECMA-376 §19.2.1.34 `ST_SlideId` range `[256, 2 147 483 647]`; layout/master chain (each slide → its layout → its master, all must exist); media references (`<a:blip r:embed>`, `<p:videoFile r:link>` resolve to packaged parts); notes-slide reciprocity (notes → back to its slide); orphan slides warning. |
+| pdf | (uses pypdf/pdfplumber inline; no OOXML validator) | n/a — `pdf_fill_form.py --check` returns the AcroForm/XFA/none triage exit codes (0/11/12). |
+
+**XSD binding is opt-in.** ECMA-376 schemas are large (~10 MB) and
+not bundled by default. Run `office/schemas/fetch.sh` to download
+them; XSD validation then activates automatically for the parts each
+validator declares in its `xsd_map` (workbook.xml, sheets, slides,
+slide layouts, slide masters, sharedStrings, styles, etc.). Without
+the schemas, `--strict` produces "XSD not bundled" warnings and exit
+1 — the gate is intentional so CI cannot silently skip schema checks.
+
+The validators are exercised by 18 unit tests
+(`office/tests/test_pptx_validator.py` + `test_xlsx_validator.py`)
+plus 7 E2E entries that inject deliberate breakage (orphan slide,
+missing slideLayout, blip → unknown rId, out-of-range sst index,
+duplicate sheet name) and assert the validator catches each.
+
 ---
 
 ## 9.5. Cross-skill safeguards (cross-1 / 4 / 5)

@@ -272,6 +272,102 @@ echo "$err" | grep -q "macro-enabled" && [ "$rc" -eq 0 ] \
     && ok "xlsx_add_chart warns when .xlsm → .xlsx" \
     || nok "macro-loss warning (xlsx)" "exit=$rc msg=$err"
 
+# --- xlsx-5: XlsxValidator deep checks ------------------------------------
+echo "xlsx-5 deep validation:"
+
+# Real fixture must validate cleanly (sheet chain, sst+styles bounds).
+"$PY" -m office.validate "$TMP/out.xlsx" --json > "$TMP/_v.json" 2>&1
+"$PY" -c "
+import json
+r = json.load(open('$TMP/_v.json'))
+assert r['ok'] is True, r
+assert not r['errors'], r
+" \
+    && ok "real xlsx fixture: zero errors from deep validator" \
+    || nok "real xlsx clean validation" "got: $(cat $TMP/_v.json)"
+
+# Inject an out-of-range shared-string index — Excel would refuse to
+# open this; our validator must error. csv2xlsx output has no
+# sharedStrings.xml (numeric data only), so we inject one with 1 entry
+# and reference index 9999 → out-of-range against count=1.
+"$PY" -c "
+import zipfile, shutil
+shutil.copy('$TMP/out.xlsx', '$TMP/oob_sst.xlsx')
+with zipfile.ZipFile('$TMP/oob_sst.xlsx', 'r') as src:
+    data = {n: src.read(n) for n in src.namelist()}
+data['xl/sharedStrings.xml'] = (
+    '<?xml version=\"1.0\" encoding=\"UTF-8\"?>'
+    '<sst xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\" count=\"1\" uniqueCount=\"1\">'
+    '<si><t>only-string</t></si>'
+    '</sst>'
+).encode('utf-8')
+# Patch [Content_Types].xml so the package declares sharedStrings.xml.
+ct = data['[Content_Types].xml'].decode('utf-8')
+if 'sharedStrings.xml' not in ct:
+    ct = ct.replace('</Types>',
+        '<Override PartName=\"/xl/sharedStrings.xml\" '
+        'ContentType=\"application/vnd.openxmlformats-officedocument.spreadsheetml.sharedStrings+xml\"/></Types>',
+        1)
+    data['[Content_Types].xml'] = ct.encode('utf-8')
+sheet_xml = data['xl/worksheets/sheet1.xml'].decode('utf-8')
+patched = sheet_xml.replace(
+    '</sheetData>',
+    '<row r=\"99\"><c r=\"Z99\" t=\"s\"><v>9999</v></c></row></sheetData>',
+    1,
+)
+data['xl/worksheets/sheet1.xml'] = patched.encode('utf-8')
+with zipfile.ZipFile('$TMP/oob_sst.xlsx', 'w', zipfile.ZIP_DEFLATED) as out:
+    for n, d in data.items():
+        out.writestr(n, d)
+"
+set +e
+"$PY" -m office.validate "$TMP/oob_sst.xlsx" --json > "$TMP/_o.json" 2>&1
+rc=$?
+set -e
+[ "$rc" -eq 1 ] && "$PY" -c "
+import json
+r = json.load(open('$TMP/_o.json'))
+assert any('sst index 9999 out of range' in e for e in r['errors']), r
+" \
+    && ok "out-of-range sst index: error emitted, exit 1" \
+    || nok "oob sst detection" "exit=$rc out=$(cat $TMP/_o.json)"
+
+# Inject a duplicate sheet name (Excel hard-fail).
+"$PY" -c "
+import zipfile, shutil
+shutil.copy('$TMP/out.xlsx', '$TMP/dup_name.xlsx')
+with zipfile.ZipFile('$TMP/dup_name.xlsx', 'r') as src:
+    data = {n: src.read(n) for n in src.namelist()}
+wb = data['xl/workbook.xml'].decode('utf-8')
+# Naively duplicate the <sheet/> element. csv2xlsx writes one sheet
+# named 'Sheet1'; so we insert a second one with the same name.
+wb = wb.replace(
+    '</sheets>',
+    '<sheet name=\"Sheet1\" sheetId=\"99\" xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\" r:id=\"rIdSheet1\"/></sheets>',
+    1,
+)
+data['xl/workbook.xml'] = wb.encode('utf-8')
+with zipfile.ZipFile('$TMP/dup_name.xlsx', 'w', zipfile.ZIP_DEFLATED) as out:
+    for n, d in data.items():
+        out.writestr(n, d)
+"
+set +e
+"$PY" -m office.validate "$TMP/dup_name.xlsx" --json > "$TMP/_d.json" 2>&1
+rc=$?
+set -e
+[ "$rc" -eq 1 ] && "$PY" -c "
+import json
+r = json.load(open('$TMP/_d.json'))
+assert any(\"duplicate sheet name 'Sheet1'\" in e for e in r['errors']), r
+" \
+    && ok "duplicate sheet name: error emitted, exit 1" \
+    || nok "duplicate sheet name detection" "exit=$rc out=$(cat $TMP/_d.json)"
+
+# Unit-test suite for XlsxValidator (9 tests; quick).
+"$PY" -m unittest office.tests.test_xlsx_validator 2>&1 | tail -1 | grep -q "^OK$" \
+    && ok "office.tests.test_xlsx_validator: all 9 unit tests pass" \
+    || nok "XlsxValidator unit tests" "see python -m unittest output"
+
 echo
 echo "$pass passed, $fail failed"
 [ "$fail" -eq 0 ]

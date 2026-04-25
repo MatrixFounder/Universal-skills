@@ -51,7 +51,7 @@
 | pptx-1 | `pptx_clean.py` ✅ DONE | Удалить осиротевшие slides/media/charts/themes из PPTX через BFS по графу `.rels`. Опционально `--dry-run`. Содержит обновление `[Content_Types].xml`. E2E: 4 проверки. | M | M | — | Своя реализация по ECMA-376 / OOXML §10. |
 | pptx-2 | `pptx_apply_theme.py` | Сменить тему/палитру/шрифты целиком. Часто нужно для «привести презентацию из template-1 в брендинг template-2». | L | M | pptx-1 | Сложно: переносить layout-mappings + theme.xml + slideMasters. |
 | pptx-3 | `outline2pptx.js` ✅ DONE | Markdown-outline (только заголовки) → каркас презентации с пустыми слайдами. `#` → title slide; `##` → content slide с placeholder; `###+` → bullets. Использует pptxgenjs, валидируется через office.validate. E2E: 4 проверки. | S | L | — | Реализован как .js (для использования pptxgenjs без bridge). |
-| pptx-4 | XSD-валидаторы для pptx | Сейчас `office/validators/pptx.py` — заглушка. Доделать full schema-валидацию (ECMA-376 part 1, dml/pml/sml). | L | M | — | Полезно после ручных правок XML. |
+| pptx-4 | XSD-валидаторы для pptx ✅ DONE | `office/validators/pptx.py` теперь делает структурно-семантическую проверку: slide-chain через presentation.xml.rels, layout/master-цепочка для каждого слайда, media-references (`<a:blip r:embed>`, `<p:videoFile r:link>`) к существующим частям, notes-slide reciprocity, sldId rules (uniqueness + ECMA-376 §19.2.1.34 диапазон 256-2147483647), orphan slides. XSD-binding (pml.xsd) подхватывается автоматически для каждого slideN/slideLayoutN/slideMasterN при наличии schemas (run `office/schemas/fetch.sh`). 9 unit-тестов в `office/tests/test_pptx_validator.py` + 4 E2E в pptx skill. | L | M | — | Полезно после ручных правок XML. |
 | pptx-5 | Presenter notes export | При pptx2md выгружать заметки докладчика отдельным разделом (или сайдкар). | S | L | — | Покрывает use-case: репетировать с notes отдельно. |
 
 ### xlsx
@@ -62,7 +62,7 @@
 | xlsx-2 | `json2xlsx.py` | JSON-array → лист с авто-detection типов колонок. Параллель к csv2xlsx. | S | M | — | Несколько строк на pandas. |
 | xlsx-3 | `md_tables2xlsx.py` | Извлечь все markdown-таблицы из .md и положить каждую на отдельный лист. | S | L | — | Use-case: вытащить таблицы из тех. документации в excel. |
 | xlsx-4 | Сохранение charts и data-validation при unpack/pack | Если пользователь пакует обратно файл с исходными chart-объектами, они должны остаться. Сейчас, возможно, теряются. | M | M | — | Нужно проверить — требует тестирования на реальных моделях. |
-| xlsx-5 | XSD-валидаторы для xlsx | Сейчас `office/validators/xlsx.py` — заглушка. Доделать sml-validation. | L | M | — | Аналогично pptx-4. |
+| xlsx-5 | XSD-валидаторы для xlsx ✅ DONE | `office/validators/xlsx.py` теперь делает структурно-семантическую проверку: sheet-chain через workbook.xml.rels, sheet name + sheetId + r:id uniqueness (Excel hard-fail при дубликатах), definedName uniqueness в каждом scope, **shared-string index bounds** (`<c t="s">` не выходит за `<si>` count в `xl/sharedStrings.xml`), **cell-style index bounds** (`<c s="N">` не выходит за cellXfs count в `xl/styles.xml`), orphan worksheets. XSD-binding (sml.xsd) подхватывается автоматически для sharedStrings/styles/sheetN при наличии schemas. 9 unit-тестов в `office/tests/test_xlsx_validator.py` + 3 E2E в xlsx skill. | L | M | — | Аналогично pptx-4. |
 
 ### pdf
 

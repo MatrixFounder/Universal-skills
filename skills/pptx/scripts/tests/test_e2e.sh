@@ -258,6 +258,69 @@ echo "$err" | grep -q "macro-enabled" && [ "$rc" -eq 0 ] \
     && ok "pptx_clean warns when .pptm → .pptx" \
     || nok "macro-loss warning (pptx)" "exit=$rc msg=$err"
 
+# --- pptx-4: PptxValidator deep checks ------------------------------------
+echo "pptx-4 deep validation:"
+
+# Real fixture must validate cleanly (regression: the slide/layout/master
+# chain check easily produces false positives if path resolution is off).
+"$PY" -m office.validate "$TMP/out.pptx" --json > "$TMP/_v.json" 2>&1
+"$PY" -c "
+import json
+r = json.load(open('$TMP/_v.json'))
+assert r['ok'] is True, r
+assert not r['errors'], r
+" \
+    && ok "real pptx fixture: zero errors from deep validator" \
+    || nok "real pptx clean validation" "got: $(cat $TMP/_v.json)"
+
+# Inject an orphan slide → must produce a warning, not an error
+"$PY" -c "
+import zipfile, shutil
+shutil.copy('$TMP/out.pptx', '$TMP/orphan.pptx')
+with zipfile.ZipFile('$TMP/orphan.pptx', 'r') as src:
+    data = {n: src.read(n) for n in src.namelist()}
+# Pick the first slide and copy it to slide99.xml without referencing it.
+slide_bytes = data.get('ppt/slides/slide1.xml')
+assert slide_bytes is not None, 'fixture has no ppt/slides/slide1.xml'
+data['ppt/slides/slide99.xml'] = slide_bytes
+with zipfile.ZipFile('$TMP/orphan.pptx', 'w', zipfile.ZIP_DEFLATED) as out:
+    for n, d in data.items():
+        out.writestr(n, d)
+"
+set +e
+"$PY" -m office.validate "$TMP/orphan.pptx" --json > "$TMP/_o.json" 2>&1
+rc=$?
+set -e
+[ "$rc" -eq 0 ] && "$PY" -c "
+import json
+r = json.load(open('$TMP/_o.json'))
+assert any('Orphan slide part' in w and 'slide99' in w for w in r['warnings']), r
+" \
+    && ok "orphan slide → warning surfaced (slide99 not referenced)" \
+    || nok "orphan slide detection" "exit=$rc out=$(cat $TMP/_o.json)"
+
+# Strict-mode XSD probe: --strict promotes "XSD not bundled" to a
+# warning, which then exits 1 (per validate.py: "warnings present when
+# --strict"). On a checkout that has NOT run schemas/fetch.sh this is
+# expected behaviour; we assert exit-1 + the specific warning shape so
+# the test holds regardless of whether the schemas got fetched.
+set +e
+out=$("$PY" -m office.validate "$TMP/out.pptx" --strict --json 2>&1)
+rc=$?
+set -e
+if [ "$rc" -eq 0 ]; then
+    ok "real pptx fixture passes --strict (schemas bundled)"
+elif [ "$rc" -eq 1 ] && echo "$out" | grep -q "XSD not bundled"; then
+    ok "real pptx --strict: exit 1 + 'XSD not bundled' (run schemas/fetch.sh)"
+else
+    nok "pptx --strict" "exit=$rc, expected 0 (schemas present) or 1 + bundle hint"
+fi
+
+# Unit-test suite for PptxValidator (9 tests; quick).
+"$PY" -m unittest office.tests.test_pptx_validator 2>&1 | tail -1 | grep -q "^OK$" \
+    && ok "office.tests.test_pptx_validator: all 9 unit tests pass" \
+    || nok "PptxValidator unit tests" "see python -m unittest output"
+
 echo
 echo "$pass passed, $fail failed"
 [ "$fail" -eq 0 ]

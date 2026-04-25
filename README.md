@@ -177,12 +177,15 @@ skill that uses mmdc) — it's NOT in any per-skill `node_modules/`.
 **End-to-end smoke tests** (per skill `scripts/tests/test_e2e.sh` +
 top-level [`tests/run_all_e2e.sh`](tests/run_all_e2e.sh)) run every
 user-facing CLI on a real fixture and validate the output. The full
-suite covers all four skills with **109 assertions** (26 docx + 21 xlsx
-+ 27 pptx + 35 pdf) — including parameterized `--json-errors`
-envelope checks for every plumbed CLI and three rounds of VDD
-adversarial regression guards (false-positive macro detection,
-parser.error envelope routing, subprocess hygiene). It is the primary
-regression gate before each release.
+suite covers all four skills with **117 assertions** (26 docx + 25 xlsx
++ 31 pptx + 35 pdf) — including parameterized `--json-errors`
+envelope checks for every plumbed CLI, three rounds of VDD adversarial
+regression guards (false-positive macro detection, parser.error
+envelope routing, subprocess hygiene), and structural-semantic
+validation (slide/sheet/layout/master chains, shared-string + style
+index bounds, orphan parts, ECMA-376 ID range rules) backed by 18
+unit tests in `office/tests/test_{pptx,xlsx}_validator.py`. It is
+the primary regression gate before each release.
 
 For practical usage of all four skills — including the complete
 **package inventory** (what's installed globally vs per-skill, total

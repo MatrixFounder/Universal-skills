@@ -39,6 +39,51 @@ def _safe_parser() -> "etree.XMLParser":
     return etree.XMLParser(resolve_entities=False, no_network=True, load_dtd=False)
 
 
+def _resolve_zip_path(base_dir: str, target: str) -> str:
+    """Resolve `target` (which may contain `..` and `.`, and may be
+    absolute) against the POSIX-style `base_dir`, returning a cleaned
+    ZIP-relative path.
+
+    Per the Open Packaging Conventions (OPC, ISO/IEC 29500-2 §9.3),
+    relationship `Target` attributes are URI references:
+      - leading `/` → absolute against the package root (ignore
+        `base_dir`); openpyxl writes its workbook→sheet relationships
+        this way.
+      - otherwise → relative to the part's directory. `python-docx`,
+        `pptxgenjs`, and Word/PowerPoint themselves prefer this form.
+
+    Works on string fragments only; we never touch the filesystem
+    because ZIP entries are virtual paths. `PurePosixPath` does not
+    collapse `..` (since real filesystems may have symlinks), so we
+    walk the components manually.
+
+    Examples:
+        _resolve_zip_path("ppt/slides", "../slideLayouts/x.xml")
+            → "ppt/slideLayouts/x.xml"           # relative + ..
+        _resolve_zip_path("word", "media/image1.png")
+            → "word/media/image1.png"            # plain relative
+        _resolve_zip_path("xl", "/xl/worksheets/sheet1.xml")
+            → "xl/worksheets/sheet1.xml"         # absolute (openpyxl)
+    """
+    if target.startswith("/"):
+        path = target
+    else:
+        path = base_dir + "/" + target
+    parts: list[str] = []
+    for piece in path.split("/"):
+        if piece in ("", "."):
+            continue
+        if piece == "..":
+            if parts:
+                parts.pop()
+            # Going above root is silently clamped — same behaviour as
+            # a typical ZIP reader, which would just fail on an
+            # impossible path later.
+            continue
+        parts.append(piece)
+    return "/".join(parts)
+
+
 @dataclass
 class ValidationReport:
     errors: list[str] = field(default_factory=list)
