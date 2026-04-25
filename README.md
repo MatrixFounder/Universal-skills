@@ -109,7 +109,7 @@ Skills are automatically loaded from these locations:
 > Source is available for audit and code review only; **any use,
 > execution, copying, modification, or distribution requires prior
 > written permission**. For licensing inquiries:
-> <innokentiy.georgievskiy@mdcloud.tech>. The rest of this repository
+> <kuptsov.sergey@gmail.com>. The rest of this repository
 > remains Apache-2.0; see the [Licensing](#licensing) section below.
 
 Independent re-implementations of the `docx` / `xlsx` / `pptx` / `pdf`
@@ -251,7 +251,7 @@ skills that were distributed under Apache-2.0 prior to 2026-04-25
 remain available under their original Apache-2.0 terms in the public
 git history; that grant is not retroactively revoked.
 
-**Licensing inquiries:** <innokentiy.georgievskiy@mdcloud.tech>.
+**Licensing inquiries:** <kuptsov.sergey@gmail.com>.
 
 ## Contributing
 

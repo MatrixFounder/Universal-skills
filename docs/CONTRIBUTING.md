@@ -225,7 +225,7 @@ Rules:
   new dependency, update `THIRD_PARTY_NOTICES.md` in the same
   commit.
 
-For licensing inquiries, contact: <innokentiy.georgievskiy@mdcloud.tech>.
+For licensing inquiries, contact: <kuptsov.sergey@gmail.com>.
 
 ---
 
