@@ -138,6 +138,8 @@ echo "$err" | "$PY" -c "import sys, json; assert json.loads(sys.stdin.read())['v
     || nok "v=1 missing on domain error" "got: $err"
 
 # Defensive: report_error(code=0) must coerce to 1 (regression for MED-1).
+# AND in JSON mode it must NOT split output across lines (regression for
+# iter-3 MED self-regress: the dev-hint line corrupted the envelope).
 set +e
 out=$("$PY" -c "
 import sys
@@ -147,13 +149,22 @@ import io
 stream = io.StringIO()
 rc = report_error('boom', code=0, json_mode=True, stream=stream)
 print('rc=', rc)
-print('json=', stream.getvalue().strip())
+output = stream.getvalue()
+# Must be exactly one line (the JSON envelope).
+print('lines=', output.count(chr(10)))
+print('json=', output.strip())
+import json
+obj = json.loads(output)
+assert obj['code'] == 1
+assert obj['details']['coerced_from_zero'] is True, obj
+print('ok')
 " 2>&1)
 set -e
 echo "$out" | grep -q "rc= 1" \
-    && echo "$out" | grep -q '"code": 1' \
-    && ok "report_error(code=0) coerced to 1 (no false-success exit)" \
-    || nok "code=0 coercion" "got: $out"
+    && echo "$out" | grep -q "lines= 1" \
+    && echo "$out" | grep -q "ok" \
+    && ok "report_error(code=0) JSON: single line + coerced_from_zero in details" \
+    || nok "code=0 coercion (JSON mode single-line)" "got: $out"
 
 # Parameterized cross-5: every plumbed CLI must emit a JSON envelope
 # with --json-errors when fed a missing-input failure (regression for
@@ -206,6 +217,59 @@ echo "$err" | grep -q "macro-enabled" \
     && echo "$err" | grep -q ".docm" \
     && ok "writer warns when .docm → .docx (macros lost)" \
     || nok "macro-loss warning" "no warning in stderr: $err"
+
+# iter-3 LOW: _load_font legacy-fallback. Pillow ≥10.1 honours
+# load_default(size=N); older builds reject the kwarg — verify the
+# try/except TypeError path returns a usable font object instead of
+# crashing.
+"$PY" -c "
+import sys
+sys.path.insert(0, '.')
+from PIL import ImageFont
+import preview
+
+orig_truetype = ImageFont.truetype
+orig_load_default = ImageFont.load_default
+
+# Force the candidate-font truetype lookups to fail (filesystem paths
+# only). Internal Pillow truetype calls use BytesIO and must keep
+# working — load_default() hits truetype on its bundled font.
+def selective_truetype(font, *a, **kw):
+    if isinstance(font, str):
+        raise OSError('mocked: filesystem font unreadable')
+    return orig_truetype(font, *a, **kw)
+ImageFont.truetype = selective_truetype
+
+# Make load_default(size=...) reject the kwarg, simulating Pillow <10.1.
+def legacy_load_default(*a, **kw):
+    if 'size' in kw:
+        raise TypeError('mocked: legacy Pillow does not accept size kwarg')
+    return orig_load_default()
+ImageFont.load_default = legacy_load_default
+
+font = preview._load_font(14)
+assert font is not None
+print('legacy fallback returned a usable font object')
+
+ImageFont.truetype = orig_truetype
+ImageFont.load_default = orig_load_default
+" 2>&1 | grep -q "legacy fallback returned a usable font object" \
+    && ok "_load_font: legacy Pillow fallback (TypeError on size kwarg)" \
+    || nok "_load_font legacy fallback" "TypeError path crashed"
+
+# iter-3 LOW: pack.py uses pack-specific warning text (no "input is"
+# framing — pack works on a tree, not a source file).
+"$PY" -c "
+import sys
+sys.path.insert(0, '.')
+from office._macros import format_pack_macro_loss_warning
+msg = format_pack_macro_loss_warning('.docx', '.docm')
+assert 'source tree' in msg, msg
+assert 'input is' not in msg, 'pack warning must NOT use input-file framing'
+print('pack-specific warning OK')
+" 2>&1 | grep -q "pack-specific warning OK" \
+    && ok "pack.py warning uses 'source tree' framing (no false 'input is' claim)" \
+    || nok "pack warning framing" "iter-3 LOW regressed"
 
 # MED-5: template macro extension (.dotm) must be detected as macro-
 # enabled and the warning helper must fire when packing into .dotx.

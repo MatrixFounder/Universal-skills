@@ -33,12 +33,12 @@ if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
     from office._macros import (
         MACRO_EXT_FOR, NON_MACRO_EXTENSIONS, VBA_PROJECT_PARTS,
-        format_macro_loss_warning,
+        format_pack_macro_loss_warning,
     )
 else:
     from ._macros import (
         MACRO_EXT_FOR, NON_MACRO_EXTENSIONS, VBA_PROJECT_PARTS,
-        format_macro_loss_warning,
+        format_pack_macro_loss_warning,
     )
 
 
@@ -114,14 +114,13 @@ def pack(
 
     out_suffix = output_path.suffix.lower()
     if _tree_has_vba(input_dir) and out_suffix in NON_MACRO_EXTENSIONS:
-        # We don't have an "input file" suffix here (pack works on a
-        # tree), so synthesise the implied source extension from the
-        # output by mapping it to its macro twin. Reusing the shared
-        # `format_macro_loss_warning` keeps the wording in sync with
-        # the writer-script warnings users see elsewhere.
+        # Pack works on a tree, not a source file — we cannot honestly
+        # claim "input is macro-enabled (.docm)". Use the pack-specific
+        # warning helper so telemetry and grep-friendly wording stay
+        # truthful.
         suggested = MACRO_EXT_FOR.get(out_suffix, out_suffix)
-        sys.stderr.write(format_macro_loss_warning(
-            in_suffix=suggested, out_suffix=out_suffix, suggested=suggested,
+        sys.stderr.write(format_pack_macro_loss_warning(
+            out_suffix=out_suffix, suggested=suggested,
         ))
         sys.stderr.flush()
 

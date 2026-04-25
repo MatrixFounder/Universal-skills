@@ -146,10 +146,14 @@ def is_macro_enabled_file(path: Path) -> bool:
 def format_macro_loss_warning(
     in_suffix: str, out_suffix: str, suggested: str
 ) -> str:
-    """Return the canonical warning text for a macro-loss event.
+    """Return the canonical warning text for a writer-script macro-loss
+    event (we know the input file's suffix).
 
-    Single source of truth so writer scripts AND `office.pack` emit the
-    same wording; callers should NOT inline-format their own copies.
+    Single source of truth so writer scripts emit identical wording;
+    callers should NOT inline-format their own copies. For `office.pack`
+    (which has no concrete input file, only a tree) use
+    `format_pack_macro_loss_warning` instead — same intent, different
+    framing.
     """
     return (
         f"Warning: input is macro-enabled ({in_suffix}); output "
@@ -157,6 +161,22 @@ def format_macro_loss_warning(
         f"macros even if vbaProject.bin survives in the ZIP. To preserve "
         f"the macros, name the output with a macro-friendly extension "
         f"(e.g. {suggested}).\n"
+    )
+
+
+def format_pack_macro_loss_warning(out_suffix: str, suggested: str) -> str:
+    """Macro-loss warning specific to `office.pack`, which operates on
+    an unpacked tree rather than a source file.
+
+    Avoids the "input is macro-enabled (.docm)" framing of
+    `format_macro_loss_warning`, which would be misleading here — the
+    "input" is a directory of XML parts, not a .docm file.
+    """
+    return (
+        f"Warning: source tree contains vbaProject.bin (macro-enabled); "
+        f"output extension {out_suffix} will cause Office apps to "
+        f"silently drop macros even if the bin survives in the ZIP. "
+        f"Re-run with extension {suggested} to preserve.\n"
     )
 
 

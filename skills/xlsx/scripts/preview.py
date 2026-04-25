@@ -104,7 +104,8 @@ def _convert_via_soffice(src: Path, out_dir: Path, *, timeout: int) -> Path:
     return produced
 
 
-def _render_pdf_to_jpegs(pdf: Path, out_dir: Path, dpi: int) -> list[Path]:
+def _render_pdf_to_jpegs(pdf: Path, out_dir: Path, dpi: int,
+                          *, timeout: int) -> list[Path]:
     pdftoppm = _find("pdftoppm")
     if pdftoppm is None:
         raise RuntimeError(
@@ -113,10 +114,28 @@ def _render_pdf_to_jpegs(pdf: Path, out_dir: Path, dpi: int) -> list[Path]:
             "Debian/Ubuntu `apt install poppler-utils`."
         )
     prefix = out_dir / "page"
-    subprocess.run(
-        [pdftoppm, "-jpeg", "-r", str(dpi), str(pdf), str(prefix)],
-        check=True,
-    )
+    cmd = [pdftoppm, "-jpeg", "-r", str(dpi), str(pdf), str(prefix)]
+    # capture_output keeps pdftoppm's diagnostics out of our stderr
+    # (otherwise its "Syntax Error: Invalid page count 0" leaks past
+    # the JSON envelope and breaks line-based wrappers). timeout
+    # bounds malformed-PDF hangs — soffice has its own timeout already.
+    try:
+        result = subprocess.run(
+            cmd, capture_output=True, text=True,
+            timeout=timeout, check=True,
+        )
+        del result
+    except subprocess.TimeoutExpired as exc:
+        raise RuntimeError(
+            f"pdftoppm timed out after {timeout}s on {pdf}"
+        ) from exc
+    except subprocess.CalledProcessError as exc:
+        # Re-raise as RuntimeError so main()'s envelope wrapping kicks
+        # in with the captured stderr included for the user.
+        raise RuntimeError(
+            f"pdftoppm failed (exit {exc.returncode}): "
+            f"{(exc.stderr or '').strip() or '(no stderr)'}"
+        ) from exc
     files = sorted(
         out_dir.glob("page-*.jpg"),
         key=lambda p: int(re.search(r"(\d+)", p.stem).group(1)),  # type: ignore[union-attr]
@@ -132,8 +151,14 @@ def _load_font(size: int) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
         "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
         "/Library/Fonts/Arial.ttf",
     ):
-        if Path(candidate).is_file():
+        if not Path(candidate).is_file():
+            continue
+        try:
             return ImageFont.truetype(candidate, size)
+        except OSError:
+            # File exists but is unreadable / corrupt / wrong format —
+            # try the next candidate instead of crashing the preview.
+            continue
     # Fallback. Pillow >= 10.1 honours `size=` on `load_default`; older
     # builds ignore it and produce a fixed-size bitmap, which would
     # invalidate `label_h = label_font_size + 10` in the layout math.
@@ -201,6 +226,7 @@ def build(
     padding: int,
     label_font_size: int,
     soffice_timeout: int,
+    pdftoppm_timeout: int,
 ) -> None:
     suffix = input_path.suffix.lower()
     label = _label_for(input_path)
@@ -212,7 +238,7 @@ def build(
             pdf = input_path
         else:
             raise RuntimeError(f"Unsupported input extension: {suffix}")
-        tiles = _render_pdf_to_jpegs(pdf, tmp, dpi)
+        tiles = _render_pdf_to_jpegs(pdf, tmp, dpi, timeout=pdftoppm_timeout)
         _compose_grid(tiles, output_path, label,
                       cols, gap, padding, label_font_size)
 
@@ -228,8 +254,13 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--label-font-size", type=int, default=14)
     parser.add_argument("--soffice-timeout", type=int, default=240,
                         help="Timeout (seconds) for the OOXML→PDF "
-                             "conversion. Increase for very large decks. "
-                             "Ignored on .pdf input. Default 240.")
+                             "conversion via LibreOffice. Increase for "
+                             "very large decks. Ignored on .pdf input. "
+                             "Default 240.")
+    parser.add_argument("--pdftoppm-timeout", type=int, default=60,
+                        help="Timeout (seconds) for the PDF→JPEG "
+                             "rasterization via Poppler. Bounds hangs "
+                             "on malformed PDFs. Default 60.")
     add_json_errors_argument(parser)
     args = parser.parse_args(argv)
     je = args.json_errors
@@ -245,6 +276,7 @@ def main(argv: list[str] | None = None) -> int:
         ("padding", args.padding, 0),
         ("label-font-size", args.label_font_size, 1),
         ("soffice-timeout", args.soffice_timeout, 1),
+        ("pdftoppm-timeout", args.pdftoppm_timeout, 1),
     ):
         if value < minimum:
             return report_error(
@@ -306,12 +338,25 @@ def main(argv: list[str] | None = None) -> int:
                     details={"path": str(args.input)}, json_mode=je,
                 )
 
+    # Ensure output's parent dir exists — PIL.Image.save raises
+    # FileNotFoundError otherwise, which would bypass the JSON envelope
+    # as a Python traceback.
+    try:
+        args.output.parent.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        return report_error(
+            f"Cannot create output directory {args.output.parent}: {exc}",
+            code=1, error_type=type(exc).__name__,
+            details={"path": str(args.output.parent)}, json_mode=je,
+        )
+
     try:
         build(args.input, args.output,
               cols=args.cols, dpi=args.dpi, gap=args.gap,
               padding=args.padding,
               label_font_size=args.label_font_size,
-              soffice_timeout=args.soffice_timeout)
+              soffice_timeout=args.soffice_timeout,
+              pdftoppm_timeout=args.pdftoppm_timeout)
     except RuntimeError as exc:
         return report_error(str(exc), code=1, error_type="PreviewError",
                             json_mode=je)
@@ -319,6 +364,23 @@ def main(argv: list[str] | None = None) -> int:
         return report_error(f"External tool failed: {exc}",
                             code=1, error_type="ExternalToolError",
                             json_mode=je)
+    except Image.UnidentifiedImageError as exc:
+        # pdftoppm produced something Pillow can't decode — corrupt
+        # JPEG, partial write, exotic format. Wrap so the envelope
+        # contract survives.
+        return report_error(
+            f"Cannot decode rendered tile: {exc}",
+            code=1, error_type="UnidentifiedImageError",
+            json_mode=je,
+        )
+    except OSError as exc:
+        # PermissionError, disk-full ENOSPC, FileNotFoundError on a
+        # vanished tmp dir, etc. Catch broad OSError last so the more
+        # specific handlers above stay authoritative.
+        return report_error(
+            f"I/O error during preview: {exc}",
+            code=1, error_type=type(exc).__name__, json_mode=je,
+        )
     print(str(args.output))
     return 0
 

@@ -110,18 +110,17 @@ def report_error(
 
     Defensive coercion: `code=0` would mean "report an error then exit
     success", which is a contradiction and almost always a typo. We
-    coerce to 1 and write a developer hint to stderr so the bug shows
-    up in tests instead of masquerading as success in production.
+    coerce to 1 and surface the fact so the bug shows up in tests
+    instead of masquerading as success in production.
+
+    JSON-mode coercion: the dev-hint is folded into `details` as
+    `coerced_from_zero: true` so the envelope stays a single line of
+    JSON — wrappers reading `head -1 stderr | jq` keep working. In
+    plain mode the hint is written before the message because there
+    is no envelope to fold into.
     """
-    if code == 0:
-        # Stay loud — wrappers and CI runners would silently succeed
-        # if we honoured a 0 here. A literal warning to stderr ensures
-        # whoever wrote `code=0` notices on first run.
-        sys.stderr.write(
-            "report_error: WARNING — caller passed code=0 with a "
-            "non-empty error message; coercing to 1 to avoid a "
-            "false-success exit.\n"
-        )
+    coerced_from_zero = code == 0
+    if coerced_from_zero:
         code = 1
     if json_mode:
         envelope: dict[str, Any] = {
@@ -131,10 +130,19 @@ def report_error(
         }
         if error_type is not None:
             envelope["type"] = error_type
-        if details:
-            envelope["details"] = details
+        merged_details = dict(details) if details else {}
+        if coerced_from_zero:
+            merged_details["coerced_from_zero"] = True
+        if merged_details:
+            envelope["details"] = merged_details
         stream.write(json.dumps(envelope, ensure_ascii=False) + "\n")
     else:
+        if coerced_from_zero:
+            stream.write(
+                "report_error: WARNING — caller passed code=0 with a "
+                "non-empty error message; coercing to 1 to avoid a "
+                "false-success exit.\n"
+            )
         stream.write(message)
         if not message.endswith("\n"):
             stream.write("\n")

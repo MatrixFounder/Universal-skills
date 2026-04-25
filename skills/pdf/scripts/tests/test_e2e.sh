@@ -242,6 +242,72 @@ set -e
     && ok "preview.py: --cols 0 → InvalidArgument JSON (no ZeroDivisionError)" \
     || nok "preview.py cols=0" "exit=$rc msg=$out"
 
+# iter-3 MED: output dir must be auto-created; PIL Image.save would
+# otherwise raise FileNotFoundError → traceback past the JSON envelope.
+"$PY" preview.py "$TMP/out.pdf" "$TMP/auto/created/dir/p.jpg" --dpi 80 >/dev/null 2>&1 \
+    && [ -s "$TMP/auto/created/dir/p.jpg" ] \
+    && ok "preview.py: auto-creates output's parent directory" \
+    || nok "preview.py auto-mkdir" "expected file at $TMP/auto/created/dir/p.jpg"
+
+# iter-3 MED: pdftoppm stderr must be captured into the envelope, not
+# leaked as separate stderr lines. Use empty PDF so pdftoppm prints
+# "Syntax Error: Invalid page count 0" — verifies the JSON envelope is
+# single-line and the diagnostic is embedded.
+"$PY" -c "
+from pypdf import PdfWriter
+w = PdfWriter()
+with open('$TMP/empty.pdf', 'wb') as f:
+    w.write(f)
+" 2>/dev/null
+set +e
+err=$("$PY" preview.py "$TMP/empty.pdf" "$TMP/_z.jpg" --json-errors 2>&1 >/dev/null)
+rc=$?
+set -e
+n_lines=$(printf '%s' "$err" | grep -c '^')
+[ "$rc" -eq 1 ] \
+    && [ "$n_lines" -eq 1 ] \
+    && echo "$err" | "$PY" -c "import sys, json; j=json.loads(sys.stdin.read()); assert 'pdftoppm' in j['error'] and 'page count' in j['error'].lower(), j" 2>/dev/null \
+    && ok "preview.py: pdftoppm stderr captured into JSON envelope (single line)" \
+    || nok "preview.py pdftoppm capture" "exit=$rc lines=$n_lines msg=$err"
+
+# iter-3 MED: PIL UnidentifiedImageError on a corrupt tile must route
+# through the envelope. Direct call into _compose_grid with a non-JPEG
+# tile so we don't depend on pdftoppm producing one.
+"$PY" -c "
+import sys
+sys.path.insert(0, '.')
+from preview import _compose_grid
+from pathlib import Path
+import PIL
+# Plant a fake 'tile' that's not a real image
+fake = Path('$TMP/fake_tile.jpg')
+fake.write_bytes(b'definitely not a jpeg')
+out = Path('$TMP/_grid.jpg')
+try:
+    _compose_grid([fake], out, 'Page', 3, 12, 24, 14)
+except PIL.UnidentifiedImageError as e:
+    print('caught:', type(e).__name__)
+" 2>&1 | grep -q "UnidentifiedImageError" \
+    && ok "preview.py: _compose_grid raises UnidentifiedImageError on corrupt tile (caught in main)" \
+    || nok "PIL error path" "no UnidentifiedImageError raised"
+
+# iter-3 LOW: --pdftoppm-timeout flag accepted, validates lower bound
+set +e
+out=$("$PY" preview.py "$TMP/out.pdf" "$TMP/_p.jpg" --pdftoppm-timeout 0 --json-errors 2>&1 >/dev/null)
+rc=$?
+set -e
+[ "$rc" -eq 2 ] \
+    && echo "$out" | "$PY" -c "import sys, json; j=json.loads(sys.stdin.read()); assert j['details']['flag']=='pdftoppm-timeout', j" 2>/dev/null \
+    && ok "preview.py: --pdftoppm-timeout 0 rejected (lower bound)" \
+    || nok "pdftoppm-timeout validation" "exit=$rc msg=$out"
+
+# iter-3 LOW: valid --pdftoppm-timeout reaches the subprocess (happy
+# path: 60s on the existing fixture should always succeed).
+"$PY" preview.py "$TMP/out.pdf" "$TMP/_t.jpg" --pdftoppm-timeout 60 --dpi 80 >/dev/null 2>&1 \
+    && [ -s "$TMP/_t.jpg" ] \
+    && ok "preview.py: --pdftoppm-timeout 60 happy path produces output" \
+    || nok "pdftoppm-timeout happy path" "no output"
+
 # --- cross-5: --json-errors envelope (pdf) -------------------------------
 echo "cross-5 unified errors:"
 set +e
