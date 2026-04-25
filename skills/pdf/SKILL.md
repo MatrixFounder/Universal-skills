@@ -46,8 +46,8 @@ scripts that embed those choices removes the variance.
   - `python3 scripts/pdf_fill_form.py --check INPUT.pdf` — exit 0/11/12 = AcroForm/XFA/none. (Custom codes start at 10 to leave 0–9 for argparse / shell convention.)
   - `python3 scripts/pdf_fill_form.py --extract-fields INPUT.pdf -o fields.json`
   - `python3 scripts/pdf_fill_form.py INPUT.pdf DATA.json -o OUTPUT.pdf [--flatten]`
-  - `python3 scripts/preview.py INPUT OUTPUT.jpg [--cols 3] [--dpi 110] [--gap 12] [--padding 24] [--label-font-size 14]`
-  - All scripts above accept `--json-errors` to emit failures as a single line of JSON on stderr (`{error, code, type?, details?}`).
+  - `python3 scripts/preview.py INPUT OUTPUT.jpg [--cols 3] [--dpi 110] [--gap 12] [--padding 24] [--label-font-size 14] [--soffice-timeout 240] [--pdftoppm-timeout 60]`
+  - All scripts above accept `--json-errors` to emit failures as a single line of JSON on stderr (`{v, error, code, type?, details?}`). The schema version `v` is currently `1`; argparse usage errors are routed through the same envelope (`type:"UsageError"`).
 - **Inputs**: positional paths; optional flags per command.
 - **Outputs**: single PDF files (`md2pdf`, `pdf_merge`) or multiple PDFs under a directory (`pdf_split`). All stdout goes to the output path list.
 - **Failure semantics**: non-zero exit on missing inputs, invalid range specs, or library errors. Error detail to stderr.

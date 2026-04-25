@@ -50,8 +50,8 @@ removes that variance.
   - `python3 scripts/office/unpack.py INPUT.pptx OUTDIR/`
   - `python3 scripts/office/pack.py INDIR/ OUTPUT.pptx`
   - `python3 scripts/office/validate.py INPUT.pptx [--json] [--strict]`
-  - `python3 scripts/preview.py INPUT OUTPUT.jpg [--cols 3] [--dpi 110] [--gap 12] [--padding 24] [--label-font-size 14]`
-  - All scripts above accept `--json-errors` to emit failures as a single line of JSON on stderr (`{error, code, type?, details?}`).
+  - `python3 scripts/preview.py INPUT OUTPUT.jpg [--cols 3] [--dpi 110] [--gap 12] [--padding 24] [--label-font-size 14] [--soffice-timeout 240] [--pdftoppm-timeout 60]`
+  - All scripts above accept `--json-errors` to emit failures as a single line of JSON on stderr (`{v, error, code, type?, details?}`). The schema version `v` is currently `1`; argparse usage errors are routed through the same envelope (`type:"UsageError"`).
 - **Inputs**: positional paths; optional flags per command.
 - **Outputs**: single files at the named paths (`.pptx`, `.pdf`, `.jpg`); `office/unpack.py` produces a directory tree; validator prints a report.
 - **Failure semantics**: non-zero exit on missing input, soffice errors, pdftoppm errors, or pptxgenjs assembly failures. Error detail to stderr.

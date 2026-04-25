@@ -49,8 +49,8 @@ single most common xlsx bug).
   - `python3 scripts/office/unpack.py INPUT.xlsx OUTDIR/`
   - `python3 scripts/office/pack.py INDIR/ OUTPUT.xlsx`
   - `python3 scripts/office/validate.py INPUT.xlsx [--strict] [--json]`
-  - `python3 scripts/preview.py INPUT OUTPUT.jpg [--cols 3] [--dpi 110] [--gap 12] [--padding 24] [--label-font-size 14]`
-  - All scripts above accept `--json-errors` to emit failures as a single line of JSON on stderr (`{error, code, type?, details?}`).
+  - `python3 scripts/preview.py INPUT OUTPUT.jpg [--cols 3] [--dpi 110] [--gap 12] [--padding 24] [--label-font-size 14] [--soffice-timeout 240] [--pdftoppm-timeout 60]`
+  - All scripts above accept `--json-errors` to emit failures as a single line of JSON on stderr (`{v, error, code, type?, details?}`). The schema version `v` is currently `1`; argparse usage errors are routed through the same envelope (`type:"UsageError"`).
 - **Inputs**: positional paths; optional flags per command.
 - **Outputs**: a single file at the named output path; `office/unpack.py` produces a directory tree; validators print a report (or JSON).
 - **Failure semantics**: non-zero exit on missing input, invalid encoding, soffice errors, or formula errors (`xlsx_validate.py` returns 1 when errors are present). Error detail goes to stderr.

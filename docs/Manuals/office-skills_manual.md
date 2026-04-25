@@ -614,8 +614,28 @@ Every Python CLI accepts `--json-errors`. When set, failures are
 emitted as a single line of JSON on stderr:
 
 ```json
-{"error": "Input not found: /nope.pdf", "code": 1, "type": "FileNotFound", "details": {"path": "/nope.pdf"}}
+{"v": 1, "error": "Input not found: /nope.pdf", "code": 1, "type": "FileNotFound", "details": {"path": "/nope.pdf"}}
 ```
+
+Schema:
+
+| Field | Type | When | Notes |
+| :--- | :--- | :--- | :--- |
+| `v` | int | always | Schema version. Currently `1`. Bump only on breaking changes. |
+| `error` | str | always | Human-readable message; may contain newlines (`\n` in JSON). |
+| `code` | int | always | Matches the script's exit code. **Never `0`** — `report_error(code=0)` is coerced to `1` and tagged with `details.coerced_from_zero=true`. |
+| `type` | str | optional | ErrorClass name (`FileNotFound`, `EncryptedFileError`, `UsageError`, `InvalidArgument`, `UnidentifiedImageError`, `PreviewError`, …). |
+| `details` | object | optional | Free-form context (`path`, `flag`, `value`, `missing`, …). |
+
+Coverage:
+
+- **Domain errors** — emitted via `report_error()` in `_errors.py`.
+- **Argparse usage errors** — `parser.error("…")`, missing required
+  args, type-conversion failures. The `add_json_errors_argument` helper
+  transparently patches `parser.error` so the same flag covers both
+  surfaces. Without this, wrappers parsing JSON would have choked on
+  argparse's plain-text usage banner — a regression guarded by
+  `argparse usage error routed to JSON envelope (UsageError + v=1)`.
 
 Plain mode (the default) is unchanged free-form text, so existing
 shell pipelines do not break. Wrappers and CI runners gain one parser
@@ -626,20 +646,37 @@ skills (replication protocol in [`CLAUDE.md` §2](../../CLAUDE.md)).
 
 ### Macro-enabled file detection (cross-4)
 
-`office/_macros.py` provides `is_macro_enabled_file(path)` — checks
-either `vbaProject.bin` in the ZIP namelist or a `macroEnabled`
-content-type in `[Content_Types].xml`. Used by:
+`office/_macros.py` provides `is_macro_enabled_file(path)` — parses
+`[Content_Types].xml` with `defusedxml` and looks for a `<Default>` or
+`<Override>` element whose `ContentType` attribute exactly matches one
+of the OOXML macro types (`application/vnd.ms-word.document.macroEnabled.main+xml`,
+sheet, presentation, plus their `.dotm`/`.xltm`/`.potm` template
+twins).
+
+The content-type is the **authoritative** signal — Office decides
+whether to invoke the VBA runtime based on it, not on the presence of
+`vbaProject.bin`. Earlier (logical-OR) implementations produced false
+positives on documents with stray bins from manual editing; substring
+matches on the XML produced false positives on files that mentioned
+`macroEnabled` inside an XML comment. Both regressions are now guarded
+by E2E tests.
+
+Used by:
 
 - `docx_fill_template.py`, `docx_accept_changes.py`,
   `xlsx_recalc.py`, `xlsx_add_chart.py`, `pptx_clean.py`: stderr
-  warning when the input is `.docm`/`.xlsm`/`.pptm` and the chosen
-  output extension drops the macros (`.docx`/`.xlsx`/`.pptx`). The
-  warning suggests the matching macro extension instead.
+  warning via `format_macro_loss_warning()` when the input is
+  `.docm`/`.xlsm`/`.pptm`/`.dotm`/`.xltm`/`.potm` and the chosen
+  output extension drops the macros (`.docx`/…/`.potx`). The warning
+  suggests the matching macro extension instead.
 - `office/unpack.py`: prints a one-line note when the input is
   macro-enabled, so power users repacking from the unpacked tree
   know to keep the `m` in the extension.
 - `office/pack.py`: walks the unpacked tree for `vbaProject.bin` and
-  warns if the chosen output extension drops it.
+  emits a different warning via `format_pack_macro_loss_warning()`
+  ("source tree contains vbaProject.bin…") — the writer-script
+  framing ("input is macro-enabled (.docm)") would be misleading
+  here because `pack` operates on a directory, not a source file.
 
 Read-only only — we never inspect or rewrite VBA bytecode.
 
@@ -660,8 +697,38 @@ Usage:
 ```bash
 python3 skills/<skill>/scripts/preview.py INPUT OUTPUT.jpg \
     [--cols 3] [--dpi 110] [--gap 12] [--padding 24]
-    [--label-font-size 14] [--json-errors]
+    [--label-font-size 14]
+    [--soffice-timeout 240] [--pdftoppm-timeout 60]
+    [--json-errors]
 ```
+
+Flags:
+
+| Flag | Default | Notes |
+| :--- | :--- | :--- |
+| `--cols` | 3 | Grid columns. Validated `≥1` up-front. |
+| `--dpi` | 110 | Render DPI. Validated `≥1`. |
+| `--gap` / `--padding` | 12 / 24 | Pixels. Validated `≥0`. |
+| `--label-font-size` | 14 | Font size in points. Validated `≥1`. |
+| `--soffice-timeout` | 240 s | OOXML→PDF timeout (LibreOffice). Increase for very large decks. Ignored on `.pdf` input. |
+| `--pdftoppm-timeout` | 60 s | PDF→JPEG timeout (Poppler). Bounds hangs on malformed PDFs. |
+| `--json-errors` | off | See §9.5/cross-5. |
+
+Robustness behaviours:
+
+- **Output dir auto-created** — `args.output.parent.mkdir(parents=True, exist_ok=True)`
+  runs before any rendering, so `preview.py in.pdf out/sub/dir/p.jpg`
+  works without pre-creating the path.
+- **Subprocess capture** — both soffice and pdftoppm run with
+  `capture_output=True`; their stderr is folded into the JSON
+  envelope's `error` field instead of leaking past it.
+- **Image-decode safety** — `PIL.UnidentifiedImageError` and broad
+  `OSError` are caught in `main()` and routed through `report_error`,
+  so a corrupt tile never escapes as a Python traceback.
+- **Font fallback** — `_load_font` tries `Arial.ttf` / `DejaVuSans.ttf`
+  in order; on filesystem errors (`OSError` on read), it walks to the
+  next candidate. If none load, falls back to Pillow's `load_default`
+  (modern signature with `size=` first, legacy without on `TypeError`).
 
 The label changes per file type — "Page" for docx/pdf, "Sheet" for
 xlsx, "Slide" for pptx — picked from the input's extension.
