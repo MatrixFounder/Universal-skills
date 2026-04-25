@@ -10,8 +10,8 @@ and have a strict replication protocol.
 
 ```
 Universal-skills/
-├── LICENSE                          # Apache-2.0
-├── THIRD_PARTY_NOTICES.md           # attribution for ECMA/MS/W3C and OSS deps
+├── LICENSE                          # Apache-2.0 (root; covers everything except the four office skills)
+├── THIRD_PARTY_NOTICES.md           # attribution for ECMA/MS/W3C and OSS deps (governs both license scopes)
 ├── README.md                        # public-facing
 ├── CLAUDE.md / GEMINI.md            # agent-specific behavioural rules (kept in sync)
 ├── docs/
@@ -21,11 +21,11 @@ Universal-skills/
 │   └── Manuals/
 │       └── office-skills_manual.md  # how to use docx/xlsx/pptx/pdf in practice
 ├── skills/                          # one folder per skill, each self-contained
-│   ├── docx/                        # MASTER for the office/ shared module
-│   ├── xlsx/                        # downstream copy of office/
-│   ├── pptx/                        # downstream copy of office/
-│   ├── pdf/                         # standalone (no office/ needed)
-│   ├── marp-slide/, mcp-builder/, …
+│   ├── docx/                        # MASTER for the office/ shared module — Proprietary, see LICENSE+NOTICE in this dir
+│   ├── xlsx/                        # downstream copy of office/        — Proprietary, see LICENSE+NOTICE in this dir
+│   ├── pptx/                        # downstream copy of office/        — Proprietary, see LICENSE+NOTICE in this dir
+│   ├── pdf/                         # standalone (no office/ needed)    — Proprietary, see LICENSE+NOTICE in this dir
+│   ├── marp-slide/, mcp-builder/, …                                     # Apache-2.0 (root LICENSE)
 │   └── …
 └── .claude/skills/                  # agent runtime: skill-creator, skill-validator, etc.
 ```
@@ -191,7 +191,45 @@ register in `README.md` under the appropriate category.
 
 ---
 
-## 6. Commit hygiene
+## 6. Licensing of office skills
+
+The four office skills are governed by their own per-skill
+`LICENSE` and `NOTICE` files (effective **2026-04-25**) and **not**
+by the root Apache-2.0 license:
+
+- [`skills/docx/LICENSE`](../skills/docx/LICENSE) and [`NOTICE`](../skills/docx/NOTICE)
+- [`skills/xlsx/LICENSE`](../skills/xlsx/LICENSE) and [`NOTICE`](../skills/xlsx/NOTICE)
+- [`skills/pptx/LICENSE`](../skills/pptx/LICENSE) and [`NOTICE`](../skills/pptx/NOTICE)
+- [`skills/pdf/LICENSE`](../skills/pdf/LICENSE)  and [`NOTICE`](../skills/pdf/NOTICE)
+
+Rules:
+
+- **Do not modify or remove** these `LICENSE` / `NOTICE` files in
+  any PR. Any change to them must be authored by the copyright
+  holder.
+- **External pull requests** that touch
+  `skills/{docx,xlsx,pptx,pdf}/**` are **not accepted** without a
+  prior signed Contributor License Agreement; please open an issue
+  first to discuss. Bug reports without code are welcome.
+- The `SKILL.md` frontmatter for each office skill must keep
+  `license: LicenseRef-Proprietary`. Do not change it back to
+  `Apache-2.0`.
+- The shared OOXML module under `skills/docx/scripts/office/` (and
+  its byte-identical copies in xlsx/pptx) is itself part of the
+  proprietary skill; replication still follows the strict protocol
+  in [§3](#3-office-skills-modification-protocol-strict).
+- Third-party components used by the office skills keep their
+  original licenses, attributed in
+  [`THIRD_PARTY_NOTICES.md`](../THIRD_PARTY_NOTICES.md) at the repo
+  root (linked from each office skill's `NOTICE`). When you add a
+  new dependency, update `THIRD_PARTY_NOTICES.md` in the same
+  commit.
+
+For licensing inquiries, contact: <innokentiy.georgievskiy@mdcloud.tech>.
+
+---
+
+## 7. Commit hygiene
 
 - One logical change per commit.
 - Office-skills replication: replicate in the **same commit** as the

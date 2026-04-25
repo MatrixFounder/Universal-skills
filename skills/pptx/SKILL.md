@@ -3,7 +3,7 @@ name: pptx
 description: Use when the user asks to create, edit, convert, or preview Microsoft PowerPoint .pptx presentations. Triggers include "markdown to pptx", "slides from outline", "render a deck", "pptx to pdf", "generate slide thumbnails", "edit this .pptx", and related presentation generation or OOXML round-trip tasks.
 tier: 2
 version: 1.0
-license: Apache-2.0
+license: LicenseRef-Proprietary
 ---
 # pptx skill
 

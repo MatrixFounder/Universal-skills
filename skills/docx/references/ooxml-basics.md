@@ -86,6 +86,33 @@ reference handy while hand-editing — `office/validate.py` does not
 catch every ordering issue because XSD validation is optional unless
 you bundle the full schema pack.
 
+The `<w:pPr>` children most people touch have this required sequence:
+
+1. `pStyle`
+2. `numPr`
+3. `spacing`
+4. `ind`
+5. `jc`
+6. `rPr`
+
+Reverse any two of these and Word accepts the file but quietly drops
+the misplaced children on the next save — the paragraph re-renders
+without your style, numbering, or alignment. When patching by hand,
+keep the order above. (The full XSD content model has more slots —
+borders, shading, frame properties — but for everyday editing these
+six cover most work.)
+
+## Cell margins are internal padding
+
+`<w:tcMar>` entries (top/left/bottom/right on a table cell, or a
+table-wide `<w:tblCellMar>`) set the INTERNAL padding between the
+cell's border and its content. They shrink the usable content area
+inside the cell; they do NOT extend the cell outward. This differs
+from CSS `margin`, where margins push siblings apart. Cell width
+continues to be determined by `<w:tblGrid>` / `<w:gridCol>` and the
+per-cell `<w:tcW>`. If your text feels cramped after adding margins,
+widen the column — don't expect the cell to grow.
+
 ## Smart-quote entity round-trips
 
 `office/unpack.py` deliberately rewrites `"`, `"`, `'`, `'`, `–`, `—`,

@@ -55,6 +55,37 @@ Two modes:
 openpyxl without a recalc pass will show as "no errors" because every
 cell is `None`. The `--fail-empty` flag catches that situation.
 
+## The `data_only=True` destruction trap
+
+`load_workbook(path, data_only=True)` loads the cached numeric values
+only — the returned workbook contains **no formulas**. If you then
+call `wb.save(path)` on that workbook, every formula is permanently
+gone from the file, replaced by the cached numbers (or by `None` if no
+cache existed). This silently destroys weeks of modelling work.
+
+Rule: only pass `data_only=True` when you are strictly reading. For
+any code path that may save, use the default `data_only=False`, which
+preserves formula strings intact. Treat `data_only=True` as
+read-only-from-here-on — never hand that workbook object to code that
+could call `.save()`.
+
+## DataFrame-to-Excel index off-by-one
+
+`pandas` DataFrames are 0-indexed; `openpyxl` worksheets are 1-indexed,
+and conventionally row 1 holds the header. DataFrame row 5 lands on
+Excel row 6 when written with `index=False` and no header, or row 7
+when headers are present. When you compute a formula range from
+pandas positions, account for both offsets:
+
+```python
+excel_row = df_row + 2   # +1 for 1-indexing, +1 for header row
+cell = ws.cell(row=excel_row, column=1, value=f"=SUM(B2:B{excel_row-1})")
+```
+
+Skipping the header offset is the single most common bug in
+pandas-feeding-openpyxl pipelines: the resulting formula range is one
+row short and silently drops the last data row from every sum.
+
 ## Common mixed-use pattern
 
 ```python

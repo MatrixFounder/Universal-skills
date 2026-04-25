@@ -1,0 +1,16 @@
+This Skill (skills/pptx/) is licensed under the proprietary terms
+in the LICENSE file in this directory.
+
+It incorporates third-party components whose own licenses, copyrights,
+and attribution requirements are preserved unchanged. The complete
+list of third-party material — XSD schemas (ECMA-376, Microsoft Open
+Specification Promise, W3C), runtime dependencies (Python, Node.js),
+and external CLI tools (LibreOffice, Poppler, Pandoc) — together with
+their respective licenses, is documented in:
+
+    /THIRD_PARTY_NOTICES.md  (repository root)
+
+Those third-party licenses govern their respective components and are
+not modified by this Skill's proprietary LICENSE. The proprietary
+license applies only to the original work authored by the copyright
+holder.

@@ -69,6 +69,17 @@ of files rather than per-file.
 these in a model you are about to ship is usually a red flag —
 investigate before delivering.
 
+## Cross-sheet reference syntax
+
+Excel/OOXML uses `!` (not `.`) as the sheet-to-cell separator. A
+formula pointing at another sheet reads `=Sheet1!A1`, not `Sheet1.A1`
+or `'Sheet 1'.A1` (the latter two are LibreOffice Calc's native syntax
+and *only* render correctly inside `.ods`; writing them into an
+`.xlsx` yields `#NAME?` after recalc). When the sheet name contains a
+space, punctuation, or begins with a digit, wrap it in single quotes:
+`='Sheet With Space'!A1` or `='Q1 2024'!B2`. `openpyxl` does not
+rewrite this for you — emit the quoted form from the start.
+
 ## Interaction with tracked changes and merged cells
 
 LibreOffice's recalc does not disturb tracked changes or merged

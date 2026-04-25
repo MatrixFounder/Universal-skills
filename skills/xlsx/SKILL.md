@@ -3,7 +3,7 @@ name: xlsx
 description: Use when the user asks to create, transform, or validate Microsoft Excel .xlsx workbooks. Triggers include "csv to xlsx", "JSON to xlsx", "recalculate this workbook", "scan formula errors", "financial model in xlsx", "fix #REF errors", and related spreadsheet generation, recalculation, or OOXML round-trip tasks.
 tier: 2
 version: 1.0
-license: Apache-2.0
+license: LicenseRef-Proprietary
 ---
 # xlsx skill
 

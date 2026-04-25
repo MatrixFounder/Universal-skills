@@ -9,6 +9,16 @@ PDF forms come in two incompatible flavours:
    source tooling; needs commercial solutions or the JavaScript
    library `pdf-lib` in limited cases.
 
+## Always detect first — never assume the path
+
+Form filling has two distinct code paths: the AcroForm path
+(programmatic field fill via `pypdf`) and the visual-overlay path
+(draw text onto the page). Which path to take depends entirely on
+whether the file has `/AcroForm` and fillable widgets — so run a
+detection script as the first step every time. Do not pick a path
+based on the filename, the user's phrasing, or a guess; the AcroForm
+check is the gate.
+
 ## Detecting which kind you have
 
 ```python
@@ -104,6 +114,70 @@ safe default). For more than a couple of fields use
 inspect the PDF first — this skill does not include such a helper in
 the MVP, but `pdfplumber`'s `page.chars` gives you word coordinates
 from which you can infer where to place text.
+
+## Two-stage coordinate extraction for non-fillable forms
+
+When the detection step shows no `/AcroForm`, work out field
+coordinates in two stages — structure extraction first, image-based
+extraction only as a fallback:
+
+1. **Structure extraction via `pdfplumber`.** Read labels,
+   underscore-lines, rectangles, and checkbox positions from the PDF
+   object model. Cheap, exact, and deterministic when a text layer
+   exists.
+2. **Image-based fallback.** If the extracted text is dominated by
+   `(cid:N)` tokens, the document is a scan or uses custom-encoded
+   fonts with no ToUnicode map — there is no usable text layer.
+   Render the page with `pdf2image` at 2-3x zoom and locate fields
+   visually (OpenCV contour detection, or OCR via Tesseract).
+
+Do not jump straight to the image path: structure extraction is an
+order of magnitude faster and produces pixel-accurate coordinates
+when it works.
+
+### Hybrid detection for circular/colored checkboxes
+
+Structure extraction reliably finds plain rectangular, uncolored
+checkboxes (drawn as `/Rect` widgets or black outlines). It tends to
+miss circular checkboxes (drawn as `/Circle` annotations or vector
+curves) and filled/colored boxes (the fill colour masks the outline
+heuristics). For those specific field types, run a hybrid: keep
+`pdfplumber` for prose and layout, but rasterize the page and use
+image-based detection (Hough circles, color-threshold contours) to
+locate just the checkbox glyphs.
+
+## Pre-fill validation of `fields.json`
+
+Before rendering a filled PDF, validate the `fields.json`
+structurally — visual checks after rendering are expensive:
+
+- **No bounding-box intersections.** Any two field bboxes that
+  overlap will collide once filled. Reject the JSON if an
+  axis-aligned intersection is found.
+- **Box large enough for its font size.** Compute a rough glyph
+  extent (`font_size * 0.6 * len(value)` wide, `font_size * 1.2`
+  tall) and reject fields whose declared box cannot hold it.
+
+Catching both at the JSON stage turns a slow render-and-eyeball loop
+into a fast precondition check.
+
+## Coordinate-system consistency in `fields.json`
+
+A `fields.json` must commit to one coordinate system end-to-end.
+Pick exactly one:
+
+- **PDF points.** Signal by including top-level `pdf_width` and
+  `pdf_height` keys. All field bboxes are then in points, origin
+  bottom-left.
+- **Image pixels.** Signal by including top-level `image_width` and
+  `image_height` keys (the rasterization size). All field bboxes
+  are then in pixels, origin top-left.
+
+Mixing the two — e.g. declaring `pdf_height` while some bboxes are in
+pixels — silently produces misplaced text because the fill script
+has no way to tell which unit a given bbox uses. The fill script
+should assert that exactly one of the two signal pairs is present
+and reject the file otherwise.
 
 ## XFA forms
 

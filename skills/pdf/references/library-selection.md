@@ -65,12 +65,39 @@ reach for `playwright`.
 Weakness: steep learning curve. If your content starts as Markdown
 or HTML, weasyprint is faster to reach for.
 
+### ReportLab Unicode subscript/superscript gotcha
+
+ReportLab's built-in Type 1 fonts do not include the Unicode
+subscript (`₁₂₃`) or superscript (`¹²³`) glyph range. Drawing a
+literal `₂` or `²` through `canvas.drawString` renders a black box.
+Use the `<sub>...</sub>` and `<super>...</super>` tags inside a
+`Paragraph` flowable instead — they scale the surrounding font rather
+than rely on dedicated glyphs:
+
+```python
+from reportlab.platypus import Paragraph
+from reportlab.lib.styles import getSampleStyleSheet
+styles = getSampleStyleSheet()
+p = Paragraph("H<sub>2</sub>O, E = mc<super>2</super>", styles["BodyText"])
+```
+
 ## External tools
 
 - **Poppler** (`pdftotext`, `pdftoppm`, `pdfimages`): GPL, ubiquitous,
   command-line. `pdf2image` uses Poppler under the hood.
 - **qpdf**: Apache-2.0, fast CLI merge/split/linearize. Useful for
   CI pipelines; same jobs as `pypdf` but faster and without Python.
+  Commonly used invocations:
+  ```bash
+  qpdf --check input.pdf                      # validate structure
+  qpdf --fix-qdf input.pdf output.pdf         # repair common corruption
+  qpdf --linearize input.pdf output.pdf       # optimize for web streaming
+  qpdf --split-pages=N input.pdf output.pdf   # faster than pdf_split.py on large files
+  ```
+- **`pdftotext -bbox-layout`** (poppler-utils): emits text together
+  with per-word bounding boxes as HTML. Significantly faster than
+  `pdfplumber` for 100+ page documents where you only need text plus
+  coordinates; reach for it before `pdfplumber` on very large inputs.
 - **Ghostscript** (`gs`): AGPL for the open-source build — be careful
   if your product is commercial. Good for compression
   (`-dPDFSETTINGS=/ebook`) and format conversion.
@@ -96,3 +123,21 @@ pip install pypdf pdfplumber weasyprint markdown2
 
 weasyprint has native dependencies (`cairo`, `pango`, `gdk-pixbuf`);
 on macOS `brew install pango` is usually all you need.
+
+## Encrypted PDFs
+
+Before any read, check `reader.is_encrypted` and decrypt if needed.
+Skipping this causes silent failures — `pypdf` returns empty text or
+empty `reader.pages` for encrypted documents without raising:
+
+```python
+from pypdf import PdfReader
+reader = PdfReader("secret.pdf")
+if reader.is_encrypted:
+    if not reader.decrypt(password):
+        raise ValueError("wrong password")
+# only now is it safe to read pages / fields / metadata
+```
+
+Treat the `is_encrypted` check as the first line of every extraction
+or form-fill script.

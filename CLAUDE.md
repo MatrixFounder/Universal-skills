@@ -145,11 +145,26 @@ overstate what the code does.
 
 ### License hygiene
 
-This repository is Apache-2.0. All third-party material (XSD
-schemas from ECMA-376 / Microsoft OSP / W3C, runtime dependencies,
-external CLI tools) is attributed in
-[`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md). When you add a
-new external dependency, update that file in the same commit.
+This repository uses a **split licensing model** (effective
+2026-04-25):
+
+- **Repository root** and all skills **except** the four office
+  skills are **Apache-2.0** ([`LICENSE`](LICENSE)).
+- The **four office skills** — `skills/docx/`, `skills/xlsx/`,
+  `skills/pptx/`, `skills/pdf/` — are **Proprietary, All Rights
+  Reserved**, governed by their per-skill `LICENSE` and `NOTICE`
+  files (e.g. [`skills/docx/LICENSE`](skills/docx/LICENSE)). Source
+  is available for audit only; any use, execution, copying,
+  modification, or distribution requires prior written permission.
+
+All third-party material (XSD schemas from ECMA-376 / Microsoft OSP
+/ W3C, runtime dependencies, external CLI tools) is attributed in
+[`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md) (root, governs
+both license scopes) and re-pointed from each office skill's
+`NOTICE` file. When you add a new external dependency, update
+[`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md) in the same
+commit. Do **not** alter or strip the per-skill `LICENSE` /
+`NOTICE` files in the four office skills.
 
 ---
 

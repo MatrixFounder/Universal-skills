@@ -42,6 +42,29 @@ The use of parentheses for negatives (`($1,234)` instead of `-$1,234`)
 is standard; scripts that emit financial numbers as bare Python floats
 produce `-1234.0` and look wrong in context.
 
+The canonical three-part pattern for audit templates is
+`"$#,##0;($#,##0);-"` — positives render normally, negatives in
+parentheses, and zero collapses to a dash so empty rows read cleanly.
+Assign it with `cell.number_format = "$#,##0;($#,##0);-"`.
+
+## Year values must be plain text
+
+Store year labels as strings (`cell.value = "2024"`), not integers. A
+numeric `2024` under any `#,##0`-style format renders as `2,024` and
+misleads every reader. Either keep the cell as plain text (value is
+`"2024"`, format `"@"`) or pin it to the `0000` year format from the
+table above. Mixing a thousand-separator format with a numeric year is
+the single most common cosmetic bug in auto-generated FY headers.
+
+## Column-letter arithmetic past column 26
+
+Column letters extend past `Z` by gaining a second character:
+`AA`–`AZ` cover columns 27–52, `BA`–`BZ` cover 53–78, so column 52 is
+`AZ` and column 64 is `BL` (not `BK`). Financial models with many FY
+columns regularly compute cell addresses arithmetically; use
+`openpyxl.utils.get_column_letter(n)` instead of hand-rolling
+`chr(64+n)`, which breaks the moment `n` crosses 26.
+
 ## Formula hygiene
 
 1. **One assumption per cell.** If a growth rate appears in a formula
@@ -53,7 +76,11 @@ produce `-1234.0` and look wrong in context.
 3. **Comment the source of every input.** A short comment like
    "Source: FY2024 10-K, page 45" saves hours when an audit asks why
    a number is what it is. `openpyxl` supports this via
-   `Comment("Source: …", "AuthorName")`.
+   `Comment("Source: …", "AuthorName")`. Every numeric hardcode
+   should carry an adjacent cell comment or sibling cell in the
+   standard form `Source: <System/Document>, <Date>,
+   <Reference/Ticker>, <URL>` so audit trails remain intact across
+   handoffs.
 4. **No hidden magic numbers inside formulas.** If `=A1*1.2` means "add
    20%", move the 1.2 (or the 0.2) to its own input cell.
 

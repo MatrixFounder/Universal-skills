@@ -88,6 +88,53 @@ grep -riE '\bx{3,}\b|lorem|ipsum|\bTODO\b|\[insert|click to edit' unpacked/ppt/s
 If any matches appear, fix them before shipping. There is no script
 for this in the MVP — treat matches as a flag for manual review.
 
+## Raw XML post-processing
+
+When you unpack a `.pptx` and need to tweak the OOXML programmatically
+(patch a run, insert a paragraph, rewrite a relationship), parse with
+`defusedxml.minidom`. The stdlib `xml.etree.ElementTree` reshuffles
+namespace declarations on serialization and produces files that
+PowerPoint refuses to open — the corruption is silent until you try
+to launch the deck.
+
+```python
+from defusedxml import minidom
+dom = minidom.parse("unpacked/ppt/slides/slide1.xml")
+# ... mutate nodes ...
+with open("unpacked/ppt/slides/slide1.xml", "w", encoding="utf-8") as f:
+    f.write(dom.toxml())
+```
+
+## Template adaptation — delete the whole element group
+
+Decks built from a template usually have N parallel content slots
+(e.g. four feature cards). When your content only fills 3 of 4,
+deleting just the text of slot 4 leaves orphan visuals: the icon
+box, the decorative shape, the image placeholder all remain on the
+slide and look like a half-finished edit. Delete the entire element
+group for the unused slot — every `<p:sp>`, `<p:pic>`, and
+`<p:grpSp>` that belonged to it — not just the text box.
+
+## Multi-item bullet content: one `<a:p>` per item
+
+When injecting numbered steps or a list into an existing paragraph,
+do NOT concatenate the items into a single `<a:t>` run. PowerPoint
+renders that as one wrapped line with no spacing between items.
+Emit a separate `<a:p>` per item and copy the original `<a:pPr>`
+(paragraph properties) onto each so indentation, bullet style, and
+`spcBef`/`spcAft` all survive:
+
+```xml
+<a:p>
+  <a:pPr lvl="0" marL="342900" indent="-342900"><a:buChar char="•"/></a:pPr>
+  <a:r><a:rPr lang="en-US"/><a:t>First step</a:t></a:r>
+</a:p>
+<a:p>
+  <a:pPr lvl="0" marL="342900" indent="-342900"><a:buChar char="•"/></a:pPr>
+  <a:r><a:rPr lang="en-US"/><a:t>Second step</a:t></a:r>
+</a:p>
+```
+
 ## Converting to PDF for print/QA
 
 `python3 scripts/pptx_to_pdf.py deck.pptx deck.pdf` wraps LibreOffice's

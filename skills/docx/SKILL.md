@@ -3,7 +3,7 @@ name: docx
 description: Use when the user asks to create, edit, convert, or validate Microsoft Word .docx documents. Triggers include "markdown to docx", "docx to markdown", "fill this Word template", "accept tracked changes", "unpack docx XML", "extract text from docx", and related .docx round-trip or template-fill tasks.
 tier: 2
 version: 1.0
-license: Apache-2.0
+license: LicenseRef-Proprietary
 ---
 # docx skill
 

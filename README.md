@@ -19,6 +19,7 @@ Unlike standard prompts, these skills are **Agent-Agnostic** and **Architecture-
     - [Verification Skills (VDD)](#verification-skills-vdd)
     - [Agentic Workflows](#agentic-workflows)
     - [Custom Commands Deployment](#custom-commands-deployment)
+  - [Licensing](#licensing)
   - [Contributing](#contributing)
   - [Documentation](#documentation)
 
@@ -102,11 +103,22 @@ Skills are automatically loaded from these locations:
 
 ### Office Skills
 
-Open-source replacements for Anthropic's proprietary `docx` / `xlsx`
-/ `pptx` / `pdf` skills. Built from public specifications (ECMA-376,
-Microsoft Open Specification Promise, W3C, PDF ISO 32000-2) and
-open-source libraries — Apache-2.0 licensed; full attribution in
-[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+> **Proprietary — All Rights Reserved.** Effective 2026-04-25, the
+> four office skills (`docx` / `xlsx` / `pptx` / `pdf`) are licensed
+> under their per-skill `LICENSE` (e.g. [skills/docx/LICENSE](skills/docx/LICENSE)).
+> Source is available for audit and code review only; **any use,
+> execution, copying, modification, or distribution requires prior
+> written permission**. For licensing inquiries:
+> <innokentiy.georgievskiy@mdcloud.tech>. The rest of this repository
+> remains Apache-2.0; see the [Licensing](#licensing) section below.
+
+Independent re-implementations of the `docx` / `xlsx` / `pptx` / `pdf`
+capability set, built from public specifications (ECMA-376, Microsoft
+Open Specification Promise, W3C, PDF ISO 32000-2) and open-source
+libraries. Third-party components keep their original licenses;
+attribution is preserved in
+[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) and in the per-skill
+`NOTICE` files.
 
 | Skill | Description | Tier |
 | :--- | :--- | :--- |
@@ -161,6 +173,27 @@ ln -s $(pwd)/commands/auto-heal-external-skill.md ~/.claude/commands/auto-heal-e
 ```
 
 **Usage**: `/auto-heal-external-skill <path/to/skill>`
+
+## Licensing
+
+This repository uses a **split licensing model**:
+
+| Scope | License | Source of truth |
+| :--- | :--- | :--- |
+| Repository root and all skills **except** the four office skills | Apache-2.0 | [LICENSE](LICENSE) |
+| `skills/docx/`, `skills/xlsx/`, `skills/pptx/`, `skills/pdf/` (effective **2026-04-25**) | **Proprietary — All Rights Reserved** | [skills/docx/LICENSE](skills/docx/LICENSE), [skills/xlsx/LICENSE](skills/xlsx/LICENSE), [skills/pptx/LICENSE](skills/pptx/LICENSE), [skills/pdf/LICENSE](skills/pdf/LICENSE) |
+| Third-party components used by any skill (XSD schemas, pip/npm runtime deps, external CLI tools) | Their original licenses, unchanged | [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) + per-skill `NOTICE` |
+
+**For the office skills (`docx` / `xlsx` / `pptx` / `pdf`):** the
+source is published for audit, security review, and personal study
+only. Any **use, execution, integration, copying, modification, or
+redistribution** — commercial or non-commercial — requires prior
+written permission from the copyright holder. Snapshots of these
+skills that were distributed under Apache-2.0 prior to 2026-04-25
+remain available under their original Apache-2.0 terms in the public
+git history; that grant is not retroactively revoked.
+
+**Licensing inquiries:** <innokentiy.georgievskiy@mdcloud.tech>.
 
 ## Contributing
 

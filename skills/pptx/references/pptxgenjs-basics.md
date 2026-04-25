@@ -115,6 +115,37 @@ aspect ratio.
 4. **`addSlide({ masterName })` requires `defineSlideMaster` first.**
    Masters are useful for backgrounds and logos applied to many
    slides; define them at the top of your script.
+5. **Option objects are mutated in place.** `pptxgenjs` rewrites inch
+   values to EMUs on first use. Reusing the same `shadow`, `line`, or
+   `fill` object across two `addShape` calls means the second call
+   receives an already-converted object and renders incorrectly or
+   corrupts the file. Build a fresh object per call, or clone:
+   ```js
+   const shadow = { type: "outer", blur: 8, offset: 3, angle: 90, color: "000000", opacity: 0.3 };
+   slide.addShape(pres.ShapeType.rect, { x: 1, y: 1, w: 2, h: 1, shadow: structuredClone(shadow) });
+   slide.addShape(pres.ShapeType.rect, { x: 4, y: 1, w: 2, h: 1, shadow: structuredClone(shadow) });
+   ```
+6. **Hex colours must be bare.** Write `"FF6B35"`, never `"#FF6B35"`.
+   The `#` prefix produces a file some viewers silently ignore and
+   others refuse to open. Opacity is NOT encoded as an 8-character
+   hex value either — express it with the separate `opacity` property
+   (`0.0`–`1.0`).
+7. **`rectRadius` is shape-type-specific.** It only takes effect on
+   `ROUNDED_RECTANGLE`. On plain `RECTANGLE` it is silently ignored —
+   no warning, no error. If you want rounded corners, switch the
+   shape type, don't just set the radius.
+8. **`charSpacing`, not `letterSpacing`.** The CSS-style name is
+   silently dropped. Use `charSpacing: 2` (units: hundredths of a
+   point) on the text options.
+9. **`lineSpacing` inflates bullet gaps.** Applied to bulleted text
+   it produces excessive space between bullets. For tight bullet
+   spacing, reach for `paraSpaceAfter` (points) instead — it operates
+   on the paragraph boundary and leaves line height alone.
+10. **`shadow.offset` must be non-negative.** Negative offsets corrupt
+    the file. To cast a shadow pointing up, keep `offset` positive
+    and set `angle: 270`; similarly `angle: 180` points left,
+    `angle: 0` (or omitted) points right. Express direction through
+    the angle, never through a negative offset.
 
 ## Writing async
 

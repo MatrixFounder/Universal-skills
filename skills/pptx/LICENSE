@@ -1,0 +1,57 @@
+PROPRIETARY LICENSE — ALL RIGHTS RESERVED
+
+Copyright (c) 2026 Sergey K. (MatrixFounder).
+Effective date of this license for this directory: 2026-04-25.
+
+This software, including all source code, scripts, configuration,
+schemas, and accompanying materials in this directory and its
+subdirectories (the "Skill"), is the proprietary work of the
+copyright holder. All rights are reserved.
+
+NO LICENSE IS GRANTED, EXPRESSLY OR BY IMPLICATION, EXCEPT THE
+FOLLOWING LIMITED PERMISSIONS:
+
+  1. You may VIEW the source code of the Skill for the sole purposes
+     of personal study, security audit, and code review.
+
+WITHOUT PRIOR WRITTEN PERMISSION FROM THE COPYRIGHT HOLDER, YOU MAY
+NOT:
+
+  - use the Skill, in whole or in part, for any purpose (including
+    personal, internal-business, commercial, non-commercial,
+    educational, research, or evaluation use beyond passive code
+    reading);
+  - execute, install, deploy, or integrate the Skill or any portion
+    of it into any product, service, pipeline, agent, or workflow;
+  - copy, reproduce, mirror, fork, or redistribute the Skill or any
+    portion of it, in source or compiled form, on any medium;
+  - modify, adapt, translate, or create derivative works based on
+    the Skill;
+  - publicly display, publicly perform, sublicense, sell, lease,
+    rent, or otherwise transfer the Skill or any portion of it;
+  - remove, alter, or obscure this LICENSE, the accompanying NOTICE
+    file, copyright notices, or attribution.
+
+PRIOR VERSIONS. Versions of files in this directory that were
+distributed under the Apache License, Version 2.0 prior to the
+effective date above remain available under their original Apache-2.0
+terms in the public git history; that grant is not retroactively
+revoked. This LICENSE governs only this and subsequent versions.
+
+THIRD-PARTY COMPONENTS. The Skill incorporates and depends on third-
+party material whose own licenses are preserved unchanged and listed
+in the repository root file THIRD_PARTY_NOTICES.md and in the
+NOTICE file in this directory. Nothing in this LICENSE overrides
+those third-party licenses; nothing in those licenses grants any
+right to the Skill itself beyond what they explicitly cover.
+
+LICENSING INQUIRIES. To request a license for any use beyond passive
+code review, contact: innokentiy.georgievskiy@mdcloud.tech.
+
+DISCLAIMER OF WARRANTY. THE SKILL IS PROVIDED "AS IS", WITHOUT
+WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED
+TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR
+PURPOSE, AND NONINFRINGEMENT. IN NO EVENT SHALL THE COPYRIGHT HOLDER
+BE LIABLE FOR ANY CLAIM, DAMAGES, OR OTHER LIABILITY ARISING FROM,
+OUT OF, OR IN CONNECTION WITH THE SKILL OR THE USE OR OTHER DEALINGS
+IN THE SKILL.

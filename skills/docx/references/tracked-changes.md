@@ -123,3 +123,64 @@ Comment markers (`<w:commentRangeStart>`, `<w:commentRangeEnd>`,
 changes must not delete comment markers. When editing `document.xml`
 manually, preserve comment markers as siblings of any `<w:r>` they
 anchor; they are never placed inside a run.
+
+### Comment-range marker placement
+
+`<w:commentRangeStart>` and `<w:commentRangeEnd>` are SIBLINGS of the
+runs they bracket, never children. Placing either element inside a
+`<w:r>` corrupts the comment: some viewers drop the marker, others
+extend the highlighted range to the end of the paragraph. Correct
+shape:
+
+```xml
+<w:p>
+  <w:commentRangeStart w:id="7"/>
+  <w:r><w:t>highlighted span</w:t></w:r>
+  <w:commentRangeEnd w:id="7"/>
+  <w:r>
+    <w:rPr><w:rStyle w:val="CommentReference"/></w:rPr>
+    <w:commentReference w:id="7"/>
+  </w:r>
+</w:p>
+```
+
+Only the final `<w:commentReference>` lives inside a run (because it
+is itself run-level content); the range markers do not.
+
+## Rejecting another author's insertion
+
+To mark a previously-accepted or in-flight `<w:ins>` as "rejected by
+another author", nest a `<w:del>` INSIDE the original `<w:ins>` —
+keep the outer `<w:ins>` element, its `w:id`, and its `w:author`
+untouched so the audit trail shows who inserted, and a new inner
+`w:author` shows who rejected:
+
+```xml
+<w:ins w:id="10" w:author="Alice" w:date="2026-04-24T09:00:00Z">
+  <w:del w:id="11" w:author="Bob" w:date="2026-04-24T12:15:00Z">
+    <w:r><w:delText xml:space="preserve">inserted text</w:delText></w:r>
+  </w:del>
+</w:ins>
+```
+
+Do NOT rewrite the original `<w:ins>` attributes or delete its
+wrapper — that erases the first author's contribution from history.
+
+## Restoring another author's deletion
+
+To cancel another author's `<w:del>` (i.e. put the text back) add a
+SIBLING `<w:ins>` immediately after the existing `<w:del>`, carrying
+the restorer's identity. Keep the original `<w:del>` intact; the
+deletion is part of the audit trail even after it has been undone.
+
+```xml
+<w:del w:id="20" w:author="Alice" w:date="2026-04-24T09:00:00Z">
+  <w:r><w:delText xml:space="preserve">important clause </w:delText></w:r>
+</w:del>
+<w:ins w:id="21" w:author="Bob" w:date="2026-04-24T12:20:00Z">
+  <w:r><w:t xml:space="preserve">important clause </w:t></w:r>
+</w:ins>
+```
+
+The net rendered text is the same as before the deletion, but both
+authors' actions remain visible in the review pane.

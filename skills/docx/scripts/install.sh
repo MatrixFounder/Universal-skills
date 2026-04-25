@@ -8,7 +8,12 @@
 # System tools expected on PATH (checked, not installed):
 #   - node 18+
 #   - python3 3.10+
-#   - soffice   (LibreOffice; required by docx_accept_changes.py)
+#   - soffice   (LibreOffice; required by docx_accept_changes.py and by the
+#               shape-group fallback in docx2md.js)
+#   - pdftoppm + pdftotext (poppler; OPTIONAL — enables high-fidelity
+#               shape-group rendering in docx2md.js. Without poppler we fall
+#               back to LibreOffice HTML GIF export, which captures geometry
+#               only and separates shape labels from the bitmap.)
 #
 # Idempotent; safe to re-run.
 set -euo pipefail
@@ -59,12 +64,26 @@ if SOFFICE=$(find_soffice); then
     say "soffice: $SOFFICE"
 else
     warn "soffice (LibreOffice) NOT FOUND."
-    warn "Required by:  docx_accept_changes.py"
+    warn "Required by:  docx_accept_changes.py and the docx2md.js shape-group fallback."
     warn "Install:"
     warn "  macOS:   brew install --cask libreoffice"
     warn "  Debian:  sudo apt install libreoffice --no-install-recommends"
     warn "  Fedora:  sudo dnf install libreoffice"
     missing_host=1
+fi
+
+# Poppler is optional — only needed for highest-fidelity shape-group
+# rendering in docx2md.js. We probe but never fail without it.
+if command -v pdftoppm >/dev/null 2>&1 && command -v pdftotext >/dev/null 2>&1; then
+    say "poppler: pdftoppm + pdftotext OK ($(pdftoppm -v 2>&1 | head -1))"
+else
+    warn "poppler (pdftoppm + pdftotext) NOT FOUND."
+    warn "OPTIONAL: enables high-fidelity shape-group rendering in docx2md.js."
+    warn "Without it, shape diagrams render as geometry-only GIF (text labels separated)."
+    warn "Install:"
+    warn "  macOS:   brew install poppler"
+    warn "  Debian:  sudo apt install poppler-utils"
+    warn "  Fedora:  sudo dnf install poppler-utils"
 fi
 
 # --- Python venv ---

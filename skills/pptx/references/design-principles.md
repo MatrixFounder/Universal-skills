@@ -61,6 +61,16 @@ before shipping.
 - Always provide alt text. `md2pptx.js` takes it from the Markdown
   `![alt](path)` syntax.
 
+## Accent-bar overlays on rounded shapes
+
+A common motif is a thin vertical accent bar along the left edge of
+a card. If the underlying card is a `ROUNDED_RECTANGLE`, do NOT lay
+a rectangular accent bar on top — the square accent over rounded
+corners leaves jagged exposed pixels where the two geometries
+disagree. Either switch the card to a plain `RECTANGLE` and keep the
+rectangular accent, or clip the accent so it follows the rounded
+corner. The simplest rule: an accent-bar overlay demands `RECTANGLE`, never `ROUNDED_RECTANGLE`.
+
 ## When in doubt, remove
 
 The single most effective edit on almost any generated deck is to
