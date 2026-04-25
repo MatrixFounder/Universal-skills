@@ -1,6 +1,6 @@
 ---
 name: pdf
-description: Use when the user asks to create, combine, split, or extract content from PDF files. Triggers include "markdown to pdf", "merge these PDFs", "split a PDF", "render a PDF invoice", "extract text from pdf", "fill a pdf form", and similar PDF generation or manipulation tasks.
+description: Use when the user asks to create, combine, split, preview, or extract content from PDF files. Triggers include "markdown to pdf", "mermaid in pdf", "merge PDFs", "split a PDF", "extract text from pdf", "fill AcroForm", "preview pdf as image", and similar PDF generation or manipulation tasks.
 tier: 2
 version: 1.0
 license: LicenseRef-Proprietary

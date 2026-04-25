@@ -269,12 +269,21 @@ Bad range syntax exits 1 with a hint; bad anchor likewise.
 
 ```bash
 node skills/pptx/scripts/md2pptx.js INPUT.md OUTPUT.pptx \
-    [--size 16:9|4:3] [--theme theme.json]
+    [--size 16:9|4:3] [--theme theme.json] \
+    [--mermaid-config PATH | --no-mermaid-config]
 ```
 
 pptxgenjs-based renderer. Auto-paginates dense slides, mermaid
 blocks render to PNG via local `mmdc`, adaptive font sizing for
 high-density slides, accent colour stripe on every slide.
+
+The mermaid flags mirror `md2pdf.py` exactly (see §6.1): the
+bundled `scripts/mermaid-config.json` (Cyrillic-capable font stack)
+is the default; `--mermaid-config PATH` overrides it; and
+`--no-mermaid-config` opts out of the bundle so mmdc uses its
+built-in Trebuchet MS theme. Both skills ship a byte-identical
+config so non-English diagrams render consistently across PDF
+and PPTX outputs.
 
 ### 5.2 Markdown → PPTX (delegated to marp-slide for editorial polish)
 
@@ -519,7 +528,7 @@ Two layers of automated tests cover the office skills.
 
 ### 8.1 Unit tests (in `office/tests/` of each skill)
 
-The shared `office/` module has 13 unit tests under
+The shared `office/` module has **43 unit tests** under
 `skills/docx/scripts/office/tests/`:
 
 - **`test_redlining.py`** (10 tests): identical docs / marked
@@ -532,6 +541,22 @@ The shared `office/` module has 13 unit tests under
   the documented "no cross-process IPC" limitation (it passes
   when the limitation holds — i.e. when nobody has retroactively
   expanded the shim's scope without updating the docs).
+- **`test_pptx_validator.py`** (11 tests): clean fixture / per-instance
+  `xsd_map` isolation (×2 — guards against class-level mutable-default
+  pollution) / missing slide part / orphan slide warning / duplicate
+  `<p:sldId>` / sldId out of ECMA-376 §19.2.1.34 range / missing
+  slideLayout / missing slideMaster / blip → unknown rId / blip →
+  missing media part.
+- **`test_xlsx_validator.py`** (19 tests): clean fixture / instance
+  isolation (×2) / missing sheet part / orphan worksheet / orphan
+  chartsheet / duplicate sheet name / **case-insensitive** duplicate
+  (per Excel rule) / zero-sheet workbook / duplicate sheetId /
+  relationship file missing message / percent-encoded `Target=`
+  resolves correctly / backslash `Target=` normalised /
+  out-of-bounds shared-string index / sst reference without
+  `xl/sharedStrings.xml` / `<c t="s">` without `<v>` per ECMA-376
+  §18.3.1.4 / out-of-bounds cell-style index / empty `cellXfs`
+  produces a distinct message / duplicate `definedName` per scope.
 
 Run from the docx skill:
 
@@ -572,10 +597,10 @@ What's covered:
 
 | Skill | Coverage |
 |---|---|
-| docx | `md2docx → docx → docx2md` round-trip, `office.validate` on output, `docx_fill_template` with nested JSON, encryption / legacy-CFB rejection on `docx_fill_template` and `docx_accept_changes`. |
-| xlsx | `csv2xlsx` + row count + `office.validate`, `xlsx_validate` (clean + injected `#DIV/0!` via lxml mutation), `xlsx_recalc` formula preservation, `xlsx_add_chart` (bar/line/pie variants + bad-range error), encryption rejection on `xlsx_validate`/`xlsx_add_chart`/`xlsx_recalc`. |
-| pptx | `md2pptx` + slide-count + `office.validate`, `pptx_thumbnails` (JPEG sanity), `pptx_to_pdf` (`%PDF` magic), `pptx_clean` (orphan slide + media removal, dry-run reports without writing), `outline2pptx` (heading-only MD → 4 slides + validate + heading-less input fails clearly), bundled `mermaid-config.json` (parses, missing path fails clean), encryption rejection on `pptx_clean`/`pptx_thumbnails`/`pptx_to_pdf`. |
-| pdf | `md2pdf` + mermaid PNG render + bundled `mermaid-config.json` (parses, missing path warns, config change invalidates PNG cache), `pdf_merge` (page-count = sum), `pdf_split --each-page`, `pdf_fill_form` (`--check` exit codes, fill round-trip, `--flatten` removes `/AcroForm`, `--extract-fields` stdout, malformed JSON / missing `-o` exit 2, typo'd field warning, int→`/Yes` checkbox coercion). |
+| docx | `md2docx → docx → docx2md` round-trip, `office.validate` on output, `docx_fill_template` with nested JSON, encryption / legacy-CFB rejection on `docx_fill_template` and `docx_accept_changes`, **cross-7** `office_passwd` (clean→encrypt→decrypt round-trip + zip-namelist parity, wrong-password exit 4, state-mismatch exit 5, stdin password, JSON envelope). |
+| xlsx | `csv2xlsx` + row count + `office.validate`, `xlsx_validate` (clean + injected `#DIV/0!` via lxml mutation), `xlsx_recalc` formula preservation, `xlsx_add_chart` (bar/line/pie variants + bad-range error), encryption rejection on `xlsx_validate`/`xlsx_add_chart`/`xlsx_recalc`, **cross-7** `office_passwd` (round-trip + openpyxl-readable post-decrypt with row count preserved, wrong-password, state-mismatch, stdin, JSON envelope). |
+| pptx | `md2pptx` + slide-count + `office.validate`, `pptx_thumbnails` (JPEG sanity), `pptx_to_pdf` (`%PDF` magic), `pptx_clean` (orphan slide + media removal, dry-run reports without writing), `outline2pptx` (heading-only MD → 4 slides + validate + heading-less input fails clearly), bundled `mermaid-config.json` (parses, missing path fails clean), encryption rejection on `pptx_clean`/`pptx_thumbnails`/`pptx_to_pdf`, **cross-7** `office_passwd` (round-trip + slide-count preserved post-decrypt, wrong-password, state-mismatch, stdin, JSON envelope). |
+| pdf | `md2pdf` + mermaid PNG render + bundled `mermaid-config.json` (parses, missing path warns, config change invalidates PNG cache), `pdf_merge` (page-count = sum), `pdf_split --each-page`, `pdf_fill_form` (`--check` exit codes, fill round-trip, `--flatten` removes `/AcroForm`, `--extract-fields` stdout, malformed JSON / missing `-o` exit 2, typo'd field warning, int→`/Yes` checkbox coercion). pdf has its own AcroForm path and does NOT use `office_passwd.py`. |
 
 The suite is fast (<60 sec total on a warm machine) and is the
 primary pre-commit / pre-release gate. Any failure here points at a
@@ -611,7 +636,7 @@ its own structural-semantic layer:
 | Skill | Validator | Format-specific checks (in addition to base) |
 | :--- | :--- | :--- |
 | docx | `DocxValidator` | Tracked-change integrity (`<w:t>` inside `<w:del>` flagged); comment-marker pairing (`commentRangeStart`/`commentRangeEnd`/`commentReference` triples). Optional: `--compare-to` runs `RedliningValidator` to catch text changes that bypass `<w:ins>`/`<w:del>` (the "editor forgot to enable Track Changes" trap). |
-| xlsx | `XlsxValidator` | Sheet chain (`<sheet @r:id>` → workbook.rels → real `xl/worksheets/sheetN.xml`); sheet name + sheetId + r:id uniqueness (Excel hard-fail at duplicates); `definedName` uniqueness per scope; **shared-string index bounds** (`<c t="s"><v>N</v>` ≤ count of `<si>` in `xl/sharedStrings.xml`); **cell-style index bounds** (`<c s="N">` ≤ count of `cellXfs` in `xl/styles.xml`); orphan worksheets warning. |
+| xlsx | `XlsxValidator` | Sheet chain (`<sheet @r:id>` → workbook.rels → real `xl/worksheets/sheetN.xml`); sheet name uniqueness — **case-insensitive**, per Excel rule (`Sheet1` ≡ `SHEET1`); sheetId + r:id uniqueness (Excel hard-fail at duplicates); zero-sheet workbook → error; `definedName` case-insensitive uniqueness per scope; **shared-string index bounds** (`<c t="s"><v>N</v>` ≤ count of `<si>` in `xl/sharedStrings.xml`); **`<c t="s">` without `<v>`** flagged per ECMA-376 §18.3.1.4; **cell-style index bounds** (`<c s="N">` ≤ count of `cellXfs` in `xl/styles.xml`) with a distinct message when `cellXfs` is empty; orphan parts in `xl/worksheets/`, `xl/chartsheets/`, `xl/dialogsheets/`. |
 | pptx | `PptxValidator` | Slide chain (`<p:sldId>` → presentation.rels → real `ppt/slides/slideN.xml`); slide-id uniqueness + ECMA-376 §19.2.1.34 `ST_SlideId` range `[256, 2 147 483 647]`; layout/master chain (each slide → its layout → its master, all must exist); media references (`<a:blip r:embed>`, `<p:videoFile r:link>` resolve to packaged parts); notes-slide reciprocity (notes → back to its slide); orphan slides warning. |
 | pdf | (uses pypdf/pdfplumber inline; no OOXML validator) | n/a — `pdf_fill_form.py --check` returns the AcroForm/XFA/none triage exit codes (0/11/12). |
 
@@ -623,18 +648,27 @@ slide layouts, slide masters, sharedStrings, styles, etc.). Without
 the schemas, `--strict` produces "XSD not bundled" warnings and exit
 1 — the gate is intentional so CI cannot silently skip schema checks.
 
-The validators are exercised by 18 unit tests
-(`office/tests/test_pptx_validator.py` + `test_xlsx_validator.py`)
-plus 7 E2E entries that inject deliberate breakage (orphan slide,
+The validators are exercised by **30 unit tests**
+(`office/tests/test_pptx_validator.py` 11 + `test_xlsx_validator.py`
+19) plus E2E entries that inject deliberate breakage (orphan slide,
 missing slideLayout, blip → unknown rId, out-of-range sst index,
-duplicate sheet name) and assert the validator catches each.
+duplicate sheet name, `<c t="s">` without `<v>`) and assert the
+validator catches each. Two of the unit tests in each validator
+specifically guard a Python gotcha that bit us during
+implementation: the per-instance `xsd_map = dict(self.__class__.xsd_map)`
+copy in `BaseSchemaValidator.__init__` — without it, dynamically
+adding a slide-XSD entry for one file leaks into the next instance
+because the class-level dict is shared.
 
 ---
 
-## 9.5. Cross-skill safeguards (cross-1 / 4 / 5)
+## 9.5. Cross-skill safeguards (cross-1 / 4 / 5 / 7)
 
-Three features cut across all four office skills and were intentionally
-designed for uniformity:
+Four features cut across the office skills and were intentionally
+designed for uniformity. Three (`cross-1`, `cross-4`, `cross-5`)
+ship in all four skills; one (`cross-7`) ships in the three OOXML
+skills only — pdf has its own encryption mechanism (pypdf
+`PdfWriter.encrypt`).
 
 ### `--json-errors` (cross-5)
 
@@ -767,6 +801,84 @@ skill should still be able to preview a colleague's `.pptx`. Shipping
 the same file in all four locations is cheap (~6 KB each) and avoids
 forcing users to install multiple skills just to render previews.
 
+### Password protection (cross-7)
+
+The three OOXML skills (docx/xlsx/pptx) ship a byte-identical
+`scripts/office_passwd.py` that sets or removes Office password
+protection via `msoffcrypto-tool` (MS-OFB Agile, Office 2010+). pdf
+has its own mechanism (`pypdf` `PdfWriter.encrypt`) and does not use
+this script.
+
+```bash
+# Put a password on a clean .docx/.xlsx/.pptx
+python3 skills/<skill>/scripts/office_passwd.py CLEAN.docx ENC.docx --encrypt hunter2
+
+# Remove the password
+python3 skills/<skill>/scripts/office_passwd.py ENC.docx CLEAN.docx --decrypt hunter2
+
+# Detect whether a file is currently password-protected
+python3 skills/<skill>/scripts/office_passwd.py FILE.docx --check
+#   exit 0  → encrypted (CFB container)
+#   exit 10 → not encrypted (clean OOXML)
+#   exit 11 → input not found
+```
+
+Exit codes round out the contract:
+
+| Code | Meaning |
+| :--- | :--- |
+| 0 | Success (also `--check` on encrypted file) |
+| 1 | Generic msoffcrypto failure (`FileFormatError`, IO) |
+| 2 | argparse usage error (auto-routed via cross-5) |
+| 3 | `msoffcrypto-tool` not installed in this skill's venv |
+| 4 | Wrong password supplied to `--decrypt` (output is removed, no half-written decoy) |
+| 5 | State mismatch — `--encrypt` on already-encrypted, or `--decrypt` on clean OOXML |
+| 10 | `--check`: file is NOT encrypted |
+| 11 | Input file not found |
+
+Password input modes:
+
+- **Argv** — `--encrypt hunter2`. Convenient, but visible in `ps`
+  and shell history. Fine for local one-offs.
+- **Stdin** — pass `-` as the password and the script reads one line
+  from stdin (newline stripped). Combine with shell here-strings or
+  process substitution to keep the secret off the command line:
+  ```bash
+  python3 office_passwd.py FILE.docx ENC.docx --encrypt - <<<"$PASS"
+  python3 office_passwd.py FILE.docx ENC.docx --encrypt - </path/to/secret
+  ```
+
+Round-trip is lossless — the OOXML zip namelist (every part inside
+the package) is byte-equal before encrypt and after decrypt. The
+encrypted output is a CFB container, so passing it to any of the
+office reader scripts (`docx_fill_template`, `xlsx_recalc`,
+`pptx_clean`, `office.validate`, …) trips the cross-3 encryption
+guard and exits 3 with the standard "password-protected OR legacy
+.doc/.xls/.ppt" message — that's the intended pairing: cross-3
+detects, cross-7 acts on.
+
+Implementation notes:
+
+- The wrong-password path catches `msoffcrypto.exceptions.InvalidKeyError`
+  at the outer scope so both eager (Agile) and lazy (block-by-block)
+  variants fold into the same exit-4 path. The output file is
+  `unlink`-ed before reporting so callers don't get a 0-byte decoy
+  that they might mistake for a successful decrypt.
+- `assert_not_encrypted` is intentionally NOT called by `--encrypt`
+  before encrypting (it would refuse all writers because they'd see
+  CFB after the first round-trip). Instead, `office_passwd.py` calls
+  `is_cfb_container` directly and produces a different exit code (5,
+  state mismatch) when asked to re-encrypt an already-encrypted file.
+- `msoffcrypto-tool>=5.4.0` lives in the `requirements.txt` of the
+  three OOXML skills; `install.sh` picks it up on next run.
+
+The 11 cross-7 E2E entries per skill (33 total) cover: clean→encrypt→
+check→decrypt round-trip, validate-after-decrypt, openpyxl/slide-count
+sanity post-decrypt, wrong-password (exit 4 + output removed),
+state-mismatch encrypt-on-encrypted (exit 5), state-mismatch
+decrypt-on-clean (exit 5), stdin password input, and JSON envelope
+on wrong-password (`type:"InvalidPassword"`, `code:4`, `v:1`).
+
 ---
 
 ## 10. Package inventory — what lives where
@@ -832,13 +944,16 @@ to share a single Chromium revision in `~/.cache/puppeteer`).
 
 | Skill | `requirements.txt` |
 |---|---|
-| docx | `python-docx`, `lxml`, `defusedxml` |
-| xlsx | `openpyxl`, `pandas`, `lxml`, `defusedxml` |
-| pptx | `python-pptx`, `Pillow`, `lxml`, `defusedxml` |
+| docx | `python-docx`, `lxml`, `defusedxml`, `Pillow`, `msoffcrypto-tool` |
+| xlsx | `openpyxl`, `pandas`, `lxml`, `defusedxml`, `Pillow`, `msoffcrypto-tool` |
+| pptx | `python-pptx`, `Pillow`, `lxml`, `defusedxml`, `msoffcrypto-tool` |
 | pdf | `pypdf`, `pdfplumber`, `weasyprint`, `markdown2`, `reportlab` |
 
-`lxml` (~19 MB) appears in three of four .venv directories;
-`Pillow` (~14 MB) appears in two. Per-skill duplication is
+`msoffcrypto-tool>=5.4.0` is the cross-7 dependency (set/remove
+password protection) and lives in the three OOXML skills only — pdf
+uses pypdf's own encryption. `lxml` (~19 MB) appears in three of
+four .venv directories; `Pillow` (~14 MB) appears in three. Per-skill
+duplication is
 **intentional** — each skill must work as a standalone `.skill`
 archive, so unifying into a shared venv is explicitly out of
 scope (see [CONTRIBUTING.md](../CONTRIBUTING.md)).

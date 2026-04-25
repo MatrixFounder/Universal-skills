@@ -1,6 +1,6 @@
 ---
 name: docx
-description: Use when the user asks to create, edit, convert, or validate Microsoft Word .docx documents. Triggers include "markdown to docx", "docx to markdown", "fill this Word template", "accept tracked changes", "unpack docx XML", "extract text from docx", and related .docx round-trip or template-fill tasks.
+description: Use when the user asks to create, edit, convert, validate, preview, or password-protect Microsoft Word .docx documents. Triggers include "markdown to docx", "docx to markdown", "fill Word template", "accept tracked changes", "validate docx", "preview docx as image", "encrypt/decrypt docx", and related .docx round-trip or template-fill tasks.
 tier: 2
 version: 1.0
 license: LicenseRef-Proprietary
@@ -34,6 +34,7 @@ practical knowledge and make the common operations a single command.
 - Detect macro-enabled inputs (`.docm`, with `vbaProject.bin`) and warn when the chosen output extension would silently drop the macros (`docm` → `docx`).
 - Render any `.docx`/`.docm`/`.pdf` (or peer-skill `.xlsx`/`.pptx`) into a single PNG-grid preview via `preview.py` (LibreOffice + Poppler).
 - Emit failures as machine-readable JSON to stderr with `--json-errors` (uniform across all four office skills).
+- Set or remove a password on a `.docx`/`.xlsx`/`.pptx` (MS-OFB Agile, Office 2010+) via `office_passwd.py` — three modes: `--encrypt PASSWORD`, `--decrypt PASSWORD`, `--check` (exit 0 encrypted / 10 clean / 11 missing).
 
 ## 3. Execution Mode
 - **Mode**: `script-first`.
@@ -50,11 +51,12 @@ practical knowledge and make the common operations a single command.
   - `python3 scripts/office/pack.py INDIR/ OUTPUT.docx [--no-unescape-quotes] [--no-condense]`
   - `python3 scripts/office/validate.py INPUT.docx [--strict] [--json] [--schemas-dir PATH] [--compare-to ORIGINAL.docx]`
   - `python3 scripts/preview.py INPUT OUTPUT.jpg [--cols 3] [--dpi 110] [--gap 12] [--padding 24] [--label-font-size 14] [--soffice-timeout 240] [--pdftoppm-timeout 60]`
+  - `python3 scripts/office_passwd.py INPUT [OUTPUT] (--encrypt PASSWORD | --decrypt PASSWORD | --check)` — pass `-` as PASSWORD to read it from stdin.
   - All scripts above accept `--json-errors` to emit failures as a single line of JSON on stderr (`{v, error, code, type?, details?}`). The schema version `v` is currently `1`; argparse usage errors are routed through the same envelope (`type:"UsageError"`).
 - **Inputs**: positional paths only; optional flags per command.
 - **Outputs**: a single file at the named output path; `office/unpack.py` produces a directory tree; `office/validate.py` prints a report (or JSON with `--json`). `docx2md.js` additionally creates `<stem>_images/` next to the Markdown output when the document has embedded images.
 - **Failure semantics**: non-zero exit on missing input, invalid JSON, unresolved placeholders (with `--strict`), unreadable ZIP, or soffice errors. Error detail goes to stderr.
-- **Idempotency**: repeated runs with the same inputs produce equivalent output files (byte-exact for the XML parts after pretty-print and entity normalisation). `docx_accept_changes.py` is idempotent on an already-accepted document.
+- **Idempotency**: repeated runs with the same inputs produce equivalent output files (byte-exact for the XML parts after pretty-print and entity normalisation). `docx_accept_changes.py` is idempotent on an already-accepted document. **Exception**: `office_passwd.py --encrypt` is intentionally non-deterministic — Office encryption uses a fresh random salt per run, so the encrypted bytes differ each time even with the same password. The decrypted output, however, is byte-equal to the pre-encryption input (lossless round-trip).
 - **Dry-run support**: not applicable; operations are file-to-file and reversible by re-running.
 
 ## 5. Safety Boundaries
@@ -94,7 +96,7 @@ rest are behavioural defaults with their rationale.
 ### 7.3 Creating `.docx` from Markdown
 
 1. Prefer `md2docx.js` over hand-writing `new Document({...})`.
-2. When the user specifies US Letter, pass the `--size letter` flag (the script defaults to A4). Landscape needs `--size letter --landscape` — page dimensions are passed unswapped; the orientation flag tells Word how to render them.
+2. Page size and orientation are fixed (US Letter, portrait) — `md2docx.js` does not currently expose `--size` or `--landscape` flags. If the user needs A4 / landscape / custom margins, drop down to `python-docx` or unpack/edit `word/document.xml` directly via `office/unpack.py`.
 3. For headers/footers use `--header "…"` / `--footer "…"`. Multi-line headers are a single string with `\n` — `md2docx.js` splits on the newline.
 
 ### 7.4 Extracting text from `.docx` to Markdown
@@ -181,6 +183,9 @@ Fill a template with JSON data:
 | Structural validate | `python3 scripts/office/validate.py file.docx [--json] [--strict]` |
 | Compare tracked changes vs original | `python3 scripts/office/validate.py edited.docx --compare-to ORIGINAL.docx` |
 | Preview as PNG-grid | `python3 scripts/preview.py file.docx preview.jpg [--cols 3] [--dpi 110]` |
+| Set password | `python3 scripts/office_passwd.py clean.docx encrypted.docx --encrypt PASSWORD` (use `-` to read from stdin) |
+| Remove password | `python3 scripts/office_passwd.py encrypted.docx clean.docx --decrypt PASSWORD` |
+| Detect password | `python3 scripts/office_passwd.py file.docx --check` (exit 0 encrypted / 10 clean / 11 missing) |
 | Machine-readable failures | append `--json-errors` to any of the above |
 
 ## 11. Examples (Few-Shot)
@@ -188,12 +193,12 @@ Fill a template with JSON data:
 Full fixture: [examples/fixture-simple.md](examples/fixture-simple.md).
 
 **Input** — user request:
-> Convert `report.md` to a Letter-sized `.docx` and check it's structurally sound.
+> Convert `report.md` to a `.docx` and check it's structurally sound.
 
 **Output** — agent action (abbreviated):
 ```bash
 cd skills/docx/scripts && npm install          # one-time setup
-node scripts/md2docx.js report.md report.docx --size letter
+node scripts/md2docx.js report.md report.docx
 python3 scripts/office/validate.py report.docx
 ```
 Report the exit codes and a one-line summary to the user ("`report.docx` created; validator OK").
@@ -220,6 +225,7 @@ On non-zero exit, surface the `Unresolved placeholders: …` stderr line to the 
 - [scripts/docx_fill_template.py](scripts/docx_fill_template.py) — template placeholder filler with run canonicalisation.
 - [scripts/docx_accept_changes.py](scripts/docx_accept_changes.py) — LibreOffice-based tracked-change acceptor.
 - [scripts/preview.py](scripts/preview.py) — universal `INPUT → PNG-grid` renderer for `.docx`/`.docm`/`.xlsx`/`.pptx`/`.pdf`. Byte-identical across all four office skills.
+- [scripts/office_passwd.py](scripts/office_passwd.py) — set / remove / detect password protection on `.docx`/`.xlsx`/`.pptx` via msoffcrypto-tool (MS-OFB Agile, Office 2010+). Byte-identical across the three OOXML skills (not pdf — pdf has its own AcroForm encryption). Pass `-` as the password to read it from stdin (avoids leaking via `ps`/shell history).
 - [scripts/_errors.py](scripts/_errors.py) — `--json-errors` envelope helper used by every Python CLI. Schema-versioned (`v=1`); routes argparse usage errors through the same envelope as domain errors.
 - [scripts/_soffice.py](scripts/_soffice.py) — LibreOffice subprocess wrapper with sandbox-aware AF_UNIX shim auto-load.
 - [scripts/office/](scripts/office/) — OOXML unpack/pack/validate utilities; **byte-identically replicated** to `xlsx` and `pptx` skills (docx is master — see CLAUDE.md §2 for the protocol).

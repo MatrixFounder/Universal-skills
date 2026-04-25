@@ -364,6 +364,231 @@ echo "$err" | grep -q "macro-enabled" \
     && ok "office.unpack notes macro-enabled input" \
     || nok "unpack macro note" "no note: $err"
 
+# --- cross-7: real password-protect (set/remove via msoffcrypto-tool) -----
+echo "cross-7 password-protect:"
+
+# --check on a clean file: exit 10 + "not encrypted" message.
+set +e
+out=$("$PY" office_passwd.py "$TMP/out.docx" --check 2>&1)
+rc=$?
+set -e
+[ "$rc" -eq 10 ] && echo "$out" | grep -q "not encrypted" \
+    && ok "--check on clean docx → exit 10" \
+    || nok "--check on clean" "exit=$rc out=$out"
+
+# --encrypt: produces a CFB-wrapped output that --check sees as encrypted.
+"$PY" office_passwd.py "$TMP/out.docx" "$TMP/enc.docx" --encrypt hunter2 >/dev/null 2>&1 \
+    && [ -s "$TMP/enc.docx" ] \
+    && ok "--encrypt creates non-empty output" \
+    || nok "--encrypt" "missing or empty"
+set +e
+out=$("$PY" office_passwd.py "$TMP/enc.docx" --check 2>&1)
+rc=$?
+set -e
+[ "$rc" -eq 0 ] && echo "$out" | grep -q "encrypted" \
+    && ok "--check on encrypted docx → exit 0" \
+    || nok "--check on encrypted" "exit=$rc out=$out"
+
+# --decrypt round-trip: result validates with office.validate AND has the
+# same OOXML parts list as the original (lossless).
+"$PY" office_passwd.py "$TMP/enc.docx" "$TMP/dec.docx" --decrypt hunter2 >/dev/null 2>&1 \
+    && [ -s "$TMP/dec.docx" ] \
+    && ok "--decrypt creates non-empty output" \
+    || nok "--decrypt" "missing or empty"
+"$PY" -m office.validate "$TMP/dec.docx" >/dev/null 2>&1 \
+    && ok "decrypted output passes office.validate" \
+    || nok "validate decrypted" "rejected"
+"$PY" -c "
+import zipfile, sys
+a = sorted(zipfile.ZipFile('$TMP/out.docx').namelist())
+b = sorted(zipfile.ZipFile('$TMP/dec.docx').namelist())
+assert a == b, f'parts differ\\nbefore: {a}\\nafter:  {b}'
+" \
+    && ok "round-trip preserves OOXML parts list" \
+    || nok "round-trip parts" "differ"
+
+# Wrong password: exit 4 AND no half-written output is left behind.
+set +e
+err=$("$PY" office_passwd.py "$TMP/enc.docx" "$TMP/bad.docx" --decrypt nopenope 2>&1 >/dev/null)
+rc=$?
+set -e
+[ "$rc" -eq 4 ] && [ ! -e "$TMP/bad.docx" ] && echo "$err" | grep -qi "wrong password" \
+    && ok "wrong password → exit 4 + output cleaned up" \
+    || nok "wrong password" "exit=$rc, output=$([ -e "$TMP/bad.docx" ] && echo present || echo absent), msg=$err"
+
+# State-mismatch: --encrypt on already-encrypted → exit 5.
+set +e
+err=$("$PY" office_passwd.py "$TMP/enc.docx" "$TMP/x.docx" --encrypt foo 2>&1 >/dev/null)
+rc=$?
+set -e
+[ "$rc" -eq 5 ] && echo "$err" | grep -qi "already encrypted" \
+    && ok "--encrypt on already-encrypted → exit 5" \
+    || nok "encrypt-already-encrypted" "exit=$rc msg=$err"
+
+# State-mismatch: --decrypt on a clean file → exit 5.
+set +e
+err=$("$PY" office_passwd.py "$TMP/out.docx" "$TMP/x.docx" --decrypt foo 2>&1 >/dev/null)
+rc=$?
+set -e
+[ "$rc" -eq 5 ] && echo "$err" | grep -qi "not encrypted" \
+    && ok "--decrypt on clean → exit 5" \
+    || nok "decrypt-clean" "exit=$rc msg=$err"
+
+# Stdin password: lets callers avoid putting the secret in argv.
+"$PY" office_passwd.py "$TMP/enc.docx" "$TMP/dec_stdin.docx" --decrypt - <<<"hunter2" >/dev/null 2>&1 \
+    && [ -s "$TMP/dec_stdin.docx" ] \
+    && ok "--decrypt - reads password from stdin" \
+    || nok "stdin password" "no output"
+
+# JSON envelope on wrong password (cross-5 integration).
+set +e
+err=$("$PY" office_passwd.py "$TMP/enc.docx" "$TMP/x.docx" --decrypt nope --json-errors 2>&1 >/dev/null)
+rc=$?
+set -e
+[ "$rc" -eq 4 ] \
+    && echo "$err" | "$PY" -c "import sys, json; j=json.loads(sys.stdin.read()); assert j['code']==4 and j['type']=='InvalidPassword' and j['v']==1, j" 2>/dev/null \
+    && ok "wrong-password JSON envelope (code=4, type=InvalidPassword, v=1)" \
+    || nok "json envelope" "exit=$rc msg=$err"
+
+# --- cross-7 VDD-iter-2 regressions (HIGH-1, MED-1..4, LOW-1) ------------
+echo "cross-7 VDD-iter-2:"
+
+# H1: same-path I/O destroys the source. Fix is a pre-flight refusal that
+# returns exit 6 BEFORE any open() touches the filesystem. Without the
+# guard the source file is truncated to 0 bytes by the write-open before
+# the read-open finishes streaming.
+cp "$TMP/out.docx" "$TMP/victim.docx"
+sz_before=$(wc -c < "$TMP/victim.docx" | tr -d ' ')
+set +e
+err=$("$PY" office_passwd.py "$TMP/victim.docx" "$TMP/victim.docx" --encrypt p 2>&1 >/dev/null)
+rc=$?
+set -e
+sz_after=$(wc -c < "$TMP/victim.docx" | tr -d ' ')
+[ "$rc" -eq 6 ] && [ "$sz_before" = "$sz_after" ] \
+    && echo "$err" | grep -qi "same path" \
+    && ok "H1: same-path --encrypt refused (exit 6, source intact $sz_before B)" \
+    || nok "H1 same-path encrypt" "rc=$rc, before=$sz_before after=$sz_after, msg=$err"
+
+# Same guard on the decrypt path. The state-mismatch check (NotEncrypted)
+# would also fire on a clean self-input, but a CFB self-input would skip
+# that and still trip the truncation. Test on the encrypted file we
+# already produced earlier in this suite.
+cp "$TMP/enc.docx" "$TMP/victim_enc.docx"
+sz_before=$(wc -c < "$TMP/victim_enc.docx" | tr -d ' ')
+set +e
+err=$("$PY" office_passwd.py "$TMP/victim_enc.docx" "$TMP/victim_enc.docx" --decrypt hunter2 2>&1 >/dev/null)
+rc=$?
+set -e
+sz_after=$(wc -c < "$TMP/victim_enc.docx" | tr -d ' ')
+[ "$rc" -eq 6 ] && [ "$sz_before" = "$sz_after" ] \
+    && ok "H1: same-path --decrypt refused (exit 6, source intact $sz_before B)" \
+    || nok "H1 same-path decrypt" "rc=$rc, before=$sz_before after=$sz_after"
+
+# H1 must also fold through --json-errors (cross-5 contract).
+set +e
+err=$("$PY" office_passwd.py "$TMP/victim.docx" "$TMP/victim.docx" --encrypt p --json-errors 2>&1 >/dev/null)
+rc=$?
+set -e
+[ "$rc" -eq 6 ] \
+    && echo "$err" | "$PY" -c "import sys, json; j=json.loads(sys.stdin.read()); assert j['code']==6 and j['type']=='SelfOverwriteRefused' and j['v']==1, j" 2>/dev/null \
+    && ok "H1 JSON envelope: code=6, type=SelfOverwriteRefused" \
+    || nok "H1 JSON envelope" "rc=$rc msg=$err"
+
+# Symlink twist: INPUT and OUTPUT can resolve() to the same file via a
+# symlink even when the literal paths differ. Path.resolve(strict=False)
+# normalises the symlink, so the guard MUST still fire.
+ln -sf "$TMP/victim.docx" "$TMP/victim_link.docx"
+set +e
+"$PY" office_passwd.py "$TMP/victim.docx" "$TMP/victim_link.docx" --encrypt p >/dev/null 2>&1
+rc=$?
+set -e
+[ "$rc" -eq 6 ] \
+    && ok "H1: symlink → same inode also refused (exit 6)" \
+    || nok "H1 symlink" "rc=$rc (resolve() didn't follow the link)"
+
+# M1: encrypt failure must not leave a half-written output decoy.
+echo "hello world" > "$TMP/notooxml.txt"
+rm -f "$TMP/decoy.docx"
+set +e
+"$PY" office_passwd.py "$TMP/notooxml.txt" "$TMP/decoy.docx" --encrypt p >/dev/null 2>&1
+rc=$?
+set -e
+[ "$rc" -eq 1 ] && [ ! -e "$TMP/decoy.docx" ] \
+    && ok "M1: non-OOXML --encrypt → exit 1 + output cleaned up" \
+    || nok "M1 encrypt cleanup" "rc=$rc, decoy=$([ -e "$TMP/decoy.docx" ] && echo present || echo absent)"
+
+# M2: msoffcrypto.exceptions.{ParseError,DecryptionError,EncryptionError}
+# must not propagate as a Python traceback — they would corrupt the JSON
+# envelope contract. Verify by importing them through Python and asserting
+# the exception classes ARE in the catch tuple.
+"$PY" -c "
+import sys
+sys.path.insert(0, '.')
+from office_passwd import _msoffcrypto_runtime_errors
+import msoffcrypto
+caught = _msoffcrypto_runtime_errors(msoffcrypto)
+needed = (msoffcrypto.exceptions.ParseError,
+          msoffcrypto.exceptions.DecryptionError,
+          msoffcrypto.exceptions.EncryptionError)
+for cls in needed:
+    assert cls in caught, f'{cls.__name__} not in runtime catch tuple {caught}'
+" \
+    && ok "M2: ParseError + DecryptionError + EncryptionError in runtime catch tuple" \
+    || nok "M2 runtime errors" "see python output"
+
+# M3: malformed CFB must produce a friendly user message, NOT the
+# CPython int-string-conversion diagnostic. Guard test: make sure the
+# user-facing message does NOT mention sys.set_int_max_str_digits.
+{ printf '\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1'; head -c 1024 /dev/urandom; } > "$TMP/fakedoc.bin"
+set +e
+err=$("$PY" office_passwd.py "$TMP/fakedoc.bin" "$TMP/fakedoc-dec.docx" --decrypt anypw 2>&1 >/dev/null)
+rc=$?
+set -e
+[ "$rc" -eq 1 ] && ! echo "$err" | grep -q "set_int_max_str_digits" \
+    && echo "$err" | grep -qi "malformed\|not a real encrypted" \
+    && ok "M3: CPython int-limit error reskinned to user-friendly text" \
+    || nok "M3 reskin" "rc=$rc msg=$err"
+
+# M3 also validates JSON envelope stays single-line on the same input.
+set +e
+err=$("$PY" office_passwd.py "$TMP/fakedoc.bin" "$TMP/fakedoc-dec.docx" --decrypt anypw --json-errors 2>&1 >/dev/null)
+rc=$?
+set -e
+n_lines=$(echo "$err" | wc -l | tr -d ' ')
+[ "$rc" -eq 1 ] && [ "$n_lines" -eq 1 ] \
+    && echo "$err" | "$PY" -c "import sys, json; j=json.loads(sys.stdin.read()); assert j['v']==1, j" 2>/dev/null \
+    && ok "M3: malformed CFB --json-errors stays single-line + valid envelope" \
+    || nok "M3 envelope" "rc=$rc lines=$n_lines msg=$err"
+
+# M4: office.validate.py must reject CFB inputs with cross-3 message
+# (exit 3, not its own bare 'Not a ZIP-based OOXML container').
+set +e
+err=$("$PY" -m office.validate "$TMP/enc.docx" 2>&1 >/dev/null)
+rc=$?
+set -e
+[ "$rc" -eq 3 ] && echo "$err" | grep -q "password-protected" \
+    && echo "$err" | grep -q "legacy" \
+    && ok "M4: office.validate refuses encrypted with cross-3 exit 3" \
+    || nok "M4 cross-3 in validate" "rc=$rc msg=$err"
+
+# L1: stdin password with trailing whitespace must produce a stderr warning.
+set +e
+err=$(printf "hunter2 " | "$PY" office_passwd.py "$TMP/out.docx" "$TMP/L1.docx" --encrypt - 2>&1 >/dev/null)
+rc=$?
+set -e
+[ "$rc" -eq 0 ] && echo "$err" | grep -qi "ends in whitespace" \
+    && ok "L1: trailing-whitespace stdin password emits warning" \
+    || nok "L1 whitespace warning" "rc=$rc msg=$err"
+
+# L1 negative: a clean stdin password (no trailing whitespace) must NOT warn.
+set +e
+err=$(printf "hunter2" | "$PY" office_passwd.py "$TMP/out.docx" "$TMP/L1clean.docx" --encrypt - 2>&1 >/dev/null)
+rc=$?
+set -e
+[ "$rc" -eq 0 ] && ! echo "$err" | grep -qi "ends in whitespace" \
+    && ok "L1: clean stdin password emits no spurious warning" \
+    || nok "L1 false positive" "rc=$rc msg=$err"
+
 echo
 echo "$pass passed, $fail failed"
 [ "$fail" -eq 0 ]

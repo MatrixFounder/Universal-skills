@@ -321,6 +321,117 @@ fi
     && ok "office.tests.test_pptx_validator: all 9 unit tests pass" \
     || nok "PptxValidator unit tests" "see python -m unittest output"
 
+# --- cross-7: real password-protect (set/remove via msoffcrypto-tool) -----
+echo "cross-7 password-protect:"
+
+set +e
+out=$("$PY" office_passwd.py "$TMP/out.pptx" --check 2>&1)
+rc=$?
+set -e
+[ "$rc" -eq 10 ] && echo "$out" | grep -q "not encrypted" \
+    && ok "--check on clean pptx → exit 10" \
+    || nok "--check on clean" "exit=$rc out=$out"
+
+"$PY" office_passwd.py "$TMP/out.pptx" "$TMP/enc.pptx" --encrypt p4ss >/dev/null 2>&1 \
+    && [ -s "$TMP/enc.pptx" ] \
+    && ok "--encrypt creates non-empty output" \
+    || nok "--encrypt" "missing or empty"
+set +e
+out=$("$PY" office_passwd.py "$TMP/enc.pptx" --check 2>&1)
+rc=$?
+set -e
+[ "$rc" -eq 0 ] && echo "$out" | grep -q "encrypted" \
+    && ok "--check on encrypted pptx → exit 0" \
+    || nok "--check on encrypted" "exit=$rc out=$out"
+
+"$PY" office_passwd.py "$TMP/enc.pptx" "$TMP/dec.pptx" --decrypt p4ss >/dev/null 2>&1 \
+    && [ -s "$TMP/dec.pptx" ] \
+    && ok "--decrypt creates non-empty output" \
+    || nok "--decrypt" "missing or empty"
+"$PY" -m office.validate "$TMP/dec.pptx" >/dev/null 2>&1 \
+    && ok "decrypted output passes office.validate" \
+    || nok "validate decrypted" "rejected"
+# Slide count must survive the encrypt/decrypt round-trip.
+src_slides=$(unzip -l "$TMP/out.pptx" | grep -cE "ppt/slides/slide[0-9]+\.xml$" || true)
+dec_slides=$(unzip -l "$TMP/dec.pptx" | grep -cE "ppt/slides/slide[0-9]+\.xml$" || true)
+[ "$src_slides" -eq "$dec_slides" ] && [ "$dec_slides" -gt 0 ] \
+    && ok "round-trip preserves slide count ($dec_slides)" \
+    || nok "round-trip slides" "before=$src_slides after=$dec_slides"
+
+set +e
+err=$("$PY" office_passwd.py "$TMP/enc.pptx" "$TMP/bad.pptx" --decrypt nope 2>&1 >/dev/null)
+rc=$?
+set -e
+[ "$rc" -eq 4 ] && [ ! -e "$TMP/bad.pptx" ] && echo "$err" | grep -qi "wrong password" \
+    && ok "wrong password → exit 4 + output cleaned up" \
+    || nok "wrong password" "exit=$rc, output=$([ -e "$TMP/bad.pptx" ] && echo present || echo absent)"
+
+set +e
+"$PY" office_passwd.py "$TMP/enc.pptx" "$TMP/x.pptx" --encrypt foo >/dev/null 2>&1
+rc=$?
+set -e
+[ "$rc" -eq 5 ] \
+    && ok "--encrypt on already-encrypted → exit 5" \
+    || nok "encrypt-already-encrypted" "exit=$rc"
+
+set +e
+"$PY" office_passwd.py "$TMP/out.pptx" "$TMP/x.pptx" --decrypt foo >/dev/null 2>&1
+rc=$?
+set -e
+[ "$rc" -eq 5 ] \
+    && ok "--decrypt on clean → exit 5" \
+    || nok "decrypt-clean" "exit=$rc"
+
+"$PY" office_passwd.py "$TMP/enc.pptx" "$TMP/dec_stdin.pptx" --decrypt - <<<"p4ss" >/dev/null 2>&1 \
+    && [ -s "$TMP/dec_stdin.pptx" ] \
+    && ok "--decrypt - reads password from stdin" \
+    || nok "stdin password" "no output"
+
+set +e
+err=$("$PY" office_passwd.py "$TMP/enc.pptx" "$TMP/x.pptx" --decrypt nope --json-errors 2>&1 >/dev/null)
+rc=$?
+set -e
+[ "$rc" -eq 4 ] \
+    && echo "$err" | "$PY" -c "import sys, json; j=json.loads(sys.stdin.read()); assert j['code']==4 and j['type']=='InvalidPassword' and j['v']==1, j" 2>/dev/null \
+    && ok "wrong-password JSON envelope (code=4, type=InvalidPassword, v=1)" \
+    || nok "json envelope" "exit=$rc msg=$err"
+
+# --- cross-7 VDD-iter-2 regressions (H1, M1, M4) ------------------------
+echo "cross-7 VDD-iter-2:"
+
+# H1: same-path I/O destroys the source. Pre-flight refusal returns
+# exit 6 BEFORE any open() touches the filesystem.
+cp "$TMP/out.pptx" "$TMP/victim.pptx"
+sz_before=$(wc -c < "$TMP/victim.pptx" | tr -d ' ')
+set +e
+"$PY" office_passwd.py "$TMP/victim.pptx" "$TMP/victim.pptx" --encrypt p >/dev/null 2>&1
+rc=$?
+set -e
+sz_after=$(wc -c < "$TMP/victim.pptx" | tr -d ' ')
+[ "$rc" -eq 6 ] && [ "$sz_before" = "$sz_after" ] \
+    && ok "H1: same-path --encrypt refused (exit 6, source intact $sz_before B)" \
+    || nok "H1 same-path encrypt" "rc=$rc, before=$sz_before after=$sz_after"
+
+# M1: encrypt failure must not leave a half-written output decoy.
+echo "hello world" > "$TMP/notooxml.txt"
+rm -f "$TMP/decoy.pptx"
+set +e
+"$PY" office_passwd.py "$TMP/notooxml.txt" "$TMP/decoy.pptx" --encrypt p >/dev/null 2>&1
+rc=$?
+set -e
+[ "$rc" -eq 1 ] && [ ! -e "$TMP/decoy.pptx" ] \
+    && ok "M1: non-OOXML --encrypt → exit 1 + output cleaned up" \
+    || nok "M1 encrypt cleanup" "rc=$rc, decoy=$([ -e "$TMP/decoy.pptx" ] && echo present || echo absent)"
+
+# M4: office.validate.py must refuse CFB inputs with cross-3 exit 3.
+set +e
+err=$("$PY" -m office.validate "$TMP/enc.pptx" 2>&1 >/dev/null)
+rc=$?
+set -e
+[ "$rc" -eq 3 ] && echo "$err" | grep -q "password-protected" \
+    && ok "M4: office.validate refuses encrypted pptx with cross-3 exit 3" \
+    || nok "M4 cross-3 in validate" "rc=$rc msg=$err"
+
 echo
 echo "$pass passed, $fail failed"
 [ "$fail" -eq 0 ]

@@ -1,6 +1,6 @@
 ---
 name: xlsx
-description: Use when the user asks to create, transform, or validate Microsoft Excel .xlsx workbooks. Triggers include "csv to xlsx", "JSON to xlsx", "recalculate this workbook", "scan formula errors", "financial model in xlsx", "fix #REF errors", and related spreadsheet generation, recalculation, or OOXML round-trip tasks.
+description: Use when the user asks to create, transform, validate, chart, preview, or password-protect Microsoft Excel .xlsx workbooks. Triggers include "csv to xlsx", "recalculate this workbook", "scan formula errors", "add a chart to xlsx", "bar / line / pie chart over a range", "financial model in xlsx", "fix #REF errors", "preview xlsx as image", "encrypt / decrypt / password-protect an xlsx", and related spreadsheet generation, recalculation, or OOXML round-trip tasks.
 tier: 2
 version: 1.0
 license: LicenseRef-Proprietary
@@ -30,10 +30,11 @@ single most common xlsx bug).
 - Add a bar / line / pie chart on a value range with optional categories, title, anchor; stays editable in Excel / LibreOffice.
 - Unpack and repack `.xlsx` archives for raw OOXML editing (shared `office/` module with the docx skill).
 - Structurally validate an `.xlsx` (relationships, content types, required parts).
-- Reject password-protected and legacy `.xls` (CFB-container) inputs early with a clear remediation message (exit 3) instead of a `BadZipFile` traceback.
+- Reject password-protected and legacy `.xls` (CFB-container) inputs early in the **reader scripts** (`xlsx_recalc.py`, `xlsx_validate.py`, `xlsx_add_chart.py`, `office/validate.py`, `office/unpack.py`, `preview.py`) with a clear remediation message (exit 3) instead of a `BadZipFile` traceback. `csv2xlsx.py` and `office_passwd.py` are not gated — the former takes CSV/TSV input (no encryption to detect), the latter is the encryption tool itself.
 - Detect macro-enabled inputs (`.xlsm`, with `xl/vbaProject.bin`) and warn when the chosen output extension would silently drop the macros (`xlsm` → `xlsx`).
 - Render any `.xlsx`/`.xlsm`/`.pdf` (or peer-skill `.docx`/`.pptx`) into a single PNG-grid preview via `preview.py` (LibreOffice + Poppler).
 - Emit failures as machine-readable JSON to stderr with `--json-errors` (uniform across all four office skills).
+- Set or remove a password on a `.xlsx`/`.docx`/`.pptx` (MS-OFB Agile, Office 2010+) via `office_passwd.py` — three modes: `--encrypt PASSWORD`, `--decrypt PASSWORD`, `--check` (exit 0 encrypted / 10 clean / 11 missing).
 
 ## 3. Execution Mode
 - **Mode**: `script-first`.
@@ -50,11 +51,12 @@ single most common xlsx bug).
   - `python3 scripts/office/pack.py INDIR/ OUTPUT.xlsx`
   - `python3 scripts/office/validate.py INPUT.xlsx [--strict] [--json]`
   - `python3 scripts/preview.py INPUT OUTPUT.jpg [--cols 3] [--dpi 110] [--gap 12] [--padding 24] [--label-font-size 14] [--soffice-timeout 240] [--pdftoppm-timeout 60]`
+  - `python3 scripts/office_passwd.py INPUT [OUTPUT] (--encrypt PASSWORD | --decrypt PASSWORD | --check)` — pass `-` as PASSWORD to read it from stdin.
   - All scripts above accept `--json-errors` to emit failures as a single line of JSON on stderr (`{v, error, code, type?, details?}`). The schema version `v` is currently `1`; argparse usage errors are routed through the same envelope (`type:"UsageError"`).
 - **Inputs**: positional paths; optional flags per command.
 - **Outputs**: a single file at the named output path; `office/unpack.py` produces a directory tree; validators print a report (or JSON).
 - **Failure semantics**: non-zero exit on missing input, invalid encoding, soffice errors, or formula errors (`xlsx_validate.py` returns 1 when errors are present). Error detail goes to stderr.
-- **Idempotency**: `csv2xlsx.py` produces the same workbook for the same input every time. `xlsx_recalc.py` is idempotent on an already-recalculated workbook.
+- **Idempotency**: `csv2xlsx.py` produces the same workbook for the same input every time. `xlsx_recalc.py` is idempotent on an already-recalculated workbook. **Exception**: `office_passwd.py --encrypt` is intentionally non-deterministic — Office encryption uses a fresh random salt per run.
 - **Dry-run support**: not applicable.
 
 ## 5. Safety Boundaries
@@ -165,6 +167,9 @@ Audit an incoming `.xlsx`:
 | Repack | `python3 scripts/office/pack.py unpacked/ file.xlsx` |
 | Structural validation (deep) | `python3 scripts/office/validate.py file.xlsx [--json] [--strict]` |
 | Preview as PNG-grid | `python3 scripts/preview.py file.xlsx preview.jpg [--cols 3] [--dpi 110]` |
+| Set password | `python3 scripts/office_passwd.py clean.xlsx encrypted.xlsx --encrypt PASSWORD` (use `-` to read from stdin) |
+| Remove password | `python3 scripts/office_passwd.py encrypted.xlsx clean.xlsx --decrypt PASSWORD` |
+| Detect password | `python3 scripts/office_passwd.py file.xlsx --check` (exit 0 encrypted / 10 clean / 11 missing) |
 | Machine-readable failures | append `--json-errors` to any of the above |
 
 ## 11. Examples (Few-Shot)
@@ -208,6 +213,7 @@ type and sheet.
 - [scripts/xlsx_validate.py](scripts/xlsx_validate.py) — fast formula-error scan without recalc.
 - [scripts/xlsx_add_chart.py](scripts/xlsx_add_chart.py) — bar / line / pie chart attachment over a cell range; chart stays editable in Excel / LibreOffice.
 - [scripts/preview.py](scripts/preview.py) — universal `INPUT → PNG-grid` renderer for `.xlsx`/`.xlsm`/`.docx`/`.pptx`/`.pdf`. Byte-identical across all four office skills.
+- [scripts/office_passwd.py](scripts/office_passwd.py) — set / remove / detect password protection on `.xlsx`/`.docx`/`.pptx` via msoffcrypto-tool (MS-OFB Agile, Office 2010+). Byte-identical across the three OOXML skills (not pdf — pdf has its own AcroForm encryption). Pass `-` as the password to read it from stdin.
 - [scripts/_errors.py](scripts/_errors.py) — `--json-errors` envelope helper (schema `v=1`).
 - [scripts/_soffice.py](scripts/_soffice.py) — LibreOffice subprocess wrapper.
 - [scripts/office/](scripts/office/) — OOXML unpack/pack/validate, byte-identical copy from the docx skill (master — see CLAUDE.md §2). Includes deep `XlsxValidator` (sheet chain, sst+styles index bounds, sheet-name uniqueness, orphan parts).

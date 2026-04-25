@@ -1,6 +1,6 @@
 ---
 name: pptx
-description: Use when the user asks to create, edit, convert, or preview Microsoft PowerPoint .pptx presentations. Triggers include "markdown to pptx", "slides from outline", "render a deck", "pptx to pdf", "generate slide thumbnails", "edit this .pptx", and related presentation generation or OOXML round-trip tasks.
+description: Use when the user asks to create, edit, convert, preview, clean, or password-protect Microsoft PowerPoint .pptx presentations. Triggers include "markdown to pptx", "slides from outline", "mermaid in slides", "pptx to pdf", "slide thumbnails", "drop orphan slides", "encrypt/decrypt pptx", and related presentation or OOXML round-trip tasks.
 tier: 2
 version: 1.0
 license: LicenseRef-Proprietary
@@ -34,6 +34,7 @@ removes that variance.
 - Detect macro-enabled inputs (`.pptm`, with `ppt/vbaProject.bin`) and warn when the chosen output extension would silently drop the macros (`pptm` → `pptx`).
 - Render any `.pptx`/`.pptm`/`.pdf` (or peer-skill `.docx`/`.xlsx`) into a single PNG-grid preview via `preview.py` (LibreOffice + Poppler).
 - Emit failures as machine-readable JSON to stderr with `--json-errors` (uniform across all four office skills).
+- Set or remove a password on a `.pptx`/`.docx`/`.xlsx` (MS-OFB Agile, Office 2010+) via `office_passwd.py` — three modes: `--encrypt PASSWORD`, `--decrypt PASSWORD`, `--check` (exit 0 encrypted / 10 clean / 11 missing).
 
 ## 3. Execution Mode
 - **Mode**: `script-first`.
@@ -51,11 +52,12 @@ removes that variance.
   - `python3 scripts/office/pack.py INDIR/ OUTPUT.pptx`
   - `python3 scripts/office/validate.py INPUT.pptx [--json] [--strict]`
   - `python3 scripts/preview.py INPUT OUTPUT.jpg [--cols 3] [--dpi 110] [--gap 12] [--padding 24] [--label-font-size 14] [--soffice-timeout 240] [--pdftoppm-timeout 60]`
+  - `python3 scripts/office_passwd.py INPUT [OUTPUT] (--encrypt PASSWORD | --decrypt PASSWORD | --check)` — pass `-` as PASSWORD to read it from stdin.
   - All scripts above accept `--json-errors` to emit failures as a single line of JSON on stderr (`{v, error, code, type?, details?}`). The schema version `v` is currently `1`; argparse usage errors are routed through the same envelope (`type:"UsageError"`).
 - **Inputs**: positional paths; optional flags per command.
 - **Outputs**: single files at the named paths (`.pptx`, `.pdf`, `.jpg`); `office/unpack.py` produces a directory tree; validator prints a report.
 - **Failure semantics**: non-zero exit on missing input, soffice errors, pdftoppm errors, or pptxgenjs assembly failures. Error detail to stderr.
-- **Idempotency**: `md2pptx.js` produces the same deck for the same input; `pptx_to_pdf.py` and `pptx_thumbnails.py` overwrite their outputs on re-run.
+- **Idempotency**: `md2pptx.js` produces the same deck for the same input; `pptx_to_pdf.py` and `pptx_thumbnails.py` overwrite their outputs on re-run. **Exception**: `office_passwd.py --encrypt` is intentionally non-deterministic — Office encryption uses a fresh random salt per run.
 - **Dry-run support**: not applicable.
 
 ## 5. Safety Boundaries
@@ -173,6 +175,9 @@ Convert to PDF:
 | Repack | `python3 scripts/office/pack.py unpacked/ deck.pptx` |
 | Structural validate (deep: slide chain, layouts, masters, media refs) | `python3 scripts/office/validate.py deck.pptx [--json] [--strict]` |
 | Preview as PNG-grid | `python3 scripts/preview.py deck.pptx preview.jpg [--cols 3] [--dpi 110]` |
+| Set password | `python3 scripts/office_passwd.py clean.pptx encrypted.pptx --encrypt PASSWORD` (use `-` to read from stdin) |
+| Remove password | `python3 scripts/office_passwd.py encrypted.pptx clean.pptx --decrypt PASSWORD` |
+| Detect password | `python3 scripts/office_passwd.py file.pptx --check` (exit 0 encrypted / 10 clean / 11 missing) |
 | Machine-readable failures | append `--json-errors` to any of the above |
 
 ## 11. Examples (Few-Shot)
@@ -210,6 +215,7 @@ The script writes `deck.pdf` next to the source.
 - [scripts/pptx_thumbnails.py](scripts/pptx_thumbnails.py) — thumbnail grid generator (LibreOffice + Poppler + Pillow).
 - [scripts/pptx_clean.py](scripts/pptx_clean.py) — drops orphan slides / media / charts / themes via BFS over `.rels` graph (`--dry-run` previews).
 - [scripts/preview.py](scripts/preview.py) — universal `INPUT → PNG-grid` renderer for `.pptx`/`.pptm`/`.docx`/`.xlsx`/`.pdf`.
+- [scripts/office_passwd.py](scripts/office_passwd.py) — set / remove / detect password protection on `.pptx`/`.docx`/`.xlsx` via msoffcrypto-tool (MS-OFB Agile, Office 2010+). Byte-identical across the three OOXML skills (not pdf — pdf has its own AcroForm encryption). Pass `-` as the password to read it from stdin.
 - [scripts/mermaid-config.json](scripts/mermaid-config.json) — bundled office-friendly mermaid config (Cyrillic-capable font stack, auto-applied unless overridden via `--mermaid-config`).
 - [scripts/_errors.py](scripts/_errors.py) — `--json-errors` envelope helper (schema `v=1`).
 - [scripts/_soffice.py](scripts/_soffice.py) — LibreOffice subprocess wrapper.

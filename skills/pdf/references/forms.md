@@ -109,11 +109,11 @@ with open("filled.pdf", "wb") as fh:
 ```
 
 You need to know the coordinates (y from bottom, Helvetica is the
-safe default). For more than a couple of fields use
-[check_bounding_boxes.py-style](https://example.invalid) tooling to
-inspect the PDF first — this skill does not include such a helper in
-the MVP, but `pdfplumber`'s `page.chars` gives you word coordinates
-from which you can infer where to place text.
+safe default). For more than a couple of fields, inspect the PDF
+first to read off the right (x, y) positions: this skill does not
+ship a dedicated bounding-box helper, but `pdfplumber`'s `page.chars`
+gives you word-level coordinates you can translate into overlay
+positions.
 
 ## Two-stage coordinate extraction for non-fillable forms
 

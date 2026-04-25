@@ -3,3 +3,4 @@ pandas>=2.0.0
 lxml>=5.0.0
 defusedxml>=0.7.1
 Pillow>=10.0.0
+msoffcrypto-tool>=5.4.0

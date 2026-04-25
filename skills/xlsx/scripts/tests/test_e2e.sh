@@ -368,6 +368,121 @@ assert any(\"duplicate sheet name 'Sheet1'\" in e for e in r['errors']), r
     && ok "office.tests.test_xlsx_validator: all 9 unit tests pass" \
     || nok "XlsxValidator unit tests" "see python -m unittest output"
 
+# --- cross-7: real password-protect (set/remove via msoffcrypto-tool) -----
+echo "cross-7 password-protect:"
+
+set +e
+out=$("$PY" office_passwd.py "$TMP/out.xlsx" --check 2>&1)
+rc=$?
+set -e
+[ "$rc" -eq 10 ] && echo "$out" | grep -q "not encrypted" \
+    && ok "--check on clean xlsx → exit 10" \
+    || nok "--check on clean" "exit=$rc out=$out"
+
+"$PY" office_passwd.py "$TMP/out.xlsx" "$TMP/enc.xlsx" --encrypt s3cret >/dev/null 2>&1 \
+    && [ -s "$TMP/enc.xlsx" ] \
+    && ok "--encrypt creates non-empty output" \
+    || nok "--encrypt" "missing or empty"
+set +e
+out=$("$PY" office_passwd.py "$TMP/enc.xlsx" --check 2>&1)
+rc=$?
+set -e
+[ "$rc" -eq 0 ] && echo "$out" | grep -q "encrypted" \
+    && ok "--check on encrypted xlsx → exit 0" \
+    || nok "--check on encrypted" "exit=$rc out=$out"
+
+"$PY" office_passwd.py "$TMP/enc.xlsx" "$TMP/dec.xlsx" --decrypt s3cret >/dev/null 2>&1 \
+    && [ -s "$TMP/dec.xlsx" ] \
+    && ok "--decrypt creates non-empty output" \
+    || nok "--decrypt" "missing or empty"
+"$PY" -m office.validate "$TMP/dec.xlsx" >/dev/null 2>&1 \
+    && ok "decrypted output passes office.validate" \
+    || nok "validate decrypted" "rejected"
+# Decrypted xlsx must still be readable by openpyxl with the same row count
+# as the original csv2xlsx output (header + 10 fixture rows).
+"$PY" -c "
+import openpyxl
+wb = openpyxl.load_workbook('$TMP/dec.xlsx', read_only=True)
+rows = sum(1 for _ in wb.active.iter_rows())
+assert rows == 11, f'expected 11 rows after round-trip, got {rows}'
+" \
+    && ok "decrypted xlsx readable by openpyxl (11 rows preserved)" \
+    || nok "openpyxl read decrypted" "row count off"
+
+set +e
+err=$("$PY" office_passwd.py "$TMP/enc.xlsx" "$TMP/bad.xlsx" --decrypt nope 2>&1 >/dev/null)
+rc=$?
+set -e
+[ "$rc" -eq 4 ] && [ ! -e "$TMP/bad.xlsx" ] && echo "$err" | grep -qi "wrong password" \
+    && ok "wrong password → exit 4 + output cleaned up" \
+    || nok "wrong password" "exit=$rc, output=$([ -e "$TMP/bad.xlsx" ] && echo present || echo absent)"
+
+set +e
+"$PY" office_passwd.py "$TMP/enc.xlsx" "$TMP/x.xlsx" --encrypt foo >/dev/null 2>&1
+rc=$?
+set -e
+[ "$rc" -eq 5 ] \
+    && ok "--encrypt on already-encrypted → exit 5" \
+    || nok "encrypt-already-encrypted" "exit=$rc"
+
+set +e
+"$PY" office_passwd.py "$TMP/out.xlsx" "$TMP/x.xlsx" --decrypt foo >/dev/null 2>&1
+rc=$?
+set -e
+[ "$rc" -eq 5 ] \
+    && ok "--decrypt on clean → exit 5" \
+    || nok "decrypt-clean" "exit=$rc"
+
+"$PY" office_passwd.py "$TMP/enc.xlsx" "$TMP/dec_stdin.xlsx" --decrypt - <<<"s3cret" >/dev/null 2>&1 \
+    && [ -s "$TMP/dec_stdin.xlsx" ] \
+    && ok "--decrypt - reads password from stdin" \
+    || nok "stdin password" "no output"
+
+set +e
+err=$("$PY" office_passwd.py "$TMP/enc.xlsx" "$TMP/x.xlsx" --decrypt nope --json-errors 2>&1 >/dev/null)
+rc=$?
+set -e
+[ "$rc" -eq 4 ] \
+    && echo "$err" | "$PY" -c "import sys, json; j=json.loads(sys.stdin.read()); assert j['code']==4 and j['type']=='InvalidPassword' and j['v']==1, j" 2>/dev/null \
+    && ok "wrong-password JSON envelope (code=4, type=InvalidPassword, v=1)" \
+    || nok "json envelope" "exit=$rc msg=$err"
+
+# --- cross-7 VDD-iter-2 regressions (H1, M1, M4) ------------------------
+echo "cross-7 VDD-iter-2:"
+
+# H1: same-path I/O destroys the source. Pre-flight refusal returns
+# exit 6 BEFORE any open() touches the filesystem.
+cp "$TMP/out.xlsx" "$TMP/victim.xlsx"
+sz_before=$(wc -c < "$TMP/victim.xlsx" | tr -d ' ')
+set +e
+"$PY" office_passwd.py "$TMP/victim.xlsx" "$TMP/victim.xlsx" --encrypt p >/dev/null 2>&1
+rc=$?
+set -e
+sz_after=$(wc -c < "$TMP/victim.xlsx" | tr -d ' ')
+[ "$rc" -eq 6 ] && [ "$sz_before" = "$sz_after" ] \
+    && ok "H1: same-path --encrypt refused (exit 6, source intact $sz_before B)" \
+    || nok "H1 same-path encrypt" "rc=$rc, before=$sz_before after=$sz_after"
+
+# M1: encrypt failure must not leave a half-written output decoy.
+echo "hello world" > "$TMP/notooxml.txt"
+rm -f "$TMP/decoy.xlsx"
+set +e
+"$PY" office_passwd.py "$TMP/notooxml.txt" "$TMP/decoy.xlsx" --encrypt p >/dev/null 2>&1
+rc=$?
+set -e
+[ "$rc" -eq 1 ] && [ ! -e "$TMP/decoy.xlsx" ] \
+    && ok "M1: non-OOXML --encrypt → exit 1 + output cleaned up" \
+    || nok "M1 encrypt cleanup" "rc=$rc, decoy=$([ -e "$TMP/decoy.xlsx" ] && echo present || echo absent)"
+
+# M4: office.validate.py must refuse CFB inputs with cross-3 exit 3.
+set +e
+err=$("$PY" -m office.validate "$TMP/enc.xlsx" 2>&1 >/dev/null)
+rc=$?
+set -e
+[ "$rc" -eq 3 ] && echo "$err" | grep -q "password-protected" \
+    && ok "M4: office.validate refuses encrypted xlsx with cross-3 exit 3" \
+    || nok "M4 cross-3 in validate" "rc=$rc msg=$err"
+
 echo
 echo "$pass passed, $fail failed"
 [ "$fail" -eq 0 ]

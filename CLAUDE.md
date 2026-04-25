@@ -136,6 +136,36 @@ When you change either of these:
    ```
 4. Re-run all four E2E suites + `validate_skill.py` on all four skills.
 
+### Cross-skill scripts (3-skill replication, OOXML only)
+
+One helper file is byte-identical across the **three OOXML** office
+skills (`docx`, `xlsx`, `pptx`) but NOT pdf, because it operates on
+the OOXML container format directly:
+
+- `office_passwd.py` — set/remove password protection on
+  `.docx`/`.xlsx`/`.pptx` via `msoffcrypto-tool` (MS-OFB Agile,
+  Office 2010+). Pdf has its own encryption mechanism (pypdf
+  `PdfWriter.encrypt`) and does not use this script.
+
+When you change `office_passwd.py`:
+
+1. Edit only the docx copy.
+2. Replicate to xlsx and pptx:
+   ```bash
+   cp skills/docx/scripts/office_passwd.py skills/xlsx/scripts/office_passwd.py
+   cp skills/docx/scripts/office_passwd.py skills/pptx/scripts/office_passwd.py
+   ```
+3. Verify byte-identity:
+   ```bash
+   diff -q skills/docx/scripts/office_passwd.py skills/xlsx/scripts/office_passwd.py
+   diff -q skills/docx/scripts/office_passwd.py skills/pptx/scripts/office_passwd.py
+   ```
+4. Re-run E2E for the three OOXML skills + `validate_skill.py`.
+
+The `msoffcrypto-tool>=5.4.0` dependency must stay in
+`requirements.txt` of all three OOXML skills; it is NOT a pdf
+dependency.
+
 ### Anti-patterns — DO NOT
 
 - ❌ Edit `skills/xlsx/scripts/office/foo.py` directly.

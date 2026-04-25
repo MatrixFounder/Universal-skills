@@ -13,6 +13,9 @@ Exit codes:
     0 — no errors (warnings allowed unless --strict)
     1 — errors present (or warnings present when --strict)
     2 — input missing or unknown extension
+    3 — input is a CFB container (password-protected OOXML or legacy
+        .doc/.xls/.ppt). Same exit code and message as every other
+        reader in the office skills (cross-3 consistency).
 """
 
 from __future__ import annotations
@@ -24,12 +27,14 @@ from pathlib import Path
 
 if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+    from office._encryption import EncryptedFileError, assert_not_encrypted
     from office.validators.base import ValidationReport
     from office.validators.docx import DocxValidator
     from office.validators.pptx import PptxValidator
     from office.validators.redlining import RedliningValidator
     from office.validators.xlsx import XlsxValidator
 else:
+    from ._encryption import EncryptedFileError, assert_not_encrypted
     from .validators.base import ValidationReport
     from .validators.docx import DocxValidator
     from .validators.pptx import PptxValidator
@@ -76,6 +81,17 @@ def main(argv: list[str] | None = None) -> int:
     if not args.input.is_file():
         print(f"Input not found: {args.input}", file=sys.stderr)
         return 2
+
+    # cross-3 consistency: every reader emits the same exit-3 message on a
+    # CFB container (encrypted OOXML or legacy .doc/.xls/.ppt). Without this,
+    # encrypted inputs fail later as "Not a ZIP-based OOXML container",
+    # which gives the user a different (and misleading) remediation hint
+    # than every other reader in the office skills.
+    try:
+        assert_not_encrypted(args.input)
+    except EncryptedFileError as exc:
+        print(str(exc), file=sys.stderr)
+        return 3
 
     ext = args.input.suffix.lower()
     cls = _VALIDATOR_BY_EXT.get(ext)

@@ -9,7 +9,9 @@ everything; the skill leans on five, each for what it does best.
 |---|---|
 | Markdown → PDF | `weasyprint` (via [scripts/md2pdf.py](../scripts/md2pdf.py)) |
 | HTML (with modern CSS/JS) → PDF | `playwright` (not bundled — add if needed) |
-| Merge, split, rotate, encrypt | `pypdf` (via [scripts/pdf_merge.py](../scripts/pdf_merge.py), [scripts/pdf_split.py](../scripts/pdf_split.py)) |
+| Merge, split, rotate | `pypdf` (via [scripts/pdf_merge.py](../scripts/pdf_merge.py), [scripts/pdf_split.py](../scripts/pdf_split.py)) |
+| Fill AcroForm fields | `pypdf` (via [scripts/pdf_fill_form.py](../scripts/pdf_fill_form.py); XFA refused with exit 11, no-form refused with exit 12) |
+| Encrypt / decrypt PDF | `pypdf.PdfWriter.encrypt` (NOT wrapped by a bundled script — drop into Python directly; the office skills' `office_passwd.py` is OOXML-only and does not apply to PDFs) |
 | Extract text preserving layout | `pdfplumber` |
 | Extract tables | `pdfplumber.extract_tables()` or Tabula (Java) |
 | Create PDF from scratch programmatically | `reportlab` (not bundled) |
