@@ -36,7 +36,7 @@ scripts that embed those choices removes the variance.
 ## 4. Script Contract
 
 - **Commands**:
-  - `python3 scripts/md2pdf.py INPUT.md OUTPUT.pdf [--page-size letter|a4|legal] [--css EXTRA.css] [--base-url DIR] [--no-mermaid] [--strict-mermaid] [--mermaid-config PATH]`
+  - `python3 scripts/md2pdf.py INPUT.md OUTPUT.pdf [--page-size letter|a4|legal] [--css EXTRA.css] [--base-url DIR] [--no-mermaid] [--strict-mermaid] [--mermaid-config PATH | --no-mermaid-config]`
   - `python3 scripts/pdf_merge.py OUTPUT.pdf INPUT1.pdf INPUT2.pdf [INPUT3.pdf ...]`
   - `python3 scripts/pdf_split.py INPUT.pdf --ranges "1-5:part1.pdf,6-10:part2.pdf"`
   - `python3 scripts/pdf_split.py INPUT.pdf --each-page OUTDIR/`

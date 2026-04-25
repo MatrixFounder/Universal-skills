@@ -139,13 +139,25 @@ strict replication protocol in
   AND legacy `.doc`/`.xls`/`.ppt` (CFB containers) fail fast with a
   clear remediation hint instead of a `BadZipFile` traceback.
 
+**Mermaid diagrams** are rendered to PNG by `mmdc`
+(`@mermaid-js/mermaid-cli` v11) inside `md2pdf.py`, `md2pptx.js`,
+and `marp-slide`. Office skills ship a byte-identical
+Cyrillic-friendly `mermaid-config.json` (Arial Unicode MS → Noto
+Sans → DejaVu Sans fallback chain) and pass it to mmdc by default;
+override with `--mermaid-config PATH` or opt out with
+`--no-mermaid-config`. The Chromium binary mmdc drives lives in
+`~/.cache/puppeteer/` (~1 GB, **shared user-wide** across every
+skill that uses mmdc) — it's NOT in any per-skill `node_modules/`.
+
 **End-to-end smoke tests** (per skill `scripts/tests/test_e2e.sh` +
 top-level [`tests/run_all_e2e.sh`](tests/run_all_e2e.sh)) run every
 user-facing CLI on a real fixture and validate the output. The full
-suite covers all four skills with dozens of assertions and is the
+suite covers all four skills with **67 assertions** and is the
 primary regression gate before each release.
 
-For practical usage of all four skills, see the
+For practical usage of all four skills — including the complete
+**package inventory** (what's installed globally vs per-skill, total
+disk footprint, cleanup recipes) — see the
 [Office Skills Manual](docs/Manuals/office-skills_manual.md). For the
 roadmap of upcoming additions and known limitations, see the
 [Office Skills Backlog](docs/office-skills-backlog.md).
@@ -241,7 +253,7 @@ Detailed manuals for specific components can be found in `docs/Manuals`:
 - **[Summarizing Meetings Manual](docs/Manuals/summarizing-meetings_manual.md)**: Guide to the meeting summary meta-skill — templates, autodetect, tag taxonomy, and Obsidian integration.
 - **[Marp Slide Creator Manual](docs/Manuals/marp-slide_manual.md)**: Guide to creating Marp presentations — theme selection, image patterns, CSS customization, and quality checklist.
 - **[Marp CLI Manual](docs/Manuals/marp-cli_manual.md)**: Installation, dependencies, core commands, configuration, and troubleshooting for Marp CLI renderer.
-- **[Office Skills Manual](docs/Manuals/office-skills_manual.md)**: Practical reference for `docx` / `xlsx` / `pptx` / `pdf` — install, common workflows, the redlining validator (`--compare-to`), and the LD_PRELOAD AF_UNIX shim for sandboxed deployment.
+- **[Office Skills Manual](docs/Manuals/office-skills_manual.md)**: Practical reference for `docx` / `xlsx` / `pptx` / `pdf` — install, common workflows, the redlining validator (`--compare-to`), the LD_PRELOAD AF_UNIX shim for sandboxed deployment, the bundled mermaid config, and a complete **package inventory** (global vs per-skill vs user-cache).
 
 Project-level guides:
 

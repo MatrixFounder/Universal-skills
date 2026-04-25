@@ -357,7 +357,8 @@ changes).
 ```bash
 ./.venv/bin/python skills/pdf/scripts/md2pdf.py doc.md doc.pdf \
     [--page-size letter|a4|legal] [--css extra.css] \
-    [--no-mermaid] [--strict-mermaid] [--mermaid-config PATH]
+    [--no-mermaid] [--strict-mermaid] \
+    [--mermaid-config PATH | --no-mermaid-config]
 ```
 
 Uses weasyprint. Default stylesheet includes `@page` margins, footer
@@ -384,13 +385,19 @@ Mermaid flags:
   on Linux servers where mmdc's default Trebuchet MS has no Cyrillic
   glyphs. A non-existent path triggers a warning and falls back to
   mmdc's defaults (or fails in `--strict-mermaid`).
+- `--no-mermaid-config` opts out of the bundled default and lets
+  `mmdc` use its built-in config (Trebuchet MS-based). Mutually
+  exclusive with `--mermaid-config`.
 - Without `mmdc` on `PATH` or in `scripts/node_modules/.bin/`, the
   step prints a friendly hint and falls through.
 
-The same `--mermaid-config` / bundled-default mechanism is mirrored
-in `md2pptx.js`; both skills ship a byte-identical `mermaid-config.json`
-so non-English diagrams render consistently across PDF and PPTX
-outputs.
+The same `--mermaid-config` / `--no-mermaid-config` / bundled-default
+mechanism is mirrored in `md2pptx.js`; both skills ship a
+byte-identical `mermaid-config.json` so non-English diagrams render
+consistently across PDF and PPTX outputs. Both skills run mmdc
+**11.x** (aligned with `marp-slide`), so all five mermaid renderers
+in the repo share a single Chromium revision in
+`~/.cache/puppeteer/`.
 
 ### 6.2 Merge / split
 
