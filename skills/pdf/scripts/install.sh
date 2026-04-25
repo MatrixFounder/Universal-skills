@@ -43,6 +43,24 @@ fi
 say "Installing Python requirements into scripts/.venv/ ..."
 ./.venv/bin/pip install --quiet -r requirements.txt
 
+# --- Optional Node deps: mermaid-cli for ```mermaid blocks ---
+# md2pdf.py preprocesses fenced ```mermaid blocks via mmdc → SVG before
+# handing the markdown to weasyprint. Without mmdc, those blocks render
+# as code (graceful degradation, not an error).
+if command -v npm >/dev/null 2>&1; then
+    if [ -f package.json ]; then
+        say "Installing Node deps (mermaid-cli) into scripts/node_modules/..."
+        npm install --silent --no-audit --no-fund
+        if [ -x "node_modules/.bin/mmdc" ]; then
+            say "mmdc: OK ($(./node_modules/.bin/mmdc --version 2>/dev/null | tail -1))"
+        else
+            warn "mmdc binary missing after npm install — mermaid blocks will fall back to code."
+        fi
+    fi
+else
+    warn "npm not found — skipping mermaid-cli. Install Node.js if you want ```mermaid blocks rendered as diagrams."
+fi
+
 # --- weasyprint native libs probe (pango, cairo, gdk-pixbuf) ---
 # Run weasyprint's ffi binding — if pango is missing it fails on import.
 if ! ./.venv/bin/python -c 'import weasyprint' 2>/dev/null; then

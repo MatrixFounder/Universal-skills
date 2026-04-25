@@ -1,0 +1,10 @@
+{
+  "name": "universal-skills-pdf",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Optional Node CLI dep for the pdf skill: mermaid-cli renders ```mermaid blocks to SVG before weasyprint takes over.",
+  "license": "SEE LICENSE IN ../LICENSE",
+  "dependencies": {
+    "@mermaid-js/mermaid-cli": "^10.9.0"
+  }
+}
