@@ -17,6 +17,7 @@ import shutil
 import sys
 from pathlib import Path
 
+from _errors import add_json_errors_argument, report_error
 from _soffice import SofficeError, convert_to
 from office._encryption import EncryptedFileError, assert_not_encrypted
 
@@ -26,24 +27,32 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("input", type=Path, help="Source .pptx file")
     parser.add_argument("output", nargs="?", type=Path, default=None, help="Destination .pdf (optional)")
     parser.add_argument("--timeout", type=int, default=180, help="soffice timeout in seconds (default 180)")
+    add_json_errors_argument(parser)
     args = parser.parse_args(argv)
+    je = args.json_errors
 
     if not args.input.is_file():
-        print(f"Input not found: {args.input}", file=sys.stderr)
-        return 1
+        return report_error(
+            f"Input not found: {args.input}",
+            code=1, error_type="FileNotFound",
+            details={"path": str(args.input)}, json_mode=je,
+        )
     try:
         assert_not_encrypted(args.input)
     except EncryptedFileError as exc:
-        print(str(exc), file=sys.stderr)
-        return 3
+        return report_error(
+            str(exc), code=3, error_type="EncryptedFileError",
+            details={"path": str(args.input)}, json_mode=je,
+        )
 
     out_dir = (args.output.parent if args.output else args.input.parent).resolve()
     out_dir.mkdir(parents=True, exist_ok=True)
     try:
         produced = convert_to(args.input, out_dir, "pdf", timeout=args.timeout)
     except SofficeError as exc:
-        print(str(exc), file=sys.stderr)
-        return 1
+        return report_error(
+            str(exc), code=1, error_type="SofficeError", json_mode=je,
+        )
 
     if args.output and produced != args.output.resolve():
         shutil.move(str(produced), str(args.output))

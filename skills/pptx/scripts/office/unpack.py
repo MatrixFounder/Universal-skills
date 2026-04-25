@@ -33,9 +33,11 @@ if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
     from office.helpers.merge_runs import merge_runs_in_tree
     from office.helpers.simplify_redlines import simplify_redlines_in_tree
+    from office._macros import is_macro_enabled_file
 else:
     from .helpers.merge_runs import merge_runs_in_tree
     from .helpers.simplify_redlines import simplify_redlines_in_tree
+    from ._macros import is_macro_enabled_file
 
 
 SMART_QUOTES = {
@@ -94,6 +96,15 @@ def unpack(
     if not zipfile.is_zipfile(str(input_path)):
         raise ValueError(f"Not a ZIP-based OOXML container: {input_path}")
     output_dir.mkdir(parents=True, exist_ok=True)
+
+    if is_macro_enabled_file(input_path):
+        print(
+            f"Note: {input_path.name} is macro-enabled (vbaProject.bin "
+            f"detected). The bytes are preserved in the unpacked tree, "
+            f"but if you repack with a non-macro extension Office apps "
+            f"will silently drop the macros at open time.",
+            file=sys.stderr,
+        )
 
     with zipfile.ZipFile(str(input_path)) as archive:
         archive.extractall(output_dir)

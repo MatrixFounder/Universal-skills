@@ -31,6 +31,9 @@ practical knowledge and make the common operations a single command.
 - Unpack and repack `.docx` archives for raw OOXML editing, with smart-quote entity round-tripping and run canonicalisation.
 - Structurally validate a `.docx`: relationships, content types, tracked-change/`<w:delText>` integrity, comment marker pairing, and optional XSD binding.
 - Reject password-protected and legacy `.doc` (CFB-container) inputs early with a clear remediation message (exit 3) instead of a `BadZipFile` traceback.
+- Detect macro-enabled inputs (`.docm`, with `vbaProject.bin`) and warn when the chosen output extension would silently drop the macros (`docm` → `docx`).
+- Render any `.docx`/`.docm`/`.pdf` (or peer-skill `.xlsx`/`.pptx`) into a single PNG-grid preview via `preview.py` (LibreOffice + Poppler).
+- Emit failures as machine-readable JSON to stderr with `--json-errors` (uniform across all four office skills).
 
 ## 3. Execution Mode
 - **Mode**: `script-first`.
@@ -46,6 +49,8 @@ practical knowledge and make the common operations a single command.
   - `python3 scripts/office/unpack.py INPUT.docx OUTDIR/ [--no-pretty] [--no-escape-quotes] [--no-merge-runs]`
   - `python3 scripts/office/pack.py INDIR/ OUTPUT.docx [--no-unescape-quotes] [--no-condense]`
   - `python3 scripts/office/validate.py INPUT.docx [--strict] [--json] [--schemas-dir PATH] [--compare-to ORIGINAL.docx]`
+  - `python3 scripts/preview.py INPUT OUTPUT.jpg [--cols 3] [--dpi 110] [--gap 12] [--padding 24] [--label-font-size 14]`
+  - All scripts above accept `--json-errors` to emit failures as a single line of JSON on stderr (`{error, code, type?, details?}`).
 - **Inputs**: positional paths only; optional flags per command.
 - **Outputs**: a single file at the named output path; `office/unpack.py` produces a directory tree; `office/validate.py` prints a report (or JSON with `--json`). `docx2md.js` additionally creates `<stem>_images/` next to the Markdown output when the document has embedded images.
 - **Failure semantics**: non-zero exit on missing input, invalid JSON, unresolved placeholders (with `--strict`), unreadable ZIP, or soffice errors. Error detail goes to stderr.

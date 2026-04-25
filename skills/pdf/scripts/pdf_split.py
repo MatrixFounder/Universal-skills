@@ -28,6 +28,8 @@ from pathlib import Path
 
 from pypdf import PdfReader, PdfWriter  # type: ignore
 
+from _errors import add_json_errors_argument, report_error
+
 
 def _parse_ranges(spec: str) -> list[tuple[int, int, Path]]:
     out: list[tuple[int, int, Path]] = []
@@ -120,11 +122,16 @@ def main(argv: list[str] | None = None) -> int:
     mode.add_argument("--each-page", type=Path, metavar="OUTDIR", help="Write one PDF per page into OUTDIR")
     mode.add_argument("--every", nargs=2, metavar=("N", "OUTDIR"),
                       help="Write chunks of N pages into OUTDIR")
+    add_json_errors_argument(parser)
     args = parser.parse_args(argv)
+    je = args.json_errors
 
     if not args.input.is_file():
-        print(f"Input not found: {args.input}", file=sys.stderr)
-        return 1
+        return report_error(
+            f"Input not found: {args.input}",
+            code=1, error_type="FileNotFound",
+            details={"path": str(args.input)}, json_mode=je,
+        )
 
     try:
         reader = PdfReader(str(args.input))
@@ -139,8 +146,10 @@ def main(argv: list[str] | None = None) -> int:
                 raise ValueError("--every N must be >= 1")
             written = split_every_n(reader, Path(args.every[1]), args.input.stem, n)
     except Exception as exc:
-        print(f"Split failed: {exc}", file=sys.stderr)
-        return 1
+        return report_error(
+            f"Split failed: {exc}",
+            code=1, error_type=type(exc).__name__, json_mode=je,
+        )
 
     for p in written:
         print(str(p))

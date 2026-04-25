@@ -29,6 +29,16 @@ from pathlib import Path
 
 from lxml import etree  # type: ignore
 
+if __package__ in (None, ""):
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+    from office._macros import (
+        MACRO_EXT_FOR, NON_MACRO_EXTENSIONS, VBA_PROJECT_PARTS,
+    )
+else:
+    from ._macros import (
+        MACRO_EXT_FOR, NON_MACRO_EXTENSIONS, VBA_PROJECT_PARTS,
+    )
+
 
 SMART_REVERSE = {
     "&#x2018;": "‘",
@@ -82,6 +92,13 @@ def _ordered_members(root: Path) -> list[Path]:
     return ([first] + members) if first else members
 
 
+def _tree_has_vba(input_dir: Path) -> bool:
+    for part in VBA_PROJECT_PARTS:
+        if (input_dir / part).is_file():
+            return True
+    return False
+
+
 def pack(
     input_dir: Path,
     output_path: Path,
@@ -92,6 +109,18 @@ def pack(
     if not input_dir.is_dir():
         raise ValueError(f"Not a directory: {input_dir}")
     output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    out_suffix = output_path.suffix.lower()
+    if _tree_has_vba(input_dir) and out_suffix in NON_MACRO_EXTENSIONS:
+        suggested = MACRO_EXT_FOR.get(out_suffix, out_suffix)
+        print(
+            f"Warning: source tree contains vbaProject.bin (macro-enabled), "
+            f"but output {output_path.name} uses non-macro extension "
+            f"{out_suffix}. Office apps will drop the macros silently. "
+            f"Re-run with extension {suggested} to preserve.",
+            file=sys.stderr,
+        )
+
     members = _ordered_members(input_dir)
 
     with zipfile.ZipFile(output_path, "w", zipfile.ZIP_DEFLATED, compresslevel=6) as archive:

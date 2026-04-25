@@ -603,6 +603,77 @@ All four skills currently pass `validate_skill.py`.
 
 ---
 
+## 9.5. Cross-skill safeguards (cross-1 / 4 / 5)
+
+Three features cut across all four office skills and were intentionally
+designed for uniformity:
+
+### `--json-errors` (cross-5)
+
+Every Python CLI accepts `--json-errors`. When set, failures are
+emitted as a single line of JSON on stderr:
+
+```json
+{"error": "Input not found: /nope.pdf", "code": 1, "type": "FileNotFound", "details": {"path": "/nope.pdf"}}
+```
+
+Plain mode (the default) is unchanged free-form text, so existing
+shell pipelines do not break. Wrappers and CI runners gain one parser
+that works for every script.
+
+The helper lives at `scripts/_errors.py`, byte-identical in all four
+skills (replication protocol in [`CLAUDE.md` §2](../../CLAUDE.md)).
+
+### Macro-enabled file detection (cross-4)
+
+`office/_macros.py` provides `is_macro_enabled_file(path)` — checks
+either `vbaProject.bin` in the ZIP namelist or a `macroEnabled`
+content-type in `[Content_Types].xml`. Used by:
+
+- `docx_fill_template.py`, `docx_accept_changes.py`,
+  `xlsx_recalc.py`, `xlsx_add_chart.py`, `pptx_clean.py`: stderr
+  warning when the input is `.docm`/`.xlsm`/`.pptm` and the chosen
+  output extension drops the macros (`.docx`/`.xlsx`/`.pptx`). The
+  warning suggests the matching macro extension instead.
+- `office/unpack.py`: prints a one-line note when the input is
+  macro-enabled, so power users repacking from the unpacked tree
+  know to keep the `m` in the extension.
+- `office/pack.py`: walks the unpacked tree for `vbaProject.bin` and
+  warns if the chosen output extension drops it.
+
+Read-only only — we never inspect or rewrite VBA bytecode.
+
+### Universal `preview.py` (cross-1)
+
+Each office skill ships a byte-identical
+`scripts/preview.py` that renders `INPUT.pdf` / `INPUT.docx` /
+`INPUT.xlsx` / `INPUT.pptx` (or any `.docm`/`.xlsm`/`.pptm`) into a
+single labelled PNG-grid JPEG. Pipeline:
+
+```
+.pdf                  → pdftoppm                                   → PIL grid
+.docx/.xlsx/.pptx*    → soffice --headless --convert-to pdf → pdftoppm → PIL grid
+```
+
+Usage:
+
+```bash
+python3 skills/<skill>/scripts/preview.py INPUT OUTPUT.jpg \
+    [--cols 3] [--dpi 110] [--gap 12] [--padding 24]
+    [--label-font-size 14] [--json-errors]
+```
+
+The label changes per file type — "Page" for docx/pdf, "Sheet" for
+xlsx, "Slide" for pptx — picked from the input's extension.
+
+Why a single CLI in four places: each skill must remain independently
+installable as a `.skill` archive, but a user who only has the `pdf`
+skill should still be able to preview a colleague's `.pptx`. Shipping
+the same file in all four locations is cheap (~6 KB each) and avoids
+forcing users to install multiple skills just to render previews.
+
+---
+
 ## 10. Package inventory — what lives where
 
 A complete map of what each skill installs locally and what it

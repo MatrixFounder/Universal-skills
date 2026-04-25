@@ -212,6 +212,52 @@ else
     echo "xlsx_recalc: skipped (soffice not on PATH)"
 fi
 
+# --- cross-5: --json-errors envelope --------------------------------------
+echo "cross-5 unified errors:"
+set +e
+err=$("$PY" xlsx_validate.py /nope.xlsx --json-errors 2>&1 >/dev/null)
+rc=$?
+set -e
+[ "$rc" -eq 2 ] \
+    && echo "$err" | "$PY" -c "import sys, json; j=json.loads(sys.stdin.read()); assert j['code']==2 and j['type']=='FileNotFound', j" 2>/dev/null \
+    && ok "xlsx_validate --json-errors envelope" \
+    || nok "xlsx_validate --json-errors" "exit=$rc msg=$err"
+
+# --- cross-4: macro detection --------------------------------------------
+echo "cross-4 macro warnings:"
+"$PY" -c "
+import zipfile, openpyxl
+wb = openpyxl.Workbook()
+wb.active.append([1, 2, 3])
+wb.save('$TMP/macro.xlsm')
+with zipfile.ZipFile('$TMP/macro.xlsm', 'r') as src:
+    data = {n: src.read(n) for n in src.namelist()}
+ct = data['[Content_Types].xml'].decode('utf-8')
+ct = ct.replace(
+    'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml',
+    'application/vnd.ms-excel.sheet.macroEnabled.main+xml',
+)
+data['[Content_Types].xml'] = ct.encode('utf-8')
+data['xl/vbaProject.bin'] = b'fake-vba'
+with zipfile.ZipFile('$TMP/macro.xlsm', 'w', zipfile.ZIP_DEFLATED) as out:
+    for n, d in data.items():
+        out.writestr(n, d)
+from office._macros import is_macro_enabled_file
+from pathlib import Path
+assert is_macro_enabled_file(Path('$TMP/macro.xlsm')) is True
+" \
+    && ok "is_macro_enabled_file detects xlsm" \
+    || nok "xlsm detection" "is_macro_enabled_file returned False"
+
+set +e
+err=$("$PY" xlsx_add_chart.py "$TMP/macro.xlsm" --type bar --data "A1:C1" \
+    --output "$TMP/lossy.xlsx" 2>&1)
+rc=$?
+set -e
+echo "$err" | grep -q "macro-enabled" && [ "$rc" -eq 0 ] \
+    && ok "xlsx_add_chart warns when .xlsm → .xlsx" \
+    || nok "macro-loss warning (xlsx)" "exit=$rc msg=$err"
+
 echo
 echo "$pass passed, $fail failed"
 [ "$fail" -eq 0 ]

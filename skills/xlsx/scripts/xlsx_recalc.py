@@ -31,8 +31,10 @@ from pathlib import Path
 
 from openpyxl import load_workbook  # type: ignore
 
+from _errors import add_json_errors_argument, report_error
 from _soffice import SofficeError, run as soffice_run
 from office._encryption import EncryptedFileError, assert_not_encrypted
+from office._macros import warn_if_macros_will_be_dropped
 
 
 BASIC_MACRO = textwrap.dedent(
@@ -137,21 +139,30 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--timeout", type=int, default=120, help="soffice timeout (default 120s)")
     parser.add_argument("--scan-errors", action="store_true", help="Scan for formula-error cells after recalc")
     parser.add_argument("--json", action="store_true", help="Emit JSON summary")
+    add_json_errors_argument(parser)
     args = parser.parse_args(argv)
+    je = args.json_errors
 
     output = args.output or args.input
+    warn_if_macros_will_be_dropped(args.input, output, sys.stderr)
+
     try:
         assert_not_encrypted(args.input)
         recalc(args.input, output, timeout=args.timeout)
     except EncryptedFileError as exc:
-        print(str(exc), file=sys.stderr)
-        return 3
+        return report_error(
+            str(exc), code=3, error_type="EncryptedFileError",
+            details={"path": str(args.input)}, json_mode=je,
+        )
     except FileNotFoundError as exc:
-        print(f"Input not found: {exc}", file=sys.stderr)
-        return 1
+        return report_error(
+            f"Input not found: {exc}",
+            code=1, error_type="FileNotFound", json_mode=je,
+        )
     except SofficeError as exc:
-        print(str(exc), file=sys.stderr)
-        return 1
+        return report_error(
+            str(exc), code=1, error_type="SofficeError", json_mode=je,
+        )
 
     if not args.scan_errors:
         if args.json:

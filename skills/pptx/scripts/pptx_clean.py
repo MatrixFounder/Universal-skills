@@ -46,7 +46,9 @@ from pathlib import Path
 
 from lxml import etree  # type: ignore
 
+from _errors import add_json_errors_argument, report_error
 from office._encryption import EncryptedFileError, assert_not_encrypted
+from office._macros import warn_if_macros_will_be_dropped
 
 
 PKG_NS = {
@@ -252,21 +254,32 @@ def main(argv: list[str] | None = None) -> int:
                         help="Destination .pptx (default: overwrite INPUT).")
     parser.add_argument("--dry-run", action="store_true",
                         help="List what would be removed without writing.")
+    add_json_errors_argument(parser)
     args = parser.parse_args(argv)
+    je = args.json_errors
 
     if not args.input.is_file():
         parser.error(f"input not found: {args.input}")
     try:
         assert_not_encrypted(args.input)
     except EncryptedFileError as exc:
-        print(str(exc), file=sys.stderr)
-        return 3
+        return report_error(
+            str(exc), code=3, error_type="EncryptedFileError",
+            details={"path": str(args.input)}, json_mode=je,
+        )
+
+    if not args.dry_run:
+        warn_if_macros_will_be_dropped(
+            args.input, args.output or args.input, sys.stderr,
+        )
 
     try:
         report = clean(args.input, args.output, dry_run=args.dry_run)
     except (zipfile.BadZipFile, etree.XMLSyntaxError) as exc:
-        print(f"pptx_clean: {type(exc).__name__}: {exc}", file=sys.stderr)
-        return 1
+        return report_error(
+            f"pptx_clean: {type(exc).__name__}: {exc}",
+            code=1, error_type=type(exc).__name__, json_mode=je,
+        )
 
     print(json.dumps(report, indent=2, ensure_ascii=False))
     return 0

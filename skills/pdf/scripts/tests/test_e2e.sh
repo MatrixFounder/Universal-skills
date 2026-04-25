@@ -205,6 +205,42 @@ JSON
         || nok "cache invalidation" "same digest: $digest_default"
 fi
 
+# --- cross-1: preview.py — pdf path (no soffice required) ----------------
+echo "preview (pdf path):"
+"$PY" preview.py "$TMP/out.pdf" "$TMP/preview.jpg" --dpi 80 >/dev/null 2>&1 \
+    && [ -s "$TMP/preview.jpg" ] \
+    && file "$TMP/preview.jpg" | grep -q "JPEG image" \
+    && ok "pdf → preview.jpg (PNG-grid via pdftoppm)" \
+    || nok "preview.py pdf" "missing or wrong format"
+
+set +e
+"$PY" preview.py /nope.pdf "$TMP/_missing.jpg" >/dev/null 2>&1
+rc=$?
+set -e
+[ "$rc" -eq 1 ] \
+    && ok "preview.py: missing input exits 1" \
+    || nok "preview.py missing" "exit $rc"
+
+set +e
+"$PY" preview.py "$TMP/out.pdf" "$TMP/_x.jpg" --json-errors --dpi -1 >/dev/null 2>&1
+rc=$?
+set -e
+# Negative DPI should fail somewhere in the pdftoppm path (exit 1).
+[ "$rc" -ne 0 ] \
+    && ok "preview.py: bad DPI fails non-zero" \
+    || nok "preview.py bad dpi" "expected non-zero, got $rc"
+
+# --- cross-5: --json-errors envelope (pdf) -------------------------------
+echo "cross-5 unified errors:"
+set +e
+err=$("$PY" pdf_merge.py "$TMP/_out.pdf" /nope1.pdf /nope2.pdf --json-errors 2>&1 >/dev/null)
+rc=$?
+set -e
+[ "$rc" -eq 1 ] \
+    && echo "$err" | "$PY" -c "import sys, json; j=json.loads(sys.stdin.read()); assert j['code']==1 and j['type']=='FileNotFound' and len(j['details']['missing'])==2, j" 2>/dev/null \
+    && ok "pdf_merge --json-errors envelope (lists missing inputs)" \
+    || nok "pdf_merge --json-errors" "exit=$rc msg=$err"
+
 echo
 echo "$pass passed, $fail failed"
 [ "$fail" -eq 0 ]

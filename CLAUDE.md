@@ -95,13 +95,46 @@ When you change ANYTHING under
 
 In scope (must replicate): everything under
 `skills/docx/scripts/office/` (unpack, pack, validate, validators/,
-helpers/, shim/, tests/, schemas/README.md, schemas/fetch.sh,
-schemas/w3c/) plus `skills/docx/scripts/_soffice.py`.
+helpers/, shim/, tests/, `_encryption.py`, `_macros.py`,
+schemas/README.md, schemas/fetch.sh, schemas/w3c/) plus
+`skills/docx/scripts/_soffice.py`.
 
 Out of scope (docx-only, no replication): `skills/docx/scripts/docx_*.py`,
 `skills/docx/SKILL.md`, `skills/docx/references/`,
 `skills/docx/examples/`, `skills/docx/scripts/package.json`,
 `skills/docx/scripts/requirements.txt`, `skills/docx/scripts/install.sh`.
+
+### Cross-skill scripts (4-skill replication, includes pdf)
+
+Two helper files live at `skills/<skill>/scripts/` (sibling to
+`_soffice.py`, NOT inside `office/`) and are byte-identical across
+**all four** office skills (`docx`, `xlsx`, `pptx`, `pdf`):
+
+- `_errors.py` — `--json-errors` envelope helper used by every Python
+  CLI for uniform machine-readable failure output.
+- `preview.py` — universal `INPUT → PNG-grid` renderer; routes `.pdf`
+  through Poppler directly and `.docx`/`.xlsx`/`.pptx` (incl. `.docm`/
+  `.xlsm`/`.pptm`) through LibreOffice → Poppler.
+
+When you change either of these:
+
+1. Edit only the docx copy.
+2. Replicate to xlsx, pptx, AND pdf (note: pdf is included even though
+   it has no `office/`):
+   ```bash
+   for s in xlsx pptx pdf; do
+       cp skills/docx/scripts/_errors.py skills/$s/scripts/_errors.py
+       cp skills/docx/scripts/preview.py skills/$s/scripts/preview.py
+   done
+   ```
+3. Verify byte-identity:
+   ```bash
+   for s in xlsx pptx pdf; do
+       diff -q skills/docx/scripts/_errors.py skills/$s/scripts/_errors.py
+       diff -q skills/docx/scripts/preview.py  skills/$s/scripts/preview.py
+   done
+   ```
+4. Re-run all four E2E suites + `validate_skill.py` on all four skills.
 
 ### Anti-patterns — DO NOT
 

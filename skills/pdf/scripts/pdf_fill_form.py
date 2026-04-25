@@ -38,6 +38,8 @@ from pathlib import Path
 from pypdf import PdfReader, PdfWriter  # type: ignore
 from pypdf.generic import NameObject  # type: ignore
 
+from _errors import add_json_errors_argument, report_error
+
 
 # Custom exit codes start at 10 to leave 0-9 for argparse / shell convention.
 EXIT_OK = 0
@@ -226,7 +228,9 @@ def main(argv: list[str] | None = None) -> int:
                         help="Write field schema to --output (or stdout) as JSON.")
     parser.add_argument("--flatten", action="store_true",
                         help="After filling, drop /AcroForm so values stay but form is non-editable.")
+    add_json_errors_argument(parser)
     args = parser.parse_args(argv)
+    je = args.json_errors
 
     # parser.error() exits with code 2 — that's the argparse contract
     # we deliberately leave alone (so usage errors stay distinguishable
@@ -271,19 +275,29 @@ def main(argv: list[str] | None = None) -> int:
         report = fill(args.input, data, args.output, flatten=args.flatten)
     except FormError as ex:
         if ex.kind == "xfa":
-            print(f"{args.input} is an XFA form — pypdf cannot fill it. "
-                  "Re-author as AcroForm or use commercial tooling.", file=sys.stderr)
-            return EXIT_XFA
+            return report_error(
+                f"{args.input} is an XFA form — pypdf cannot fill it. "
+                "Re-author as AcroForm or use commercial tooling.",
+                code=EXIT_XFA, error_type="XFAForm",
+                details={"path": str(args.input)}, json_mode=je,
+            )
         if ex.kind == "no_form":
-            print(f"{args.input} has no AcroForm. For non-fillable PDFs use the "
-                  "visual-overlay path (see references/forms.md).", file=sys.stderr)
-            return EXIT_NO_FORM
-        # Unknown FormError kind — defensive default.
-        print(f"FormError: {ex}", file=sys.stderr)
-        return EXIT_FILL_ERROR
+            return report_error(
+                f"{args.input} has no AcroForm. For non-fillable PDFs use "
+                "the visual-overlay path (see references/forms.md).",
+                code=EXIT_NO_FORM, error_type="NoAcroForm",
+                details={"path": str(args.input)}, json_mode=je,
+            )
+        return report_error(
+            f"FormError: {ex}",
+            code=EXIT_FILL_ERROR, error_type="FormError", json_mode=je,
+        )
     except Exception as ex:  # pypdf write/clone failure on broken PDFs
-        print(f"Fill failed: {type(ex).__name__}: {ex}", file=sys.stderr)
-        return EXIT_FILL_ERROR
+        return report_error(
+            f"Fill failed: {type(ex).__name__}: {ex}",
+            code=EXIT_FILL_ERROR, error_type=type(ex).__name__,
+            json_mode=je,
+        )
 
     print(json.dumps(report, indent=2, ensure_ascii=False))
     if report["skipped_unknown_fields"]:

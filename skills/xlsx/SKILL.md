@@ -31,6 +31,9 @@ single most common xlsx bug).
 - Unpack and repack `.xlsx` archives for raw OOXML editing (shared `office/` module with the docx skill).
 - Structurally validate an `.xlsx` (relationships, content types, required parts).
 - Reject password-protected and legacy `.xls` (CFB-container) inputs early with a clear remediation message (exit 3) instead of a `BadZipFile` traceback.
+- Detect macro-enabled inputs (`.xlsm`, with `xl/vbaProject.bin`) and warn when the chosen output extension would silently drop the macros (`xlsm` → `xlsx`).
+- Render any `.xlsx`/`.xlsm`/`.pdf` (or peer-skill `.docx`/`.pptx`) into a single PNG-grid preview via `preview.py` (LibreOffice + Poppler).
+- Emit failures as machine-readable JSON to stderr with `--json-errors` (uniform across all four office skills).
 
 ## 3. Execution Mode
 - **Mode**: `script-first`.
@@ -46,6 +49,8 @@ single most common xlsx bug).
   - `python3 scripts/office/unpack.py INPUT.xlsx OUTDIR/`
   - `python3 scripts/office/pack.py INDIR/ OUTPUT.xlsx`
   - `python3 scripts/office/validate.py INPUT.xlsx [--strict] [--json]`
+  - `python3 scripts/preview.py INPUT OUTPUT.jpg [--cols 3] [--dpi 110] [--gap 12] [--padding 24] [--label-font-size 14]`
+  - All scripts above accept `--json-errors` to emit failures as a single line of JSON on stderr (`{error, code, type?, details?}`).
 - **Inputs**: positional paths; optional flags per command.
 - **Outputs**: a single file at the named output path; `office/unpack.py` produces a directory tree; validators print a report (or JSON).
 - **Failure semantics**: non-zero exit on missing input, invalid encoding, soffice errors, or formula errors (`xlsx_validate.py` returns 1 when errors are present). Error detail goes to stderr.

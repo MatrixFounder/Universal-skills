@@ -33,6 +33,8 @@ from openpyxl import Workbook  # type: ignore
 from openpyxl.styles import Alignment, Font, PatternFill  # type: ignore
 from openpyxl.utils import get_column_letter  # type: ignore
 
+from _errors import add_json_errors_argument, report_error
+
 
 HEADER_FILL = PatternFill("solid", fgColor="F2F2F2")
 HEADER_FONT = Font(bold=True)
@@ -165,11 +167,16 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--encoding", default="utf-8", help="Input encoding (default: utf-8)")
     parser.add_argument("--no-freeze", action="store_true", help="Do not freeze the header row")
     parser.add_argument("--no-filter", action="store_true", help="Do not add an auto-filter")
+    add_json_errors_argument(parser)
     args = parser.parse_args(argv)
+    je = args.json_errors
 
     if not args.input.is_file():
-        print(f"Input not found: {args.input}", file=sys.stderr)
-        return 1
+        return report_error(
+            f"Input not found: {args.input}",
+            code=1, error_type="FileNotFound",
+            details={"path": str(args.input)}, json_mode=je,
+        )
 
     delim = args.delimiter
     if delim == "\\t":
@@ -185,8 +192,10 @@ def main(argv: list[str] | None = None) -> int:
             auto_filter=not args.no_filter,
         )
     except Exception as exc:
-        print(f"Conversion failed: {exc}", file=sys.stderr)
-        return 1
+        return report_error(
+            f"Conversion failed: {exc}",
+            code=1, error_type=type(exc).__name__, json_mode=je,
+        )
     return 0
 
 

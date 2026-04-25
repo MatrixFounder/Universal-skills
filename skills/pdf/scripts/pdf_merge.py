@@ -21,6 +21,8 @@ from pathlib import Path
 
 from pypdf import PdfReader, PdfWriter  # type: ignore
 
+from _errors import add_json_errors_argument, report_error
+
 
 def merge(output: Path, inputs: list[Path]) -> None:
     writer = PdfWriter()
@@ -39,18 +41,25 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("output", type=Path, help="Destination merged PDF")
     parser.add_argument("inputs", nargs="+", type=Path, help="Source PDFs in merge order")
+    add_json_errors_argument(parser)
     args = parser.parse_args(argv)
+    je = args.json_errors
 
     missing = [str(p) for p in args.inputs if not p.is_file()]
     if missing:
-        print(f"Missing inputs: {', '.join(missing)}", file=sys.stderr)
-        return 1
+        return report_error(
+            f"Missing inputs: {', '.join(missing)}",
+            code=1, error_type="FileNotFound",
+            details={"missing": missing}, json_mode=je,
+        )
 
     try:
         merge(args.output, args.inputs)
     except Exception as exc:
-        print(f"Merge failed: {exc}", file=sys.stderr)
-        return 1
+        return report_error(
+            f"Merge failed: {exc}",
+            code=1, error_type=type(exc).__name__, json_mode=je,
+        )
 
     print(f"Merged {len(args.inputs)} PDFs into {args.output}")
     return 0

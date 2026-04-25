@@ -138,6 +138,22 @@ strict replication protocol in
   `assert_not_encrypted()` before opening, so password-protected files
   AND legacy `.doc`/`.xls`/`.ppt` (CFB containers) fail fast with a
   clear remediation hint instead of a `BadZipFile` traceback.
+- `office/_macros.py` — detects `.docm`/`.xlsm`/`.pptm` (vbaProject.bin
+  or `macroEnabled` content-type); writers warn loudly when the chosen
+  output extension would silently drop the macros at open time. Read-only
+  support: bytes survive through unpack/pack, but Office apps respect the
+  content-type, so renaming an output to a non-macro extension is treated
+  as data loss.
+
+**Cross-skill helpers** (byte-identical at `scripts/` level across all
+four office skills, including pdf):
+- `_errors.py` — `--json-errors` flag on every Python CLI emits
+  `{"error", "code", "type"?, "details"?}` as a single line on stderr,
+  so agent wrappers parse one envelope instead of N free-form messages.
+- `preview.py` — universal `INPUT → PNG-grid` renderer; takes any of
+  `.pdf`/`.docx`/`.xlsx`/`.pptx` (incl. `.docm`/`.xlsm`/`.pptm`) and
+  produces a single labelled JPEG. PDF goes straight through Poppler;
+  OOXML routes via LibreOffice → Poppler.
 
 **Mermaid diagrams** are rendered to PNG by `mmdc`
 (`@mermaid-js/mermaid-cli` v11) inside `md2pdf.py`, `md2pptx.js`,
@@ -152,7 +168,7 @@ skill that uses mmdc) — it's NOT in any per-skill `node_modules/`.
 **End-to-end smoke tests** (per skill `scripts/tests/test_e2e.sh` +
 top-level [`tests/run_all_e2e.sh`](tests/run_all_e2e.sh)) run every
 user-facing CLI on a real fixture and validate the output. The full
-suite covers all four skills with **67 assertions** and is the
+suite covers all four skills with **83 assertions** and is the
 primary regression gate before each release.
 
 For practical usage of all four skills — including the complete

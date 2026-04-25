@@ -28,6 +28,8 @@ scripts that embed those choices removes the variance.
 - Split a PDF by explicit page ranges, one-per-page, or fixed-size chunks.
 - Detect and fill AcroForm fields via `pypdf` (documented in references; not bundled as a script in the MVP).
 - Extract text, tables, and layout via `pdfplumber` (documented; inline usage from the agent is fine).
+- Render any `.pdf` (or peer-skill `.docx`/`.xlsx`/`.pptx`) into a single PNG-grid preview via `preview.py` (uses Poppler directly for `.pdf`; LibreOffice + Poppler for OOXML).
+- Emit failures as machine-readable JSON to stderr with `--json-errors` (uniform across all four office skills).
 
 ## 3. Execution Mode
 - **Mode**: `script-first` for the bundled operations, `prompt-first` with library references for extraction and form filling.
@@ -44,6 +46,8 @@ scripts that embed those choices removes the variance.
   - `python3 scripts/pdf_fill_form.py --check INPUT.pdf` — exit 0/11/12 = AcroForm/XFA/none. (Custom codes start at 10 to leave 0–9 for argparse / shell convention.)
   - `python3 scripts/pdf_fill_form.py --extract-fields INPUT.pdf -o fields.json`
   - `python3 scripts/pdf_fill_form.py INPUT.pdf DATA.json -o OUTPUT.pdf [--flatten]`
+  - `python3 scripts/preview.py INPUT OUTPUT.jpg [--cols 3] [--dpi 110] [--gap 12] [--padding 24] [--label-font-size 14]`
+  - All scripts above accept `--json-errors` to emit failures as a single line of JSON on stderr (`{error, code, type?, details?}`).
 - **Inputs**: positional paths; optional flags per command.
 - **Outputs**: single PDF files (`md2pdf`, `pdf_merge`) or multiple PDFs under a directory (`pdf_split`). All stdout goes to the output path list.
 - **Failure semantics**: non-zero exit on missing inputs, invalid range specs, or library errors. Error detail to stderr.

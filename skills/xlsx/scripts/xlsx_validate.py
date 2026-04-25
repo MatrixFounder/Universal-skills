@@ -26,6 +26,7 @@ from pathlib import Path
 
 from openpyxl import load_workbook  # type: ignore
 
+from _errors import add_json_errors_argument, report_error
 from office._encryption import EncryptedFileError, assert_not_encrypted
 
 
@@ -66,17 +67,24 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="Exit 1 if every cell is None — likely means formulas were never recalculated",
     )
+    add_json_errors_argument(parser)
     args = parser.parse_args(argv)
+    je = args.json_errors
 
     if not args.input.is_file():
-        print(f"Input not found: {args.input}", file=sys.stderr)
-        return 2
+        return report_error(
+            f"Input not found: {args.input}",
+            code=2, error_type="FileNotFound",
+            details={"path": str(args.input)}, json_mode=je,
+        )
 
     try:
         assert_not_encrypted(args.input)
     except EncryptedFileError as exc:
-        print(str(exc), file=sys.stderr)
-        return 3
+        return report_error(
+            str(exc), code=3, error_type="EncryptedFileError",
+            details={"path": str(args.input)}, json_mode=je,
+        )
 
     hits, non_empty = scan(args.input)
     if args.json:

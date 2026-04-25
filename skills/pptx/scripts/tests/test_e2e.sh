@@ -205,6 +205,49 @@ set -e
     && ok "md2pptx --mermaid-config: missing path exits non-zero" \
     || nok "md2pptx missing config" "exit $rc / msg: $err"
 
+# --- cross-5: --json-errors envelope (pptx) ------------------------------
+echo "cross-5 unified errors:"
+set +e
+err=$("$PY" pptx_to_pdf.py /nope.pptx --json-errors 2>&1 >/dev/null)
+rc=$?
+set -e
+[ "$rc" -eq 1 ] \
+    && echo "$err" | "$PY" -c "import sys, json; j=json.loads(sys.stdin.read()); assert j['code']==1 and j['type']=='FileNotFound', j" 2>/dev/null \
+    && ok "pptx_to_pdf --json-errors envelope" \
+    || nok "pptx_to_pdf --json-errors" "exit=$rc msg=$err"
+
+# --- cross-4: macro detection (pptx) -------------------------------------
+echo "cross-4 macro warnings:"
+"$PY" -c "
+import zipfile, shutil
+shutil.copy('$TMP/out.pptx', '$TMP/macro.pptm')
+with zipfile.ZipFile('$TMP/macro.pptm', 'r') as src:
+    data = {n: src.read(n) for n in src.namelist()}
+ct = data['[Content_Types].xml'].decode('utf-8')
+ct = ct.replace(
+    'application/vnd.openxmlformats-officedocument.presentationml.presentation.main+xml',
+    'application/vnd.ms-powerpoint.presentation.macroEnabled.main+xml',
+)
+data['[Content_Types].xml'] = ct.encode('utf-8')
+data['ppt/vbaProject.bin'] = b'fake-vba'
+with zipfile.ZipFile('$TMP/macro.pptm', 'w', zipfile.ZIP_DEFLATED) as out:
+    for n, d in data.items():
+        out.writestr(n, d)
+from office._macros import is_macro_enabled_file
+from pathlib import Path
+assert is_macro_enabled_file(Path('$TMP/macro.pptm')) is True
+" \
+    && ok "is_macro_enabled_file detects pptm" \
+    || nok "pptm detection" "is_macro_enabled_file returned False"
+
+set +e
+err=$("$PY" pptx_clean.py "$TMP/macro.pptm" --output "$TMP/lossy.pptx" 2>&1)
+rc=$?
+set -e
+echo "$err" | grep -q "macro-enabled" && [ "$rc" -eq 0 ] \
+    && ok "pptx_clean warns when .pptm → .pptx" \
+    || nok "macro-loss warning (pptx)" "exit=$rc msg=$err"
+
 echo
 echo "$pass passed, $fail failed"
 [ "$fail" -eq 0 ]

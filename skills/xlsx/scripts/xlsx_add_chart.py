@@ -37,7 +37,9 @@ from openpyxl import load_workbook  # type: ignore
 from openpyxl.chart import BarChart, LineChart, PieChart, Reference  # type: ignore
 from openpyxl.utils import column_index_from_string, get_column_letter  # type: ignore
 
+from _errors import add_json_errors_argument, report_error
 from office._encryption import EncryptedFileError, assert_not_encrypted
+from office._macros import warn_if_macros_will_be_dropped
 
 
 CHART_TYPES = {"bar": BarChart, "line": LineChart, "pie": PieChart}
@@ -184,16 +186,21 @@ def main(argv: list[str] | None = None) -> int:
                               help="Treat every cell in --data as a value (no header row).")
     parser.add_argument("--output", type=Path, default=None,
                         help="Destination .xlsx (default: overwrite INPUT).")
+    add_json_errors_argument(parser)
     args = parser.parse_args(argv)
+    je = args.json_errors
 
     if not args.input.is_file():
         parser.error(f"input not found: {args.input}")
     try:
         assert_not_encrypted(args.input)
     except EncryptedFileError as exc:
-        print(str(exc), file=sys.stderr)
-        return 3
+        return report_error(
+            str(exc), code=3, error_type="EncryptedFileError",
+            details={"path": str(args.input)}, json_mode=je,
+        )
     output = args.output or args.input
+    warn_if_macros_will_be_dropped(args.input, output, sys.stderr)
 
     try:
         report = add_chart(
@@ -207,8 +214,10 @@ def main(argv: list[str] | None = None) -> int:
             titles_from_data=args.titles_from_data,
         )
     except (ValueError, KeyError) as exc:
-        print(f"xlsx_add_chart: {exc}", file=sys.stderr)
-        return 1
+        return report_error(
+            f"xlsx_add_chart: {exc}",
+            code=1, error_type=type(exc).__name__, json_mode=je,
+        )
 
     import json
     print(json.dumps(report, indent=2, ensure_ascii=False))

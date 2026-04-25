@@ -34,6 +34,8 @@ from pathlib import Path
 import markdown2  # type: ignore
 from weasyprint import CSS, HTML  # type: ignore
 
+from _errors import add_json_errors_argument, report_error
+
 SCRIPT_DIR = Path(__file__).resolve().parent
 LOCAL_BIN = SCRIPT_DIR / "node_modules" / ".bin"
 MERMAID_BLOCK_RE = re.compile(r"```mermaid\s*\n(.*?)\n```", re.DOTALL)
@@ -325,11 +327,16 @@ def main(argv: list[str] | None = None) -> int:
     cfg_group.add_argument("--no-mermaid-config", dest="no_mermaid_config",
                            action="store_true",
                            help="Render with mmdc's built-in defaults (skip the bundled config).")
+    add_json_errors_argument(parser)
     args = parser.parse_args(argv)
+    je = args.json_errors
 
     if not args.input.is_file():
-        print(f"Input not found: {args.input}", file=sys.stderr)
-        return 1
+        return report_error(
+            f"Input not found: {args.input}",
+            code=1, error_type="FileNotFound",
+            details={"path": str(args.input)}, json_mode=je,
+        )
 
     try:
         convert(
@@ -346,8 +353,10 @@ def main(argv: list[str] | None = None) -> int:
             mermaid_config=False if args.no_mermaid_config else args.mermaid_config,
         )
     except Exception as exc:
-        print(f"Conversion failed: {exc}", file=sys.stderr)
-        return 1
+        return report_error(
+            f"Conversion failed: {exc}",
+            code=1, error_type=type(exc).__name__, json_mode=je,
+        )
     return 0
 
 

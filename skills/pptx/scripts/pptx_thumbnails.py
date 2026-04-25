@@ -27,6 +27,7 @@ from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageFont  # type: ignore
 
+from _errors import add_json_errors_argument, report_error
 from _soffice import SofficeError, convert_to
 from office._encryption import EncryptedFileError, assert_not_encrypted
 
@@ -125,16 +126,23 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--gap", type=int, default=12)
     parser.add_argument("--padding", type=int, default=24)
     parser.add_argument("--label-font-size", type=int, default=14)
+    add_json_errors_argument(parser)
     args = parser.parse_args(argv)
+    je = args.json_errors
 
     if not args.input.is_file():
-        print(f"Input not found: {args.input}", file=sys.stderr)
-        return 1
+        return report_error(
+            f"Input not found: {args.input}",
+            code=1, error_type="FileNotFound",
+            details={"path": str(args.input)}, json_mode=je,
+        )
     try:
         assert_not_encrypted(args.input)
     except EncryptedFileError as exc:
-        print(str(exc), file=sys.stderr)
-        return 3
+        return report_error(
+            str(exc), code=3, error_type="EncryptedFileError",
+            details={"path": str(args.input)}, json_mode=je,
+        )
 
     try:
         build(
@@ -147,8 +155,10 @@ def main(argv: list[str] | None = None) -> int:
             label_font_size=args.label_font_size,
         )
     except (SofficeError, RuntimeError, subprocess.CalledProcessError) as exc:
-        print(str(exc), file=sys.stderr)
-        return 1
+        return report_error(
+            str(exc), code=1, error_type=type(exc).__name__,
+            json_mode=je,
+        )
     print(str(args.output))
     return 0
 

@@ -34,7 +34,9 @@ from docx import Document  # type: ignore
 from docx.oxml.ns import qn  # type: ignore
 from lxml import etree  # type: ignore
 
+from _errors import add_json_errors_argument, report_error
 from office._encryption import EncryptedFileError, assert_not_encrypted
+from office._macros import warn_if_macros_will_be_dropped
 
 
 PLACEHOLDER_RE = re.compile(r"\{\{\s*([A-Za-z0-9_.]+)\s*\}\}")
@@ -173,35 +175,59 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="Exit non-zero if any placeholder remains unresolved (default: warn, continue)",
     )
+    add_json_errors_argument(parser)
     args = parser.parse_args(argv)
+    je = args.json_errors
 
     if not args.template.is_file():
-        print(f"Template not found: {args.template}", file=sys.stderr)
-        return 1
+        return report_error(
+            f"Template not found: {args.template}",
+            code=1, error_type="FileNotFound",
+            details={"path": str(args.template)}, json_mode=je,
+        )
     if not args.data.is_file():
-        print(f"Data file not found: {args.data}", file=sys.stderr)
-        return 1
+        return report_error(
+            f"Data file not found: {args.data}",
+            code=1, error_type="FileNotFound",
+            details={"path": str(args.data)}, json_mode=je,
+        )
     try:
         assert_not_encrypted(args.template)
     except EncryptedFileError as exc:
-        print(str(exc), file=sys.stderr)
-        return 3
+        return report_error(
+            str(exc), code=3, error_type="EncryptedFileError",
+            details={"path": str(args.template)}, json_mode=je,
+        )
+
+    warn_if_macros_will_be_dropped(args.template, args.output, sys.stderr)
 
     try:
         data = json.loads(args.data.read_text(encoding="utf-8"))
     except json.JSONDecodeError as exc:
-        print(f"Invalid JSON in {args.data}: {exc}", file=sys.stderr)
-        return 1
+        return report_error(
+            f"Invalid JSON in {args.data}: {exc}",
+            code=1, error_type="InvalidJSON",
+            details={"path": str(args.data)}, json_mode=je,
+        )
     if not isinstance(data, dict):
-        print("Data JSON must be an object at the top level.", file=sys.stderr)
-        return 1
+        return report_error(
+            "Data JSON must be an object at the top level.",
+            code=1, error_type="InvalidJSON",
+            json_mode=je,
+        )
 
     unresolved = fill_template(args.template, data, args.output)
     if unresolved:
         joined = ", ".join(sorted(unresolved))
-        print(f"Unresolved placeholders: {joined}", file=sys.stderr)
         if args.strict:
-            return 1
+            return report_error(
+                f"Unresolved placeholders: {joined}",
+                code=1, error_type="UnresolvedPlaceholders",
+                details={"placeholders": sorted(unresolved)}, json_mode=je,
+            )
+        # Non-strict: warn but succeed. Plain stderr text — report_error
+        # is for failures, and unresolved placeholders here are not.
+        print(f"Unresolved placeholders: {joined}", file=sys.stderr)
     return 0
 
 
