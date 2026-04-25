@@ -117,6 +117,18 @@ set -e
     && ok "--json-errors envelope: code+type set" \
     || nok "--json-errors" "exit=$rc msg=$err"
 
+# argparse usage errors must ALSO honour --json-errors. Regression for
+# VDD HIGH-1 (parser.error bypass): exit 2 with a JSON envelope of
+# type=UsageError, NOT plain-text usage.
+set +e
+err=$("$PY" docx_fill_template.py --json-errors 2>&1 >/dev/null)
+rc=$?
+set -e
+[ "$rc" -eq 2 ] \
+    && echo "$err" | "$PY" -c "import sys, json; j=json.loads(sys.stdin.read()); assert j['code']==2 and j['type']=='UsageError', j" 2>/dev/null \
+    && ok "argparse usage error routed to JSON envelope (UsageError)" \
+    || nok "usage-error envelope" "exit=$rc msg=$err"
+
 # --- cross-4: macro detection (docx) --------------------------------------
 echo "cross-4 macro warnings:"
 # Build a minimal macro-enabled .docm by patching fixture.docx
@@ -155,6 +167,48 @@ echo "$err" | grep -q "macro-enabled" \
     && echo "$err" | grep -q ".docm" \
     && ok "writer warns when .docm → .docx (macros lost)" \
     || nok "macro-loss warning" "no warning in stderr: $err"
+
+# False-positive guard A: stray vbaProject.bin in a regular .docx must
+# NOT trip the detector. Office ignores the bin without the matching
+# content-type, so warning would lie. Regression for VDD HIGH-4.
+"$PY" -c "
+import zipfile, shutil, sys
+sys.path.insert(0, '.')
+from office._macros import is_macro_enabled_file
+from pathlib import Path
+shutil.copy('$TMP/out.docx', '$TMP/stray.docx')
+with zipfile.ZipFile('$TMP/stray.docx', 'r') as src:
+    data = {n: src.read(n) for n in src.namelist()}
+data['word/vbaProject.bin'] = b'leftover'
+with zipfile.ZipFile('$TMP/stray.docx', 'w', zipfile.ZIP_DEFLATED) as out:
+    for n, d in data.items():
+        out.writestr(n, d)
+assert is_macro_enabled_file(Path('$TMP/stray.docx')) is False, 'stray bin must not trigger'
+" \
+    && ok "stray vbaProject.bin without macro CT → False (no false positive)" \
+    || nok "stray vbaProject.bin" "false-positive returned True"
+
+# False-positive guard B: substring mention of macroEnabled in an XML
+# comment must NOT trip the detector. XML-aware parse rejects this.
+# Regression for VDD HIGH-3.
+"$PY" -c "
+import zipfile, shutil, sys
+sys.path.insert(0, '.')
+from office._macros import is_macro_enabled_file
+from pathlib import Path
+shutil.copy('$TMP/out.docx', '$TMP/comment.docx')
+with zipfile.ZipFile('$TMP/comment.docx', 'r') as src:
+    data = {n: src.read(n) for n in src.namelist()}
+ct = data['[Content_Types].xml'].decode('utf-8')
+ct = ct.replace('<Types ', '<!-- macroEnabled.main+xml --><Types ', 1)
+data['[Content_Types].xml'] = ct.encode('utf-8')
+with zipfile.ZipFile('$TMP/comment.docx', 'w', zipfile.ZIP_DEFLATED) as out:
+    for n, d in data.items():
+        out.writestr(n, d)
+assert is_macro_enabled_file(Path('$TMP/comment.docx')) is False, 'comment substring must not trigger'
+" \
+    && ok "macroEnabled mention in XML comment → False (no substring false positive)" \
+    || nok "comment substring" "false-positive returned True"
 
 # Matching extension: writer must NOT print the macro warning.
 set +e

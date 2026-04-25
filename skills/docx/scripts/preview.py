@@ -219,6 +219,31 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     je = args.json_errors
 
+    # Validate numeric arguments before they reach PIL / pdftoppm —
+    # otherwise cols=0 is a ZeroDivisionError, label-font-size<=0 is a
+    # PIL ValueError, dpi<=0 is a pdftoppm internal error, all leaking
+    # tracebacks past the JSON envelope.
+    for name, value, minimum in (
+        ("cols", args.cols, 1),
+        ("dpi", args.dpi, 1),
+        ("gap", args.gap, 0),
+        ("padding", args.padding, 0),
+        ("label-font-size", args.label_font_size, 1),
+    ):
+        if value < minimum:
+            return report_error(
+                f"--{name} must be >= {minimum} (got {value})",
+                code=2, error_type="InvalidArgument",
+                details={"flag": name, "value": value, "minimum": minimum},
+                json_mode=je,
+            )
+
+    if args.input.exists() and not args.input.is_file():
+        return report_error(
+            f"Input is not a regular file: {args.input}",
+            code=1, error_type="NotARegularFile",
+            details={"path": str(args.input)}, json_mode=je,
+        )
     if not args.input.is_file():
         return report_error(
             f"Input not found: {args.input}",

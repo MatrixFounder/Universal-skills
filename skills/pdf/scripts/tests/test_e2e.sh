@@ -222,13 +222,25 @@ set -e
     || nok "preview.py missing" "exit $rc"
 
 set +e
-"$PY" preview.py "$TMP/out.pdf" "$TMP/_x.jpg" --json-errors --dpi -1 >/dev/null 2>&1
+out=$("$PY" preview.py "$TMP/out.pdf" "$TMP/_x.jpg" --json-errors --dpi -1 2>&1 >/dev/null)
 rc=$?
 set -e
-# Negative DPI should fail somewhere in the pdftoppm path (exit 1).
-[ "$rc" -ne 0 ] \
-    && ok "preview.py: bad DPI fails non-zero" \
-    || nok "preview.py bad dpi" "expected non-zero, got $rc"
+# Negative DPI must be caught BEFORE pdftoppm so we get a structured
+# JSON envelope, not a Python traceback. Regression for VDD HIGH-2.
+[ "$rc" -eq 2 ] \
+    && echo "$out" | "$PY" -c "import sys, json; j=json.loads(sys.stdin.read()); assert j['type']=='InvalidArgument' and j['details']['flag']=='dpi', j" 2>/dev/null \
+    && ok "preview.py: --dpi -1 → InvalidArgument JSON (no traceback)" \
+    || nok "preview.py bad dpi" "exit=$rc msg=$out"
+
+set +e
+out=$("$PY" preview.py "$TMP/out.pdf" "$TMP/_y.jpg" --json-errors --cols 0 2>&1 >/dev/null)
+rc=$?
+set -e
+# Same regression for cols=0 — would otherwise be ZeroDivisionError.
+[ "$rc" -eq 2 ] \
+    && echo "$out" | "$PY" -c "import sys, json; j=json.loads(sys.stdin.read()); assert j['type']=='InvalidArgument' and j['details']['flag']=='cols', j" 2>/dev/null \
+    && ok "preview.py: --cols 0 → InvalidArgument JSON (no ZeroDivisionError)" \
+    || nok "preview.py cols=0" "exit=$rc msg=$out"
 
 # --- cross-5: --json-errors envelope (pdf) -------------------------------
 echo "cross-5 unified errors:"

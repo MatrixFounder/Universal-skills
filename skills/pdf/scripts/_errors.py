@@ -32,10 +32,20 @@ from typing import IO, Any
 
 
 def add_json_errors_argument(parser: argparse.ArgumentParser) -> None:
-    """Wire the `--json-errors` flag into a CLI's argparse.
+    """Wire the `--json-errors` flag into a CLI's argparse and route
+    argparse's own usage errors (`parser.error`, missing required args,
+    type-conversion failures) through the same JSON envelope.
 
     Call this in every script's `main()` right after the parser is
-    constructed so the flag is uniform across the four skills."""
+    constructed so the flag is uniform across the four skills.
+
+    Implementation note: argparse's built-in `parser.error` exits 2 with
+    plain-text usage to stderr. That bypasses the JSON envelope and is
+    the most common way wrappers get tripped up — they parse stderr as
+    JSON and choke on usage banners. We monkey-patch `parser.error`
+    here so the same flag covers both domain errors (via
+    `report_error`) and usage errors.
+    """
     parser.add_argument(
         "--json-errors",
         dest="json_errors",
@@ -45,6 +55,29 @@ def add_json_errors_argument(parser: argparse.ArgumentParser) -> None:
             "(machine-readable: {error, code, type?, details?})."
         ),
     )
+
+    _argparse_error = parser.error
+
+    def _json_aware_error(message: str) -> None:
+        # We can't read parsed args here — argparse calls error() during
+        # parsing, before parse_args() returns. Fall back to a literal
+        # scan of sys.argv. False positives only happen if a string
+        # arg literally contains "--json-errors", which is harmless
+        # (we'd just emit the JSON form on a usage error — strictly
+        # better for wrappers).
+        if "--json-errors" in sys.argv[1:]:
+            envelope = {
+                "error": message,
+                "code": 2,
+                "type": "UsageError",
+                "details": {"prog": parser.prog},
+            }
+            sys.stderr.write(json.dumps(envelope, ensure_ascii=False) + "\n")
+            sys.stderr.flush()
+            sys.exit(2)
+        _argparse_error(message)
+
+    parser.error = _json_aware_error  # type: ignore[method-assign]
 
 
 def report_error(
