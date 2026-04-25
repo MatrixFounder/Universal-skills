@@ -123,9 +123,9 @@ attribution is preserved in
 | Skill | Description | Tier |
 | :--- | :--- | :--- |
 | **[docx](skills/docx/SKILL.md)** | Create / edit / convert / validate `.docx`. Markdown ↔ DOCX, template fill (`{{placeholders}}`), accept tracked changes (LibreOffice), unpack/pack OOXML, **redlining validator** (`--compare-to ORIGINAL.docx`) catches "editor forgot Track Changes" scenarios. | 2 |
-| **[xlsx](skills/xlsx/SKILL.md)** | CSV → styled `.xlsx` (bold header, frozen row, auto-filter, leading-zero preservation), force formula recalculation via LibreOffice, scan for `#REF!`/`#DIV/0!` errors. | 2 |
-| **[pptx](skills/pptx/SKILL.md)** | Markdown → PPTX (built-in pptxgenjs renderer with auto-pagination, mermaid diagrams, accent stripes — OR `--via-marp` delegation to marp-slide for editorial polish), pptx → PDF, slide thumbnail grids. | 2 |
-| **[pdf](skills/pdf/SKILL.md)** | Markdown → PDF (weasyprint), PDF merge / split (by ranges, per-page, fixed chunks), bookmark preservation. | 2 |
+| **[xlsx](skills/xlsx/SKILL.md)** | CSV → styled `.xlsx` (bold header, frozen row, auto-filter, leading-zero preservation), force formula recalculation via LibreOffice, scan for `#REF!`/`#DIV/0!` errors, attach bar/line/pie **charts** to a range (`xlsx_add_chart.py`). | 2 |
+| **[pptx](skills/pptx/SKILL.md)** | Markdown → PPTX (built-in pptxgenjs renderer with auto-pagination, mermaid diagrams, accent stripes — OR `--via-marp` delegation to marp-slide for editorial polish), pptx → PDF, slide thumbnail grids, **`pptx_clean.py`** to drop orphan slides/media after manual editing. | 2 |
+| **[pdf](skills/pdf/SKILL.md)** | Markdown → PDF (weasyprint, with optional ```mermaid → PNG via `mmdc`), PDF merge / split (by ranges, per-page, fixed chunks), AcroForm form **fill / inspect / flatten** (`pdf_fill_form.py`), TOC bookmarks preserved. | 2 |
 
 The three OOXML skills (docx/xlsx/pptx) share an identical
 `scripts/office/` module + `_soffice.py` LibreOffice wrapper. The
@@ -133,8 +133,22 @@ The three OOXML skills (docx/xlsx/pptx) share an identical
 strict replication protocol in
 [CONTRIBUTING.md §3](docs/CONTRIBUTING.md#3-office-skills-modification-protocol-strict).
 
+**Cross-cutting safeguards** in the shared `office/` module:
+- `office/_encryption.py` — every reader script calls
+  `assert_not_encrypted()` before opening, so password-protected files
+  AND legacy `.doc`/`.xls`/`.ppt` (CFB containers) fail fast with a
+  clear remediation hint instead of a `BadZipFile` traceback.
+
+**End-to-end smoke tests** (per skill `scripts/tests/test_e2e.sh` +
+top-level [`tests/run_all_e2e.sh`](tests/run_all_e2e.sh)) run every
+user-facing CLI on a real fixture and validate the output. The full
+suite covers all four skills with dozens of assertions and is the
+primary regression gate before each release.
+
 For practical usage of all four skills, see the
-[Office Skills Manual](docs/Manuals/office-skills_manual.md).
+[Office Skills Manual](docs/Manuals/office-skills_manual.md). For the
+roadmap of upcoming additions and known limitations, see the
+[Office Skills Backlog](docs/office-skills-backlog.md).
 
 ### Verification Skills (VDD)
 

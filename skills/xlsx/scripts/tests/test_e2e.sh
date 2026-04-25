@@ -101,6 +101,84 @@ else
     nok "validator on bad cell" "exit $rc and no DIV/0 in stdout"
 fi
 
+# --- xlsx_add_chart -------------------------------------------------------
+echo "xlsx_add_chart:"
+"$PY" xlsx_add_chart.py "$TMP/out.xlsx" --type bar --data "F2:F11" --categories "C2:C11" \
+    --title "Revenue" --output "$TMP/with_chart.xlsx" >/dev/null 2>&1 \
+    && [ -s "$TMP/with_chart.xlsx" ] && ok "bar chart written to new workbook" \
+    || nok "add bar chart" "missing or empty"
+
+# Verify the chart actually landed via openpyxl's _charts list
+charts=$("$PY" -c "
+import openpyxl
+wb = openpyxl.load_workbook('$TMP/with_chart.xlsx')
+ws = wb.active
+print(len(ws._charts))
+print(','.join(type(c).__name__ for c in ws._charts))
+")
+n=$(echo "$charts" | head -1)
+[ "$n" = "1" ] \
+    && ok "chart object present in saved workbook (count=$n)" \
+    || nok "chart object" "expected 1, got $n"
+
+# Pie + line variants exercise the type dispatch
+"$PY" xlsx_add_chart.py "$TMP/out.xlsx" --type pie --data "F2:F11" --categories "C2:C11" \
+    --output "$TMP/pie.xlsx" >/dev/null 2>&1 \
+    && ok "pie chart variant" \
+    || nok "pie chart" "non-zero exit"
+"$PY" xlsx_add_chart.py "$TMP/out.xlsx" --type line --data "D2:F11" --categories "A2:A11" \
+    --output "$TMP/line.xlsx" >/dev/null 2>&1 \
+    && ok "line chart variant" \
+    || nok "line chart" "non-zero exit"
+
+# Bad range syntax → exit 1 with clear stderr
+set +e
+err=$("$PY" xlsx_add_chart.py "$TMP/out.xlsx" --type bar --data "garbage" \
+    --output "$TMP/_x.xlsx" 2>&1 >/dev/null)
+rc=$?
+set -e
+[ "$rc" -eq 1 ] && echo "$err" | grep -q "is not in" \
+    && ok "bad range exits 1 with hint" \
+    || nok "bad range" "exit $rc / msg: $err"
+
+# --- encryption fail-fast (cross-cutting, applies to all readers) ---------
+echo "encryption fail-fast:"
+# Forge a CFB-magic file (D0CF11E0A1B11AE1) — not a valid OOXML, but
+# enough to trigger our pre-flight check.
+"$PY" -c "
+from pathlib import Path
+Path('$TMP/cfb.xlsx').write_bytes(b'\\xd0\\xcf\\x11\\xe0\\xa1\\xb1\\x1a\\xe1' + b'\\x00' * 100)
+"
+# Same fixture used by all three xlsx readers — verifies wiring is
+# consistent across xlsx_validate / xlsx_add_chart / xlsx_recalc
+# (the latter only when soffice is on PATH).
+set +e
+err=$("$PY" xlsx_validate.py "$TMP/cfb.xlsx" 2>&1 >/dev/null)
+rc=$?
+set -e
+[ "$rc" -eq 3 ] && echo "$err" | grep -q "password-protected" \
+    && echo "$err" | grep -q "legacy" \
+    && ok "xlsx_validate: exit 3 + message names both encrypted AND legacy" \
+    || nok "encrypted rejection (validate)" "exit $rc / msg: $err"
+
+set +e
+err=$("$PY" xlsx_add_chart.py "$TMP/cfb.xlsx" --type bar --data "A1:B5" --output "$TMP/_x.xlsx" 2>&1 >/dev/null)
+rc=$?
+set -e
+[ "$rc" -eq 3 ] && echo "$err" | grep -q "CFB\|password-protected" \
+    && ok "xlsx_add_chart also refuses CFB with exit 3" \
+    || nok "encrypted rejection (add_chart)" "exit $rc / msg: $err"
+
+if command -v soffice >/dev/null 2>&1; then
+    set +e
+    err=$("$PY" xlsx_recalc.py "$TMP/cfb.xlsx" --output "$TMP/_y.xlsx" 2>&1 >/dev/null)
+    rc=$?
+    set -e
+    [ "$rc" -eq 3 ] && echo "$err" | grep -q "CFB\|password-protected" \
+        && ok "xlsx_recalc also refuses CFB with exit 3" \
+        || nok "encrypted rejection (recalc)" "exit $rc / msg: $err"
+fi
+
 # --- xlsx_recalc ---------------------------------------------------------
 # Skip if soffice missing; recalc goes via LibreOffice.
 if command -v soffice >/dev/null 2>&1; then

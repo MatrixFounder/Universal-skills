@@ -48,7 +48,7 @@
 
 | ID | Название | Что/Зачем | Effort | Value | Dep | Notes |
 |---|---|---|---|---|---|---|
-| pptx-1 | `pptx_clean.py` | Удалить осиротевшие slides/media/charts/themes из распакованного PPTX. Решает раздувание файла после серии правок. | M | M | — | Перифраз tmp/pptx/scripts/clean.py, но своими руками. |
+| pptx-1 | `pptx_clean.py` ✅ DONE | Удалить осиротевшие slides/media/charts/themes из PPTX через BFS по графу `.rels`. Опционально `--dry-run`. Содержит обновление `[Content_Types].xml`. E2E: 4 проверки. | M | M | — | Своя реализация по ECMA-376 / OOXML §10. |
 | pptx-2 | `pptx_apply_theme.py` | Сменить тему/палитру/шрифты целиком. Часто нужно для «привести презентацию из template-1 в брендинг template-2». | L | M | pptx-1 | Сложно: переносить layout-mappings + theme.xml + slideMasters. |
 | pptx-3 | `outline2pptx.py` | Markdown-outline (только заголовки) → каркас презентации с пустыми слайдами. Удобно для брейншторма «накидать структуру». | S | L | — | По сути: упрощённая `md2pptx`. |
 | pptx-4 | XSD-валидаторы для pptx | Сейчас `office/validators/pptx.py` — заглушка. Доделать full schema-валидацию (ECMA-376 part 1, dml/pml/sml). | L | M | — | Полезно после ручных правок XML. |
@@ -58,7 +58,7 @@
 
 | ID | Название | Что/Зачем | Effort | Value | Dep | Notes |
 |---|---|---|---|---|---|---|
-| xlsx-1 | `xlsx_add_chart.py` | Построить bar/line/pie chart на основе диапазона. Самая частая просьба после csv2xlsx — «и график сверху». | M | H | — | openpyxl поддерживает базовые типы; пишем CLI-обёртку. |
+| xlsx-1 | `xlsx_add_chart.py` ✅ DONE | bar/line/pie на диапазоне, опц. `--categories` / `--title` / `--anchor`. E2E: 4 проверки (3 типа + bad-range). | M | H | — | openpyxl chart API; chart остаётся редактируемым в Excel/LO. |
 | xlsx-2 | `json2xlsx.py` | JSON-array → лист с авто-detection типов колонок. Параллель к csv2xlsx. | S | M | — | Несколько строк на pandas. |
 | xlsx-3 | `md_tables2xlsx.py` | Извлечь все markdown-таблицы из .md и положить каждую на отдельный лист. | S | L | — | Use-case: вытащить таблицы из тех. документации в excel. |
 | xlsx-4 | Сохранение charts и data-validation при unpack/pack | Если пользователь пакует обратно файл с исходными chart-объектами, они должны остаться. Сейчас, возможно, теряются. | M | M | — | Нужно проверить — требует тестирования на реальных моделях. |
@@ -84,7 +84,7 @@
 |---|---|---|---|---|---|---|
 | cross-1 | `preview.py` универсальный | Один CLI: на вход docx/pptx/xlsx/pdf — на выход PNG-grid (по странице/слайду/листу). | M | M | pptx_thumbnails | Заменяет 4 разных способа «глянуть, как это выглядит». |
 | cross-2 | LD_PRELOAD shim для sandbox-Linux | LibreOffice требует AF_UNIX, в sandboxes часто ломается. Уже есть `office/shim/lo_socket_shim.c` — нужно проверить, что собирается и работает на Linux-CI. | M | L | — | На macOS desktop не нужно — отложили. |
-| cross-3 | Encrypted/password-protected files | Сейчас все скрипты падают на запароленных файлах. Минимум — внятная ошибка вместо traceback. | S | M | — | Касается docx/xlsx/pptx; pdf пароли отдельная история. |
+| cross-3 | Encrypted/password-protected files ✅ DONE | `office/_encryption.py` детектирует CFB-magic; 8 reader-скриптов вызывают `assert_not_encrypted()` рано и возвращают exit 3 + понятное сообщение. E2E: 3 проверки (по одной на skill). | S | M | — | Замена `BadZipFile: not a zip file` на «password-protected, decrypt upstream». |
 | cross-4 | `.docm`/`.xlsm`/`.pptm` (с макросами) | Read-only поддержка: предупредить, что макросы будут потеряны при pack-обратно. | S | L | — | Корпоративные пользователи иногда дают такие файлы. |
 | cross-5 | Унифицированный error-reporting | Сейчас разные скрипты падают по-разному. Единый формат: код выхода + JSON-trace в stderr (опционально). | M | L | — | Полезно для обёрток-агентов. |
 | cross-6 | Cyrillic font preset для mermaid | Файл `mermaid-config.json` с `fontFamily: "Arial Unicode MS"` (или аналог) для офис-сценариев. Положить в `pdf` и `pptx`. | S | M | pdf-6 | Сейчас Chromium тянет system fonts — на macOS ок, на Linux может быть пусто. |

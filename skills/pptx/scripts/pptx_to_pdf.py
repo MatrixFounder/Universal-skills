@@ -18,6 +18,7 @@ import sys
 from pathlib import Path
 
 from _soffice import SofficeError, convert_to
+from office._encryption import EncryptedFileError, assert_not_encrypted
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -30,6 +31,11 @@ def main(argv: list[str] | None = None) -> int:
     if not args.input.is_file():
         print(f"Input not found: {args.input}", file=sys.stderr)
         return 1
+    try:
+        assert_not_encrypted(args.input)
+    except EncryptedFileError as exc:
+        print(str(exc), file=sys.stderr)
+        return 3
 
     out_dir = (args.output.parent if args.output else args.input.parent).resolve()
     out_dir.mkdir(parents=True, exist_ok=True)

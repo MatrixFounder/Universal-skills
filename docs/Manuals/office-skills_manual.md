@@ -15,12 +15,33 @@ replication rule), see [CONTRIBUTING.md](../CONTRIBUTING.md).
 | Skill | Primary use | Key scripts |
 |---|---|---|
 | **docx** | Create, edit, convert, validate `.docx` (Word) | `md2docx.js`, `docx2md.js`, `docx_fill_template.py`, `docx_accept_changes.py`, `office/validate.py` |
-| **xlsx** | CSV/JSON → styled `.xlsx`, recalc formulas, scan errors | `csv2xlsx.py`, `xlsx_recalc.py`, `xlsx_validate.py` |
-| **pptx** | Markdown → `.pptx`, generate thumbnails, convert to PDF | `md2pptx.js` (incl. `--via-marp`), `pptx_to_pdf.py`, `pptx_thumbnails.py` |
-| **pdf** | Markdown → PDF, merge, split | `md2pdf.py`, `pdf_merge.py`, `pdf_split.py` |
+| **xlsx** | CSV/JSON → styled `.xlsx`, recalc formulas, scan errors, **add charts** | `csv2xlsx.py`, `xlsx_recalc.py`, `xlsx_validate.py`, `xlsx_add_chart.py` |
+| **pptx** | Markdown → `.pptx`, thumbnails, PDF, **clean orphans** | `md2pptx.js` (incl. `--via-marp`), `pptx_to_pdf.py`, `pptx_thumbnails.py`, `pptx_clean.py` |
+| **pdf** | Markdown → PDF (with mermaid), merge, split, **fill AcroForms** | `md2pdf.py`, `pdf_merge.py`, `pdf_split.py`, `pdf_fill_form.py` |
 
-All four are licensed Apache-2.0; runtime deps and external-tool
-attributions are in [THIRD_PARTY_NOTICES.md](../../THIRD_PARTY_NOTICES.md).
+The four office skills are governed by a per-skill **Proprietary**
+licence (effective 2026-04-25, see [LICENSE](../../skills/docx/LICENSE)
+and siblings). Runtime deps and external-tool attributions remain
+under their original licences in
+[THIRD_PARTY_NOTICES.md](../../THIRD_PARTY_NOTICES.md).
+
+### Cross-cutting safeguards
+
+Every reader script in `docx`/`xlsx`/`pptx` calls
+`office._encryption.assert_not_encrypted(path)` before opening its
+input. The check sniffs the first 8 bytes for the Compound File
+Binary (CFB) signature `D0CF11E0A1B11AE1`, which catches both:
+
+- **password-protected OOXML** (Office 2010+ encryption wraps the
+  package in CFB), and
+- **legacy `.doc` / `.xls` / `.ppt`** (Office 97-2003 native format
+  is also CFB).
+
+Either case exits with code **3** and a message that names both
+possibilities so users hitting the legacy case aren't sent looking
+for a non-existent password. Remediation is upstream: remove the
+password (`msoffcrypto-tool` or office app) OR convert with
+`soffice --headless --convert-to docx INPUT`.
 
 ---
 
@@ -187,6 +208,35 @@ with a `calculateAll()` macro to populate the cache.
 Counts cells whose Excel `data_type == "e"` (true formula errors).
 Pairs with `xlsx_recalc.py` — recalc first, then validate.
 
+### 4.4 Attach a chart to a range
+
+```bash
+./.venv/bin/python skills/xlsx/scripts/xlsx_add_chart.py file.xlsx \
+    --type bar|line|pie \
+    --data "B2:B11" \
+    [--categories "A2:A11"] \
+    [--title "Revenue"] \
+    [--sheet "Sheet1"] \
+    [--anchor "F2"] \
+    [--titles-from-data | --no-titles-from-data] \
+    [--output out.xlsx]
+```
+
+Wraps `openpyxl.chart` so the chart stays editable in
+Excel/LibreOffice (no rasterisation). Defaults are tuned for the most
+common follow-up to `csv2xlsx`:
+
+- `--type` selects the chart class (BarChart, LineChart, PieChart).
+- `--data` is the value range; multi-column blocks become multiple
+  series.
+- `--titles-from-data` is auto-detected from the top-left cell — if
+  it's text, the first row is treated as series titles. Use
+  `--no-titles-from-data` to override when your data has a header
+  cell that's accidentally numeric (e.g. `2024`).
+- `--anchor` defaults to two columns to the right of the data block.
+
+Bad range syntax exits 1 with a hint; bad anchor likewise.
+
 ---
 
 ## 5. pptx — common workflows
@@ -232,19 +282,56 @@ Pipeline: pptx → pdf (LibreOffice) → per-slide JPEGs (`pdftoppm`) →
 labelled grid (Pillow). Useful for visual QA and as a deliverable to
 sub-agents who can read images.
 
+### 5.5 Clean orphaned parts
+
+```bash
+./.venv/bin/python skills/pptx/scripts/pptx_clean.py deck.pptx \
+    [--output cleaned.pptx] [--dry-run]
+```
+
+A common artefact of hand-editing or template substitution: a
+deletion removes the `<p:sldId>` reference but leaves the slide XML
+plus its media in the zip. The package gets larger, diff tools get
+noisier, and consumers may render hidden content.
+
+`pptx_clean.py` walks the OOXML relationship graph from
+`ppt/presentation.xml` outward (BFS through `.rels`), keeps only
+parts reachable from `<p:sldIdLst>` plus the always-required
+skeleton (`[Content_Types].xml`, `_rels/.rels`, `docProps/`), and
+drops the rest. `[Content_Types].xml` Override entries pointing at
+removed parts are stripped in the same pass.
+
+`--dry-run` prints the keep / remove report as JSON without writing
+the output file (idempotent — re-runs on a clean file produce no
+changes).
+
 ---
 
 ## 6. pdf — common workflows
 
-### 6.1 Markdown → PDF
+### 6.1 Markdown → PDF (with optional mermaid)
 
 ```bash
 ./.venv/bin/python skills/pdf/scripts/md2pdf.py doc.md doc.pdf \
-    [--page-size letter|a4|legal] [--css extra.css]
+    [--page-size letter|a4|legal] [--css extra.css] \
+    [--no-mermaid] [--strict-mermaid]
 ```
 
-Uses weasyprint. Default stylesheet includes proper `@page` margins
-and footer page numbers.
+Uses weasyprint. Default stylesheet includes `@page` margins, footer
+page numbers, and a `.mermaid-diagram` rule that constrains diagrams
+to fit the page (`max-width: 100%; max-height: 7in`).
+
+Fenced ```mermaid blocks are pre-rendered to **PNG** (not SVG —
+weasyprint's SVG path doesn't honour mermaid's font chain, leaving
+Cyrillic / CJK text invisible). Rendering is cached by SHA1 of the
+diagram body in `<output_stem>_assets/`, so repeat runs are cheap.
+
+- `--no-mermaid` skips the preprocessing entirely (blocks render as
+  code).
+- `--strict-mermaid` exits non-zero if any block fails to render
+  (default: warn and degrade to code).
+- Without `mmdc` on `PATH` or in `scripts/node_modules/.bin/`, the
+  step prints a friendly hint and falls through.
 
 ### 6.2 Merge / split
 
@@ -264,6 +351,39 @@ and footer page numbers.
 Range syntax accepts both `:` and `=>` separators (the latter is
 useful when output paths contain `:` themselves, e.g. Windows drive
 letters: `1-5=>C:\out.pdf`).
+
+### 6.3 Inspect / fill / flatten an AcroForm
+
+```bash
+# 1. Detect form type — exit codes are the gate
+./.venv/bin/python skills/pdf/scripts/pdf_fill_form.py --check FORM.pdf
+#   exit 0  → AcroForm (fillable)
+#   exit 11 → XFA (Adobe LiveCycle, NOT fillable via pypdf)
+#   exit 12 → no form fields
+
+# 2. Extract field schema for editing
+./.venv/bin/python skills/pdf/scripts/pdf_fill_form.py \
+    --extract-fields FORM.pdf -o fields.json
+
+# 3. Fill from JSON (flat {field_name: value} map)
+./.venv/bin/python skills/pdf/scripts/pdf_fill_form.py \
+    FORM.pdf data.json -o FILLED.pdf [--flatten]
+```
+
+The exit codes start at 10 to leave 0–9 for argparse / shell
+convention (so a usage error → exit 2, while an XFA refusal → exit
+11). Checkbox values accept `true`/`false`, `1`/`0`, `"/Yes"`/`"/Off"`,
+or bare `"Yes"`/`"Off"` — the script normalises to pypdf's
+NameObject vocabulary. Unknown field names are reported as warnings
+in stderr but don't fail the run (typo'd-field is the most common
+source of "fill looked right, field stays empty"). `--flatten` drops
+the `/AcroForm` dictionary so the values stick but the form is no
+longer interactively editable.
+
+XFA forms are detected and refused — pypdf cannot fill them. See
+[`skills/pdf/references/forms.md`](../../skills/pdf/references/forms.md)
+for the visual-overlay fallback when the document has no fillable
+fields at all.
 
 ---
 
@@ -329,7 +449,11 @@ at all (AF_UNIX works), so this only matters for unusual setups.
 
 ## 8. Test suite
 
-The office-shared module has 13 unit tests under
+Two layers of automated tests cover the office skills.
+
+### 8.1 Unit tests (in `office/tests/` of each skill)
+
+The shared `office/` module has 13 unit tests under
 `skills/docx/scripts/office/tests/`:
 
 - **`test_redlining.py`** (10 tests): identical docs / marked
@@ -351,10 +475,45 @@ cd skills/docx/scripts
 ```
 
 Per the [contributor protocol](../CONTRIBUTING.md#3-office-skills-modification-protocol-strict),
-the test suite stays only in `docx`; xlsx and pptx receive byte-
+the unit-test files stay only in `docx`; xlsx and pptx receive byte-
 identical copies of `office/` (which includes the tests), but the
 tests are typically run from the docx skill since that's the
-master.
+master. The docx skill also has additional unit suites under
+`scripts/docx2md/tests/` covering the markdown-postprocess passes
+and shape-extraction logic.
+
+### 8.2 End-to-end smoke suites
+
+Each skill ships a `scripts/tests/test_e2e.sh` that runs every
+user-facing CLI on a real fixture and asserts the output's basic
+shape (file exists, page count, element presence, exit code, error
+message text). The top-level orchestrator runs all four sequentially:
+
+```bash
+bash tests/run_all_e2e.sh
+```
+
+Per-skill quick check:
+
+```bash
+bash skills/docx/scripts/tests/test_e2e.sh
+bash skills/xlsx/scripts/tests/test_e2e.sh
+bash skills/pptx/scripts/tests/test_e2e.sh
+bash skills/pdf/scripts/tests/test_e2e.sh
+```
+
+What's covered:
+
+| Skill | Coverage |
+|---|---|
+| docx | `md2docx → docx → docx2md` round-trip, `office.validate` on output, `docx_fill_template` with nested JSON, encryption / legacy-CFB rejection on `docx_fill_template` and `docx_accept_changes`. |
+| xlsx | `csv2xlsx` + row count + `office.validate`, `xlsx_validate` (clean + injected `#DIV/0!` via lxml mutation), `xlsx_recalc` formula preservation, `xlsx_add_chart` (bar/line/pie variants + bad-range error), encryption rejection on `xlsx_validate`/`xlsx_add_chart`/`xlsx_recalc`. |
+| pptx | `md2pptx` + slide-count + `office.validate`, `pptx_thumbnails` (JPEG sanity), `pptx_to_pdf` (`%PDF` magic), `pptx_clean` (orphan slide + media removal, dry-run reports without writing), encryption rejection on `pptx_clean`/`pptx_thumbnails`/`pptx_to_pdf`. |
+| pdf | `md2pdf` + mermaid PNG render, `pdf_merge` (page-count = sum), `pdf_split --each-page`, `pdf_fill_form` (`--check` exit codes, fill round-trip, `--flatten` removes `/AcroForm`, `--extract-fields` stdout, malformed JSON / missing `-o` exit 2, typo'd field warning, int→`/Yes` checkbox coercion). |
+
+The suite is fast (<60 sec total on a warm machine) and is the
+primary pre-commit / pre-release gate. Any failure here points at a
+broken user-facing contract.
 
 ---
 
@@ -385,6 +544,11 @@ All four skills currently pass `validate_skill.py`.
 | `soffice not found` | Install LibreOffice (see §2 system tools) |
 | `pdftoppm not found` | Install Poppler (see §2) |
 | weasyprint `cannot load library 'libpango-1.0-0'` | Install pango/cairo (see §2) |
+| `mmdc not found` warning from md2pdf | `(cd skills/pdf/scripts && npm install)` to fetch `@mermaid-js/mermaid-cli` locally, or `npm i -g @mermaid-js/mermaid-cli` for system-wide |
+| `appears to be either password-protected OR a legacy format` (exit 3) | The input file is a CFB container. Either remove its password upstream (`msoffcrypto-tool`, office app) or convert from `.doc`/`.xls`/`.ppt` to OOXML via `soffice --headless --convert-to docx INPUT` |
+| `--check` on PDF returns 11 / 12 | 11 = XFA form (re-author as AcroForm or use commercial tooling); 12 = no fillable fields (use the visual-overlay path documented in [pdf/references/forms.md](../../skills/pdf/references/forms.md)) |
+| Mermaid diagram in PDF shows coloured rectangles with no text | Old issue with SVG path; fixed by switching to PNG render. Delete `<output_stem>_assets/` and re-run `md2pdf.py`. Cyrillic / CJK fonts need `mmdc` (Chromium) which has system fonts |
+| `pptx_clean` removes a part you wanted to keep | The part is unreachable from `<p:sldIdLst>` via `.rels` graph. Add an explicit relationship (e.g. via `_rels/.rels` for top-level customXml) before re-running. Use `--dry-run` first to inspect |
 | LibreOffice fails to start in container | See [shim docs](../../skills/docx/scripts/office/tests/test_shim.md); shim auto-detects, but verify with `LO_SHIM_VERBOSE=1` |
 | Diff `office/` between docx and xlsx/pptx | Run replication protocol from [CONTRIBUTING.md §3](../CONTRIBUTING.md#3-office-skills-modification-protocol-strict) |
 | `validate.py --compare-to` reports unexpected unmarked edits | Check `references/tracked-changes.md` in the docx skill; possibly an editor saved without Track Changes — that's exactly what the validator catches |

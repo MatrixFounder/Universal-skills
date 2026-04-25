@@ -58,6 +58,93 @@ else
     echo "pptx_to_pdf: skipped (soffice not on PATH)"
 fi
 
+# --- pptx_clean -----------------------------------------------------------
+echo "pptx_clean:"
+# Inject orphan slide99.xml + orphan media into a fresh copy of out.pptx
+"$PY" -c "
+import zipfile, shutil, os
+shutil.copy('$TMP/out.pptx', '$TMP/dirty.pptx')
+items = []
+with zipfile.ZipFile('$TMP/dirty.pptx', 'r') as z:
+    for n in z.namelist():
+        items.append((n, z.read(n)))
+items.append(('ppt/slides/slide99.xml',
+              b'<?xml version=\"1.0\"?><p:sld xmlns:p=\"http://schemas.openxmlformats.org/presentationml/2006/main\"><p:cSld><p:spTree/></p:cSld></p:sld>'))
+items.append(('ppt/media/image_orphan.png', b'\\x89PNG\\r\\n\\x1a\\n' + b'\\x00' * 100))
+os.unlink('$TMP/dirty.pptx')
+with zipfile.ZipFile('$TMP/dirty.pptx', 'w', zipfile.ZIP_DEFLATED) as z:
+    for n, data in items:
+        z.writestr(n, data)
+"
+"$PY" pptx_clean.py "$TMP/dirty.pptx" --output "$TMP/cleaned.pptx" >/dev/null 2>&1 \
+    && [ -s "$TMP/cleaned.pptx" ] && ok "clean produced output" \
+    || nok "clean" "missing output"
+
+# Orphan slide and orphan media should be gone
+post=$("$PY" -c "
+import zipfile
+files = zipfile.ZipFile('$TMP/cleaned.pptx').namelist()
+print('orphan_slide=' + ('yes' if 'ppt/slides/slide99.xml' in files else 'no'))
+print('orphan_media=' + ('yes' if 'ppt/media/image_orphan.png' in files else 'no'))
+")
+echo "$post" | grep -q "orphan_slide=no" \
+    && ok "orphan slide99.xml removed" \
+    || nok "orphan slide" "$post"
+echo "$post" | grep -q "orphan_media=no" \
+    && ok "orphan media removed" \
+    || nok "orphan media" "$post"
+
+# Cleaned file must still validate via office.validate
+"$PY" -m office.validate "$TMP/cleaned.pptx" >/dev/null 2>&1 \
+    && ok "cleaned pptx still validates" \
+    || nok "validate after clean" "rejected"
+
+# Dry-run should print what would be removed AND not write the output
+rm -f "$TMP/_unused.pptx"
+"$PY" pptx_clean.py "$TMP/dirty.pptx" --dry-run --output "$TMP/_unused.pptx" 2>&1 \
+    | grep -q '"dry_run": true' \
+    && ok "--dry-run reports" \
+    || nok "dry-run reports" "no dry_run marker in output"
+# The --output path was supplied but --dry-run won the early-return —
+# the file must not exist. This guards against future refactors that
+# accidentally move the write before the dry-run check.
+[ ! -e "$TMP/_unused.pptx" ] \
+    && ok "--dry-run did not write the output file" \
+    || nok "dry-run leaked write" "$TMP/_unused.pptx exists"
+
+# --- encryption / legacy-CFB fail-fast (pptx side) ------------------------
+echo "encryption fail-fast:"
+"$PY" -c "
+from pathlib import Path
+Path('$TMP/cfb.pptx').write_bytes(b'\\xd0\\xcf\\x11\\xe0\\xa1\\xb1\\x1a\\xe1' + b'\\x00' * 100)
+"
+set +e
+err=$("$PY" pptx_clean.py "$TMP/cfb.pptx" --dry-run 2>&1 >/dev/null)
+rc=$?
+set -e
+[ "$rc" -eq 3 ] && echo "$err" | grep -q "password-protected" \
+    && echo "$err" | grep -q "legacy" \
+    && ok "pptx_clean: exit 3 + message names both encrypted AND legacy" \
+    || nok "encrypted rejection (clean)" "exit $rc / msg: $err"
+
+if command -v soffice >/dev/null 2>&1; then
+    set +e
+    err=$("$PY" pptx_thumbnails.py "$TMP/cfb.pptx" "$TMP/_thumbs.jpg" 2>&1 >/dev/null)
+    rc=$?
+    set -e
+    [ "$rc" -eq 3 ] && echo "$err" | grep -q "CFB\|password-protected" \
+        && ok "pptx_thumbnails also refuses CFB with exit 3" \
+        || nok "encrypted rejection (thumbnails)" "exit $rc / msg: $err"
+
+    set +e
+    err=$("$PY" pptx_to_pdf.py "$TMP/cfb.pptx" "$TMP/_x.pdf" 2>&1 >/dev/null)
+    rc=$?
+    set -e
+    [ "$rc" -eq 3 ] && echo "$err" | grep -q "CFB\|password-protected" \
+        && ok "pptx_to_pdf also refuses CFB with exit 3" \
+        || nok "encrypted rejection (to_pdf)" "exit $rc / msg: $err"
+fi
+
 echo
 echo "$pass passed, $fail failed"
 [ "$fail" -eq 0 ]

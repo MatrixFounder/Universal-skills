@@ -30,6 +30,7 @@ practical knowledge and make the common operations a single command.
 - Accept all tracked changes in a `.docx` via headless LibreOffice without leaving artefacts in the user's profile.
 - Unpack and repack `.docx` archives for raw OOXML editing, with smart-quote entity round-tripping and run canonicalisation.
 - Structurally validate a `.docx`: relationships, content types, tracked-change/`<w:delText>` integrity, comment marker pairing, and optional XSD binding.
+- Reject password-protected and legacy `.doc` (CFB-container) inputs early with a clear remediation message (exit 3) instead of a `BadZipFile` traceback.
 
 ## 3. Execution Mode
 - **Mode**: `script-first`.

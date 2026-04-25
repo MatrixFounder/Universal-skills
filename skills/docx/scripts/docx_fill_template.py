@@ -34,6 +34,8 @@ from docx import Document  # type: ignore
 from docx.oxml.ns import qn  # type: ignore
 from lxml import etree  # type: ignore
 
+from office._encryption import EncryptedFileError, assert_not_encrypted
+
 
 PLACEHOLDER_RE = re.compile(r"\{\{\s*([A-Za-z0-9_.]+)\s*\}\}")
 
@@ -179,6 +181,11 @@ def main(argv: list[str] | None = None) -> int:
     if not args.data.is_file():
         print(f"Data file not found: {args.data}", file=sys.stderr)
         return 1
+    try:
+        assert_not_encrypted(args.template)
+    except EncryptedFileError as exc:
+        print(str(exc), file=sys.stderr)
+        return 3
 
     try:
         data = json.loads(args.data.read_text(encoding="utf-8"))

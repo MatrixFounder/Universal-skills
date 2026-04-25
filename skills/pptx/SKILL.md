@@ -26,8 +26,10 @@ removes that variance.
 - Convert Markdown (split by `---`) into a `.pptx` with consistent typography, bullet styling, and theme via `md2pptx.js`.
 - Convert a `.pptx` to PDF via headless LibreOffice for print, email, or review pipelines.
 - Produce a labelled thumbnail grid (JPEG) for rapid visual QA of all slides at once.
+- Drop orphan slides / media / charts / themes after manual editing or template substitution (`pptx_clean.py`, BFS over the `.rels` graph; `--dry-run` previews without writing).
 - Unpack, patch, and repack raw OOXML for changes not covered by high-level APIs (theme swaps, master edits, custom XML parts).
 - Structurally validate a `.pptx` (relationships, content types, required parts) via the shared `office/` module.
+- Reject password-protected and legacy `.ppt` (CFB-container) inputs early with a clear remediation message (exit 3) instead of a `BadZipFile` traceback.
 
 ## 3. Execution Mode
 - **Mode**: `script-first`.
@@ -39,6 +41,7 @@ removes that variance.
   - `node scripts/md2pptx.js INPUT.md OUTPUT.pptx [--size 16:9|4:3] [--theme theme.json] [--via-marp] [--marp-theme NAME]`
   - `python3 scripts/pptx_to_pdf.py INPUT.pptx [OUTPUT.pdf] [--timeout 180]`
   - `python3 scripts/pptx_thumbnails.py INPUT.pptx OUTPUT.jpg [--cols 3] [--dpi 110]`
+  - `python3 scripts/pptx_clean.py INPUT.pptx [--output OUT.pptx] [--dry-run]`
   - `python3 scripts/office/unpack.py INPUT.pptx OUTDIR/`
   - `python3 scripts/office/pack.py INDIR/ OUTPUT.pptx`
   - `python3 scripts/office/validate.py INPUT.pptx [--json] [--strict]`

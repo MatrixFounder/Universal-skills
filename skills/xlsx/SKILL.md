@@ -27,8 +27,10 @@ single most common xlsx bug).
 - Convert a CSV / TSV to a styled `.xlsx` with bold header, freeze-first-row, auto-filter, auto column widths, and leading-zero preservation.
 - Force formula recalculation in an `.xlsx` via headless LibreOffice, then optionally scan for error cells.
 - Scan an `.xlsx` for formula errors (`#REF!`, `#DIV/0!`, `#VALUE!`, `#NAME?`, `#N/A`, `#NUM!`, `#NULL!`) without recomputing.
+- Add a bar / line / pie chart on a value range with optional categories, title, anchor; stays editable in Excel / LibreOffice.
 - Unpack and repack `.xlsx` archives for raw OOXML editing (shared `office/` module with the docx skill).
 - Structurally validate an `.xlsx` (relationships, content types, required parts).
+- Reject password-protected and legacy `.xls` (CFB-container) inputs early with a clear remediation message (exit 3) instead of a `BadZipFile` traceback.
 
 ## 3. Execution Mode
 - **Mode**: `script-first`.
@@ -40,6 +42,7 @@ single most common xlsx bug).
   - `python3 scripts/csv2xlsx.py INPUT.csv OUTPUT.xlsx [--delimiter auto|,|;|\t] [--encoding utf-8] [--no-freeze] [--no-filter]`
   - `python3 scripts/xlsx_recalc.py INPUT.xlsx [--output OUT.xlsx] [--timeout 120] [--scan-errors] [--json]`
   - `python3 scripts/xlsx_validate.py INPUT.xlsx [--json] [--fail-empty]`
+  - `python3 scripts/xlsx_add_chart.py INPUT.xlsx --type bar|line|pie --data RANGE [--categories RANGE] [--title TEXT] [--sheet NAME] [--anchor CELL] [--titles-from-data | --no-titles-from-data] [--output OUT.xlsx]`
   - `python3 scripts/office/unpack.py INPUT.xlsx OUTDIR/`
   - `python3 scripts/office/pack.py INDIR/ OUTPUT.xlsx`
   - `python3 scripts/office/validate.py INPUT.xlsx [--strict] [--json]`

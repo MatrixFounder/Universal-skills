@@ -32,6 +32,7 @@ from pathlib import Path
 from openpyxl import load_workbook  # type: ignore
 
 from _soffice import SofficeError, run as soffice_run
+from office._encryption import EncryptedFileError, assert_not_encrypted
 
 
 BASIC_MACRO = textwrap.dedent(
@@ -140,7 +141,11 @@ def main(argv: list[str] | None = None) -> int:
 
     output = args.output or args.input
     try:
+        assert_not_encrypted(args.input)
         recalc(args.input, output, timeout=args.timeout)
+    except EncryptedFileError as exc:
+        print(str(exc), file=sys.stderr)
+        return 3
     except FileNotFoundError as exc:
         print(f"Input not found: {exc}", file=sys.stderr)
         return 1

@@ -26,6 +26,8 @@ from pathlib import Path
 
 from openpyxl import load_workbook  # type: ignore
 
+from office._encryption import EncryptedFileError, assert_not_encrypted
+
 
 ERROR_TOKENS = {"#REF!", "#DIV/0!", "#VALUE!", "#NAME?", "#N/A", "#NUM!", "#NULL!"}
 
@@ -69,6 +71,12 @@ def main(argv: list[str] | None = None) -> int:
     if not args.input.is_file():
         print(f"Input not found: {args.input}", file=sys.stderr)
         return 2
+
+    try:
+        assert_not_encrypted(args.input)
+    except EncryptedFileError as exc:
+        print(str(exc), file=sys.stderr)
+        return 3
 
     hits, non_empty = scan(args.input)
     if args.json:

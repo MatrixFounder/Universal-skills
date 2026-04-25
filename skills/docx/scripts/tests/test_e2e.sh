@@ -64,6 +64,38 @@ grep -q "Acme Inc." "$TMP/filled.md" \
     && ok "substitution: customer.name visible after round-trip" \
     || nok "substitution: customer.name" "not in re-extracted .md"
 
+# --- encryption / legacy-CFB fail-fast -----------------------------------
+echo "encryption fail-fast:"
+# Same byte test catches encrypted .docx AND legacy .doc — both are
+# CFB containers. The error message must mention BOTH possibilities so
+# users hitting the legacy case aren't sent on a wild goose chase
+# looking for a password.
+"$PY" -c "
+from pathlib import Path
+Path('$TMP/cfb.docx').write_bytes(b'\\xd0\\xcf\\x11\\xe0\\xa1\\xb1\\x1a\\xe1' + b'\\x00' * 100)
+"
+set +e
+err=$("$PY" docx_fill_template.py "$TMP/cfb.docx" "$TMP/data.json" "$TMP/_x.docx" 2>&1 >/dev/null)
+rc=$?
+set -e
+[ "$rc" -eq 3 ] && echo "$err" | grep -q "password-protected" \
+    && echo "$err" | grep -q "legacy" \
+    && ok "docx_fill_template: exit 3 + message names both encrypted AND legacy" \
+    || nok "encrypted rejection (fill_template)" "exit $rc / msg: $err"
+
+# Same fixture, different reader script — verifies the wiring isn't
+# specific to fill_template. Use a soffice-gated guard since
+# docx_accept_changes goes through LibreOffice.
+if command -v soffice >/dev/null 2>&1; then
+    set +e
+    err=$("$PY" docx_accept_changes.py "$TMP/cfb.docx" "$TMP/_y.docx" 2>&1 >/dev/null)
+    rc=$?
+    set -e
+    [ "$rc" -eq 3 ] && echo "$err" | grep -q "CFB\|password-protected" \
+        && ok "docx_accept_changes also refuses CFB with exit 3" \
+        || nok "encrypted rejection (accept_changes)" "exit $rc / msg: $err"
+fi
+
 echo
 echo "$pass passed, $fail failed"
 [ "$fail" -eq 0 ]

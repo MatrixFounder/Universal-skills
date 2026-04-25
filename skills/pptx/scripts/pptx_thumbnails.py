@@ -28,6 +28,7 @@ from pathlib import Path
 from PIL import Image, ImageDraw, ImageFont  # type: ignore
 
 from _soffice import SofficeError, convert_to
+from office._encryption import EncryptedFileError, assert_not_encrypted
 
 
 def _find_pdftoppm() -> str:
@@ -129,6 +130,11 @@ def main(argv: list[str] | None = None) -> int:
     if not args.input.is_file():
         print(f"Input not found: {args.input}", file=sys.stderr)
         return 1
+    try:
+        assert_not_encrypted(args.input)
+    except EncryptedFileError as exc:
+        print(str(exc), file=sys.stderr)
+        return 3
 
     try:
         build(
