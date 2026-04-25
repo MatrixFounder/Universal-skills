@@ -160,9 +160,12 @@ Audit an incoming `.xlsx`:
 | CSV → styled .xlsx | `python3 scripts/csv2xlsx.py data.csv out.xlsx` |
 | Force formula recalc | `python3 scripts/xlsx_recalc.py file.xlsx [--scan-errors]` |
 | Scan for `#REF!`/`#DIV/0!`/... | `python3 scripts/xlsx_validate.py file.xlsx --fail-empty` |
+| Add bar/line/pie chart | `python3 scripts/xlsx_add_chart.py file.xlsx --type bar --data B2:B10 [--categories A2:A10] [--title "..."]` |
 | Unpack for XML editing | `python3 scripts/office/unpack.py file.xlsx unpacked/` |
 | Repack | `python3 scripts/office/pack.py unpacked/ file.xlsx` |
-| Structural validation | `python3 scripts/office/validate.py file.xlsx` |
+| Structural validation (deep) | `python3 scripts/office/validate.py file.xlsx [--json] [--strict]` |
+| Preview as PNG-grid | `python3 scripts/preview.py file.xlsx preview.jpg [--cols 3] [--dpi 110]` |
+| Machine-readable failures | append `--json-errors` to any of the above |
 
 ## 11. Examples (Few-Shot)
 
@@ -203,4 +206,8 @@ type and sheet.
 - [scripts/csv2xlsx.py](scripts/csv2xlsx.py) — CSV/TSV → styled workbook.
 - [scripts/xlsx_recalc.py](scripts/xlsx_recalc.py) — LibreOffice-backed formula recalculation + error scan.
 - [scripts/xlsx_validate.py](scripts/xlsx_validate.py) — fast formula-error scan without recalc.
-- [scripts/office/](scripts/office/) — OOXML unpack/pack/validate, identical copy from the docx skill.
+- [scripts/xlsx_add_chart.py](scripts/xlsx_add_chart.py) — bar / line / pie chart attachment over a cell range; chart stays editable in Excel / LibreOffice.
+- [scripts/preview.py](scripts/preview.py) — universal `INPUT → PNG-grid` renderer for `.xlsx`/`.xlsm`/`.docx`/`.pptx`/`.pdf`. Byte-identical across all four office skills.
+- [scripts/_errors.py](scripts/_errors.py) — `--json-errors` envelope helper (schema `v=1`).
+- [scripts/_soffice.py](scripts/_soffice.py) — LibreOffice subprocess wrapper.
+- [scripts/office/](scripts/office/) — OOXML unpack/pack/validate, byte-identical copy from the docx skill (master — see CLAUDE.md §2). Includes deep `XlsxValidator` (sheet chain, sst+styles index bounds, sheet-name uniqueness, orphan parts).

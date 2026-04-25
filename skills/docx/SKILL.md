@@ -180,6 +180,8 @@ Fill a template with JSON data:
 | Repack | `python3 scripts/office/pack.py unpacked/ out.docx` |
 | Structural validate | `python3 scripts/office/validate.py file.docx [--json] [--strict]` |
 | Compare tracked changes vs original | `python3 scripts/office/validate.py edited.docx --compare-to ORIGINAL.docx` |
+| Preview as PNG-grid | `python3 scripts/preview.py file.docx preview.jpg [--cols 3] [--dpi 110]` |
+| Machine-readable failures | append `--json-errors` to any of the above |
 
 ## 11. Examples (Few-Shot)
 
@@ -217,5 +219,10 @@ On non-zero exit, surface the `Unresolved placeholders: …` stderr line to the 
 - [scripts/docx2md.js](scripts/docx2md.js) — .docx → Markdown converter (original script, preserved).
 - [scripts/docx_fill_template.py](scripts/docx_fill_template.py) — template placeholder filler with run canonicalisation.
 - [scripts/docx_accept_changes.py](scripts/docx_accept_changes.py) — LibreOffice-based tracked-change acceptor.
-- [scripts/office/](scripts/office/) — OOXML unpack/pack/validate utilities shared conceptually with `xlsx` and `pptx` skills.
+- [scripts/preview.py](scripts/preview.py) — universal `INPUT → PNG-grid` renderer for `.docx`/`.docm`/`.xlsx`/`.pptx`/`.pdf`. Byte-identical across all four office skills.
+- [scripts/_errors.py](scripts/_errors.py) — `--json-errors` envelope helper used by every Python CLI. Schema-versioned (`v=1`); routes argparse usage errors through the same envelope as domain errors.
+- [scripts/_soffice.py](scripts/_soffice.py) — LibreOffice subprocess wrapper with sandbox-aware AF_UNIX shim auto-load.
+- [scripts/office/](scripts/office/) — OOXML unpack/pack/validate utilities; **byte-identically replicated** to `xlsx` and `pptx` skills (docx is master — see CLAUDE.md §2 for the protocol).
+- [scripts/office/_encryption.py](scripts/office/_encryption.py) — CFB-magic detection: rejects password-protected and legacy `.doc`/`.xls`/`.ppt` files with exit 3 + remediation hint.
+- [scripts/office/_macros.py](scripts/office/_macros.py) — XML-aware macro detection (Default/Override ContentType in `[Content_Types].xml`); writer scripts warn when output extension drops the macros.
 - [scripts/office/schemas/README.md](scripts/office/schemas/README.md) — how to fetch ECMA-376 / Microsoft / W3C XSDs for strict validation.

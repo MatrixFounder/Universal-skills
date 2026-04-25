@@ -164,11 +164,16 @@ Convert to PDF:
 |---|---|
 | Markdown → .pptx (programmatic, built-in) | `node scripts/md2pptx.js deck.md deck.pptx` |
 | Markdown → .pptx (professional quality via marp-slide) | `node scripts/md2pptx.js deck.md deck.pptx --via-marp` |
+| Heading-only outline → slide skeleton | `node scripts/outline2pptx.js outline.md skeleton.pptx` |
+| Markdown → .pptx with custom mermaid theme | `node scripts/md2pptx.js deck.md deck.pptx --mermaid-config theme.json` |
 | .pptx → PDF | `python3 scripts/pptx_to_pdf.py deck.pptx [deck.pdf]` |
 | Thumbnail grid (JPG) | `python3 scripts/pptx_thumbnails.py deck.pptx grid.jpg` |
+| Drop orphan slides/media after manual edit | `python3 scripts/pptx_clean.py deck.pptx [--output cleaned.pptx] [--dry-run]` |
 | Unpack for XML editing | `python3 scripts/office/unpack.py deck.pptx unpacked/` |
 | Repack | `python3 scripts/office/pack.py unpacked/ deck.pptx` |
-| Structural validate | `python3 scripts/office/validate.py deck.pptx` |
+| Structural validate (deep: slide chain, layouts, masters, media refs) | `python3 scripts/office/validate.py deck.pptx [--json] [--strict]` |
+| Preview as PNG-grid | `python3 scripts/preview.py deck.pptx preview.jpg [--cols 3] [--dpi 110]` |
+| Machine-readable failures | append `--json-errors` to any of the above |
 
 ## 11. Examples (Few-Shot)
 
@@ -199,7 +204,13 @@ The script writes `deck.pdf` next to the source.
 - [references/pptxgenjs-basics.md](references/pptxgenjs-basics.md) — API primer: slide sizes, text options, lists, tables, images, common pitfalls.
 - [references/editing-workflow.md](references/editing-workflow.md) — python-pptx vs unpack/patch/pack vs LibreOffice dispatch; placeholder cleanup.
 - [references/design-principles.md](references/design-principles.md) — typography, colour contrast, bullet density, default palette, exit criteria.
-- [scripts/md2pptx.js](scripts/md2pptx.js) — Markdown → .pptx wrapper over pptxgenjs.
+- [scripts/md2pptx.js](scripts/md2pptx.js) — Markdown → .pptx wrapper over pptxgenjs (built-in or `--via-marp` delegation).
+- [scripts/outline2pptx.js](scripts/outline2pptx.js) — heading-only Markdown outline → slide-skeleton .pptx (titles + TODO bullets).
 - [scripts/pptx_to_pdf.py](scripts/pptx_to_pdf.py) — LibreOffice-based PDF export.
 - [scripts/pptx_thumbnails.py](scripts/pptx_thumbnails.py) — thumbnail grid generator (LibreOffice + Poppler + Pillow).
-- [scripts/office/](scripts/office/) — OOXML unpack/pack/validate, identical copy from the docx skill.
+- [scripts/pptx_clean.py](scripts/pptx_clean.py) — drops orphan slides / media / charts / themes via BFS over `.rels` graph (`--dry-run` previews).
+- [scripts/preview.py](scripts/preview.py) — universal `INPUT → PNG-grid` renderer for `.pptx`/`.pptm`/`.docx`/`.xlsx`/`.pdf`.
+- [scripts/mermaid-config.json](scripts/mermaid-config.json) — bundled office-friendly mermaid config (Cyrillic-capable font stack, auto-applied unless overridden via `--mermaid-config`).
+- [scripts/_errors.py](scripts/_errors.py) — `--json-errors` envelope helper (schema `v=1`).
+- [scripts/_soffice.py](scripts/_soffice.py) — LibreOffice subprocess wrapper.
+- [scripts/office/](scripts/office/) — OOXML unpack/pack/validate, byte-identical copy from the docx skill (master). Includes deep `PptxValidator` (slide chain, layout/master chain, media refs, notes reciprocity, sldId rules).

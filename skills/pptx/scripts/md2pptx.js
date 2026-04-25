@@ -688,7 +688,10 @@ async function main() {
       "                        for prose-heavy MD). Mermaid blocks are pre-rendered to PNG\n" +
       "                        and the final PPTX uses --pptx-editable (requires LibreOffice).\n" +
       "                        Needs ../marp-slide/ with its scripts/install.sh run.\n" +
-      "  --marp-theme NAME     When using --via-marp, override theme (default, minimal, tech, etc.)"
+      "  --marp-theme NAME     When using --via-marp, override theme (default, minimal, tech, etc.)\n" +
+      "  --mermaid-config PATH JSON config passed to mmdc -c (theme, fontFamily, etc.).\n" +
+      "                        Default: scripts/mermaid-config.json (office-friendly, Cyrillic-capable).\n" +
+      "  --no-mermaid-config   Render with mmdc's built-in defaults (skip the bundled config)."
     );
     process.exit(1);
   }

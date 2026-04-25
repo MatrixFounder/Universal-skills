@@ -23,10 +23,10 @@ scripts that embed those choices removes the variance.
 - "I'll skip checking exit codes from `pdf_merge.py`." → **WRONG**. Missing an input file produces exit 1 and the output is absent — silently assuming success ships a broken deliverable.
 
 ## 2. Capabilities
-- Render Markdown (+ optional custom CSS) to a typeset PDF via `weasyprint`.
-- Merge multiple PDFs into one preserving bookmarks.
-- Split a PDF by explicit page ranges, one-per-page, or fixed-size chunks.
-- Detect and fill AcroForm fields via `pypdf` (documented in references; not bundled as a script in the MVP).
+- Render Markdown (+ optional custom CSS) to a typeset PDF via `weasyprint`. Fenced ```mermaid blocks pre-render to PNG via `mmdc`; bundled `scripts/mermaid-config.json` ships an office-friendly Cyrillic-capable font stack (override with `--mermaid-config PATH`, opt out with `--no-mermaid-config`).
+- Merge multiple PDFs into one preserving bookmarks (`pdf_merge.py`).
+- Split a PDF by explicit page ranges, one-per-page, or fixed-size chunks (`pdf_split.py`).
+- **Detect, inspect, and fill AcroForm fields** via `pdf_fill_form.py` — three modes: `--check` (form-type triage with exit codes 0/11/12 = AcroForm/XFA/none), `--extract-fields` (dump field schema as JSON for editing), and fill mode (`INPUT.pdf DATA.json -o OUT.pdf [--flatten]`). XFA forms are detected and refused with a clear message.
 - Extract text, tables, and layout via `pdfplumber` (documented; inline usage from the agent is fine).
 - Render any `.pdf` (or peer-skill `.docx`/`.xlsx`/`.pptx`) into a single PNG-grid preview via `preview.py` (uses Poppler directly for `.pdf`; LibreOffice + Poppler for OOXML).
 - Emit failures as machine-readable JSON to stderr with `--json-errors` (uniform across all four office skills).
@@ -158,10 +158,16 @@ Extract text (inline, no bundled script):
 | Task | Command |
 |---|---|
 | Markdown → PDF | `python3 scripts/md2pdf.py doc.md doc.pdf --page-size letter` |
+| Markdown → PDF with custom mermaid theme | `python3 scripts/md2pdf.py doc.md doc.pdf --mermaid-config theme.json` |
 | Merge PDFs | `python3 scripts/pdf_merge.py out.pdf a.pdf b.pdf c.pdf` |
 | Split by ranges | `python3 scripts/pdf_split.py in.pdf --ranges "1-5:intro.pdf,6-10:body.pdf"` |
 | Split one-per-page | `python3 scripts/pdf_split.py in.pdf --each-page pages/` |
 | Split in chunks of N | `python3 scripts/pdf_split.py in.pdf --every N out/` |
+| Inspect AcroForm fields | `python3 scripts/pdf_fill_form.py --check form.pdf` |
+| Extract field schema as JSON | `python3 scripts/pdf_fill_form.py --extract-fields form.pdf -o fields.json` |
+| Fill AcroForm from JSON | `python3 scripts/pdf_fill_form.py form.pdf data.json -o filled.pdf [--flatten]` |
+| Preview as PNG-grid | `python3 scripts/preview.py file.pdf preview.jpg [--cols 3] [--dpi 110]` |
+| Machine-readable failures | append `--json-errors` to any of the above |
 
 ## 11. Examples (Few-Shot)
 
@@ -196,6 +202,10 @@ python3 scripts/pdf_split.py handbook.pdf --every 10 chapters/
 - [references/library-selection.md](references/library-selection.md) — which PDF library for which task, installation shortcuts.
 - [references/forms.md](references/forms.md) — AcroForm vs XFA, filling with pypdf, flattening, visual overlay fallback.
 - [references/weasyprint-setup.md](references/weasyprint-setup.md) — install platform notes, `@page` recipes, font embedding, page breaks.
-- [scripts/md2pdf.py](scripts/md2pdf.py) — Markdown → PDF via weasyprint + markdown2.
+- [scripts/md2pdf.py](scripts/md2pdf.py) — Markdown → PDF via weasyprint + markdown2; mermaid blocks pre-rendered to PNG via `mmdc`.
 - [scripts/pdf_merge.py](scripts/pdf_merge.py) — bookmark-preserving merger via pypdf.
 - [scripts/pdf_split.py](scripts/pdf_split.py) — range, per-page, or fixed-chunk splitter.
+- [scripts/pdf_fill_form.py](scripts/pdf_fill_form.py) — AcroForm inspect/extract/fill/flatten via pypdf; XFA forms detected and refused.
+- [scripts/preview.py](scripts/preview.py) — universal `INPUT → PNG-grid` renderer for `.pdf` (via Poppler) and `.docx`/`.xlsx`/`.pptx` (via LibreOffice + Poppler). Byte-identical across all four office skills.
+- [scripts/mermaid-config.json](scripts/mermaid-config.json) — bundled office-friendly mermaid config (Cyrillic-capable font stack, auto-applied unless overridden via `--mermaid-config`).
+- [scripts/_errors.py](scripts/_errors.py) — `--json-errors` envelope helper (schema `v=1`).
