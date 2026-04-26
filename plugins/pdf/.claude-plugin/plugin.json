@@ -1,0 +1,23 @@
+{
+  "name": "pdf",
+  "version": "1.0.0",
+  "description": "Markdown→PDF (weasyprint, Cyrillic mermaid) + pypdf merge/split + AcroForm fill (XFA detection) + PNG-grid preview",
+  "author": {
+    "name": "Sergey K.",
+    "email": "kuptsov.sergey@gmail.com"
+  },
+  "homepage": "https://github.com/MatrixFounder/Universal-skills",
+  "repository": "https://github.com/MatrixFounder/Universal-skills",
+  "license": "LicenseRef-Proprietary",
+  "keywords": [
+    "pdf",
+    "weasyprint",
+    "pypdf",
+    "mermaid",
+    "acroform",
+    "merge",
+    "split"
+  ],
+  "category": "office",
+  "_generator": "sync-plugins.sh@universal-skills"
+}

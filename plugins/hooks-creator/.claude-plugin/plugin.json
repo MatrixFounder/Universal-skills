@@ -1,0 +1,20 @@
+{
+  "name": "hooks-creator",
+  "version": "1.0.0",
+  "description": "Customize Gemini CLI behavior using hooks (events, blockers, loggers) with templates and patterns",
+  "author": {
+    "name": "Sergey K.",
+    "email": "kuptsov.sergey@gmail.com"
+  },
+  "homepage": "https://github.com/MatrixFounder/Universal-skills",
+  "repository": "https://github.com/MatrixFounder/Universal-skills",
+  "license": "Apache-2.0",
+  "keywords": [
+    "hooks",
+    "gemini",
+    "cli",
+    "automation"
+  ],
+  "category": "development",
+  "_generator": "sync-plugins.sh@universal-skills"
+}

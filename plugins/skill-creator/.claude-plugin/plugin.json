@@ -1,0 +1,21 @@
+{
+  "name": "skill-creator",
+  "version": "1.0.0",
+  "description": "Scaffold + upgrade + eval + benchmark agent skills against the Gold-Standard structural template",
+  "author": {
+    "name": "Sergey K.",
+    "email": "kuptsov.sergey@gmail.com"
+  },
+  "homepage": "https://github.com/MatrixFounder/Universal-skills",
+  "repository": "https://github.com/MatrixFounder/Universal-skills",
+  "license": "Apache-2.0",
+  "keywords": [
+    "skill",
+    "meta",
+    "scaffolding",
+    "validation",
+    "gold-standard"
+  ],
+  "category": "meta",
+  "_generator": "sync-plugins.sh@universal-skills"
+}

@@ -1,0 +1,21 @@
+{
+  "name": "vdd-sarcastic",
+  "version": "1.0.0",
+  "description": "VDD adversarial review with a sarcastic, provocative tone — exposes lazy patterns by being uncomfortable to read",
+  "author": {
+    "name": "Sergey K.",
+    "email": "kuptsov.sergey@gmail.com"
+  },
+  "homepage": "https://github.com/MatrixFounder/Universal-skills",
+  "repository": "https://github.com/MatrixFounder/Universal-skills",
+  "license": "Apache-2.0",
+  "keywords": [
+    "vdd",
+    "verification",
+    "adversarial",
+    "code-review",
+    "tone"
+  ],
+  "category": "verification",
+  "_generator": "sync-plugins.sh@universal-skills"
+}

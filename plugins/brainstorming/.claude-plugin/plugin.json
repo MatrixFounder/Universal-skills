@@ -1,0 +1,20 @@
+{
+  "name": "brainstorming",
+  "version": "1.0.0",
+  "description": "Open-ended exploration partner — brainstorm, clarify requirements, design architecture, generate options",
+  "author": {
+    "name": "Sergey K.",
+    "email": "kuptsov.sergey@gmail.com"
+  },
+  "homepage": "https://github.com/MatrixFounder/Universal-skills",
+  "repository": "https://github.com/MatrixFounder/Universal-skills",
+  "license": "Apache-2.0",
+  "keywords": [
+    "brainstorming",
+    "ideation",
+    "exploration",
+    "design"
+  ],
+  "category": "workflow",
+  "_generator": "sync-plugins.sh@universal-skills"
+}

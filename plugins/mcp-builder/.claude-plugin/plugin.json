@@ -1,0 +1,21 @@
+{
+  "name": "mcp-builder",
+  "version": "1.0.0",
+  "description": "Build production-quality MCP (Model Context Protocol) servers in Python (FastMCP) or Node/TypeScript (MCP SDK)",
+  "author": {
+    "name": "Sergey K.",
+    "email": "kuptsov.sergey@gmail.com"
+  },
+  "homepage": "https://github.com/MatrixFounder/Universal-skills",
+  "repository": "https://github.com/MatrixFounder/Universal-skills",
+  "license": "Apache-2.0",
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "server",
+    "fastmcp",
+    "typescript"
+  ],
+  "category": "development",
+  "_generator": "sync-plugins.sh@universal-skills"
+}

@@ -1,0 +1,24 @@
+{
+  "name": "pptx",
+  "version": "1.0.0",
+  "description": "Markdown→pptx (built-in or marp) + outline skeleton + orphan cleanup + deep PptxValidator + Cyrillic mermaid + encrypt/decrypt",
+  "author": {
+    "name": "Sergey K.",
+    "email": "kuptsov.sergey@gmail.com"
+  },
+  "homepage": "https://github.com/MatrixFounder/Universal-skills",
+  "repository": "https://github.com/MatrixFounder/Universal-skills",
+  "license": "LicenseRef-Proprietary",
+  "keywords": [
+    "pptx",
+    "powerpoint",
+    "office",
+    "ooxml",
+    "marp",
+    "mermaid",
+    "thumbnails",
+    "encryption"
+  ],
+  "category": "office",
+  "_generator": "sync-plugins.sh@universal-skills"
+}

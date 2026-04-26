@@ -1,0 +1,21 @@
+{
+  "name": "post-writing",
+  "version": "1.0.0",
+  "description": "Write, draft, or rewrite social-media posts (LinkedIn, Telegram, Blog) for higher engagement",
+  "author": {
+    "name": "Sergey K.",
+    "email": "kuptsov.sergey@gmail.com"
+  },
+  "homepage": "https://github.com/MatrixFounder/Universal-skills",
+  "repository": "https://github.com/MatrixFounder/Universal-skills",
+  "license": "Apache-2.0",
+  "keywords": [
+    "writing",
+    "social-media",
+    "linkedin",
+    "telegram",
+    "blog"
+  ],
+  "category": "content",
+  "_generator": "sync-plugins.sh@universal-skills"
+}

@@ -1,0 +1,20 @@
+{
+  "name": "text-humanizer",
+  "version": "1.0.0",
+  "description": "Humanize AI-generated text or generate untraceable system prompts in multiple genres (Wiki, Creative, Crypto, etc.)",
+  "author": {
+    "name": "Sergey K.",
+    "email": "kuptsov.sergey@gmail.com"
+  },
+  "homepage": "https://github.com/MatrixFounder/Universal-skills",
+  "repository": "https://github.com/MatrixFounder/Universal-skills",
+  "license": "Apache-2.0",
+  "keywords": [
+    "text",
+    "humanize",
+    "rewriting",
+    "prompts"
+  ],
+  "category": "content",
+  "_generator": "sync-plugins.sh@universal-skills"
+}

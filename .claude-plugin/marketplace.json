@@ -1,0 +1,229 @@
+{
+  "name": "universal-skills",
+  "owner": {
+    "name": "Sergey K.",
+    "email": "kuptsov.sergey@gmail.com",
+    "url": "https://github.com/MatrixFounder"
+  },
+  "metadata": {
+    "description": "Universal-Skills marketplace: agent-agnostic skills for Claude Code. Pick and install only the skills you need — office (docx/xlsx/pptx/pdf), presentations (marp-slide), meta-skills (skill-creator/validator/enhancer), VDD verification, content writing, and more.",
+    "version": "1.0.0",
+    "pluginRoot": "./plugins"
+  },
+  "plugins": [
+    {
+      "name": "brainstorming",
+      "source": "brainstorming",
+      "description": "Open-ended exploration partner — brainstorm, clarify requirements, design architecture, generate options",
+      "category": "workflow",
+      "tags": [
+        "brainstorming",
+        "ideation",
+        "exploration",
+        "design"
+      ]
+    },
+    {
+      "name": "docx",
+      "source": "docx",
+      "description": "Markdown↔docx round-trip + template fill + tracked-changes accept + deep XSD validator + msoffcrypto-tool encrypt/decrypt",
+      "category": "office",
+      "tags": [
+        "docx",
+        "word",
+        "office",
+        "ooxml",
+        "markdown",
+        "template",
+        "encryption"
+      ]
+    },
+    {
+      "name": "hooks-creator",
+      "source": "hooks-creator",
+      "description": "Customize Gemini CLI behavior using hooks (events, blockers, loggers) with templates and patterns",
+      "category": "development",
+      "tags": [
+        "hooks",
+        "gemini",
+        "cli",
+        "automation"
+      ]
+    },
+    {
+      "name": "marp-slide",
+      "source": "marp-slide",
+      "description": "Marp slides with 7 themes + custom themes + image layouts + mermaid preprocessing + editable PPTX export via LibreOffice",
+      "category": "office",
+      "tags": [
+        "marp",
+        "slides",
+        "presentation",
+        "mermaid",
+        "themes"
+      ]
+    },
+    {
+      "name": "mcp-builder",
+      "source": "mcp-builder",
+      "description": "Build production-quality MCP (Model Context Protocol) servers in Python (FastMCP) or Node/TypeScript (MCP SDK)",
+      "category": "development",
+      "tags": [
+        "mcp",
+        "model-context-protocol",
+        "server",
+        "fastmcp",
+        "typescript"
+      ]
+    },
+    {
+      "name": "pdf",
+      "source": "pdf",
+      "description": "Markdown→PDF (weasyprint, Cyrillic mermaid) + pypdf merge/split + AcroForm fill (XFA detection) + PNG-grid preview",
+      "category": "office",
+      "tags": [
+        "pdf",
+        "weasyprint",
+        "pypdf",
+        "mermaid",
+        "acroform",
+        "merge",
+        "split"
+      ]
+    },
+    {
+      "name": "post-writing",
+      "source": "post-writing",
+      "description": "Write, draft, or rewrite social-media posts (LinkedIn, Telegram, Blog) for higher engagement",
+      "category": "content",
+      "tags": [
+        "writing",
+        "social-media",
+        "linkedin",
+        "telegram",
+        "blog"
+      ]
+    },
+    {
+      "name": "pptx",
+      "source": "pptx",
+      "description": "Markdown→pptx (built-in or marp) + outline skeleton + orphan cleanup + deep PptxValidator + Cyrillic mermaid + encrypt/decrypt",
+      "category": "office",
+      "tags": [
+        "pptx",
+        "powerpoint",
+        "office",
+        "ooxml",
+        "marp",
+        "mermaid",
+        "thumbnails",
+        "encryption"
+      ]
+    },
+    {
+      "name": "skill-creator",
+      "source": "skill-creator",
+      "description": "Scaffold + upgrade + eval + benchmark agent skills against the Gold-Standard structural template",
+      "category": "meta",
+      "tags": [
+        "skill",
+        "meta",
+        "scaffolding",
+        "validation",
+        "gold-standard"
+      ]
+    },
+    {
+      "name": "skill-enhancer",
+      "source": "skill-enhancer",
+      "description": "Audit, fix, or improve an existing skill to meet Gold-Standard compliance",
+      "category": "meta",
+      "tags": [
+        "skill",
+        "meta",
+        "refactor",
+        "gold-standard"
+      ]
+    },
+    {
+      "name": "skill-validator",
+      "source": "skill-validator",
+      "description": "Audit a skill for security vulnerabilities (malicious bash, injection vectors) and Gold-Standard structural compliance",
+      "category": "meta",
+      "tags": [
+        "skill",
+        "meta",
+        "validation",
+        "security",
+        "audit"
+      ]
+    },
+    {
+      "name": "summarizing-meetings",
+      "source": "summarizing-meetings",
+      "description": "Auto-detects meeting type and produces a two-level pyramid Markdown summary optimized for people, AI agents, RAG, Obsidian",
+      "category": "content",
+      "tags": [
+        "meetings",
+        "summary",
+        "transcription",
+        "rag",
+        "obsidian"
+      ]
+    },
+    {
+      "name": "text-humanizer",
+      "source": "text-humanizer",
+      "description": "Humanize AI-generated text or generate untraceable system prompts in multiple genres (Wiki, Creative, Crypto, etc.)",
+      "category": "content",
+      "tags": [
+        "text",
+        "humanize",
+        "rewriting",
+        "prompts"
+      ]
+    },
+    {
+      "name": "vdd-adversarial",
+      "source": "vdd-adversarial",
+      "description": "Verification-Driven Development adversarial reviewer — destroys happy-path assumptions, finds edge cases the builder missed",
+      "category": "verification",
+      "tags": [
+        "vdd",
+        "verification",
+        "adversarial",
+        "code-review",
+        "qa"
+      ]
+    },
+    {
+      "name": "vdd-sarcastic",
+      "source": "vdd-sarcastic",
+      "description": "VDD adversarial review with a sarcastic, provocative tone — exposes lazy patterns by being uncomfortable to read",
+      "category": "verification",
+      "tags": [
+        "vdd",
+        "verification",
+        "adversarial",
+        "code-review",
+        "tone"
+      ]
+    },
+    {
+      "name": "xlsx",
+      "source": "xlsx",
+      "description": "CSV→xlsx with styling + LibreOffice formula recalc + deep XlsxValidator + openpyxl charts + msoffcrypto-tool encrypt/decrypt",
+      "category": "office",
+      "tags": [
+        "xlsx",
+        "excel",
+        "office",
+        "ooxml",
+        "csv",
+        "chart",
+        "openpyxl",
+        "encryption"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,21 @@
+{
+  "name": "marp-slide",
+  "version": "1.0.0",
+  "description": "Marp slides with 7 themes + custom themes + image layouts + mermaid preprocessing + editable PPTX export via LibreOffice",
+  "author": {
+    "name": "Sergey K.",
+    "email": "kuptsov.sergey@gmail.com"
+  },
+  "homepage": "https://github.com/MatrixFounder/Universal-skills",
+  "repository": "https://github.com/MatrixFounder/Universal-skills",
+  "license": "Apache-2.0",
+  "keywords": [
+    "marp",
+    "slides",
+    "presentation",
+    "mermaid",
+    "themes"
+  ],
+  "category": "office",
+  "_generator": "sync-plugins.sh@universal-skills"
+}

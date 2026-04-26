@@ -1,0 +1,20 @@
+{
+  "name": "skill-enhancer",
+  "version": "1.0.0",
+  "description": "Audit, fix, or improve an existing skill to meet Gold-Standard compliance",
+  "author": {
+    "name": "Sergey K.",
+    "email": "kuptsov.sergey@gmail.com"
+  },
+  "homepage": "https://github.com/MatrixFounder/Universal-skills",
+  "repository": "https://github.com/MatrixFounder/Universal-skills",
+  "license": "Apache-2.0",
+  "keywords": [
+    "skill",
+    "meta",
+    "refactor",
+    "gold-standard"
+  ],
+  "category": "meta",
+  "_generator": "sync-plugins.sh@universal-skills"
+}

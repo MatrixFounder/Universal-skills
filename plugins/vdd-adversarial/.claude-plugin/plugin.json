@@ -1,0 +1,21 @@
+{
+  "name": "vdd-adversarial",
+  "version": "1.0.0",
+  "description": "Verification-Driven Development adversarial reviewer — destroys happy-path assumptions, finds edge cases the builder missed",
+  "author": {
+    "name": "Sergey K.",
+    "email": "kuptsov.sergey@gmail.com"
+  },
+  "homepage": "https://github.com/MatrixFounder/Universal-skills",
+  "repository": "https://github.com/MatrixFounder/Universal-skills",
+  "license": "Apache-2.0",
+  "keywords": [
+    "vdd",
+    "verification",
+    "adversarial",
+    "code-review",
+    "qa"
+  ],
+  "category": "verification",
+  "_generator": "sync-plugins.sh@universal-skills"
+}

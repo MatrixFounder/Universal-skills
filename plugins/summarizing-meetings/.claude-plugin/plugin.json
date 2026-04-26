@@ -1,0 +1,21 @@
+{
+  "name": "summarizing-meetings",
+  "version": "1.0.0",
+  "description": "Auto-detects meeting type and produces a two-level pyramid Markdown summary optimized for people, AI agents, RAG, Obsidian",
+  "author": {
+    "name": "Sergey K.",
+    "email": "kuptsov.sergey@gmail.com"
+  },
+  "homepage": "https://github.com/MatrixFounder/Universal-skills",
+  "repository": "https://github.com/MatrixFounder/Universal-skills",
+  "license": "Apache-2.0",
+  "keywords": [
+    "meetings",
+    "summary",
+    "transcription",
+    "rag",
+    "obsidian"
+  ],
+  "category": "content",
+  "_generator": "sync-plugins.sh@universal-skills"
+}
