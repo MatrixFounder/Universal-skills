@@ -42,21 +42,38 @@ And reuse the common helpers:
 
 ## 4. URL detection
 
-`fetch.py::_detect_source` does shallow string matching on the URL.
-Adding a new source means adding one branch:
+`fetch.py::_detect_source` parses the URL with `urllib.parse.urlparse`
+and checks the hostname against an explicit **allowlist**. Substring
+matching on the URL string was removed in v1.1 because it accepted
+typosquats like `phishing-youtu.be.evil.com` and path-embedded
+`?ref=youtube.com`.
 
-```python
-if "vimeo.com" in u:
-    return "vimeo"
-```
+Adding a new source means three concrete edits:
 
-and one dispatch in `_fetch_one`:
+1. Add the new hosts to a hostname set in `fetch.py`. Today there is
+   only `_YOUTUBE_HOSTS`; for a second source, refactor into a
+   `host → source` lookup table:
 
-```python
-if source == "vimeo":
-    stat = fetch_vimeo_transcript(url, out_path, fallback_ladder=ladder)
-```
+   ```python
+   _SOURCE_BY_HOST: dict[str, str] = {}
+   for h in ("youtu.be", "www.youtu.be", "youtube.com", ...):
+       _SOURCE_BY_HOST[h] = "youtube"
+   for h in ("vimeo.com", "www.vimeo.com", "player.vimeo.com"):
+       _SOURCE_BY_HOST[h] = "vimeo"
+   ```
+
+   Then `_detect_source` becomes a single dict lookup.
+
+2. Add one dispatch branch in `_fetch_one`:
+
+   ```python
+   if source == "vimeo":
+       stat = fetch_vimeo_transcript(url, out_path, fallback_ladder=ladder)
+   ```
+
+3. Drop the new adapter at `scripts/sources/<source>.py`. Reuse the
+   common helpers (`_vtt_to_text`, `TranscriptStat`).
 
 Keep the dispatch flat. Do not introduce a registry pattern unless we
-have ≥ 4 sources — three branches in an `if/elif` chain are still more
-readable than reflection.
+have ≥ 4 sources — three branches in a dict are still more readable
+than reflection.

@@ -14,7 +14,7 @@ and adversarial review notes, see
 
 | Capability | Detail |
 |---|---|
-| **Source** | YouTube today (via `yt-dlp`). Vimeo / Zoom / podcast slots reserved (see [`references/supported_sources.md`](../../skills/transcript-fetcher/references/supported_sources.md)). |
+| **Source** | **YouTube only** today (via `yt-dlp`). URLs from Vimeo, Zoom, or any other host are rejected by the hostname allowlist with `ValueError: Unsupported source for URL: ...`. Adapter slots for Vimeo / Zoom / podcast are documented in [`references/supported_sources.md`](../../skills/transcript-fetcher/references/supported_sources.md) but **not implemented** in v1.0. |
 | **Caption tracks** | Manual (user-uploaded) and auto-generated. The fallback ladder picks the highest-quality track that exists for a given language. |
 | **Output** | Two files per URL: `<out>.txt` (cleaned plain text, UTF-8) and `<out>.txt.stat.json` (audit trail of which track was used). |
 | **Modes** | Single-URL and batch (one URL per line). |
