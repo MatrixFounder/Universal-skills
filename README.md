@@ -100,7 +100,7 @@ Available plugins (by category):
 | `office` | `docx`, `xlsx`, `pptx`, `pdf`, `marp-slide` |
 | `meta` | `skill-creator`, `skill-validator`, `skill-enhancer` |
 | `verification` | `vdd-adversarial`, `vdd-sarcastic` |
-| `content` | `post-writing`, `text-humanizer`, `summarizing-meetings` |
+| `content` | `post-writing`, `text-humanizer`, `summarizing-meetings`, `transcript-fetcher` |
 | `workflow` | `brainstorming` |
 | `development` | `mcp-builder`, `hooks-creator` |
 
@@ -176,6 +176,7 @@ specific repo.
 | **[Post Writing](skills/post-writing/SKILL.md)** | 4-step editorial pipeline for LinkedIn/Telegram posts: analyze → hook → draft → review. Includes brand voice guides (RU/EN), 7 hook formulas, platform formatting, and review checklist. | 2 |
 | **[Text Humanizer](skills/text-humanizer/SKILL.md)** | Rewrites text to remove "AI slop" or generates prompt tailored to specific genres (Wiki, Crypto, etc.). | 2 |
 | **[Marp Slide Creator](skills/marp-slide/SKILL.md)** | Creates professional Marp presentation slides with 7 pre-designed themes. Supports image layouts, custom CSS, and "make it look good" requests with automatic theme inference. | 2 |
+| **[Transcript Fetcher](skills/transcript-fetcher/SKILL.md)** | Pulls clean plain-text transcripts from video URLs (YouTube today; Vimeo / Zoom / podcast slots reserved) via `yt-dlp`. Manual→auto language fallback ladder (`ru` → `ru-orig` → `en` with quality-flag), rolling-caption dedup with cue-grouping + suffix-prefix splice, anchored `>>` speaker turns, JSON stat sidecar. Composes with **Summarizing Meetings**: fetch → summarize. | 2 |
 
 ### Office Skills
 

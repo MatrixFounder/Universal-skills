@@ -48,7 +48,7 @@ npm-debug.log*
 .agent
 archieve
 test-posts
-tmp
+tmp*
 
 # Test runner caches
 .pytest_cache/

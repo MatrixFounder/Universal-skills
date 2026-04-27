@@ -143,6 +143,12 @@ CATEGORY=content
 KEYWORDS=meetings,summary,transcription,rag,obsidian
 EOF
 ;;
+        transcript-fetcher) cat <<'EOF'
+TAGLINE=Fetch clean plain-text transcripts from video URLs (YouTube via yt-dlp) with manual→auto language fallback, rolling-caption dedup, >> speaker turns, and a JSON stat sidecar
+CATEGORY=content
+KEYWORDS=transcript,youtube,yt-dlp,vtt,subtitles,captions,fetcher
+EOF
+;;
 
         # Workflow
         brainstorming) cat <<'EOF'

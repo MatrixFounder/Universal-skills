@@ -1,0 +1,15 @@
+{
+  "source": "youtube",
+  "url": "https://youtu.be/NSVTpCfBMK8",
+  "video_id": "NSVTpCfBMK8",
+  "output_path": "/tmp/talk.txt",
+  "chosen_track_kind": "auto",
+  "chosen_track_lang": "ru-orig",
+  "char_count": 78421,
+  "speaker_turn_count": 6,
+  "quality_flag": null,
+  "notes": [
+    "no subtitle returned for manual:ru",
+    "got auto:ru-orig -> NSVTpCfBMK8.ru-orig.vtt"
+  ]
+}

@@ -1,0 +1,7 @@
+# transcript-fetcher batch input format
+# - One URL per line.
+# - Blank lines are ignored.
+# - Lines starting with `#` are comments.
+
+https://youtu.be/NSVTpCfBMK8
+https://www.youtube.com/watch?v=R-LXs0olaG8

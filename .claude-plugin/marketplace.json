@@ -184,6 +184,21 @@
       ]
     },
     {
+      "name": "transcript-fetcher",
+      "source": "transcript-fetcher",
+      "description": "Fetch clean plain-text transcripts from video URLs (YouTube via yt-dlp) with manual→auto language fallback, rolling-caption dedup, >> speaker turns, and a JSON stat sidecar",
+      "category": "content",
+      "tags": [
+        "transcript",
+        "youtube",
+        "yt-dlp",
+        "vtt",
+        "subtitles",
+        "captions",
+        "fetcher"
+      ]
+    },
+    {
       "name": "vdd-adversarial",
       "source": "vdd-adversarial",
       "description": "Verification-Driven Development adversarial reviewer — destroys happy-path assumptions, finds edge cases the builder missed",

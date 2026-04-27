@@ -1,0 +1,23 @@
+{
+  "name": "transcript-fetcher",
+  "version": "1.0.0",
+  "description": "Fetch clean plain-text transcripts from video URLs (YouTube via yt-dlp) with manual→auto language fallback, rolling-caption dedup, >> speaker turns, and a JSON stat sidecar",
+  "author": {
+    "name": "Sergey K.",
+    "email": "kuptsov.sergey@gmail.com"
+  },
+  "homepage": "https://github.com/MatrixFounder/Universal-skills",
+  "repository": "https://github.com/MatrixFounder/Universal-skills",
+  "license": "Apache-2.0",
+  "keywords": [
+    "transcript",
+    "youtube",
+    "yt-dlp",
+    "vtt",
+    "subtitles",
+    "captions",
+    "fetcher"
+  ],
+  "category": "content",
+  "_generator": "sync-plugins.sh@universal-skills"
+}
