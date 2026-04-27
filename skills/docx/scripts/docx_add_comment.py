@@ -78,9 +78,18 @@ def _rpr_key(run: etree._Element) -> bytes:
 
 
 def _is_simple_text_run(run: etree._Element) -> bool:
+    """A run is "simple" enough to safely split around an anchor when it
+    contains only formatting (`<w:rPr>`), text (`<w:t>`), and Word's
+    visual-empty render-cache markers. `<w:lastRenderedPageBreak>` is
+    Word's hint for the position of the last page break it computed —
+    purely a paginator cache, no glyph rendered, and re-emitted on
+    every save. Real-world headings (e.g. "PURPOSE" right after a
+    heading-induced page break) routinely look like
+    `[rPr, lastRenderedPageBreak, t]` and were silently treated as
+    non-simple by an earlier overly-strict filter."""
     for child in run:
         tag = etree.QName(child).localname
-        if tag not in {"rPr", "t"}:
+        if tag not in {"rPr", "t", "lastRenderedPageBreak"}:
             return False
     return True
 

@@ -340,6 +340,97 @@ The `pdf_fill_form` exit-code table is in
 
 ---
 
+## 5b. `docx_merge.py` (real-world Word documents)
+
+The merger was hardened iteratively against real Word-authored
+inputs. If you see one of these symptoms after a merge, the fix is
+already in place — double-check you're on a recent build:
+
+### Word: "обнаружено содержимое, которое не удалось прочитать" (couldn't read content)
+
+**Cause.** One of three things, in order of frequency:
+
+1. Extra's media files (PNG / GIF) have no MIME mapping in
+   `[Content_Types].xml` — base only had `Default Extension="jpeg"`
+   and we copied PNG bytes in.
+2. Extra body has paragraph-level `<w:sectPr>` with
+   `<w:headerReference>`/`<w:footerReference>` pointing at extra's
+   header/footer parts that we don't merge — refs end up resolving
+   to base's rels with a different content type.
+3. Numbering definitions appended in the wrong schema order
+   (`<w:abstractNum>` after `<w:num>` violates ECMA-376 §17.9.20).
+
+**Fix.** All three are handled in iter-2 of `docx_merge.py`:
+`_merge_content_types_defaults` pulls missing `<Default Extension>`,
+`_strip_paragraph_section_breaks` removes inline sectPr with
+header/footer refs, and `_merge_numbering` inserts new abstractNums
+BEFORE the first `<w:num>`. If you still see this on a fresh
+build, run [`office.validate`](../../skills/docx/scripts/office/validate.py)
+on the merged file — it will surface the specific class of issue.
+
+### Headings on later pages render as bulleted "o" markers post-merge
+
+**Cause.** Schema-order violation in `numbering.xml` →  Word
+auto-repairs at open time, and during the repair pass the binding
+of base's heading-style numIds gets mangled. (Specifically: appended
+`<w:abstractNum>` elements landed AFTER existing `<w:num>` elements;
+ECMA-376 forbids that order.)
+
+**Fix.** Already in iter-2.3 — `_merge_numbering` now inserts new
+abstractNums at the position of the first existing `<w:num>` and
+appends new nums before `<w:numIdMacAtCleanup>` if it exists. To
+verify a merged file:
+
+```bash
+python -c "
+import zipfile
+from lxml import etree
+with zipfile.ZipFile('merged.docx') as z:
+    root = etree.fromstring(z.read('word/numbering.xml'))
+order = [etree.QName(c).localname for c in root]
+saw_num = False; bad = 0
+for tag in order:
+    if tag == 'num': saw_num = True
+    if tag == 'abstractNum' and saw_num: bad += 1
+print('abstractNum-after-num violations:', bad, '(must be 0)')
+"
+```
+
+### "Этот файл заблокирован для правки. Кем заблокирован: другим пользователем"
+
+**Cause.** This is **not** a merge bug. Word reports it when a
+lock file `~$<filename>.docx` is present in the same directory
+(another Word session held a write-lock and didn't clean up), or
+when OneDrive/Box/SharePoint sync holds the file. Neither input
+nor output need `<w:documentProtection>` for this dialog to fire.
+
+**Fix.**
+
+```bash
+# Close ALL Word windows, then remove the lock file
+rm tmp/test-data/~$merged_*    # macOS / Linux
+del "tmp\test-data\~$merged_*" # Windows cmd
+```
+
+Re-open the merged file. If it still says locked, check whether the
+file itself is read-only (`chmod +w` / right-click → Properties).
+
+### Merged file silently drops list continuity from extra
+
+**Cause.** Iter-2 merges numbering definitions with offset, but if
+extra's numbering relies on `<w:numStyleLink>` / `<w:styleLink>` to
+chain into a base-style ID that has different semantics, the
+appended list will use base's chain instead of extra's. Rare in
+practice (md2docx and most Word documents define numbering inline,
+not via style chains).
+
+**Fix.** Either pre-flight extras through `office.unpack` and
+manually inline the list `<w:lvl>` elements before merge, or accept
+the visual difference. Future iter-3 may address numStyleLink
+remapping if user demand surfaces.
+
+---
+
 ## 6. Environment / CI
 
 ### CI fails with "validate_skill.py: not found" or skill validation 0/0
