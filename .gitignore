@@ -50,6 +50,10 @@ archieve
 test-posts
 tmp
 
+# Test runner caches
+.pytest_cache/
+.hypothesis/
+
 # Claude Code runtime state
 .claude/scheduled_tasks.lock
 .claude/*.lock

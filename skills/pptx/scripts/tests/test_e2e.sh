@@ -6,6 +6,8 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 SKILL_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+ROOT="$(cd "$SKILL_DIR/../../.." && pwd)"
+SKILL=pptx
 PY="$SKILL_DIR/.venv/bin/python"
 TMP="$(mktemp -d -t pptx_e2e_XXXX)"
 trap 'rm -rf "$TMP"' EXIT
@@ -14,6 +16,8 @@ cd "$SKILL_DIR"
 pass=0; fail=0
 ok()  { printf '  ✓ %s\n'   "$1"; pass=$((pass+1)); }
 nok() { printf '  ✗ %s\n  → %s\n' "$1" "$2"; fail=$((fail+1)); }
+
+source "$ROOT/tests/visual/_visual_helper.sh"
 
 # --- md2pptx ---------------------------------------------------------------
 echo "md2pptx:"
@@ -30,6 +34,32 @@ slide_count=$(unzip -l "$TMP/out.pptx" | grep -cE "ppt/slides/slide[0-9]+\.xml$"
 [ "$slide_count" -ge 3 ] \
     && ok "expected ≥3 slides, got $slide_count" \
     || nok "slide count" "expected ≥3, got $slide_count"
+
+# --- q-3 mermaid smoke (pptx) ---------------------------------------------
+# Same path as md2pdf: ```mermaid blocks → mmdc → PNG → embedded as image.
+# Skip cleanly if mmdc isn't installed.
+if [ -x "node_modules/.bin/mmdc" ]; then
+    echo "q-3 mermaid (pptx):"
+    cat > "$TMP/mm.md" <<'MD'
+# Mermaid smoke
+
+```mermaid
+graph LR
+    A[Start] --> B[End]
+```
+MD
+    node md2pptx.js "$TMP/mm.md" "$TMP/mm.pptx" >/dev/null 2>&1 \
+        && [ -s "$TMP/mm.pptx" ] \
+        && ok "md2pptx with mermaid produced output" \
+        || nok "md2pptx mermaid" "no output"
+    # The rendered PNG must land inside ppt/media/ (or wherever pptxgenjs
+    # places embedded images). Just confirm the package contains at least
+    # one PNG part — the alternative would be a code-fence-only fallback,
+    # which is silent regression we want to catch.
+    unzip -l "$TMP/mm.pptx" 2>/dev/null | grep -q "\.png" \
+        && ok "pptx contains an embedded PNG (mmdc render landed)" \
+        || nok "pptx mermaid PNG" "no .png in archive"
+fi
 
 # --- pptx_thumbnails -------------------------------------------------------
 # Skip if soffice is missing; thumbnails go through LibreOffice.
@@ -431,6 +461,12 @@ set -e
 [ "$rc" -eq 3 ] && echo "$err" | grep -q "password-protected" \
     && ok "M4: office.validate refuses encrypted pptx with cross-3 exit 3" \
     || nok "M4 cross-3 in validate" "rc=$rc msg=$err"
+
+# --- q-2: visual regression on the pptx → pdf output ----------------------
+if [ -s "$TMP/out.pdf" ]; then
+    echo "q-2 visual regression:"
+    visual_check "$TMP/out.pdf" "fixture-slides"
+fi
 
 echo
 echo "$pass passed, $fail failed"

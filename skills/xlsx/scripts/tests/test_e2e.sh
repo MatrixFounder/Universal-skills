@@ -6,6 +6,8 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 SKILL_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+ROOT="$(cd "$SKILL_DIR/../../.." && pwd)"
+SKILL=xlsx
 PY="$SKILL_DIR/.venv/bin/python"
 TMP="$(mktemp -d -t xlsx_e2e_XXXX)"
 trap 'rm -rf "$TMP"' EXIT
@@ -14,6 +16,8 @@ cd "$SKILL_DIR"
 pass=0; fail=0
 ok()  { printf '  ✓ %s\n'   "$1"; pass=$((pass+1)); }
 nok() { printf '  ✗ %s\n  → %s\n' "$1" "$2"; fail=$((fail+1)); }
+
+source "$ROOT/tests/visual/_visual_helper.sh"
 
 # --- csv2xlsx -------------------------------------------------------------
 echo "csv2xlsx:"
@@ -482,6 +486,19 @@ set -e
 [ "$rc" -eq 3 ] && echo "$err" | grep -q "password-protected" \
     && ok "M4: office.validate refuses encrypted xlsx with cross-3 exit 3" \
     || nok "M4 cross-3 in validate" "rc=$rc msg=$err"
+
+# --- q-2: visual regression (xlsx → soffice → pdf, then compare) ----------
+if command -v soffice >/dev/null 2>&1; then
+    echo "q-2 visual regression:"
+    soffice --headless --norestore --nologo --nodefault \
+            "-env:UserInstallation=file://$TMP/lo-profile" \
+            --convert-to pdf --outdir "$TMP" "$TMP/out.xlsx" >/dev/null 2>&1
+    if [ -s "$TMP/out.pdf" ]; then
+        visual_check "$TMP/out.pdf" "csv-recalc"
+    else
+        nok "visual: csv-recalc" "soffice did not produce out.pdf"
+    fi
+fi
 
 echo
 echo "$pass passed, $fail failed"

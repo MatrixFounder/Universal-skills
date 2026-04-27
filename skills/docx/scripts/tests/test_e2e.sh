@@ -9,6 +9,8 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 SKILL_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+ROOT="$(cd "$SKILL_DIR/../../.." && pwd)"
+SKILL=docx
 PY="$SKILL_DIR/.venv/bin/python"
 TMP="$(mktemp -d -t docx_e2e_XXXX)"
 trap 'rm -rf "$TMP"' EXIT
@@ -17,6 +19,8 @@ cd "$SKILL_DIR"
 pass=0; fail=0
 ok()  { printf '  ✓ %s\n'   "$1"; pass=$((pass+1)); }
 nok() { printf '  ✗ %s\n  → %s\n' "$1" "$2"; fail=$((fail+1)); }
+
+source "$ROOT/tests/visual/_visual_helper.sh"
 
 # --- md2docx ----------------------------------------------------------------
 echo "md2docx:"
@@ -588,6 +592,22 @@ set -e
 [ "$rc" -eq 0 ] && ! echo "$err" | grep -qi "ends in whitespace" \
     && ok "L1: clean stdin password emits no spurious warning" \
     || nok "L1 false positive" "rc=$rc msg=$err"
+
+# --- q-2: visual regression (docx → soffice → pdf, then compare) ----------
+# docx itself isn't a PDF; convert via soffice headless first, gated on
+# soffice availability. The conversion uses a dedicated profile dir to
+# avoid colliding with other LibreOffice instances on the host.
+if command -v soffice >/dev/null 2>&1; then
+    echo "q-2 visual regression:"
+    soffice --headless --norestore --nologo --nodefault \
+            "-env:UserInstallation=file://$TMP/lo-profile" \
+            --convert-to pdf --outdir "$TMP" "$TMP/out.docx" >/dev/null 2>&1
+    if [ -s "$TMP/out.pdf" ]; then
+        visual_check "$TMP/out.pdf" "fixture-simple"
+    else
+        nok "visual: fixture-simple" "soffice did not produce out.pdf"
+    fi
+fi
 
 echo
 echo "$pass passed, $fail failed"

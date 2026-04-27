@@ -236,6 +236,70 @@ For licensing inquiries, contact: <kuptsov.sergey@gmail.com>.
   source `docx` change. CI/reviewer should be able to verify
   `diff -qr` matches at every commit on the main branch.
 - Reference the issue / scenario in the commit message.
-- Do not commit `node_modules/`, `.venv/`, `__pycache__/`, compiled
-  shim binaries, ECMA-376 schemas, package-lock.json — all are
-  per-skill `.gitignore`d.
+- Do not commit `node_modules/`, `.venv/`, `__pycache__/`,
+  `.pytest_cache/`, `.hypothesis/`, compiled shim binaries, ECMA-376
+  schemas, package-lock.json — all are `.gitignore`d (root or
+  per-skill).
+
+---
+
+## 8. Quality automation (visual regression, fuzz tests, CI)
+
+Three quality layers run on top of the per-skill E2E suites
+([§2.5](#2-modifying-any-skill--universal-checklist)). All three are
+designed to soft-skip locally when the host lacks a tool, and to fail
+loudly in CI.
+
+### Visual regression — `tests/visual/` ([README](../tests/visual/README.md))
+
+First-page golden-image comparison for every PDF an E2E suite
+produces. Pipeline: `pdftoppm` → PNG → `magick compare -metric AE
+-fuzz 5%`. Goldens live at `tests/visual/goldens/<skill>/<name>.png`
+and are committed.
+
+```bash
+# Add a new golden after a deliberate output change:
+UPDATE_GOLDENS=1 bash skills/pdf/scripts/tests/test_e2e.sh
+git diff tests/visual/goldens/   # review the new/updated PNGs
+```
+
+`STRICT_VISUAL=1` (set in CI) makes a missing golden or missing
+ImageMagick a hard failure; without it, both warn-and-skip so a
+fresh local checkout doesn't break.
+
+### Property-based fuzz — `tests/property/`
+
+Hypothesis-driven black-box fuzz for `md2pdf.py`, `md2docx.js`,
+`csv2xlsx.py`. Each test asserts the CLI either exits 0 with non-empty
+output, OR exits non-zero **without** a Python traceback / Node
+uncaught exception.
+
+```bash
+bash tests/property/setup.sh                          # one-time
+tests/property/.venv/bin/pytest tests/property -q     # run
+HYPOTHESIS_PROFILE=ci tests/property/.venv/bin/pytest tests/property -q
+```
+
+Default profile: 30 examples per test (~30 s). `ci` profile: 100
+examples (~2 min). Each example runs in its own
+`tempfile.TemporaryDirectory()` — pytest's `tmp_path` is
+function-scoped and incompatible with `@given`.
+
+### CI — [`.github/workflows/office-skills.yml`](../.github/workflows/office-skills.yml)
+
+Triggers: push to `main`, PRs that touch `skills/{docx,xlsx,pptx,pdf}/`
+or `tests/`, plus `workflow_dispatch`. Three job groups:
+
+- **`skill` matrix** (per docx/xlsx/pptx/pdf): `install.sh` →
+  `validate_skill.py` → `test_e2e.sh` with `STRICT_VISUAL=1`.
+- **`property`** (after skill): hypothesis fuzz under
+  `HYPOTHESIS_PROFILE=ci`.
+- **goldens regen via `workflow_dispatch`**: dispatch with
+  `update_goldens=true` reruns each E2E with `UPDATE_GOLDENS=1` and
+  uploads the regenerated PNGs as a per-skill artifact. Download,
+  commit, re-push.
+
+Cross-platform note: goldens generated on macOS will likely drift
+beyond the 0.5%-pixel default threshold against Ubuntu CI's font
+rendering. First CI run on a new branch may need a one-time
+`workflow_dispatch` regen.

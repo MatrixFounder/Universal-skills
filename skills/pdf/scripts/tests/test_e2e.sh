@@ -12,6 +12,8 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 SKILL_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+ROOT="$(cd "$SKILL_DIR/../../.." && pwd)"
+SKILL=pdf
 PY="$SKILL_DIR/.venv/bin/python"
 TMP="$(mktemp -d -t pdf_e2e_XXXX)"
 trap 'rm -rf "$TMP"' EXIT
@@ -20,6 +22,10 @@ cd "$SKILL_DIR"
 pass=0; fail=0
 ok()  { printf '  ✓ %s\n'   "$1"; pass=$((pass+1)); }
 nok() { printf '  ✗ %s\n  → %s\n' "$1" "$2"; fail=$((fail+1)); }
+
+# q-2 visual regression helper (soft-skips when golden/IM missing unless
+# STRICT_VISUAL=1; see tests/visual/_visual_helper.sh)
+source "$ROOT/tests/visual/_visual_helper.sh"
 
 # --- md2pdf -----------------------------------------------------------------
 echo "md2pdf:"
@@ -203,6 +209,44 @@ JSON
     [ "$digest_default" != "$digest_alt" ] \
         && ok "config change invalidates PNG cache (digest differs)" \
         || nok "cache invalidation" "same digest: $digest_default"
+
+    # --- q-3 mermaid edge-cases ---------------------------------------------
+    # --base-url "$TMP" keeps mermaid PNG assets in the temp dir (default
+    # would write them next to the input under examples/, polluting the
+    # repo).
+    echo "q-3 mermaid edge-cases:"
+    for fix in cyrillic sequence gantt large-mindmap; do
+        set +e
+        "$PY" md2pdf.py "../examples/fixture-mermaid-$fix.md" "$TMP/m_$fix.pdf" \
+              --base-url "$TMP" >/dev/null 2>&1
+        rc=$?
+        set -e
+        [ "$rc" -eq 0 ] && [ -s "$TMP/m_$fix.pdf" ] \
+            && ok "mermaid edge: $fix" \
+            || nok "mermaid edge: $fix" "exit=$rc, pdf=$([ -s "$TMP/m_$fix.pdf" ] && echo present || echo missing)"
+    done
+
+    # broken syntax + --strict-mermaid → fail (exit non-zero, no PDF)
+    set +e
+    err=$("$PY" md2pdf.py ../examples/fixture-mermaid-broken.md \
+              "$TMP/m_broken_strict.pdf" --base-url "$TMP" --strict-mermaid 2>&1 >/dev/null)
+    rc=$?
+    set -e
+    [ "$rc" -ne 0 ] \
+        && ok "mermaid edge: broken+strict fails" \
+        || nok "mermaid edge: broken+strict fails" "expected non-zero, got $rc"
+
+    # broken syntax (no strict) → exit 0, warning, PDF still produced
+    set +e
+    err=$("$PY" md2pdf.py ../examples/fixture-mermaid-broken.md \
+              "$TMP/m_broken_lenient.pdf" --base-url "$TMP" 2>&1 >/dev/null)
+    rc=$?
+    set -e
+    [ "$rc" -eq 0 ] && [ -s "$TMP/m_broken_lenient.pdf" ] \
+        && echo "$err" | grep -qi "mmdc failed" \
+        && ok "mermaid edge: broken degrades with warning" \
+        || nok "mermaid edge: broken degrades" \
+               "rc=$rc, pdf=$([ -s "$TMP/m_broken_lenient.pdf" ] && echo present || echo missing), warn=$err"
 fi
 
 # --- cross-1: preview.py — pdf path (no soffice required) ----------------
@@ -347,6 +391,17 @@ set -e
 echo "$err" | grep -q "encryption pre-flight is unavailable" \
     && ok "OOXML→pdf-preview: emits encryption-skip note (LOW-3)" \
     || nok "OOXML→pdf-preview note" "no note in stderr: $err"
+
+# --- q-2: visual regression on the produced PDFs --------------------------
+echo "q-2 visual regression:"
+visual_check "$TMP/out.pdf"     "fixture-base"
+visual_check "$TMP/merged.pdf"  "fixture-merged"
+visual_check "$TMP/filled.pdf"  "acroform-filled"
+visual_check "$TMP/flat.pdf"    "acroform-flat"
+if [ -x "node_modules/.bin/mmdc" ]; then
+    visual_check "$TMP/wm_default.pdf" "mermaid-default"
+    visual_check "$TMP/wm_alt.pdf"     "mermaid-alt"
+fi
 
 echo
 echo "$pass passed, $fail failed"

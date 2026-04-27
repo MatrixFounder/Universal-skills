@@ -253,15 +253,23 @@ skill that uses mmdc) — it's NOT in any per-skill `node_modules/`.
 **End-to-end smoke tests** (per skill `scripts/tests/test_e2e.sh` +
 top-level [`tests/run_all_e2e.sh`](tests/run_all_e2e.sh)) run every
 user-facing CLI on a real fixture and validate the output. The full
-suite covers all four skills with **117 assertions** (26 docx + 25 xlsx
-+ 31 pptx + 35 pdf) — including parameterized `--json-errors`
+suite covers all four skills with **184 assertions** (49 docx + 40 xlsx
++ 48 pptx + 47 pdf) — including parameterized `--json-errors`
 envelope checks for every plumbed CLI, three rounds of VDD adversarial
 regression guards (false-positive macro detection, parser.error
-envelope routing, subprocess hygiene), and structural-semantic
-validation (slide/sheet/layout/master chains, shared-string + style
-index bounds, orphan parts, ECMA-376 ID range rules) backed by 18
-unit tests in `office/tests/test_{pptx,xlsx}_validator.py`. It is
-the primary regression gate before each release.
+envelope routing, subprocess hygiene), structural-semantic validation
+(slide/sheet/layout/master chains, shared-string + style index bounds,
+orphan parts, ECMA-376 ID range rules) backed by 18 unit tests in
+`office/tests/test_{pptx,xlsx}_validator.py`, mermaid edge-case
+fixtures (cyrillic / sequence / gantt / large-mindmap / broken-with-
+strict), and **visual regression** ([`tests/visual/`](tests/visual/))
+of every output PDF against a committed first-page golden. A separate
+**hypothesis fuzz suite** ([`tests/property/`](tests/property/))
+black-box-tests `md2pdf` / `md2docx` / `csv2xlsx` for crash-on-edge-
+input. Together they form the primary regression gate before each
+release; the [`office-skills` GitHub Actions
+workflow](.github/workflows/office-skills.yml) runs all of the above
+on every PR.
 
 For practical usage of all four skills — including the complete
 **package inventory** (what's installed globally vs per-skill, total
