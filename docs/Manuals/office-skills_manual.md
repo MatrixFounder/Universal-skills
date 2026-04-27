@@ -600,11 +600,84 @@ What's covered:
 | docx | `md2docx → docx → docx2md` round-trip, `office.validate` on output, `docx_fill_template` with nested JSON, encryption / legacy-CFB rejection on `docx_fill_template` and `docx_accept_changes`, **cross-7** `office_passwd` (clean→encrypt→decrypt round-trip + zip-namelist parity, wrong-password exit 4, state-mismatch exit 5, stdin password, JSON envelope). |
 | xlsx | `csv2xlsx` + row count + `office.validate`, `xlsx_validate` (clean + injected `#DIV/0!` via lxml mutation), `xlsx_recalc` formula preservation, `xlsx_add_chart` (bar/line/pie variants + bad-range error), encryption rejection on `xlsx_validate`/`xlsx_add_chart`/`xlsx_recalc`, **cross-7** `office_passwd` (round-trip + openpyxl-readable post-decrypt with row count preserved, wrong-password, state-mismatch, stdin, JSON envelope). |
 | pptx | `md2pptx` + slide-count + `office.validate`, `pptx_thumbnails` (JPEG sanity), `pptx_to_pdf` (`%PDF` magic), `pptx_clean` (orphan slide + media removal, dry-run reports without writing), `outline2pptx` (heading-only MD → 4 slides + validate + heading-less input fails clearly), bundled `mermaid-config.json` (parses, missing path fails clean), encryption rejection on `pptx_clean`/`pptx_thumbnails`/`pptx_to_pdf`, **cross-7** `office_passwd` (round-trip + slide-count preserved post-decrypt, wrong-password, state-mismatch, stdin, JSON envelope). |
-| pdf | `md2pdf` + mermaid PNG render + bundled `mermaid-config.json` (parses, missing path warns, config change invalidates PNG cache), `pdf_merge` (page-count = sum), `pdf_split --each-page`, `pdf_fill_form` (`--check` exit codes, fill round-trip, `--flatten` removes `/AcroForm`, `--extract-fields` stdout, malformed JSON / missing `-o` exit 2, typo'd field warning, int→`/Yes` checkbox coercion). pdf has its own AcroForm path and does NOT use `office_passwd.py`. |
+| pdf | `md2pdf` + mermaid PNG render + bundled `mermaid-config.json` (parses, missing path warns, config change invalidates PNG cache), `pdf_merge` (page-count = sum), `pdf_split --each-page`, `pdf_fill_form` (`--check` exit codes, fill round-trip, `--flatten` removes `/AcroForm`, `--extract-fields` stdout, malformed JSON / missing `-o` exit 2, typo'd field warning, int→`/Yes` checkbox coercion), **q-3 mermaid edge-cases** (cyrillic / sequence / gantt / large-mindmap fixtures + `--strict-mermaid` exits non-zero on broken input + lenient mode degrades with warning). pdf has its own AcroForm path and does NOT use `office_passwd.py`. |
+
+Each suite ends with a **q-2 visual-regression** block that compares
+the first page of every produced PDF against a committed golden
+(see §8.3). Total assertion count after q-2/q-3: **184** (49 docx +
+40 xlsx + 48 pptx + 47 pdf).
 
 The suite is fast (<60 sec total on a warm machine) and is the
 primary pre-commit / pre-release gate. Any failure here points at a
 broken user-facing contract.
+
+### 8.3 Visual regression (q-2)
+
+[`tests/visual/visual_compare.py`](../../tests/visual/visual_compare.py)
+captures the first page of every E2E-produced PDF via `pdftoppm` →
+PNG, then compares against a committed golden using ImageMagick
+`compare -metric AE -fuzz 5%`. Goldens live at
+`tests/visual/goldens/<skill>/<name>.png`. The default tolerance is
+0.5% of total pixels — generous enough to absorb cross-platform
+font-rendering drift, tight enough to catch real layout regressions.
+
+```bash
+# Run normally — soft-skips when ImageMagick or a golden is missing
+bash tests/run_all_e2e.sh
+
+# Regenerate goldens after a deliberate output change
+UPDATE_GOLDENS=1 bash tests/run_all_e2e.sh
+git diff tests/visual/goldens/      # review
+
+# CI-strict mode: missing IM or missing golden → hard failure
+STRICT_VISUAL=1 bash tests/run_all_e2e.sh
+```
+
+See [`tests/visual/README.md`](../../tests/visual/README.md) for the
+full contract (exit codes, threshold tuning, cross-platform notes).
+The bash glue lives in
+[`tests/visual/_visual_helper.sh`](../../tests/visual/_visual_helper.sh)
+and is sourced by every per-skill `test_e2e.sh`.
+
+### 8.4 Property-based fuzz (q-5)
+
+[`tests/property/`](../../tests/property/) drives `md2pdf.py`,
+`md2docx.js`, and `csv2xlsx.py` as black boxes via Hypothesis with
+unicode-rich markdown / CSV strategies. Each test asserts the CLI
+either exits 0 with a non-empty output OR exits non-zero **without**
+a Python traceback / Node uncaught exception. Catches crash-on-edge-
+input regressions that the deterministic E2E suite misses.
+
+```bash
+bash tests/property/setup.sh                          # one-time
+tests/property/.venv/bin/pytest tests/property -q     # 30 examples (~30s)
+
+# CI profile — 100 examples per test (~2 min)
+HYPOTHESIS_PROFILE=ci tests/property/.venv/bin/pytest tests/property -q
+```
+
+Strategies live in
+[`tests/property/strategies.py`](../../tests/property/strategies.py).
+Each example runs in its own `tempfile.TemporaryDirectory()` —
+pytest's `tmp_path` is function-scoped and incompatible with
+`@given`. Default profile is `dev` (30 examples, 20-s deadline);
+override with `HYPOTHESIS_PROFILE=ci`.
+
+### 8.5 GitHub Actions CI
+
+[`.github/workflows/office-skills.yml`](../../.github/workflows/office-skills.yml)
+runs everything above on push/PR with `STRICT_VISUAL=1` and
+`HYPOTHESIS_PROFILE=ci`. `workflow_dispatch` with `update_goldens=true`
+regenerates visual goldens on the matching Ubuntu runner image and
+uploads per-skill PNG artifacts — cross-platform drift is the main
+reason locally-generated goldens may need a one-time regen on first
+CI run.
+
+For when something goes wrong: see
+[`office-skills_troubleshooting.md`](office-skills_troubleshooting.md)
+— a single document with `Symptom → Cause → Fix` recipes for the
+recurring failures (pango/cairo missing, soffice timeout, mmdc fail,
+encrypted-input rejection, golden drift, etc.).
 
 ---
 

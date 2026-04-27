@@ -19,7 +19,8 @@ Universal-skills/
 │   ├── SKILL_EXECUTION_POLICY.md    # script-first / Tier definitions
 │   ├── refactoring-office-skills.md # design plan (historical reference)
 │   └── Manuals/
-│       └── office-skills_manual.md  # how to use docx/xlsx/pptx/pdf in practice
+│       ├── office-skills_manual.md         # how to use docx/xlsx/pptx/pdf in practice
+│       └── office-skills_troubleshooting.md # Symptom → Cause → Fix recipes
 ├── skills/                          # one folder per skill, each self-contained
 │   ├── docx/                        # MASTER for the office/ shared module — Proprietary, see LICENSE+NOTICE in this dir
 │   ├── xlsx/                        # downstream copy of office/        — Proprietary, see LICENSE+NOTICE in this dir
@@ -185,6 +186,10 @@ register in `README.md` under the appropriate category.
 - [Manuals/office-skills_manual.md](Manuals/office-skills_manual.md)
   — practical guide to docx/xlsx/pptx/pdf, including the redlining
   validator and the AF_UNIX shim for sandboxed environments.
+- [Manuals/office-skills_troubleshooting.md](Manuals/office-skills_troubleshooting.md)
+  — `Symptom → Cause → Fix` for the recurring failure modes
+  (pango/cairo missing, soffice timeout, mmdc fail, encrypted input,
+  visual-regression drift, ImageMagick v6 vs v7, etc.).
 - [refactoring-office-skills.md](refactoring-office-skills.md) —
   original design plan that drove the office-skills architecture
   (historical reference; do not edit, supersede via this CONTRIBUTING).

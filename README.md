@@ -369,7 +369,8 @@ Detailed manuals for specific components can be found in `docs/Manuals`:
 - **[Summarizing Meetings Manual](docs/Manuals/summarizing-meetings_manual.md)**: Guide to the meeting summary meta-skill — templates, autodetect, tag taxonomy, and Obsidian integration.
 - **[Marp Slide Creator Manual](docs/Manuals/marp-slide_manual.md)**: Guide to creating Marp presentations — theme selection, image patterns, CSS customization, and quality checklist.
 - **[Marp CLI Manual](docs/Manuals/marp-cli_manual.md)**: Installation, dependencies, core commands, configuration, and troubleshooting for Marp CLI renderer.
-- **[Office Skills Manual](docs/Manuals/office-skills_manual.md)**: Practical reference for `docx` / `xlsx` / `pptx` / `pdf` — install, common workflows, the redlining validator (`--compare-to`), the LD_PRELOAD AF_UNIX shim for sandboxed deployment, the bundled mermaid config, and a complete **package inventory** (global vs per-skill vs user-cache).
+- **[Office Skills Manual](docs/Manuals/office-skills_manual.md)**: Practical reference for `docx` / `xlsx` / `pptx` / `pdf` — install, common workflows, the redlining validator (`--compare-to`), the LD_PRELOAD AF_UNIX shim for sandboxed deployment, the bundled mermaid config, the test suite (E2E + visual regression + hypothesis fuzz + GHA CI), and a complete **package inventory** (global vs per-skill vs user-cache).
+- **[Office Skills Troubleshooting](docs/Manuals/office-skills_troubleshooting.md)**: `Symptom → Cause → Fix` recipes for the recurring failures — pango/cairo missing, soffice timeout, mmdc fail, AF_UNIX sandbox, encrypted-input rejection, visual-regression drift, ImageMagick v6 vs v7, openpyxl recalc, AcroForm vs XFA.
 
 Project-level guides:
 
