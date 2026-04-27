@@ -253,7 +253,7 @@ skill that uses mmdc) — it's NOT in any per-skill `node_modules/`.
 **End-to-end smoke tests** (per skill `scripts/tests/test_e2e.sh` +
 top-level [`tests/run_all_e2e.sh`](tests/run_all_e2e.sh)) run every
 user-facing CLI on a real fixture and validate the output. The full
-suite covers all four skills with **184 assertions** (49 docx + 40 xlsx
+suite covers all four skills with **201 assertions** (66 docx + 40 xlsx
 + 48 pptx + 47 pdf) — including parameterized `--json-errors`
 envelope checks for every plumbed CLI, three rounds of VDD adversarial
 regression guards (false-positive macro detection, parser.error

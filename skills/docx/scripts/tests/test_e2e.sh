@@ -593,6 +593,212 @@ set -e
     && ok "L1: clean stdin password emits no spurious warning" \
     || nok "L1 false positive" "rc=$rc msg=$err"
 
+# --- docx-1: docx_add_comment ---------------------------------------------
+echo "docx-1 add_comment:"
+"$PY" docx_add_comment.py "$TMP/out.docx" "$TMP/commented.docx" \
+    --anchor-text "Quarterly" --comment "Verify against source" \
+    --author "QA Bot" >/dev/null 2>&1 \
+    && [ -s "$TMP/commented.docx" ] \
+    && ok "anchor → output produced" \
+    || nok "add_comment basic" "no output"
+
+"$PY" -m office.validate "$TMP/commented.docx" >/dev/null 2>&1 \
+    && ok "office.validate accepts commented output" \
+    || nok "validate commented" "rejected"
+
+# Comment present in word/comments.xml with the author and body
+"$PY" -c "
+import zipfile, re
+with zipfile.ZipFile('$TMP/commented.docx') as z:
+    cx = z.read('word/comments.xml').decode()
+assert re.search(r'<w:comment [^/]*w:author=\"QA Bot\"', cx), 'author missing'
+assert 'Verify against source' in cx, 'body missing'
+assert re.search(r'<w:comment [^/]*w:id=\"', cx), 'id missing'
+print('comment verified')
+" 2>&1 | grep -q "comment verified" \
+    && ok "comment XML carries author + body + id" \
+    || nok "comment xml content" "see python output"
+
+# Anchor markers present in document.xml
+"$PY" -c "
+import zipfile
+with zipfile.ZipFile('$TMP/commented.docx') as z:
+    doc = z.read('word/document.xml').decode()
+assert '<w:commentRangeStart' in doc, 'no commentRangeStart'
+assert '<w:commentRangeEnd' in doc, 'no commentRangeEnd'
+assert '<w:commentReference' in doc, 'no commentReference'
+print('anchors verified')
+" 2>&1 | grep -q "anchors verified" \
+    && ok "document.xml has commentRangeStart/End + commentReference" \
+    || nok "anchor markers" "missing in document.xml"
+
+# Anchor not found → exit 2 with AnchorNotFound JSON envelope
+set +e
+err=$("$PY" docx_add_comment.py "$TMP/out.docx" "$TMP/_x.docx" \
+    --anchor-text "ZZZNOTPRESENTZZZ" --comment "x" --json-errors 2>&1 >/dev/null)
+rc=$?
+set -e
+[ "$rc" -eq 2 ] \
+    && echo "$err" | "$PY" -c "import sys, json; j=json.loads(sys.stdin.read()); assert j['type']=='AnchorNotFound' and j['v']==1, j" 2>/dev/null \
+    && ok "anchor not found → exit 2 + AnchorNotFound envelope" \
+    || nok "anchor not found" "rc=$rc msg=$err"
+
+# --all multi-match: comment count > 1 when the anchor occurs multiple times
+"$PY" docx_add_comment.py "$TMP/out.docx" "$TMP/all.docx" \
+    --anchor-text "the" --comment "n" --author "B" --all >/dev/null 2>&1
+n_cmts=$("$PY" -c "
+import zipfile, re
+with zipfile.ZipFile('$TMP/all.docx') as z:
+    print(len(re.findall(r'<w:comment ', z.read('word/comments.xml').decode())))
+")
+[ "$n_cmts" -ge 2 ] \
+    && ok "--all adds >1 comments (got $n_cmts)" \
+    || nok "--all multi-match" "got only $n_cmts comment(s)"
+
+# VDD-A regression: --all must catch INTRA-paragraph repeats. Build a fixture
+# with three lowercase "the" in a single paragraph; expect exactly 3 comments
+# AND 3 matching commentRangeStart/End markers in the document body.
+cat > "$TMP/intra.md" <<'MD'
+# Intra
+
+The cat saw the dog and the bird in the same garden.
+MD
+node md2docx.js "$TMP/intra.md" "$TMP/intra.docx" >/dev/null 2>&1
+"$PY" docx_add_comment.py "$TMP/intra.docx" "$TMP/intra_out.docx" \
+    --anchor-text "the" --comment "x" --author "Q" --all >/dev/null 2>&1
+"$PY" -c "
+import zipfile, re
+with zipfile.ZipFile('$TMP/intra_out.docx') as z:
+    cx = z.read('word/comments.xml').decode()
+    doc = z.read('word/document.xml').decode()
+n_cmt = len(re.findall(r'<w:comment ', cx))
+n_crs = len(re.findall(r'<w:commentRangeStart', doc))
+n_cre = len(re.findall(r'<w:commentRangeEnd', doc))
+n_ref = len(re.findall(r'<w:commentReference', doc))
+assert n_cmt == 3, f'expected 3 comments, got {n_cmt}'
+assert n_crs == n_cre == n_ref == 3, f'marker counts mismatch: crs={n_crs} cre={n_cre} ref={n_ref}'
+print('intra-paragraph triple-match verified')
+" 2>&1 | grep -q "triple-match verified" \
+    && ok "VDD-A: --all catches all 3 'the' in a single paragraph (was 1/3 before fix)" \
+    || nok "VDD-A intra-paragraph multi-match" "see python output"
+
+# VDD-A negative: default mode (no --all) must still produce exactly 1 comment
+"$PY" docx_add_comment.py "$TMP/intra.docx" "$TMP/single.docx" \
+    --anchor-text "the" --comment "x" --author "Q" >/dev/null 2>&1
+n=$("$PY" -c "
+import zipfile, re
+with zipfile.ZipFile('$TMP/single.docx') as z:
+    print(len(re.findall(r'<w:comment ', z.read('word/comments.xml').decode())))
+")
+[ "$n" -eq 1 ] \
+    && ok "VDD-A: default mode still produces exactly 1 comment (got $n)" \
+    || nok "VDD-A default-mode regression" "got $n, expected 1"
+
+# VDD-B: same-path I/O must refuse with exit 6 + SelfOverwriteRefused envelope
+cp "$TMP/out.docx" "$TMP/vdb.docx"
+sz_b=$(wc -c < "$TMP/vdb.docx" | tr -d ' ')
+set +e
+out=$("$PY" docx_add_comment.py "$TMP/vdb.docx" "$TMP/vdb.docx" \
+    --anchor-text "Quarterly" --comment "x" --author "Q" --json-errors 2>&1 >/dev/null)
+rc=$?
+set -e
+sz_a=$(wc -c < "$TMP/vdb.docx" | tr -d ' ')
+[ "$rc" -eq 6 ] && [ "$sz_b" = "$sz_a" ] \
+    && echo "$out" | "$PY" -c "import sys, json; j=json.loads(sys.stdin.read()); assert j['type']=='SelfOverwriteRefused' and j['code']==6, j" 2>/dev/null \
+    && ok "VDD-B: add_comment same-path → exit 6 + source intact + envelope" \
+    || nok "VDD-B add_comment same-path" "rc=$rc before=$sz_b after=$sz_a msg=$out"
+
+# VDD-B: same-path on merge (output == input[0]) must also refuse with exit 6
+cp "$TMP/out.docx" "$TMP/m_in.docx"
+cp "$TMP/out.docx" "$TMP/m_other.docx"
+set +e
+out=$("$PY" docx_merge.py "$TMP/m_in.docx" "$TMP/m_in.docx" "$TMP/m_other.docx" \
+        --json-errors 2>&1 >/dev/null)
+rc=$?
+set -e
+[ "$rc" -eq 6 ] \
+    && echo "$out" | "$PY" -c "import sys, json; j=json.loads(sys.stdin.read()); assert j['type']=='SelfOverwriteRefused' and j['code']==6, j" 2>/dev/null \
+    && ok "VDD-B: merge same-path → exit 6 + envelope" \
+    || nok "VDD-B merge same-path" "rc=$rc msg=$out"
+
+# VDD-B: symlink resolves to same inode — must also be caught
+ln -sf "$TMP/m_in.docx" "$TMP/m_link.docx"
+set +e
+"$PY" docx_merge.py "$TMP/m_link.docx" "$TMP/m_in.docx" "$TMP/m_other.docx" \
+      >/dev/null 2>&1
+rc=$?
+set -e
+[ "$rc" -eq 6 ] \
+    && ok "VDD-B: merge with symlink → same-inode caught (exit 6)" \
+    || nok "VDD-B merge symlink" "rc=$rc"
+
+# --- docx-2: docx_merge ---------------------------------------------------
+echo "docx-2 merge:"
+# Build 3 distinct inputs from inline markdown
+for f in a b c; do
+    cat > "$TMP/m_$f.md" <<MD
+# Doc $f
+Content of $f section.
+MD
+    node md2docx.js "$TMP/m_$f.md" "$TMP/m_$f.docx" >/dev/null 2>&1
+done
+
+"$PY" docx_merge.py "$TMP/merged.docx" \
+    "$TMP/m_a.docx" "$TMP/m_b.docx" "$TMP/m_c.docx" \
+    --page-break-between >/dev/null 2>&1 \
+    && [ -s "$TMP/merged.docx" ] \
+    && ok "3 inputs → merged.docx" \
+    || nok "merge basic" "no output"
+
+"$PY" -m office.validate "$TMP/merged.docx" >/dev/null 2>&1 \
+    && ok "office.validate accepts merged output" \
+    || nok "validate merged" "rejected"
+
+# Round-trip back to MD: all three headings must be present in order
+node docx2md.js "$TMP/merged.docx" "$TMP/merged.md" >/dev/null 2>&1
+"$PY" -c "
+content = open('$TMP/merged.md').read()
+ai = content.find('Doc a')
+bi = content.find('Doc b')
+ci = content.find('Doc c')
+assert 0 <= ai < bi < ci, f'order wrong: a={ai} b={bi} c={ci}'
+print('order ok')
+" 2>&1 | grep -q "order ok" \
+    && ok "merge preserves input order (a → b → c)" \
+    || nok "merge order" "headings not in order"
+
+# Page break preservation (--page-break-between inserts <w:br w:type=\"page\"/>)
+"$PY" -c "
+import zipfile, re
+with zipfile.ZipFile('$TMP/merged.docx') as z:
+    doc = z.read('word/document.xml').decode()
+n_pb = len(re.findall(r'<w:br [^/]*w:type=\"page\"', doc))
+assert n_pb >= 2, f'expected >=2 page breaks (one per appended doc), got {n_pb}'
+print(f'page breaks: {n_pb}')
+" 2>&1 | grep -q "page breaks:" \
+    && ok "--page-break-between inserted page breaks" \
+    || nok "page break insertion" "missing or too few"
+
+# Single-input rejected with NotEnoughInputs envelope
+set +e
+err=$("$PY" docx_merge.py "$TMP/_solo.docx" "$TMP/m_a.docx" \
+        --json-errors 2>&1 >/dev/null)
+rc=$?
+set -e
+[ "$rc" -eq 2 ] \
+    && echo "$err" | "$PY" -c "import sys, json; j=json.loads(sys.stdin.read()); assert j['type']=='NotEnoughInputs', j" 2>/dev/null \
+    && ok "single input → NotEnoughInputs envelope" \
+    || nok "single-input rejection" "rc=$rc msg=$err"
+
+# Encrypted input → exit 3 (cross-3 contract)
+set +e
+err=$("$PY" docx_merge.py "$TMP/_enc.docx" "$TMP/cfb.docx" "$TMP/m_a.docx" 2>&1 >/dev/null)
+rc=$?
+set -e
+[ "$rc" -eq 3 ] && echo "$err" | grep -q "password-protected" \
+    && ok "merge refuses CFB input with exit 3" \
+    || nok "merge cfb rejection" "rc=$rc msg=$err"
+
 # --- q-2: visual regression (docx → soffice → pdf, then compare) ----------
 # docx itself isn't a PDF; convert via soffice headless first, gated on
 # soffice availability. The conversion uses a dedicated profile dir to

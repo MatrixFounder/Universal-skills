@@ -35,6 +35,8 @@ practical knowledge and make the common operations a single command.
 - Render any `.docx`/`.docm`/`.pdf` (or peer-skill `.xlsx`/`.pptx`) into a single PNG-grid preview via `preview.py` (LibreOffice + Poppler).
 - Emit failures as machine-readable JSON to stderr with `--json-errors` (uniform across all four office skills).
 - Set or remove a password on a `.docx`/`.xlsx`/`.pptx` (MS-OFB Agile, Office 2010+) via `office_passwd.py` — three modes: `--encrypt PASSWORD`, `--decrypt PASSWORD`, `--check` (exit 0 encrypted / 10 clean / 11 missing).
+- Insert a Word review comment anchored on a text substring via `docx_add_comment.py` — wires `<w:commentRangeStart>`/`<w:commentRangeEnd>`/`<w:commentReference>` markers, appends to `word/comments.xml`, and patches `[Content_Types].xml` + relationships. Useful for review-flows where a robot leaves notes like "verify formula X".
+- Merge N `.docx` files into one via `docx_merge.py` — appends body content from each input into the first (base), copies missing style definitions, optionally inserts a hard page break before each appended doc. Honest scope: numbering / footnotes / headers / footers / images / comments are NOT merged (warned in stderr when extras have user content in those parts).
 
 ## 3. Execution Mode
 - **Mode**: `script-first`.
@@ -52,6 +54,8 @@ practical knowledge and make the common operations a single command.
   - `python3 scripts/office/validate.py INPUT.docx [--strict] [--json] [--schemas-dir PATH] [--compare-to ORIGINAL.docx]`
   - `python3 scripts/preview.py INPUT OUTPUT.jpg [--cols 3] [--dpi 110] [--gap 12] [--padding 24] [--label-font-size 14] [--soffice-timeout 240] [--pdftoppm-timeout 60]`
   - `python3 scripts/office_passwd.py INPUT [OUTPUT] (--encrypt PASSWORD | --decrypt PASSWORD | --check)` — pass `-` as PASSWORD to read it from stdin.
+  - `python3 scripts/docx_add_comment.py INPUT.docx OUTPUT.docx --anchor-text TEXT --comment BODY [--author NAME] [--initials AB] [--date ISO] [--all]`
+  - `python3 scripts/docx_merge.py OUTPUT.docx INPUT1.docx INPUT2.docx [...] [--page-break-between] [--no-merge-styles]`
   - All scripts above accept `--json-errors` to emit failures as a single line of JSON on stderr (`{v, error, code, type?, details?}`). The schema version `v` is currently `1`; argparse usage errors are routed through the same envelope (`type:"UsageError"`).
 - **Inputs**: positional paths only; optional flags per command.
 - **Outputs**: a single file at the named output path; `office/unpack.py` produces a directory tree; `office/validate.py` prints a report (or JSON with `--json`). `docx2md.js` additionally creates `<stem>_images/` next to the Markdown output when the document has embedded images.
@@ -186,6 +190,8 @@ Fill a template with JSON data:
 | Set password | `python3 scripts/office_passwd.py clean.docx encrypted.docx --encrypt PASSWORD` (use `-` to read from stdin) |
 | Remove password | `python3 scripts/office_passwd.py encrypted.docx clean.docx --decrypt PASSWORD` |
 | Detect password | `python3 scripts/office_passwd.py file.docx --check` (exit 0 encrypted / 10 clean / 11 missing) |
+| Add review comment | `python3 scripts/docx_add_comment.py in.docx out.docx --anchor-text "phrase" --comment "body" --author "Reviewer"` |
+| Merge N docx | `python3 scripts/docx_merge.py merged.docx a.docx b.docx c.docx [--page-break-between]` |
 | Machine-readable failures | append `--json-errors` to any of the above |
 
 ## 11. Examples (Few-Shot)

@@ -604,8 +604,8 @@ What's covered:
 
 Each suite ends with a **q-2 visual-regression** block that compares
 the first page of every produced PDF against a committed golden
-(see §8.3). Total assertion count after q-2/q-3: **184** (49 docx +
-40 xlsx + 48 pptx + 47 pdf).
+(see §8.3). Total assertion count after q-2/q-3 + docx-1/docx-2 +
+VDD adversarial fixes: **201** (66 docx + 40 xlsx + 48 pptx + 47 pdf).
 
 The suite is fast (<60 sec total on a warm machine) and is the
 primary pre-commit / pre-release gate. Any failure here points at a
