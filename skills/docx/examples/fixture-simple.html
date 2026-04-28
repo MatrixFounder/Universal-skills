@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <title>Quarterly report — Q1</title>
+    <style>
+        /* Inline styles are intentionally ignored by html2docx (honest scope). */
+        body { font-family: sans-serif; }
+    </style>
+</head>
+<body>
+    <h1>Quarterly report — Q1</h1>
+
+    <p>This fixture exercises the main features of <code>html2docx.js</code>
+    so the round-trip and validation tests cover real-world coverage:</p>
+
+    <ul>
+        <li>headings at multiple levels,</li>
+        <li>bulleted and numbered lists with <strong>bold</strong> and
+            <em>italic</em> inline,</li>
+        <li>a small <a href="https://example.com/spec">linked</a> table,</li>
+        <li>a code block, a blockquote,</li>
+        <li>a smart quote &ldquo;just like this&rdquo; and an en-dash &mdash;
+            for round-trip testing.</li>
+    </ul>
+
+    <h2>Key metrics</h2>
+
+    <table>
+        <thead>
+            <tr><th>Metric</th><th>Q4 2024</th><th>Q1 2025</th><th>&Delta;</th></tr>
+        </thead>
+        <tbody>
+            <tr><td>Revenue, USD</td><td>840,000</td><td>915,000</td><td>+8.9%</td></tr>
+            <tr><td>New customers</td><td>120</td><td>137</td><td>+14%</td></tr>
+            <tr><td>Churn rate</td><td>3.2%</td><td>2.8%</td><td>&minus;0.4 pp</td></tr>
+        </tbody>
+    </table>
+
+    <h2>Highlights</h2>
+
+    <ol>
+        <li>Shipped the new onboarding flow on schedule.</li>
+        <li>Signed two enterprise accounts in EU region.</li>
+        <li>Reduced infra cost per request by 11% following the cache rewrite.</li>
+    </ol>
+
+    <h2>Risks</h2>
+
+    <blockquote>
+        <p>One provider&rsquo;s SLA breach cost us four hours of uptime in
+        March; we are renegotiating the contract and have a fallback ready.</p>
+    </blockquote>
+
+    <h2>Code sample</h2>
+
+    <pre><code>def growth(before: float, after: float) -&gt; float:
+    return (after - before) / before
+</code></pre>
+
+    <hr>
+
+    <p>End of fixture. Inline <s>strikethrough</s> and <u>underline</u> styling
+    must round-trip too.</p>
+</body>
+</html>

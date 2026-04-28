@@ -35,7 +35,7 @@ practical knowledge and make the common operations a single command.
 - Render any `.docx`/`.docm`/`.pdf` (or peer-skill `.xlsx`/`.pptx`) into a single PNG-grid preview via `preview.py` (LibreOffice + Poppler).
 - Emit failures as machine-readable JSON to stderr with `--json-errors` (uniform across all four office skills).
 - Set or remove a password on a `.docx`/`.xlsx`/`.pptx` (MS-OFB Agile, Office 2010+) via `office_passwd.py` — three modes: `--encrypt PASSWORD`, `--decrypt PASSWORD`, `--check` (exit 0 encrypted / 10 clean / 11 missing).
-- Insert a Word review comment anchored on a text substring via `docx_add_comment.py` — wires `<w:commentRangeStart>`/`<w:commentRangeEnd>`/`<w:commentReference>` markers, appends to `word/comments.xml`, and patches `[Content_Types].xml` + relationships. Useful for review-flows where a robot leaves notes like "verify formula X". See [`references/add-comment-howto.md`](references/add-comment-howto.md) for verification steps.
+- Insert a Word review comment anchored on a text substring via `docx_add_comment.py` — wires `<w:commentRangeStart>`/`<w:commentRangeEnd>`/`<w:commentReference>` markers, appends to `word/comments.xml`, and patches `[Content_Types].xml` + relationships. Supports threaded **replies** (`--parent N`) via `<w15:commentEx w15:paraIdParent=…>` in `commentsExtended.xml`; reply-to-reply chains are flattened to the conversation root to match Word's review-pane render. Multi-paragraph bodies via `\n` in `--comment` are split into separate `<w:p>` per ECMA-376 §17.13.4.2. Opt-in **library mode** (`--unpacked-dir DIR`) operates in-place on an already-unpacked tree (skips unpack/pack/encryption-check) — **not reentrant**: do not run two processes against the same tree concurrently, no file locking. Malformed OOXML side-parts surface as `MalformedOOXML` envelope (not a traceback). See [`references/add-comment-howto.md`](references/add-comment-howto.md) for verification steps and §6 troubleshooting for failure modes.
 - Merge N `.docx` files into one via `docx_merge.py` (VDD iter-2 real-world hardened). Appends body content + styles + numbering + media + relationships into the first input (base), with full reference relocation: image rIds renumbered, `r:embed`/`r:link`/`r:id` in body remapped, `<w:bookmarkStart/End w:id>` bumped past base's max, `<w:abstractNum>` / `<w:num>` shifted with `<w:numId w:val>` body refs rewritten, missing `Default Extension` entries pulled into `[Content_Types].xml`. Strips paragraph-level `<w:sectPr>` from extras (their header/footer references would dangle). Inserts new `<w:abstractNum>` BEFORE first `<w:num>` per ECMA-376 §17.9.20 schema-order. Honest scope (still not merged, warned when extras have content): footnotes / endnotes / headers / footers / comments.
 
 ## 3. Execution Mode
@@ -55,6 +55,8 @@ practical knowledge and make the common operations a single command.
   - `python3 scripts/preview.py INPUT OUTPUT.jpg [--cols 3] [--dpi 110] [--gap 12] [--padding 24] [--label-font-size 14] [--soffice-timeout 240] [--pdftoppm-timeout 60]`
   - `python3 scripts/office_passwd.py INPUT [OUTPUT] (--encrypt PASSWORD | --decrypt PASSWORD | --check)` — pass `-` as PASSWORD to read it from stdin.
   - `python3 scripts/docx_add_comment.py INPUT.docx OUTPUT.docx --anchor-text TEXT --comment BODY [--author NAME] [--initials AB] [--date ISO] [--all]`
+  - `python3 scripts/docx_add_comment.py INPUT.docx OUTPUT.docx --parent N --comment BODY [--author NAME]` — reply to comment N (inherits its anchor range; threads via `commentsExtended.xml`).
+  - `python3 scripts/docx_add_comment.py --unpacked-dir DIR --anchor-text TEXT --comment BODY [...]` — library mode: edit an already-unpacked tree in-place (combine with `--parent` to add a reply over the same tree).
   - `python3 scripts/docx_merge.py OUTPUT.docx INPUT1.docx INPUT2.docx [...] [--page-break-between] [--no-merge-styles]`
   - All scripts above accept `--json-errors` to emit failures as a single line of JSON on stderr (`{v, error, code, type?, details?}`). The schema version `v` is currently `1`; argparse usage errors are routed through the same envelope (`type:"UsageError"`).
 - **Inputs**: positional paths only; optional flags per command.
@@ -182,6 +184,7 @@ Fill a template with JSON data:
 |---|---|
 | Markdown → `.docx` | `node scripts/md2docx.js input.md output.docx` |
 | `.docx` → Markdown | `node scripts/docx2md.js input.docx output.md` |
+| HTML / `.webarchive` / `.mhtml` → `.docx` | `node scripts/html2docx.js input.html output.docx [--header ...] [--footer ...] [--json-errors]` |
 | Fill template | `python3 scripts/docx_fill_template.py template.docx data.json out.docx [--strict]` |
 | Accept tracked changes | `python3 scripts/docx_accept_changes.py in.docx out.docx` |
 | Unpack for raw editing | `python3 scripts/office/unpack.py in.docx unpacked/` |
@@ -193,6 +196,8 @@ Fill a template with JSON data:
 | Remove password | `python3 scripts/office_passwd.py encrypted.docx clean.docx --decrypt PASSWORD` |
 | Detect password | `python3 scripts/office_passwd.py file.docx --check` (exit 0 encrypted / 10 clean / 11 missing) |
 | Add review comment | `python3 scripts/docx_add_comment.py in.docx out.docx --anchor-text "phrase" --comment "body" --author "Reviewer"` |
+| Reply to comment | `python3 scripts/docx_add_comment.py in.docx out.docx --parent N --comment "reply body" --author "Dev"` |
+| Edit unpacked tree | `python3 scripts/docx_add_comment.py --unpacked-dir DIR --anchor-text "phrase" --comment "body"` (combine with `--parent` for replies in-place) |
 | Merge N docx | `python3 scripts/docx_merge.py merged.docx a.docx b.docx c.docx [--page-break-between]` |
 | Machine-readable failures | append `--json-errors` to any of the above |
 

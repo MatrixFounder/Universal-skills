@@ -14,6 +14,13 @@
 #               shape-group rendering in docx2md.js. Without poppler we fall
 #               back to LibreOffice HTML GIF export, which captures geometry
 #               only and separates shape labels from the bitmap.)
+#   - Chrome / Chromium / Edge / Brave (OPTIONAL — html2docx.js auto-detects
+#               a Chromium-family browser and uses headless rendering for
+#               inline SVG diagrams (drawio, mermaid, etc.) so foreignObject
+#               + CSS layout reproduce exactly. Without one, html2docx falls
+#               back to the @resvg/resvg-js parser, which handles geometry
+#               but degrades on rich HTML labels inside SVG. Override the
+#               auto-detect with HTML2DOCX_BROWSER=/path/to/chrome.)
 #
 # Idempotent; safe to re-run.
 set -euo pipefail
@@ -70,6 +77,44 @@ else
     warn "  Debian:  sudo apt install libreoffice --no-install-recommends"
     warn "  Fedora:  sudo dnf install libreoffice"
     missing_host=1
+fi
+
+# Chromium-family browser is optional — html2docx.js detects it at
+# runtime and uses headless rendering for inline SVG diagrams (drawio /
+# mermaid / etc.) when found. Without one, html2docx falls back to the
+# bundled @resvg/resvg-js parser. Override auto-detect with
+# HTML2DOCX_BROWSER=/path/to/chrome.
+HTML2DOCX_BROWSER_FOUND=""
+case "$(uname -s 2>/dev/null || echo unknown)" in
+    Darwin)
+        for p in \
+            "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" \
+            "/Applications/Chromium.app/Contents/MacOS/Chromium" \
+            "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge" \
+            "/Applications/Brave Browser.app/Contents/MacOS/Brave Browser" ; do
+            if [ -x "$p" ]; then HTML2DOCX_BROWSER_FOUND="$p"; break; fi
+        done
+        ;;
+    *)
+        for n in google-chrome google-chrome-stable chromium chromium-browser chrome microsoft-edge brave-browser; do
+            if command -v "$n" >/dev/null 2>&1; then
+                HTML2DOCX_BROWSER_FOUND="$(command -v "$n")"
+                break
+            fi
+        done
+        ;;
+esac
+if [ -n "$HTML2DOCX_BROWSER_FOUND" ]; then
+    say "browser: $HTML2DOCX_BROWSER_FOUND (used by html2docx.js for SVG rendering)"
+else
+    warn "Chrome / Chromium NOT FOUND on host."
+    warn "OPTIONAL: html2docx.js renders SVG diagrams via @resvg/resvg-js fallback;"
+    warn "rich foreignObject content (drawio HTML labels) may degrade."
+    warn "Install ANY ONE of:"
+    warn "  macOS:   brew install --cask google-chrome    (or chromium / brave-browser)"
+    warn "  Debian:  sudo apt install chromium            (or chromium-browser)"
+    warn "  Fedora:  sudo dnf install chromium"
+    warn "Or set HTML2DOCX_BROWSER=/path/to/chrome to override the auto-detector."
 fi
 
 # Poppler is optional — only needed for highest-fidelity shape-group

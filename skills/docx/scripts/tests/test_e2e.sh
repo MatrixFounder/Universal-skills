@@ -47,6 +47,269 @@ grep -q "915,000" "$TMP/back.md" \
     && ok "table cell preserved" \
     || nok "table cell" "lost in round-trip"
 
+# --- html2docx -------------------------------------------------------------
+echo "html2docx:"
+node html2docx.js ../examples/fixture-simple.html "$TMP/html_out.docx" >/dev/null 2>&1 \
+    && [ -s "$TMP/html_out.docx" ] && ok "fixture.html → html_out.docx" \
+    || nok "fixture.html → html_out.docx" "missing or empty"
+
+"$PY" -m office.validate "$TMP/html_out.docx" >/dev/null 2>&1 \
+    && ok "office.validate accepts html2docx output" \
+    || nok "office.validate (html2docx)" "rejected the produced .docx"
+
+# Round-trip via docx2md to confirm content survived the cheerio→docx walk.
+node docx2md.js "$TMP/html_out.docx" "$TMP/html_back.md" >/dev/null 2>&1
+grep -q "Quarterly report" "$TMP/html_back.md" \
+    && ok "html→docx→md preserves heading text" \
+    || nok "html heading round-trip" "lost in cheerio walk"
+grep -q "915,000" "$TMP/html_back.md" \
+    && ok "html→docx→md preserves table cell" \
+    || nok "html table cell round-trip" "lost in cheerio walk"
+
+# cross-7 H1: same-path guard. Input HTML and output .docx have different
+# extensions in the typical case, but the guard must still trip when the
+# user points both args at the same path (e.g. via a typo).
+cp ../examples/fixture-simple.html "$TMP/same.html"
+set +e
+err=$(node html2docx.js "$TMP/same.html" "$TMP/same.html" --json-errors 2>&1 >/dev/null)
+rc=$?
+set -e
+[ "$rc" -eq 6 ] \
+    && echo "$err" | "$PY" -c "import sys, json; j=json.loads(sys.stdin.read()); assert j['code']==6 and j['type']=='SelfOverwriteRefused', j" 2>/dev/null \
+    && ok "same-path guard: exit 6 + SelfOverwriteRefused envelope" \
+    || nok "same-path guard" "exit=$rc msg=$err"
+
+# cross-5: --json-errors envelope on a missing-input failure (regression
+# for any future change to the JS error helper).
+set +e
+err=$(node html2docx.js /nope.html "$TMP/_z.docx" --json-errors 2>&1 >/dev/null)
+rc=$?
+set -e
+[ "$rc" -eq 1 ] \
+    && echo "$err" | "$PY" -c "import sys, json; j=json.loads(sys.stdin.read()); assert j['v']==1 and j['code']==1 and j['type']=='FileNotFound', j" 2>/dev/null \
+    && ok "html2docx --json-errors: v=1 + FileNotFound + code=1" \
+    || nok "html2docx envelope" "exit=$rc msg=$err"
+
+# VDD iter-3 unit-tests for the SVG render module — exercise helpers
+# directly so a regression in trim / corrupt-PNG / sandbox-gate is caught
+# even on a host without Chrome.
+out=$(cd "$SKILL_DIR" && node --eval "
+const r = require('./_html2docx_svg_render');
+const { PNG } = require('pngjs');
+const assert = require('assert');
+
+// (1) PNG magic check.
+const real = new PNG({ width: 4, height: 4 });
+assert.strictEqual(r._isValidPng(PNG.sync.write(real)), true);
+assert.strictEqual(r._isValidPng(Buffer.from([0xFF,0xD8,0xFF,0xE0])), false);
+assert.strictEqual(r._isValidPng(Buffer.alloc(0)), false);
+
+// (2) Trim crops all four sides — content in middle of 40×40, padding=2.
+const dirty = new PNG({ width: 40, height: 40 });
+for (let i = 0; i < dirty.data.length; i++) dirty.data[i] = 255;
+for (let y = 12; y < 22; y++) for (let x = 15; x < 25; x++) {
+    const idx = (y * 40 + x) * 4;
+    dirty.data[idx] = dirty.data[idx+1] = dirty.data[idx+2] = 0;
+    dirty.data[idx+3] = 255;
+}
+const trim1 = PNG.sync.read(r._trimPngWhitespace(PNG.sync.write(dirty), 2));
+assert(trim1.width >= 12 && trim1.width <= 14, 'four-side trim width');
+assert(trim1.height >= 12 && trim1.height <= 14, 'four-side trim height');
+
+// (3) Top trim — content in BOTTOM half must collapse the top white region.
+const bottomOnly = new PNG({ width: 30, height: 60 });
+for (let i = 0; i < bottomOnly.data.length; i++) bottomOnly.data[i] = 255;
+for (let y = 50; y < 58; y++) for (let x = 5; x < 25; x++) {
+    const idx = (y * 30 + x) * 4;
+    bottomOnly.data[idx] = bottomOnly.data[idx+1] = bottomOnly.data[idx+2] = 0;
+    bottomOnly.data[idx+3] = 255;
+}
+const trim2 = PNG.sync.read(r._trimPngWhitespace(PNG.sync.write(bottomOnly), 0));
+assert(trim2.height <= 12, 'top trim removes leading white, got h=' + trim2.height);
+
+// (4) Corrupt input: helper passes through, magic check rejects.
+const corrupt = Buffer.from([0xFF, 0xD8, 0xFF, 0xE0]);
+assert.strictEqual(r._trimPngWhitespace(corrupt, 0), corrupt);
+assert.strictEqual(r._isValidPng(corrupt), false);
+
+// (5) Sandbox gate: opt-in env triggers disable, default leaves it on
+// (skip the not-root assertion when actually running as root, e.g. CI Docker).
+const wasOptIn = process.env.HTML2DOCX_ALLOW_NO_SANDBOX;
+delete process.env.HTML2DOCX_ALLOW_NO_SANDBOX;
+const isRoot = typeof process.getuid === 'function' && process.getuid() === 0;
+if (!isRoot) assert.strictEqual(r._shouldDisableSandbox(), false);
+process.env.HTML2DOCX_ALLOW_NO_SANDBOX = '1';
+assert.strictEqual(r._shouldDisableSandbox(), true);
+if (wasOptIn === undefined) delete process.env.HTML2DOCX_ALLOW_NO_SANDBOX;
+else process.env.HTML2DOCX_ALLOW_NO_SANDBOX = wasOptIn;
+
+console.log('OK');
+" 2>&1)
+echo "$out" | tail -1 | grep -q '^OK$' \
+    && ok "svg-render helpers: 4-sided trim + isValidPng + sandbox gate" \
+    || nok "svg-render helpers" "$out"
+
+# SVG renderer tier detection: with HTML2DOCX_BROWSER set to a non-existent
+# path, Tier 1 (Chrome) must be skipped and Tier 2 (resvg-js) must take
+# over. Use a tiny inline-SVG fixture so the test runs fast and works on
+# any host (no actual Chrome required).
+cat > "$TMP/svg.html" <<'HTML'
+<!doctype html><html><body><svg xmlns="http://www.w3.org/2000/svg" width="60" height="40" viewBox="0 0 60 40"><rect x="2" y="2" width="56" height="36" fill="#cce" stroke="#333"/><text x="30" y="24" text-anchor="middle" font-size="12">tier</text></svg></body></html>
+HTML
+out=$(HTML2DOCX_BROWSER=/no/such/browser-binary node html2docx.js \
+        "$TMP/svg.html" "$TMP/svg_resvg.docx" 2>&1)
+rc=$?
+[ "$rc" -eq 0 ] && [ -s "$TMP/svg_resvg.docx" ] \
+    && echo "$out" | grep -q "resvg-js" \
+    && ok "Tier 2 (resvg-js) used when HTML2DOCX_BROWSER is unreachable" \
+    || nok "tier-2 fallback" "exit=$rc out=$out"
+"$PY" -m office.validate "$TMP/svg_resvg.docx" >/dev/null 2>&1 \
+    && ok "Tier 2 output passes office.validate" \
+    || nok "tier-2 validate" "rejected"
+
+# VDD-iter-2 MED-1: nested <ol> inside <ul> must render as numbered, not
+# inherit "bullets" reference. Round-trip via docx2md detects bullet
+# regression because mammoth/turndown preserve list markers.
+cat > "$TMP/nested.html" <<'HTML'
+<html><body><ul><li>top<ol><li>nested-numbered-A</li><li>nested-numbered-B</li></ol></li></ul></body></html>
+HTML
+node html2docx.js "$TMP/nested.html" "$TMP/nested.docx" >/dev/null 2>&1
+node docx2md.js "$TMP/nested.docx" "$TMP/nested.md" >/dev/null 2>&1
+# After fix: nested items must appear with `1.` / `1)` / `2.` markers
+# (turndown emits "1.  text"). Bug regression would emit "*  text".
+grep -E "^\s*1\.\s+nested-numbered-A" "$TMP/nested.md" >/dev/null \
+    && ok "MED-1: <ol> inside <ul> keeps numbering after round-trip" \
+    || nok "MED-1: nested numbered list" "got: $(cat $TMP/nested.md)"
+
+# VDD-iter-2 LOW-1: mailto: links survive as docx hyperlinks (not flat
+# text). docx2md re-emits hyperlinks as `[label](url)` markdown.
+cat > "$TMP/mailto.html" <<'HTML'
+<html><body><p>Email <a href="mailto:foo@bar.com">support</a> please.</p></body></html>
+HTML
+node html2docx.js "$TMP/mailto.html" "$TMP/mailto.docx" >/dev/null 2>&1
+node docx2md.js "$TMP/mailto.docx" "$TMP/mailto.md" >/dev/null 2>&1
+grep -q "mailto:foo@bar.com" "$TMP/mailto.md" \
+    && ok "LOW-1: mailto: link preserved through round-trip" \
+    || nok "LOW-1: mailto link" "stripped to plain text: $(cat $TMP/mailto.md)"
+
+# VDD-iter-2 MED-3: a query-string-suffixed src that doesn't exist on
+# disk must yield "Local image not found" (existence check first), NOT
+# "Unsupported image format" (extname mis-parse).
+cat > "$TMP/queryimg.html" <<'HTML'
+<html><body><img src="/no/such/file.png?version=42&v2"></body></html>
+HTML
+set +e
+err=$(node html2docx.js "$TMP/queryimg.html" "$TMP/queryimg.docx" 2>&1 >/dev/null)
+rc=$?
+set -e
+[ "$rc" -eq 0 ] \
+    && echo "$err" | grep -q "Local image not found" \
+    && ! echo "$err" | grep -q "Unsupported image format" \
+    && ok "MED-3: missing image error names existence (not format)" \
+    || nok "MED-3: error message" "$err"
+
+# --- html2docx: webarchive + mhtml extractors (HIGH-1 coverage gap) -------
+echo "html2docx archives:"
+
+# Generate a minimal Safari .webarchive synthetically: bplist00 dict with
+# WebMainResource{WebResourceData=<html>, MIMEType=text/html, URL=...}
+# and one PNG sub-resource with a known URL → exercises addExtractedImage
+# path-only key fallback.
+"$PY" -c "
+import plistlib, sys, base64
+# Tiny 1x1 PNG (transparent) — minimum valid PNG.
+PNG_1x1 = base64.b64decode('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==')
+HTML = b'<!DOCTYPE html><html><head><title>WA fixture</title></head><body><h1>WebArchive heading marker</h1><p>cell-915,000 marker</p><img src=\"https://example.com/a.png\"></body></html>'
+data = {
+    'WebMainResource': {
+        'WebResourceData': HTML,
+        'WebResourceMIMEType': 'text/html',
+        'WebResourceTextEncodingName': 'UTF-8',
+        'WebResourceURL': 'https://example.com/page.html',
+        'WebResourceFrameName': '',
+    },
+    'WebSubresources': [
+        {
+            'WebResourceData': PNG_1x1,
+            'WebResourceMIMEType': 'image/png',
+            'WebResourceURL': 'https://example.com/a.png',
+        },
+    ],
+}
+with open('$TMP/fx.webarchive', 'wb') as f:
+    plistlib.dump(data, f, fmt=plistlib.FMT_BINARY)
+"
+node html2docx.js "$TMP/fx.webarchive" "$TMP/fx_wa.docx" >/dev/null 2>&1 \
+    && [ -s "$TMP/fx_wa.docx" ] && ok "fx.webarchive → fx_wa.docx" \
+    || nok ".webarchive → .docx" "missing or empty"
+"$PY" -m office.validate "$TMP/fx_wa.docx" >/dev/null 2>&1 \
+    && ok "office.validate accepts .webarchive output" \
+    || nok ".webarchive validate" "rejected"
+node docx2md.js "$TMP/fx_wa.docx" "$TMP/fx_wa.md" >/dev/null 2>&1
+grep -q "WebArchive heading marker" "$TMP/fx_wa.md" \
+    && ok ".webarchive: heading round-trips through bplist parser" \
+    || nok ".webarchive content" "lost in extraction: $(head -3 $TMP/fx_wa.md)"
+
+# Generate a minimal Chrome .mhtml synthetically: multipart/related with
+# one quoted-printable text/html part + one base64 image part. Tests:
+# (a) MIME header parsing, (b) QP decode, (c) base64 decode, (d) image
+# part extraction, (e) Content-Location lookup against extractedImages.
+PNG_B64='iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=='
+{
+    printf 'From: <Saved test>\r\n'
+    printf 'Snapshot-Content-Location: https://example.com/p\r\n'
+    printf 'Subject: MHTML fixture\r\n'
+    printf 'MIME-Version: 1.0\r\n'
+    printf 'Content-Type: multipart/related; type="text/html"; boundary="MHTML_BOUND_42"\r\n'
+    printf '\r\n'
+    printf '\r\n--MHTML_BOUND_42\r\n'
+    printf 'Content-Type: text/html; charset=utf-8\r\n'
+    printf 'Content-Transfer-Encoding: quoted-printable\r\n'
+    printf 'Content-Location: https://example.com/p\r\n'
+    printf '\r\n'
+    # Quoted-printable body: encodes "—" as =E2=80=94 (utf-8 em-dash).
+    printf '<html><body><h1>MHTML heading marker =E2=80=94 Q1</h1><table>'
+    printf '<tr><th>Metric</th></tr><tr><td>915,000</td></tr></table>'
+    printf '<img src="https://example.com/img.png"></body></html>\r\n'
+    printf '\r\n--MHTML_BOUND_42\r\n'
+    printf 'Content-Type: image/png\r\n'
+    printf 'Content-Transfer-Encoding: base64\r\n'
+    printf 'Content-Location: https://example.com/img.png\r\n'
+    printf '\r\n'
+    printf '%s\r\n' "$PNG_B64"
+    printf '\r\n--MHTML_BOUND_42--\r\n'
+} > "$TMP/fx.mhtml"
+
+# (a) Conversion succeeds + image extraction reported.
+out=$(node html2docx.js "$TMP/fx.mhtml" "$TMP/fx_mh.docx" 2>&1)
+rc=$?
+[ "$rc" -eq 0 ] && [ -s "$TMP/fx_mh.docx" ] && ok "fx.mhtml → fx_mh.docx" \
+    || nok ".mhtml → .docx" "exit=$rc msg=$out"
+echo "$out" | grep -q "extracted 1 image part" \
+    && ok ".mhtml: image part extracted (base64 decoded)" \
+    || nok ".mhtml image extraction" "expected 'extracted 1 image part': $out"
+"$PY" -m office.validate "$TMP/fx_mh.docx" >/dev/null 2>&1 \
+    && ok "office.validate accepts .mhtml output" \
+    || nok ".mhtml validate" "rejected"
+node docx2md.js "$TMP/fx_mh.docx" "$TMP/fx_mh.md" >/dev/null 2>&1
+grep -q "MHTML heading marker" "$TMP/fx_mh.md" \
+    && ok ".mhtml: QP-decoded heading round-trips (em-dash UTF-8)" \
+    || nok ".mhtml QP decode" "got: $(head -3 $TMP/fx_mh.md)"
+grep -q "915,000" "$TMP/fx_mh.md" \
+    && ok ".mhtml: table cell round-trips through MIME parser" \
+    || nok ".mhtml table" "lost: $(head -5 $TMP/fx_mh.md)"
+
+# MED-2: tmpDirs registered for cleanup must be empty after the process
+# exits (cleanup hook ran). Sample the temp directory of the OS — count
+# our markers right before vs right after a fresh run.
+TMPROOT="$(node -e 'process.stdout.write(require("os").tmpdir())')"
+before=$(ls "$TMPROOT" 2>/dev/null | grep -c "html2docx-mhtml-" || true)
+node html2docx.js "$TMP/fx.mhtml" "$TMP/_cleanup_check.docx" >/dev/null 2>&1
+after=$(ls "$TMPROOT" 2>/dev/null | grep -c "html2docx-mhtml-" || true)
+[ "$after" -le "$before" ] \
+    && ok "MED-2: mhtml tmp dir cleaned up on process exit" \
+    || nok "MED-2: tmp leak" "before=$before after=$after"
+
 # --- docx_fill_template ---------------------------------------------------
 echo "docx_fill_template:"
 # docx_fill_template walks dotted keys as nested JSON paths
@@ -731,6 +994,164 @@ set -e
 [ "$rc" -eq 6 ] \
     && ok "VDD-B: merge with symlink → same-inode caught (exit 6)" \
     || nok "VDD-B merge symlink" "rc=$rc"
+
+# --- docx-1b: docx_add_comment replies + library mode ---------------------
+echo "docx-1b add_comment replies + library:"
+
+# R1 reply happy-path (zip-mode): wrap an anchor, then reply to comment 0.
+# Verify (a) two <w:comment>, (b) commentsExtended.xml has paraIdParent
+# matching parent's paraId, (c) document.xml has 2 of each marker kind
+# with reply's range nested inside parent's.
+"$PY" docx_add_comment.py "$TMP/out.docx" "$TMP/r_parent.docx" \
+    --anchor-text "Quarterly" --comment "verify" --author "QA" >/dev/null 2>&1
+"$PY" docx_add_comment.py "$TMP/r_parent.docx" "$TMP/r_reply.docx" \
+    --parent 0 --comment "Acknowledged, fixing." --author "Dev" >/dev/null 2>&1
+"$PY" -c "
+import zipfile, re
+with zipfile.ZipFile('$TMP/r_reply.docx') as z:
+    cx = z.read('word/comments.xml').decode()
+    ext = z.read('word/commentsExtended.xml').decode()
+    doc = z.read('word/document.xml').decode()
+assert len(re.findall(r'<w:comment ', cx)) == 2, 'expected 2 comments'
+m_parent = re.search(r'<w:p[^>]*w14:paraId=\"([0-9A-F]+)\"[^>]*>', cx)
+assert m_parent, 'parent paraId missing in comments.xml'
+parent_para = m_parent.group(1)
+assert f'w15:paraIdParent=\"{parent_para}\"' in ext, \
+    f'paraIdParent {parent_para} missing in commentsExtended.xml: {ext}'
+crs_ids = re.findall(r'<w:commentRangeStart w:id=\"(\d+)\"', doc)
+cre_ids = re.findall(r'<w:commentRangeEnd w:id=\"(\d+)\"', doc)
+ref_ids = re.findall(r'<w:commentReference w:id=\"(\d+)\"', doc)
+assert sorted(crs_ids) == ['0','1'], f'crs ids: {crs_ids}'
+assert sorted(cre_ids) == ['0','1'], f'cre ids: {cre_ids}'
+assert sorted(ref_ids) == ['0','1'], f'ref ids: {ref_ids}'
+# Reply's range must be nested inside parent's: order is crs0,crs1,...,cre1,cre0
+assert crs_ids == ['0','1'], f'crs order: {crs_ids}'
+assert cre_ids == ['1','0'], f'cre order: {cre_ids}'
+print('R1 reply structure verified')
+" 2>&1 | grep -q "R1 reply structure verified" \
+    && ok "R1: reply nested inside parent + paraIdParent linkage" \
+    || nok "R1 reply structure" "see python output"
+
+"$PY" -m office.validate "$TMP/r_reply.docx" >/dev/null 2>&1 \
+    && ok "R1: office.validate accepts threaded reply output" \
+    || nok "R1 validate reply" "rejected"
+
+# R2 unknown parent → exit 2 + ParentCommentNotFound envelope
+set +e
+err=$("$PY" docx_add_comment.py "$TMP/out.docx" "$TMP/_y.docx" \
+    --parent 999 --comment "x" --json-errors 2>&1 >/dev/null)
+rc=$?
+set -e
+[ "$rc" -eq 2 ] \
+    && echo "$err" | "$PY" -c "import sys, json; j=json.loads(sys.stdin.read()); assert j['type']=='ParentCommentNotFound' and j['code']==2 and j['details']['parent_id']==999, j" 2>/dev/null \
+    && ok "R2: unknown parent → exit 2 + ParentCommentNotFound envelope" \
+    || nok "R2 unknown parent" "rc=$rc msg=$err"
+
+# R3 library-mode: unpack → anchor + reply (in-place) → pack → validate
+mkdir -p "$TMP/lib_tree"
+"$PY" -c "
+from office.unpack import unpack
+from pathlib import Path
+unpack(Path('$TMP/out.docx'), Path('$TMP/lib_tree'))
+" >/dev/null 2>&1
+"$PY" docx_add_comment.py --unpacked-dir "$TMP/lib_tree" \
+    --anchor-text "Quarterly" --comment "lib verify" --author "QA" >/dev/null 2>&1 \
+    && ok "R3: --unpacked-dir anchor mode runs" \
+    || nok "R3 unpacked anchor" "non-zero exit"
+"$PY" docx_add_comment.py --unpacked-dir "$TMP/lib_tree" \
+    --parent 0 --comment "lib reply" --author "Dev" >/dev/null 2>&1 \
+    && ok "R3: --unpacked-dir reply mode runs" \
+    || nok "R3 unpacked reply" "non-zero exit"
+"$PY" -c "
+from office.pack import pack
+from pathlib import Path
+pack(Path('$TMP/lib_tree'), Path('$TMP/lib.docx'))
+" >/dev/null 2>&1
+"$PY" -m office.validate "$TMP/lib.docx" >/dev/null 2>&1 \
+    && ok "R3: library-mode round-trip validates" \
+    || nok "R3 validate" "rejected"
+"$PY" -c "
+import zipfile, re
+with zipfile.ZipFile('$TMP/lib.docx') as z:
+    cx = z.read('word/comments.xml').decode()
+    ext = z.read('word/commentsExtended.xml').decode()
+assert len(re.findall(r'<w:comment ', cx)) == 2, f'expected 2 comments'
+assert 'paraIdParent' in ext, 'no paraIdParent in commentsExtended.xml'
+print('R3 content verified')
+" 2>&1 | grep -q "R3 content verified" \
+    && ok "R3: library-mode produces parent + reply with thread linkage" \
+    || nok "R3 content" "see python output"
+
+# R4 library-mode + INPUT/OUTPUT mutual exclusion → UsageError envelope
+set +e
+err=$("$PY" docx_add_comment.py "$TMP/out.docx" "$TMP/_z.docx" \
+    --unpacked-dir "$TMP/lib_tree" --parent 0 --comment x --json-errors 2>&1 >/dev/null)
+rc=$?
+set -e
+[ "$rc" -eq 2 ] \
+    && echo "$err" | "$PY" -c "import sys, json; j=json.loads(sys.stdin.read()); assert j['type']=='UsageError' and j['code']==2, j" 2>/dev/null \
+    && ok "R4: --unpacked-dir + INPUT/OUTPUT → exit 2 + UsageError envelope" \
+    || nok "R4 mutual-exclusion" "rc=$rc msg=$err"
+
+# R5 (VDD-A3): malformed OOXML side-part → MalformedOOXML envelope (no traceback)
+mkdir -p "$TMP/bad_tree"
+"$PY" -c "
+from office.unpack import unpack
+from pathlib import Path
+unpack(Path('$TMP/r_reply.docx'), Path('$TMP/bad_tree'))
+" >/dev/null 2>&1
+echo "garbage-not-xml" > "$TMP/bad_tree/word/commentsExtended.xml"
+set +e
+err=$("$PY" docx_add_comment.py --unpacked-dir "$TMP/bad_tree" \
+    --parent 0 --comment "x" --json-errors 2>&1 >/dev/null)
+rc=$?
+set -e
+[ "$rc" -eq 1 ] \
+    && echo "$err" | "$PY" -c "import sys, json; j=json.loads(sys.stdin.read()); assert j['type']=='MalformedOOXML' and j['code']==1 and j['v']==1, j" 2>/dev/null \
+    && ok "R5 (VDD-A3): corrupt side-part → exit 1 + MalformedOOXML envelope" \
+    || nok "R5 corrupt side-part" "rc=$rc msg=$err"
+
+# R6 (VDD-A5): reply-to-reply re-targets to root — flattened thread
+"$PY" docx_add_comment.py "$TMP/r_reply.docx" "$TMP/chain.docx" \
+    --parent 1 --comment "second reply (should flatten to root, not chain)" \
+    --author "Y" >/dev/null 2>&1
+"$PY" -c "
+import zipfile, re
+with zipfile.ZipFile('$TMP/chain.docx') as z:
+    ext = z.read('word/commentsExtended.xml').decode()
+parents = re.findall(r'w15:paraIdParent=\"([0-9A-F]+)\"', ext)
+assert len(parents) == 2, f'expected 2 paraIdParent entries, got {parents}'
+assert parents[0] == parents[1], f'replies should share root, got {parents}'
+print('R6 chain flattened to root')
+" 2>&1 | grep -q "R6 chain flattened to root" \
+    && ok "R6 (VDD-A5): reply-to-reply flattens to conversation root" \
+    || nok "R6 chain flatten" "see python output"
+
+# R7 (VDD-A6): newlines in --comment body → multiple <w:p>
+"$PY" docx_add_comment.py "$TMP/out.docx" "$TMP/multi_p.docx" \
+    --anchor-text "Quarterly" \
+    --comment $'line one\nline two\n\nline four' --author "M" >/dev/null 2>&1
+"$PY" -c "
+import zipfile, re
+with zipfile.ZipFile('$TMP/multi_p.docx') as z:
+    cx = z.read('word/comments.xml').decode()
+m = re.search(r'<w:comment[^>]*w:author=\"M\".*?</w:comment>', cx, re.S)
+body = m.group(0)
+n_p = body.count('<w:p ')
+texts = [t for t in re.findall(r'<w:t[^>]*>([^<]*)</w:t>', body) if t]
+assert n_p == 4, f'expected 4 <w:p> (incl. blank), got {n_p}'
+assert texts == ['line one', 'line two', 'line four'], f'texts: {texts}'
+print('R7 multi-paragraph body verified')
+" 2>&1 | grep -q "R7 multi-paragraph body verified" \
+    && ok "R7 (VDD-A6): newlines in body split into <w:p> paragraphs" \
+    || nok "R7 multi-paragraph body" "see python output"
+
+# R8 (VDD-A8): --parent + --anchor-text together does NOT leak anchor in stdout
+out=$("$PY" docx_add_comment.py "$TMP/r_reply.docx" "$TMP/_a8.docx" \
+    --parent 0 --anchor-text "should-be-ignored" --comment "ok" --author "X" 2>&1 | tail -1)
+echo "$out" | grep -q "should-be-ignored" \
+    && nok "R8 (VDD-A8) stdout leaked anchor" "stdout: $out" \
+    || ok "R8 (VDD-A8): --parent stdout does not leak unused --anchor-text"
 
 # --- docx-2: docx_merge ---------------------------------------------------
 echo "docx-2 merge:"
