@@ -1220,6 +1220,327 @@ set -e
     && ok "merge refuses CFB input with exit 3" \
     || nok "merge cfb rejection" "rc=$rc msg=$err"
 
+# --- docx-4 + docx-5: docx2md sidecar (comments + revisions) + footnotes ---
+echo "docx-4 + docx-5 docx2md sidecar + pandoc footnotes:"
+
+# 1. Negative case: clean fixture round-trip → no sidecar written.
+node docx2md.js "$TMP/out.docx" "$TMP/clean.md" >/dev/null 2>&1
+[ ! -e "$TMP/clean.docx2md.json" ] \
+    && ok "clean fixture: no sidecar" \
+    || nok "clean fixture sidecar" "sidecar created on doc with no comments/revisions"
+
+# 2. Comments path: use docx_add_comment.py to inject a comment into out.docx,
+#    then run docx2md and confirm sidecar shows it.
+"$PY" docx_add_comment.py "$TMP/out.docx" "$TMP/d4_commented.docx" \
+    --anchor-text "Quarterly" --comment "Audit note" \
+    --author "Auditor" --initials "AU" >/dev/null 2>&1
+node docx2md.js "$TMP/d4_commented.docx" "$TMP/d4_commented.md" >/dev/null 2>&1
+[ -s "$TMP/d4_commented.docx2md.json" ] \
+    && ok "commented docx → sidecar written" \
+    || nok "sidecar present" "missing or empty"
+
+"$PY" -c "
+import json
+with open('$TMP/d4_commented.docx2md.json') as f: j = json.load(f)
+assert j['v'] == 1, f'wrong schema version: {j.get(\"v\")}'
+assert isinstance(j['comments'], list) and len(j['comments']) >= 1, f'expected >=1 comment, got {len(j[\"comments\"])}'
+c = j['comments'][0]
+assert c['author'] == 'Auditor', c
+assert c['text'] == 'Audit note', c
+assert isinstance(c.get('paragraphIndex'), int) and c['paragraphIndex'] >= 0, c
+assert 'anchorTextBefore' in c and 'anchorTextAfter' in c, c
+print('schema ok')
+" 2>&1 | grep -q "schema ok" \
+    && ok "sidecar v1 schema: comment fields populated" \
+    || nok "sidecar schema" "see python output"
+
+# 3. Revisions + footnotes: programmatically inject ins/del/footnoteReference/endnoteReference
+#    into out.docx and verify the sidecar + pandoc markers.
+"$PY" - "$TMP/out.docx" "$TMP/d4_rich.docx" << 'PYEOF'
+import sys, zipfile, shutil, re
+src, dst = sys.argv[1], sys.argv[2]
+shutil.copy(src, dst)
+with zipfile.ZipFile(dst, 'r') as zin:
+    parts = {n: zin.read(n) for n in zin.namelist()}
+doc = parts['word/document.xml'].decode('utf-8')
+inject = (
+    '<w:ins w:id="100" w:author="Alice" w:date="2024-06-01T10:00:00Z">'
+    '<w:r><w:t xml:space="preserve">[INS]</w:t></w:r></w:ins>'
+    '<w:del w:id="101" w:author="Bob" w:date="2024-06-02T11:00:00Z">'
+    '<w:r><w:delText xml:space="preserve">[DEL]</w:delText></w:r></w:del>'
+    '<w:r><w:footnoteReference w:id="2"/></w:r>'
+    '<w:r><w:endnoteReference w:id="2"/></w:r>'
+)
+m = re.search(r'(<w:p\b[^>]*>)(.*?)(</w:p>)', doc, flags=re.DOTALL)
+assert m, 'no <w:p>'
+doc = doc[:m.start()] + m.group(1) + m.group(2) + inject + m.group(3) + doc[m.end():]
+parts['word/document.xml'] = doc.encode('utf-8')
+parts['word/footnotes.xml'] = (
+    '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+    '<w:footnotes xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+    '<w:footnote w:type="separator" w:id="-1"><w:p><w:r><w:separator/></w:r></w:p></w:footnote>'
+    '<w:footnote w:type="continuationSeparator" w:id="0"><w:p><w:r><w:continuationSeparator/></w:r></w:p></w:footnote>'
+    '<w:footnote w:id="2"><w:p><w:r><w:t xml:space="preserve">A footnote about something important.</w:t></w:r></w:p></w:footnote>'
+    '</w:footnotes>'
+).encode('utf-8')
+parts['word/endnotes.xml'] = (
+    '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+    '<w:endnotes xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+    '<w:endnote w:type="separator" w:id="-1"><w:p><w:r><w:separator/></w:r></w:p></w:endnote>'
+    '<w:endnote w:type="continuationSeparator" w:id="0"><w:p><w:r><w:continuationSeparator/></w:r></w:p></w:endnote>'
+    '<w:endnote w:id="2"><w:p><w:r><w:t xml:space="preserve">An endnote referenced in the body.</w:t></w:r></w:p></w:endnote>'
+    '</w:endnotes>'
+).encode('utf-8')
+ct = parts['[Content_Types].xml'].decode('utf-8')
+if '/word/footnotes.xml' not in ct:
+    ct = ct.replace('</Types>',
+        '<Override PartName="/word/footnotes.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.footnotes+xml"/>'
+        '<Override PartName="/word/endnotes.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.endnotes+xml"/>'
+        '</Types>')
+    parts['[Content_Types].xml'] = ct.encode('utf-8')
+rels = parts['word/_rels/document.xml.rels'].decode('utf-8')
+if 'footnotes.xml' not in rels:
+    rels = rels.replace('</Relationships>',
+        '<Relationship Id="rIdFn999" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/footnotes" Target="footnotes.xml"/>'
+        '<Relationship Id="rIdEn999" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/endnotes" Target="endnotes.xml"/>'
+        '</Relationships>')
+    parts['word/_rels/document.xml.rels'] = rels.encode('utf-8')
+with zipfile.ZipFile(dst, 'w', zipfile.ZIP_DEFLATED) as zout:
+    for name, data in parts.items():
+        zout.writestr(name, data)
+PYEOF
+
+node docx2md.js "$TMP/d4_rich.docx" "$TMP/d4_rich.md" >/dev/null 2>&1
+
+"$PY" -c "
+import json
+with open('$TMP/d4_rich.docx2md.json') as f: j = json.load(f)
+ins = [r for r in j['revisions'] if r['type'] == 'insertion']
+dels = [r for r in j['revisions'] if r['type'] == 'deletion']
+assert len(ins) == 1 and ins[0]['author'] == 'Alice' and ins[0]['text'] == '[INS]', ins
+assert len(dels) == 1 and dels[0]['author'] == 'Bob' and dels[0]['text'] == '[DEL]', dels
+assert isinstance(ins[0]['paragraphIndex'], int) and ins[0]['paragraphIndex'] >= 0
+assert isinstance(ins[0]['runIndex'], int) and ins[0]['runIndex'] >= 0
+print('revisions ok')
+" 2>&1 | grep -q "revisions ok" \
+    && ok "sidecar captures <w:ins>/<w:del> with author + paragraphIndex + runIndex" \
+    || nok "revision capture" "see python output"
+
+# Pandoc footnote markers in the markdown body
+grep -E '\[\^fn-2\]' "$TMP/d4_rich.md" >/dev/null \
+    && ok "pandoc footnote marker [^fn-2] in body" \
+    || nok "footnote marker" "missing"
+grep -E '\[\^en-2\]' "$TMP/d4_rich.md" >/dev/null \
+    && ok "pandoc endnote marker [^en-2] in body" \
+    || nok "endnote marker" "missing"
+
+# Definitions block at end
+grep -E '^\[\^fn-2\]: A footnote about something important' "$TMP/d4_rich.md" >/dev/null \
+    && ok "footnote definition appended" \
+    || nok "footnote definition" "missing"
+grep -E '^\[\^en-2\]: An endnote referenced in the body' "$TMP/d4_rich.md" >/dev/null \
+    && ok "endnote definition appended" \
+    || nok "endnote definition" "missing"
+
+# 4. --no-metadata suppresses the sidecar even when comments/revisions exist.
+rm -f "$TMP/d4_rich.docx2md.json"
+node docx2md.js "$TMP/d4_rich.docx" "$TMP/d4_no_meta.md" --no-metadata >/dev/null 2>&1
+[ ! -e "$TMP/d4_no_meta.docx2md.json" ] && [ ! -e "$TMP/d4_rich.docx2md.json" ] \
+    && ok "--no-metadata suppresses sidecar" \
+    || nok "--no-metadata" "sidecar still written"
+
+# 5. --no-footnotes skips the pandoc conversion (no [^fn-/[^en- markers).
+node docx2md.js "$TMP/d4_rich.docx" "$TMP/d4_no_fn.md" --no-footnotes >/dev/null 2>&1
+[ "$(grep -cE '\[\^fn-' "$TMP/d4_no_fn.md")" = "0" ] \
+    && ok "--no-footnotes skips pandoc conversion" \
+    || nok "--no-footnotes" "marker still present"
+
+# 6. --metadata-json overrides sidecar location.
+custom="$TMP/d4_custom_path.json"
+node docx2md.js "$TMP/d4_rich.docx" "$TMP/d4_custom.md" --metadata-json "$custom" >/dev/null 2>&1
+[ -s "$custom" ] && [ ! -e "$TMP/d4_custom.docx2md.json" ] \
+    && ok "--metadata-json overrides default sidecar path" \
+    || nok "--metadata-json" "wrong location"
+
+# 7. --json-errors envelope on usage error.
+set +e
+err=$(node docx2md.js --json-errors 2>&1 >/dev/null)
+rc=$?
+set -e
+[ "$rc" -eq 2 ] \
+    && echo "$err" | "$PY" -c "import sys, json; j=json.loads(sys.stdin.read()); assert j['v']==1 and j['type']=='UsageError', j" 2>/dev/null \
+    && ok "docx2md --json-errors emits v=1 envelope on usage error" \
+    || nok "json-errors envelope" "rc=$rc msg=$err"
+
+# --- VDD HIGH-1: same-path guard (refuse to overwrite input docx) ---------
+# Without this guard, `node docx2md.js x.docx x.docx` would silently destroy
+# the input by writing markdown over it. Verified pre-fix on a 9116-byte
+# valid docx → 1398-byte UTF-8 markdown.
+cp "$TMP/out.docx" "$TMP/d4_selfovr.docx"
+set +e
+err=$(node docx2md.js "$TMP/d4_selfovr.docx" "$TMP/d4_selfovr.docx" --json-errors 2>&1 >/dev/null)
+rc=$?
+set -e
+[ "$rc" -eq 6 ] \
+    && echo "$err" | "$PY" -c "import sys, json; j=json.loads(sys.stdin.read()); assert j['type']=='SelfOverwriteRefused' and j['code']==6, j" 2>/dev/null \
+    && "$PY" -m office.validate "$TMP/d4_selfovr.docx" >/dev/null 2>&1 \
+    && ok "VDD HIGH-1: same-path guard refuses overwrite + input docx intact" \
+    || nok "same-path guard" "rc=$rc msg=$err (input intact?)"
+
+# --- VDD MED-1: empty footnote body → reference still resolvable ----------
+# Build a fixture with one populated footnote (id=2) and one empty (id=3).
+# Pre-fix bug: [^fn-3] appeared in body but had no [^fn-3]: definition.
+"$PY" - "$TMP/out.docx" "$TMP/d4_emptyfn.docx" << 'PYEOF'
+import sys, zipfile, shutil, re
+src, dst = sys.argv[1], sys.argv[2]
+shutil.copy(src, dst)
+with zipfile.ZipFile(dst, 'r') as zin:
+    parts = {n: zin.read(n) for n in zin.namelist()}
+doc = parts['word/document.xml'].decode('utf-8')
+m = re.search(r'(<w:p\b[^>]*>)(.*?)(</w:p>)', doc, flags=re.DOTALL)
+inject = '<w:r><w:footnoteReference w:id="2"/></w:r><w:r><w:footnoteReference w:id="3"/></w:r>'
+doc = doc[:m.start()] + m.group(1) + m.group(2) + inject + m.group(3) + doc[m.end():]
+parts['word/document.xml'] = doc.encode('utf-8')
+parts['word/footnotes.xml'] = (
+    '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+    '<w:footnotes xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+    '<w:footnote w:type="separator" w:id="-1"><w:p><w:r><w:separator/></w:r></w:p></w:footnote>'
+    '<w:footnote w:type="continuationSeparator" w:id="0"><w:p><w:r><w:continuationSeparator/></w:r></w:p></w:footnote>'
+    '<w:footnote w:id="2"><w:p><w:r><w:t xml:space="preserve">Real footnote text.</w:t></w:r></w:p></w:footnote>'
+    '<w:footnote w:id="3"><w:p/></w:footnote>'
+    '</w:footnotes>'
+).encode('utf-8')
+ct = parts['[Content_Types].xml'].decode('utf-8')
+if '/word/footnotes.xml' not in ct:
+    ct = ct.replace('</Types>', '<Override PartName="/word/footnotes.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.footnotes+xml"/></Types>')
+    parts['[Content_Types].xml'] = ct.encode('utf-8')
+rels = parts['word/_rels/document.xml.rels'].decode('utf-8')
+if 'footnotes.xml' not in rels:
+    rels = rels.replace('</Relationships>', '<Relationship Id="rIdFn999" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/footnotes" Target="footnotes.xml"/></Relationships>')
+    parts['word/_rels/document.xml.rels'] = rels.encode('utf-8')
+with zipfile.ZipFile(dst, 'w', zipfile.ZIP_DEFLATED) as zout:
+    for n,d in parts.items():
+        zout.writestr(n, d)
+PYEOF
+node docx2md.js "$TMP/d4_emptyfn.docx" "$TMP/d4_emptyfn.md" >/dev/null 2>&1
+# Both [^fn-2] and [^fn-3] must have matching definitions (no dangling).
+grep -E '^\[\^fn-2\]:' "$TMP/d4_emptyfn.md" >/dev/null \
+    && grep -E '^\[\^fn-3\]:' "$TMP/d4_emptyfn.md" >/dev/null \
+    && ok "VDD MED-1: empty footnote body still gets a [^fn-N]: definition (no dangling ref)" \
+    || nok "empty footnote definition" "[^fn-3]: missing"
+
+# --- VDD MED-2: --metadata-json refuses to consume a flag as path --------
+# Pre-fix bug: `--metadata-json --no-footnotes` set metadataJsonPath = "--no-footnotes"
+set +e
+err=$(node docx2md.js "$TMP/out.docx" "$TMP/x.md" --metadata-json --no-footnotes 2>&1 >/dev/null)
+rc=$?
+set -e
+[ "$rc" -eq 2 ] && echo "$err" | grep -q "requires a path" \
+    && ok "VDD MED-2: --metadata-json without value rejected" \
+    || nok "--metadata-json validation" "rc=$rc msg=$err"
+
+# --- VDD LOW-3: id=\"\" not coerced to 0 ---------------------------------
+"$PY" - "$TMP/out.docx" "$TMP/d4_emptyid.docx" << 'PYEOF'
+import sys, zipfile, shutil, re
+src, dst = sys.argv[1], sys.argv[2]
+shutil.copy(src, dst)
+with zipfile.ZipFile(dst, 'r') as zin:
+    parts = {n: zin.read(n) for n in zin.namelist()}
+# Inject one well-formed and one malformed (empty id) <w:ins>
+doc = parts['word/document.xml'].decode('utf-8')
+m = re.search(r'(<w:p\b[^>]*>)(.*?)(</w:p>)', doc, flags=re.DOTALL)
+inject = (
+    '<w:ins w:id="50" w:author="OK" w:date="2024-01-01T00:00:00Z"><w:r><w:t>good</w:t></w:r></w:ins>'
+    '<w:ins w:id="" w:author="Bad" w:date="2024-01-01T00:00:00Z"><w:r><w:t>bad</w:t></w:r></w:ins>'
+)
+doc = doc[:m.start()] + m.group(1) + m.group(2) + inject + m.group(3) + doc[m.end():]
+parts['word/document.xml'] = doc.encode('utf-8')
+with zipfile.ZipFile(dst, 'w', zipfile.ZIP_DEFLATED) as zout:
+    for n,d in parts.items():
+        zout.writestr(n, d)
+PYEOF
+node docx2md.js "$TMP/d4_emptyid.docx" "$TMP/d4_emptyid.md" >/dev/null 2>&1
+"$PY" -c "
+import json
+with open('$TMP/d4_emptyid.docx2md.json') as f: j = json.load(f)
+ids = [r['id'] for r in j['revisions']]
+assert 50 in ids, ids
+# Pre-fix: id='' coerced to 0 → ids contains 0. Post-fix: id is null.
+assert 0 not in ids, f'empty id silently coerced to 0: {ids}'
+assert any(i is None for i in ids), f'malformed id should serialize as null: {ids}'
+print('id parsing ok')
+" 2>&1 | grep -q "id parsing ok" \
+    && ok "VDD LOW-3: id=\"\" serialized as null (not coerced to 0)" \
+    || nok "id parsing" "see python output"
+
+# --- VDD coverage: Cyrillic footnote text round-trip ---------------------
+"$PY" - "$TMP/out.docx" "$TMP/d4_cyr.docx" << 'PYEOF'
+import sys, zipfile, shutil, re
+src, dst = sys.argv[1], sys.argv[2]
+shutil.copy(src, dst)
+with zipfile.ZipFile(dst, 'r') as zin:
+    parts = {n: zin.read(n) for n in zin.namelist()}
+doc = parts['word/document.xml'].decode('utf-8')
+m = re.search(r'(<w:p\b[^>]*>)(.*?)(</w:p>)', doc, flags=re.DOTALL)
+doc = doc[:m.start()] + m.group(1) + m.group(2) + '<w:r><w:footnoteReference w:id="7"/></w:r>' + m.group(3) + doc[m.end():]
+parts['word/document.xml'] = doc.encode('utf-8')
+parts['word/footnotes.xml'] = (
+    '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+    '<w:footnotes xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+    '<w:footnote w:type="separator" w:id="-1"><w:p><w:r><w:separator/></w:r></w:p></w:footnote>'
+    '<w:footnote w:type="continuationSeparator" w:id="0"><w:p><w:r><w:continuationSeparator/></w:r></w:p></w:footnote>'
+    '<w:footnote w:id="7"><w:p><w:r><w:t xml:space="preserve">Сноска: проверка кириллицы и emoji 🚀</w:t></w:r></w:p></w:footnote>'
+    '</w:footnotes>'
+).encode('utf-8')
+ct = parts['[Content_Types].xml'].decode('utf-8')
+if '/word/footnotes.xml' not in ct:
+    ct = ct.replace('</Types>', '<Override PartName="/word/footnotes.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.footnotes+xml"/></Types>')
+    parts['[Content_Types].xml'] = ct.encode('utf-8')
+rels = parts['word/_rels/document.xml.rels'].decode('utf-8')
+if 'footnotes.xml' not in rels:
+    rels = rels.replace('</Relationships>', '<Relationship Id="rIdFn999" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/footnotes" Target="footnotes.xml"/></Relationships>')
+    parts['word/_rels/document.xml.rels'] = rels.encode('utf-8')
+with zipfile.ZipFile(dst, 'w', zipfile.ZIP_DEFLATED) as zout:
+    for n,d in parts.items():
+        zout.writestr(n, d)
+PYEOF
+node docx2md.js "$TMP/d4_cyr.docx" "$TMP/d4_cyr.md" >/dev/null 2>&1
+grep -F 'Сноска: проверка кириллицы и emoji 🚀' "$TMP/d4_cyr.md" >/dev/null \
+    && ok "VDD coverage: Cyrillic + emoji footnote text round-trips" \
+    || nok "Cyrillic footnote" "characters lost in pipeline"
+
+# --- VDD coverage: rPrChange counted in unsupported ----------------------
+"$PY" - "$TMP/out.docx" "$TMP/d4_rprc.docx" << 'PYEOF'
+import sys, zipfile, shutil, re
+src, dst = sys.argv[1], sys.argv[2]
+shutil.copy(src, dst)
+with zipfile.ZipFile(dst, 'r') as zin:
+    parts = {n: zin.read(n) for n in zin.namelist()}
+doc = parts['word/document.xml'].decode('utf-8')
+m = re.search(r'(<w:p\b[^>]*>)(.*?)(</w:p>)', doc, flags=re.DOTALL)
+inject = (
+    '<w:r>'
+    '<w:rPr><w:rPrChange w:id="200" w:author="Reviewer" w:date="2024-01-01T00:00:00Z">'
+    '<w:rPr/></w:rPrChange></w:rPr>'
+    '<w:t>formatting-change carrier</w:t>'
+    '</w:r>'
+)
+doc = doc[:m.start()] + m.group(1) + m.group(2) + inject + m.group(3) + doc[m.end():]
+parts['word/document.xml'] = doc.encode('utf-8')
+with zipfile.ZipFile(dst, 'w', zipfile.ZIP_DEFLATED) as zout:
+    for n,d in parts.items():
+        zout.writestr(n, d)
+PYEOF
+node docx2md.js "$TMP/d4_rprc.docx" "$TMP/d4_rprc.md" >/dev/null 2>&1
+"$PY" -c "
+import json
+with open('$TMP/d4_rprc.docx2md.json') as f: j = json.load(f)
+assert j['unsupported']['rPrChange'] >= 1, j['unsupported']
+print('rPrChange counted')
+" 2>&1 | grep -q "rPrChange counted" \
+    && ok "VDD coverage: rPrChange counted in unsupported (honest-scope)" \
+    || nok "rPrChange counter" "see python output"
+
 # --- q-2: visual regression (docx → soffice → pdf, then compare) ----------
 # docx itself isn't a PDF; convert via soffice headless first, gated on
 # soffice availability. The conversion uses a dedicated profile dir to

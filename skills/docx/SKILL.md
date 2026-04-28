@@ -25,7 +25,7 @@ practical knowledge and make the common operations a single command.
 
 ## 2. Capabilities
 - Convert Markdown to `.docx` with headings, lists, tables, images, and optional mermaid diagrams via `md2docx.js`.
-- Extract `.docx` content back to Markdown preserving tables, lists, and embedded images via `docx2md.js`.
+- Extract `.docx` content back to Markdown preserving tables, lists, and embedded images via `docx2md.js`. Comments and tracked changes (which mammoth strips) are pulled into a JSON sidecar (`<output>.docx2md.json`) — useful for contract audits where the audit trail must accompany the converted markdown. Footnotes/endnotes are converted to pandoc-style `[^fn-N]` / `[^en-N]` markers with definitions appended at the end. Schema versioned (`v: 1`); the sidecar's `unsupported` field reports counts of revision types not yet captured (`rPrChange`, `pPrChange`, `moveFrom`, `moveTo`, `cellIns`, `cellDel`) so callers know what was lost. Opt-out via `--no-metadata` (skip sidecar) and `--no-footnotes` (skip pandoc conversion). Sidecar is **not** written when the source has no comments, no revisions, and zero unsupported counts — clean docs stay clean.
 - Fill `.docx` templates containing `{{placeholder}}` or `{{nested.key}}` markers from a JSON payload with safe run-merging.
 - Accept all tracked changes in a `.docx` via headless LibreOffice without leaving artefacts in the user's profile.
 - Unpack and repack `.docx` archives for raw OOXML editing, with smart-quote entity round-tripping and run canonicalisation.
@@ -46,7 +46,7 @@ practical knowledge and make the common operations a single command.
 
 - **Commands**:
   - `node scripts/md2docx.js INPUT.md OUTPUT.docx [--header "TEXT"] [--footer "TEXT"]`
-  - `node scripts/docx2md.js INPUT.docx OUTPUT.md`
+  - `node scripts/docx2md.js INPUT.docx OUTPUT.md [--metadata-json PATH] [--no-metadata] [--no-footnotes] [--json-errors]`
   - `python3 scripts/docx_fill_template.py TEMPLATE.docx DATA.json OUTPUT.docx [--strict]`
   - `python3 scripts/docx_accept_changes.py INPUT.docx OUTPUT.docx [--timeout 120]`
   - `python3 scripts/office/unpack.py INPUT.docx OUTDIR/ [--no-pretty] [--no-escape-quotes] [--no-merge-runs]`
@@ -76,7 +76,7 @@ practical knowledge and make the common operations a single command.
   - `cd skills/docx/scripts && npm install` — installs docx, marked, mammoth, turndown, image-size, turndown-plugin-gfm into `scripts/node_modules/`.
   - `python3 -m venv .venv && source .venv/bin/activate && pip install -r scripts/requirements.txt` — installs python-docx, lxml, defusedxml.
   - `node scripts/md2docx.js examples/fixture-simple.md /tmp/out.docx && unzip -l /tmp/out.docx | grep word/document.xml` — exits 0 and lists the document part.
-  - `node scripts/docx2md.js /tmp/out.docx /tmp/back.md && test -s /tmp/back.md` — round-trips non-empty Markdown.
+  - `node scripts/docx2md.js /tmp/out.docx /tmp/back.md && test -s /tmp/back.md` — round-trips non-empty Markdown. On a docx with comments / tracked changes, also writes `/tmp/back.docx2md.json` (schema `v:1`); on a docx with footnotes/endnotes, the markdown gets pandoc-style `[^fn-N]` markers + definitions block at the end. See [`references/docx2md-sidecar.md`](references/docx2md-sidecar.md) for the full schema and `--metadata-json` / `--no-metadata` / `--no-footnotes` flags. Same-path (`docx2md.js foo.docx foo.docx`) is refused with exit 6 (`SelfOverwriteRefused`) so the input is never destroyed.
   - `python3 scripts/office/validate.py /tmp/out.docx` — exits 0, prints `OK` or only warnings.
   - `python3 scripts/office/unpack.py /tmp/out.docx /tmp/unpacked && python3 scripts/office/pack.py /tmp/unpacked /tmp/repack.docx && unzip -p /tmp/repack.docx word/document.xml | head -c 100` — unpack/pack round trip.
   - `python3 scripts/docx_add_comment.py /tmp/out.docx /tmp/commented.docx --anchor-text "Quarterly" --comment "Verify this number" --author "QA Bot" && python3 -m office.validate /tmp/commented.docx` — adds a Word comment anchored on the substring; output validates and contains a `<w:comment>` part. See [`references/add-comment-howto.md`](references/add-comment-howto.md) for the full verification protocol.
@@ -110,7 +110,10 @@ rest are behavioural defaults with their rationale.
 ### 7.4 Extracting text from `.docx` to Markdown
 
 1. Use `docx2md.js` for GFM output with tables preserved. If the document contains images, a sibling `<stem>_images/` directory is created — tell the user so they know to ship it alongside the Markdown.
-2. For plain text without any formatting, `pandoc -t plain` is a valid alternative but external — document this choice to the user rather than silently switching tools.
+2. For docs that carry **comments** or **tracked changes**, the converter writes a JSON sidecar `<stem>.docx2md.json` next to the Markdown. Tell the user to ship the sidecar alongside the markdown if the audit trail matters; the sidecar's absence on a clean doc is a feature, not a missing artefact. Field semantics + the `unsupported` counters are documented in [`references/docx2md-sidecar.md`](references/docx2md-sidecar.md).
+3. For docs with **footnotes/endnotes**, the markdown body gets pandoc-style `[^fn-N]` / `[^en-N]` markers and definitions appended at the end. Pass `--no-footnotes` if downstream tooling can't parse pandoc syntax.
+4. **MUST NOT** invoke `docx2md.js` with the same input and output path — the cross-7 H1 guard exits 6 (`SelfOverwriteRefused`), but better to never tempt it.
+5. For plain text without any formatting, `pandoc -t plain` is a valid alternative but external — document this choice to the user rather than silently switching tools.
 
 ### 7.5 Filling a template
 

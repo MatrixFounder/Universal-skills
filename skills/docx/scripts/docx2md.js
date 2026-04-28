@@ -1,18 +1,22 @@
 // docx → markdown CLI. Main entry; orchestrates the pipeline and delegates
-// domain logic to ./docx2md/_{util,probes,assets,shapes,markdown}.js.
+// domain logic to ./docx2md/_{util,probes,assets,shapes,markdown,metadata}.js.
 //
 // Flow:
 //   1. Probe external tools (soffice, poppler) and load npm deps.
 //   2. Create output assets dir (refusing symlinks).
 //   3. Build shared ctx (paths, counters, dedup maps, tool handles).
-//   4. Mammoth: docx → HTML (with image callback that stores assets via ctx).
-//   5. Turndown: HTML → markdown with custom table rules.
-//   6. In parallel: extract header/footer images + extract shape drawings from XML.
-//   7. Batch-convert collected EMFs to PNG; rewrite markdown refs.
-//   8. Prepend header/footer image block; inject shape-group diagrams.
-//   9. Collapse duplicate image runs; apply TOC-derived heading numbering;
-//      inject TOC anchors.
-//   10. Write final markdown.
+//   4. Read .docx into a JSZip; pull metadata sidecar (comments + revisions)
+//      and footnote/endnote definitions; rewrite footnote/endnote references
+//      in document.xml to ⟦FN:N⟧ / ⟦EN:N⟧ sentinels (docx-4 + docx-5).
+//   5. Mammoth: modified docx buffer → HTML (with image callback).
+//   6. Turndown: HTML → markdown with custom table rules.
+//   7. In parallel: extract header/footer images + extract shape drawings.
+//   8. Batch-convert collected EMFs to PNG; rewrite markdown refs.
+//   9. Prepend header/footer block; inject shape diagrams.
+//  10. Collapse duplicate image runs; apply TOC numbering; inject TOC anchors.
+//  11. Restore footnote/endnote sentinels to pandoc `[^fn-N]` / `[^en-N]`
+//      and append definitions block.
+//  12. Write final markdown + (if non-empty) the sidecar JSON.
 
 const fs = require("fs");
 const path = require("path");
@@ -36,14 +40,89 @@ const {
     dropEmptyHeadings,
     dropTinyImageRefs,
 } = require("./docx2md/_markdown");
+const metadataMod = require("./docx2md/_metadata");
 
 // ---- CLI args ------------------------------------------------------------
+//
+// Positional: <input.docx> <output.md>.
+// Flags:
+//   --metadata-json PATH   override sidecar path (default: <output.md base>.docx2md.json)
+//   --no-metadata          skip comment/revision extraction; do not write sidecar
+//   --no-footnotes         skip footnote/endnote conversion; behave like pre-docx-5
+//   --json-errors          emit single-line JSON envelope on stderr for top-level failures
 
-const inputDocx = process.argv[2];
-const outputMd = process.argv[3];
+const argv = process.argv.slice(2);
+let inputDocx, outputMd;
+let metadataJsonPath = null;
+let extractMetadataFlag = true;
+let convertFootnotesFlag = true;
+let jsonErrors = false;
+{
+    const positional = [];
+    for (let i = 0; i < argv.length; i++) {
+        const a = argv[i];
+        if (a === "--metadata-json") {
+            // VDD MED-2: refuse to swallow the next flag as our path.
+            const v = argv[i + 1];
+            if (v == null || v.startsWith("--")) {
+                // jsonErrors flag may not yet be set; fall back to plain text
+                // here intentionally — UsageError envelope is reported below
+                // through the regular reportError path.
+                process.stderr.write("--metadata-json requires a path argument\n");
+                process.exit(2);
+            }
+            metadataJsonPath = v;
+            i += 1;
+        }
+        else if (a === "--no-metadata")  extractMetadataFlag = false;
+        else if (a === "--no-footnotes") convertFootnotesFlag = false;
+        else if (a === "--json-errors")  jsonErrors = true;
+        else positional.push(a);
+    }
+    inputDocx = positional[0];
+    outputMd  = positional[1];
+}
+
+// Single-line JSON envelope for top-level errors. Mirrors scripts/_errors.py
+// shape and html2docx.js (cross-5). Defensive `code === 0` coerce to 1.
+function reportError(msg, code, type, details) {
+    if (code === 0) {
+        details = Object.assign({ coerced_from_zero: true }, details || {});
+        code = 1;
+    }
+    if (jsonErrors) {
+        const env = { v: 1, error: String(msg), code };
+        if (type) env.type = type;
+        if (details && Object.keys(details).length) env.details = details;
+        process.stderr.write(JSON.stringify(env) + "\n");
+    } else {
+        process.stderr.write(String(msg) + "\n");
+    }
+    process.exit(code);
+}
+
 if (!inputDocx || !outputMd) {
-    console.error("Usage: node docx2md.js <input.docx> <output.md>");
-    process.exit(1);
+    reportError(
+        "Usage: node docx2md.js <input.docx> <output.md> [--metadata-json PATH] [--no-metadata] [--no-footnotes] [--json-errors]",
+        2, "UsageError",
+    );
+}
+
+// VDD HIGH-1: cross-7 H1 same-path guard. Without this, `node docx2md.js
+// foo.docx foo.docx` would overwrite the input docx with markdown text and
+// destroy it irrecoverably (verified). realpath catches symlinks pointing
+// at the same inode.
+const inputAbs = path.resolve(inputDocx);
+const outputAbs = path.resolve(outputMd);
+function realPathOrSelf(p) {
+    try { return fs.realpathSync.native(p); } catch (_) { return p; }
+}
+if (realPathOrSelf(inputAbs) === realPathOrSelf(outputAbs)) {
+    reportError(
+        `Refusing to overwrite input file: ${inputDocx}`,
+        6, "SelfOverwriteRefused",
+        { input: inputAbs, output: outputAbs },
+    );
 }
 
 // ---- Load npm deps (via loader with auto-install fallback) ---------------
@@ -281,39 +360,98 @@ function buildHeaderFooterPrefix(hfImages, conversions) {
 // ---- Main pipeline -------------------------------------------------------
 
 console.log(`Converting:\n  Input:  ${inputDocx}\n  Output: ${outputMd}`);
-mammoth
-    .convertToHtml({ path: inputDocx }, mammothOptions)
-    .then((result) => {
-        if (result.messages.length > 0) {
-            console.warn("Mammoth notices:");
-            result.messages.forEach((m) => console.warn(` - ${m.type}: ${m.message}`));
+
+(async () => {
+    // Read input as a buffer once. The buffer flows through metadata
+    // extraction → sentinel injection → mammoth, so we never touch disk
+    // for the same bytes more than necessary. (VDD LOW-5: async read so
+    // big inputs don't block the event loop.)
+    let inputBuffer;
+    try {
+        inputBuffer = await fs.promises.readFile(inputDocx);
+    } catch (e) {
+        reportError(`Cannot read input: ${e.message}`, 1, "InputReadError", { path: inputDocx });
+    }
+
+    const JSZip = loadDependency("jszip", SCRIPTS_DIR);
+    const zip = await JSZip.loadAsync(inputBuffer);
+    const parts = await metadataMod.loadDocxParts(zip);
+
+    // docx-4: build sidecar from comments + revisions (sidecar-only, no
+    // markdown pollution).
+    let sidecar = null;
+    if (extractMetadataFlag) {
+        sidecar = metadataMod.buildSidecar(parts, path.basename(inputDocx));
+    }
+
+    // docx-5: extract footnote/endnote definitions BEFORE mutating XML
+    // (the strip pass blanks bodies). Inject sentinels into document.xml
+    // and silence mammoth's own footnote rendering.
+    let notes = { footnotes: [], endnotes: [] };
+    let mammothInput = { path: inputDocx };
+    if (convertFootnotesFlag) {
+        notes = metadataMod.extractFootnotesAndEndnotes(parts);
+        if (notes.footnotes.length > 0 || notes.endnotes.length > 0) {
+            metadataMod.injectFootnoteSentinels(parts, notes);
+            const modBuf = await metadataMod.repackToBuffer(parts);
+            mammothInput = { buffer: modBuf };
         }
-        const bodyMarkdown = buildTurndown().turndown(result.value);
+    }
 
-        return Promise.all([
-            extractHeaderFooterImages(ctx, inputDocx),
-            extractBodyDrawings(inputDocx, ctx),
-        ]).then(([hfImages, bodyDrawings]) => {
-            const conversions = batchConvertEmfToPng(ctx);
-            const patchedBody = rewriteEmfHrefsToPng(ctx, bodyMarkdown, conversions);
-            const prefix = buildHeaderFooterPrefix(hfImages, conversions);
+    let result;
+    try {
+        result = await mammoth.convertToHtml(mammothInput, mammothOptions);
+    } catch (err) {
+        reportError(`Mammoth failed: ${err.message}`, 1, "MammothError");
+    }
+    if (result.messages.length > 0) {
+        console.warn("Mammoth notices:");
+        result.messages.forEach((m) => console.warn(` - ${m.type}: ${m.message}`));
+    }
+    const bodyMarkdown = buildTurndown().turndown(result.value);
 
-            let markdown = prefix + patchedBody;
-            markdown = injectMissingShapeDiagrams(markdown, bodyDrawings, ctx);
-            markdown = collapseDuplicateImageRuns(markdown);
-            markdown = dropTinyImageRefs(markdown, ctx);
-            markdown = dropEmptyHeadings(markdown);
-            markdown = applyHeadingNumberingFromTOC(markdown);
-            markdown = injectTocAnchors(markdown);
+    const [hfImages, bodyDrawings] = await Promise.all([
+        extractHeaderFooterImages(ctx, inputDocx),
+        extractBodyDrawings(inputDocx, ctx),
+    ]);
+    const conversions = batchConvertEmfToPng(ctx);
+    const patchedBody = rewriteEmfHrefsToPng(ctx, bodyMarkdown, conversions);
+    const prefix = buildHeaderFooterPrefix(hfImages, conversions);
 
-            fs.writeFileSync(outputMd, markdown, "utf8");
-            console.log(
-                `\nSuccessfully converted. Extracted ${ctx.seenHashes.size} unique image(s); ` +
-                `header/footer assets: ${hfImages.length}; EMF converted to PNG: ${conversions.size}/${ctx.emfFilenames.length}.`,
-            );
-        });
-    })
-    .catch((err) => {
-        console.error("Error during conversion:", err);
-        process.exit(1);
-    });
+    let markdown = prefix + patchedBody;
+    markdown = injectMissingShapeDiagrams(markdown, bodyDrawings, ctx);
+    markdown = collapseDuplicateImageRuns(markdown);
+    markdown = dropTinyImageRefs(markdown, ctx);
+    markdown = dropEmptyHeadings(markdown);
+    markdown = applyHeadingNumberingFromTOC(markdown);
+    markdown = injectTocAnchors(markdown);
+
+    // docx-5 post-pass: ⟦FN:N⟧ → [^fn-N], append definitions block.
+    if (convertFootnotesFlag) {
+        markdown = metadataMod.restoreFootnoteSentinels(markdown, notes);
+    }
+
+    fs.writeFileSync(outputMd, markdown, "utf8");
+
+    // docx-4: write sidecar only if non-empty (avoid clutter on clean docs).
+    if (sidecar) {
+        const sidecarPath = metadataJsonPath
+            ? path.resolve(metadataJsonPath)
+            : path.join(outputDir, `${baseName}.docx2md.json`);
+        fs.writeFileSync(sidecarPath, JSON.stringify(sidecar, null, 2) + "\n", "utf8");
+        console.log(
+            `Wrote sidecar: ${sidecarPath} ` +
+            `(${sidecar.comments.length} comment(s), ${sidecar.revisions.length} revision(s)).`,
+        );
+    }
+
+    console.log(
+        `\nSuccessfully converted. Extracted ${ctx.seenHashes.size} unique image(s); ` +
+        `header/footer assets: ${hfImages.length}; EMF converted to PNG: ${conversions.size}/${ctx.emfFilenames.length}` +
+        (notes.footnotes.length || notes.endnotes.length
+            ? `; footnotes: ${notes.footnotes.length}, endnotes: ${notes.endnotes.length}.`
+            : "."),
+    );
+})().catch((err) => {
+    reportError(`Error during conversion: ${err.message || err}`, 1, "ConversionError");
+});

@@ -119,12 +119,94 @@ content area).
 ### 3.2 DOCX → Markdown (extract for editing)
 
 ```bash
-node skills/docx/scripts/docx2md.js INPUT.docx OUTPUT.md
+node skills/docx/scripts/docx2md.js INPUT.docx OUTPUT.md \
+    [--metadata-json PATH] [--no-metadata] [--no-footnotes] [--json-errors]
 ```
 
 Produces a sibling `OUTPUT_images/` directory if the source contains
 embedded media. Uses mammoth (HTML conversion) + turndown (HTML → MD)
 internally.
+
+**Sidecar JSON for comments & tracked changes (docx-4).** Mammoth strips
+`<w:comment>`, `<w:ins>`, `<w:del>` on its way to HTML, so the markdown
+loses them. `docx2md.js` writes a `<OUTPUT-stem>.docx2md.json` sidecar
+alongside the markdown when the source has any comments or revisions:
+
+```json
+{
+  "v": 1,
+  "source": "Контракт.docx",
+  "comments": [
+    {"id": 0, "paraId": "77E1E8F3", "parentParaId": null,
+     "author": "Auditor", "initials": "AU", "date": "2026-04-28T15:22:00Z",
+     "text": "verify against source",
+     "anchorText": "абзаца",
+     "anchorTextBefore": "Типа текст ", "anchorTextAfter": "",
+     "paragraphIndex": 2}
+  ],
+  "revisions": [
+    {"type": "insertion", "id": 100, "author": "Alice",
+     "date": "2024-06-01T10:00:00Z", "text": "added clause",
+     "paragraphIndex": 12, "runIndex": 3}
+  ],
+  "unsupported": {"rPrChange": 0, "pPrChange": 0, "moveFrom": 0,
+                  "moveTo": 0, "cellIns": 0, "cellDel": 0}
+}
+```
+
+The schema is versioned (`v: 1`); thread linkage for replies comes from
+`paraIdParent` (matched against `commentsExtended.xml`); `paragraphIndex`
++ `anchorTextBefore` / `anchorTextAfter` give a stable locator even
+when the anchor text appears multiple times in the document. The
+`unsupported` field counts revision elements not yet captured (formatting
+changes, content moves, table-cell ins/del) so callers know what was
+lost — this is **honest scope**, not data loss reported as success. For
+the full schema and field semantics see
+[`skills/docx/references/docx2md-sidecar.md`](../../skills/docx/references/docx2md-sidecar.md).
+**No sidecar is written if the source has no comments, no revisions,
+and zero unsupported counts** — clean docs stay clean.
+
+Flags:
+
+- `--metadata-json PATH` overrides the sidecar location (default:
+  `<OUTPUT-stem>.docx2md.json` next to the markdown).
+- `--no-metadata` skips the comment/revision pass entirely (no sidecar
+  ever written).
+- `--no-footnotes` skips the footnote/endnote pandoc conversion
+  described below (mammoth's default rendering takes over).
+- `--json-errors` routes failures through the cross-5 envelope
+  (`{v, error, code, type?, details?}`).
+
+**Pandoc-style footnotes & endnotes (docx-5).** Word's
+`<w:footnoteReference>` / `<w:endnoteReference>` markers are converted
+to pandoc `[^fn-N]` / `[^en-N]` references inline, with definitions
+appended at the end of the markdown:
+
+```markdown
+…body text with footnote[^fn-2] and endnote[^en-1].
+
+[^fn-2]: A footnote about something important.
+[^en-1]: An endnote referenced in the body.
+```
+
+Word's separator / continuationSeparator / continuationNotice entries
+(boilerplate id `-1` and `0`) are filtered out as not user content.
+Footnote/endnote text is captured as **plain text only** — formatting
+inside the footnote (bold, links, nested lists) flattens. To keep
+mammoth's older `[1](#fn1) → 1. ↑ text` rendering instead of pandoc
+syntax, pass `--no-footnotes`.
+
+**Same-path safety.** `node docx2md.js foo.docx foo.docx` (typo) used
+to silently overwrite the input with markdown, destroying the source.
+Now exits 6 with a `SelfOverwriteRefused` envelope. Symlinks resolving
+to the same inode are caught too.
+
+Use case for the sidecar: contract audit. Auditors get a clean
+markdown they can diff side-by-side, plus a structured JSON file that
+preserves the audit trail (who commented what, where, when; what the
+reviewer inserted/deleted). The markdown is **not** polluted with
+inline `<!-- COMMENT 1 -->` or `^[c1]` annotations — locator info
+lives in the sidecar so md→docx round-trips don't propagate noise.
 
 ### 3.3 Fill a `{{placeholder}}` template
 
@@ -597,7 +679,7 @@ What's covered:
 
 | Skill | Coverage |
 |---|---|
-| docx | `md2docx → docx → docx2md` round-trip, `office.validate` on output, `docx_fill_template` with nested JSON, encryption / legacy-CFB rejection on `docx_fill_template` and `docx_accept_changes`, **cross-7** `office_passwd` (clean→encrypt→decrypt round-trip + zip-namelist parity, wrong-password exit 4, state-mismatch exit 5, stdin password, JSON envelope). |
+| docx | `md2docx → docx → docx2md` round-trip, `office.validate` on output, `docx_fill_template` with nested JSON, encryption / legacy-CFB rejection on `docx_fill_template` and `docx_accept_changes`, **cross-7** `office_passwd` (clean→encrypt→decrypt round-trip + zip-namelist parity, wrong-password exit 4, state-mismatch exit 5, stdin password, JSON envelope), **docx-4 + docx-5** `docx2md` sidecar (clean→no sidecar; `docx_add_comment` injection→sidecar v=1 with comment fields populated; `<w:ins>`/`<w:del>` injection→`paragraphIndex`+`runIndex`; pandoc `[^fn-N]`/`[^en-N]` markers + definitions; `--no-metadata` / `--no-footnotes` / `--metadata-json` / `--json-errors` envelopes), **VDD-regression** (same-path `SelfOverwriteRefused` exit 6 + input intact, empty footnote → resolvable `[^fn-N]:` definition, `--metadata-json` rejects flag-as-path, `id=""` serialised null not 0, Cyrillic+emoji footnote text, `<w:rPrChange>` counted in `unsupported`). |
 | xlsx | `csv2xlsx` + row count + `office.validate`, `xlsx_validate` (clean + injected `#DIV/0!` via lxml mutation), `xlsx_recalc` formula preservation, `xlsx_add_chart` (bar/line/pie variants + bad-range error), encryption rejection on `xlsx_validate`/`xlsx_add_chart`/`xlsx_recalc`, **cross-7** `office_passwd` (round-trip + openpyxl-readable post-decrypt with row count preserved, wrong-password, state-mismatch, stdin, JSON envelope). |
 | pptx | `md2pptx` + slide-count + `office.validate`, `pptx_thumbnails` (JPEG sanity), `pptx_to_pdf` (`%PDF` magic), `pptx_clean` (orphan slide + media removal, dry-run reports without writing), `outline2pptx` (heading-only MD → 4 slides + validate + heading-less input fails clearly), bundled `mermaid-config.json` (parses, missing path fails clean), encryption rejection on `pptx_clean`/`pptx_thumbnails`/`pptx_to_pdf`, **cross-7** `office_passwd` (round-trip + slide-count preserved post-decrypt, wrong-password, state-mismatch, stdin, JSON envelope). |
 | pdf | `md2pdf` + mermaid PNG render + bundled `mermaid-config.json` (parses, missing path warns, config change invalidates PNG cache), `pdf_merge` (page-count = sum), `pdf_split --each-page`, `pdf_fill_form` (`--check` exit codes, fill round-trip, `--flatten` removes `/AcroForm`, `--extract-fields` stdout, malformed JSON / missing `-o` exit 2, typo'd field warning, int→`/Yes` checkbox coercion), **q-3 mermaid edge-cases** (cyrillic / sequence / gantt / large-mindmap fixtures + `--strict-mermaid` exits non-zero on broken input + lenient mode degrades with warning). pdf has its own AcroForm path and does NOT use `office_passwd.py`. |
@@ -605,7 +687,9 @@ What's covered:
 Each suite ends with a **q-2 visual-regression** block that compares
 the first page of every produced PDF against a committed golden
 (see §8.3). Total assertion count after q-2/q-3 + docx-1/docx-2 +
-VDD adversarial fixes: **201** (66 docx + 40 xlsx + 48 pptx + 47 pdf).
+VDD adversarial fixes: **219** (84 docx + 40 xlsx + 48 pptx + 47 pdf).
+The docx delta from previous count (+18) is docx-4/docx-5 base (12) +
+VDD-regression (6).
 
 The suite is fast (<60 sec total on a warm machine) and is the
 primary pre-commit / pre-release gate. Any failure here points at a

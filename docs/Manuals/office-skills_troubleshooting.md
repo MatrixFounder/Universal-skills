@@ -340,6 +340,107 @@ The `pdf_fill_form` exit-code table is in
 
 ---
 
+## 5a. `docx2md.js` sidecar & footnote conversion
+
+### Sidecar file is missing — but the docx has comments / revisions
+
+**Cause.** Either you passed `--no-metadata` (which suppresses the
+sidecar entirely), or the build is outdated and predates docx-4.
+
+**Fix.**
+
+```bash
+# Confirm flag isn't in the command line:
+node skills/docx/scripts/docx2md.js IN.docx OUT.md
+ls OUT.docx2md.json   # should exist if IN.docx had comments / revisions
+
+# If it still doesn't appear, check whether the source actually has them:
+unzip -p IN.docx word/comments.xml 2>/dev/null | grep -c '<w:comment '
+unzip -p IN.docx word/document.xml | grep -oE '<w:ins\b|<w:del\b' | wc -l
+```
+
+A docx with **zero** comments AND **zero** revisions AND `unsupported`
+all-zero produces no sidecar — by design (clean docs stay clean).
+
+### `[^fn-N]` markers in markdown but no `[^fn-N]:` definition
+
+**Cause.** Either an orphan footnote reference (the OOXML body had
+`<w:footnoteReference w:id="N"/>` pointing at a non-existent
+`<w:footnote w:id="N">`), or you ran an older build without the
+"never-dangle" guard.
+
+**Fix.** On a current build the orphan reference is left alone (mammoth
+renders it as `[1](#fn-N)` instead of pandoc syntax — visible but not
+hijacked). Empty footnote bodies still get a `[^fn-N]: ` definition
+(empty after the colon) so pandoc sees a resolvable footnote.
+
+If you genuinely want the legacy mammoth rendering for the entire
+document, pass `--no-footnotes` and the pandoc pass is skipped wholesale.
+
+### `Refusing to overwrite input file: foo.docx` (exit 6)
+
+**Cause.** `docx2md.js` was invoked with the same path as input and
+output (typo or a mistakenly shared variable). The cross-7 H1 guard
+refuses the operation rather than destroying the source.
+
+**Fix.** Pick a distinct output path:
+
+```bash
+node skills/docx/scripts/docx2md.js foo.docx foo.md   # not foo.docx foo.docx
+```
+
+The guard uses `realpath`, so it also catches symlinks resolving to the
+same inode (e.g. `OUT.docx → IN.docx`).
+
+### `--metadata-json requires a path argument` (exit 2)
+
+**Cause.** Either `--metadata-json` was the last argv token, or the
+next token started with `--` (a flag). The parser refuses to treat a
+flag as the sidecar path because that would silently write the sidecar
+to a literal file called `--no-footnotes` (or whatever the next flag
+was).
+
+**Fix.** Always pass an explicit path, then any other flags:
+
+```bash
+# Wrong:
+node docx2md.js in.docx out.md --metadata-json --no-footnotes
+
+# Right:
+node docx2md.js in.docx out.md --metadata-json out/audit.json --no-footnotes
+```
+
+### `unsupported.<key> > 0` in the sidecar — what got lost?
+
+**Cause.** The source has revision elements not yet captured by the v1
+sidecar schema (formatting changes, content moves, or table-cell
+ins/del). The counter exists so consumers know the markdown does not
+fully reflect the audit trail.
+
+**Fix.** Three options:
+
+1. **Accept the loss.** Plain-text comparison of `out.md` is enough
+   for many audits — formatting changes don't affect contract terms.
+2. **Run `docx_accept_changes.py` first** to materialise all tracked
+   edits, then convert. The resulting markdown reflects the post-accept
+   state with no `<w:rPrChange>` etc. left:
+   ```bash
+   ./.venv/bin/python skills/docx/scripts/docx_accept_changes.py \
+       IN.docx /tmp/accepted.docx
+   node skills/docx/scripts/docx2md.js /tmp/accepted.docx OUT.md
+   ```
+3. **Inspect the source XML directly** if you need the formatting
+   change details:
+   ```bash
+   ./.venv/bin/python skills/docx/scripts/office/unpack.py IN.docx /tmp/u/
+   grep -r 'w:rPrChange\|w:moveFrom' /tmp/u/word/
+   ```
+
+See [`skills/docx/references/docx2md-sidecar.md`](../../skills/docx/references/docx2md-sidecar.md)
+for the full schema and what each `unsupported` counter represents.
+
+---
+
 ## 5b. `docx_merge.py` (real-world Word documents)
 
 The merger was hardened iteratively against real Word-authored
