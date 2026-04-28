@@ -1,19 +1,16 @@
 {
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
   "name": "universal-skills",
+  "description": "Universal-Skills marketplace: agent-agnostic skills for Claude Code. Pick and install only the skills you need — office (docx/xlsx/pptx/pdf), presentations (marp-slide), meta-skills (skill-creator/validator/enhancer), VDD verification, content writing, and more.",
   "owner": {
     "name": "Sergey K.",
     "email": "kuptsov.sergey@gmail.com",
     "url": "https://github.com/MatrixFounder"
   },
-  "metadata": {
-    "description": "Universal-Skills marketplace: agent-agnostic skills for Claude Code. Pick and install only the skills you need — office (docx/xlsx/pptx/pdf), presentations (marp-slide), meta-skills (skill-creator/validator/enhancer), VDD verification, content writing, and more.",
-    "version": "1.0.0",
-    "pluginRoot": "./plugins"
-  },
   "plugins": [
     {
       "name": "brainstorming",
-      "source": "brainstorming",
+      "source": "./plugins/brainstorming",
       "description": "Open-ended exploration partner — brainstorm, clarify requirements, design architecture, generate options",
       "category": "workflow",
       "tags": [
@@ -25,7 +22,7 @@
     },
     {
       "name": "docx",
-      "source": "docx",
+      "source": "./plugins/docx",
       "description": "Markdown↔docx round-trip + template fill + tracked-changes accept + deep XSD validator + msoffcrypto-tool encrypt/decrypt",
       "category": "office",
       "tags": [
@@ -40,7 +37,7 @@
     },
     {
       "name": "hooks-creator",
-      "source": "hooks-creator",
+      "source": "./plugins/hooks-creator",
       "description": "Customize Gemini CLI behavior using hooks (events, blockers, loggers) with templates and patterns",
       "category": "development",
       "tags": [
@@ -52,7 +49,7 @@
     },
     {
       "name": "marp-slide",
-      "source": "marp-slide",
+      "source": "./plugins/marp-slide",
       "description": "Marp slides with 7 themes + custom themes + image layouts + mermaid preprocessing + editable PPTX export via LibreOffice",
       "category": "office",
       "tags": [
@@ -65,7 +62,7 @@
     },
     {
       "name": "mcp-builder",
-      "source": "mcp-builder",
+      "source": "./plugins/mcp-builder",
       "description": "Build production-quality MCP (Model Context Protocol) servers in Python (FastMCP) or Node/TypeScript (MCP SDK)",
       "category": "development",
       "tags": [
@@ -78,7 +75,7 @@
     },
     {
       "name": "pdf",
-      "source": "pdf",
+      "source": "./plugins/pdf",
       "description": "Markdown→PDF (weasyprint, Cyrillic mermaid) + pypdf merge/split + AcroForm fill (XFA detection) + PNG-grid preview",
       "category": "office",
       "tags": [
@@ -93,7 +90,7 @@
     },
     {
       "name": "post-writing",
-      "source": "post-writing",
+      "source": "./plugins/post-writing",
       "description": "Write, draft, or rewrite social-media posts (LinkedIn, Telegram, Blog) for higher engagement",
       "category": "content",
       "tags": [
@@ -106,7 +103,7 @@
     },
     {
       "name": "pptx",
-      "source": "pptx",
+      "source": "./plugins/pptx",
       "description": "Markdown→pptx (built-in or marp) + outline skeleton + orphan cleanup + deep PptxValidator + Cyrillic mermaid + encrypt/decrypt",
       "category": "office",
       "tags": [
@@ -122,7 +119,7 @@
     },
     {
       "name": "skill-creator",
-      "source": "skill-creator",
+      "source": "./plugins/skill-creator",
       "description": "Scaffold + upgrade + eval + benchmark agent skills against the Gold-Standard structural template",
       "category": "meta",
       "tags": [
@@ -135,7 +132,7 @@
     },
     {
       "name": "skill-enhancer",
-      "source": "skill-enhancer",
+      "source": "./plugins/skill-enhancer",
       "description": "Audit, fix, or improve an existing skill to meet Gold-Standard compliance",
       "category": "meta",
       "tags": [
@@ -147,7 +144,7 @@
     },
     {
       "name": "skill-validator",
-      "source": "skill-validator",
+      "source": "./plugins/skill-validator",
       "description": "Audit a skill for security vulnerabilities (malicious bash, injection vectors) and Gold-Standard structural compliance",
       "category": "meta",
       "tags": [
@@ -160,7 +157,7 @@
     },
     {
       "name": "summarizing-meetings",
-      "source": "summarizing-meetings",
+      "source": "./plugins/summarizing-meetings",
       "description": "Auto-detects meeting type and produces a two-level pyramid Markdown summary optimized for people, AI agents, RAG, Obsidian",
       "category": "content",
       "tags": [
@@ -173,7 +170,7 @@
     },
     {
       "name": "text-humanizer",
-      "source": "text-humanizer",
+      "source": "./plugins/text-humanizer",
       "description": "Humanize AI-generated text or generate untraceable system prompts in multiple genres (Wiki, Creative, Crypto, etc.)",
       "category": "content",
       "tags": [
@@ -185,7 +182,7 @@
     },
     {
       "name": "transcript-fetcher",
-      "source": "transcript-fetcher",
+      "source": "./plugins/transcript-fetcher",
       "description": "Fetch clean plain-text transcripts from video URLs (YouTube via yt-dlp) with manual→auto language fallback, rolling-caption dedup, >> speaker turns, and a JSON stat sidecar",
       "category": "content",
       "tags": [
@@ -200,7 +197,7 @@
     },
     {
       "name": "vdd-adversarial",
-      "source": "vdd-adversarial",
+      "source": "./plugins/vdd-adversarial",
       "description": "Verification-Driven Development adversarial reviewer — destroys happy-path assumptions, finds edge cases the builder missed",
       "category": "verification",
       "tags": [
@@ -213,7 +210,7 @@
     },
     {
       "name": "vdd-sarcastic",
-      "source": "vdd-sarcastic",
+      "source": "./plugins/vdd-sarcastic",
       "description": "VDD adversarial review with a sarcastic, provocative tone — exposes lazy patterns by being uncomfortable to read",
       "category": "verification",
       "tags": [
@@ -226,7 +223,7 @@
     },
     {
       "name": "xlsx",
-      "source": "xlsx",
+      "source": "./plugins/xlsx",
       "description": "CSV→xlsx with styling + LibreOffice formula recalc + deep XlsxValidator + openpyxl charts + msoffcrypto-tool encrypt/decrypt",
       "category": "office",
       "tags": [
