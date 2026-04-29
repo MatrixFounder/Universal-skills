@@ -184,7 +184,16 @@ pre {
     border-radius: 6px !important;
     padding: 12px 16px !important;
     margin: 12px 0 !important;
-    overflow-x: auto !important;
+    /* white-space: pre-wrap + word-break: break-word makes long source lines
+       wrap to the next line at the page-width boundary instead of being clipped
+       past the right margin. PDFs can't scroll, so `overflow-x: auto` (the
+       browser default) silently drops content past the box. We preserve all
+       leading indentation via `pre-wrap` and break only at word/symbol
+       boundaries — keeps the visual indentation of nested code intact while
+       making sure no line goes past the page edge. */
+    white-space: pre-wrap !important;
+    word-break: break-word !important;
+    overflow-wrap: break-word !important;
     font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace !important;
     font-size: 0.85em !important;
     line-height: 1.45 !important;
@@ -195,6 +204,7 @@ pre code {
     padding: 0 !important;
     font-size: inherit !important;
     color: inherit !important;
+    white-space: inherit !important;
 }
 :not(pre) > code {
     background: #f6f8fa !important;
@@ -692,6 +702,79 @@ def _strip_icon_svgs(html: str) -> str:
     return "".join(out)
 
 
+def _flatten_table_code_blocks(html: str) -> str:
+    """Convert table-based syntax-highlighting blocks to plain `<pre><code>`.
+
+    Fern, Mintlify, GitBook, MkDocs Material, and many docs platforms render
+    code with line numbers as a `<pre><table><tr class="code-block-line">`
+    structure (one row per source line, gutter `<td>` for line number,
+    content `<td>` for code). weasyprint mishandles `<table>` inside `<pre>`
+    when the table needs to paginate: subsequent block siblings interleave
+    horizontally with mid-table rows, producing scrambled output (lines 16+
+    of a code block end up mixed with the next paragraph).
+
+    Detect these patterns by `<tr>` with `class*="code-block-line"` (Fern /
+    Mintlify), `class*="line"` inside `<table class*="highlight">` (Pygments),
+    or `class*="hl-row"` (Docusaurus). Extract the line content cell from
+    each row, join with `\\n`, and emit a clean `<pre><code>line1\\nline2\\n
+    ...</code></pre>` that paginates cleanly via the bundled `_NORMALIZE_CSS`.
+    """
+    # Match a <table> wrapper that's an obvious code-block table:
+    # contains <tr class="*code-block-line*"> or similar markers.
+    table_re = re.compile(
+        r'<table\b[^>]*>(.*?)</table>',
+        re.DOTALL | re.IGNORECASE,
+    )
+
+    def _is_code_table(inner: str) -> bool:
+        if 'code-block-line' in inner:        # Fern, Mintlify
+            return True
+        if 'class="line"' in inner and 'highlight' in inner:  # Pygments
+            return True
+        if 'hl-row' in inner:                  # Docusaurus
+            return True
+        return False
+
+    # Per-row extractor: prefer the *content* cell (skips line-number gutter).
+    line_re = re.compile(
+        r'<tr\b[^>]*\bclass="[^"]*(?:code-block-line|hl-row|line)[^"]*"[^>]*>(.*?)</tr>',
+        re.DOTALL | re.IGNORECASE,
+    )
+    content_cell_re = re.compile(
+        r'<td\b[^>]*\bclass="[^"]*(?:code-block-line-content|hl-content|content)[^"]*"[^>]*>(.*?)</td>',
+        re.DOTALL | re.IGNORECASE,
+    )
+
+    def _replace_table(m: re.Match) -> str:
+        inner = m.group(1)
+        if not _is_code_table(inner):
+            return m.group(0)
+        lines: list[str] = []
+        for row in line_re.finditer(inner):
+            row_html = row.group(1)
+            cell = content_cell_re.search(row_html)
+            text_html = cell.group(1) if cell else row_html
+            # Collapse any inner <span class="line">…</span> to plain text;
+            # strip ALL tags for clean monospace rendering. weasyprint can't
+            # paginate complex nested span styling reliably across pages
+            # — better to flatten than risk another interleaving bug.
+            text = re.sub(r'<[^>]+>', '', text_html)
+            # html_module.unescape() converts &lt; / &amp; / &nbsp; back to
+            # literal characters so the <pre> shows the actual source code.
+            text = html_module.unescape(text).replace('\xa0', ' ')
+            # Trim trailing whitespace; preserve leading indentation.
+            lines.append(text.rstrip())
+        if not lines:
+            return m.group(0)
+        # Use html_module.escape() to re-escape for embedding in <pre>:
+        # only `<`, `>`, `&` need escaping; whitespace including newlines
+        # is preserved by <pre>.
+        body = html_module.escape('\n'.join(lines), quote=False)
+        return f'<pre><code>{body}</code></pre>'
+
+    return table_re.sub(_replace_table, html)
+
+
 def _strip_empty_anchor_links(html: str) -> str:
     """Remove `<a href="#...">…</a>` whose visible content is empty after icon strip.
 
@@ -784,6 +867,7 @@ def _preprocess_html(html: str) -> str:
     html = _strip_interactive_chrome(html)
     html = _strip_icon_svgs(html)
     html = _strip_empty_anchor_links(html)
+    html = _flatten_table_code_blocks(html)
     html = _strip_universal_ads(html)
     html = _fo_to_svg_text(html)
     html = _fix_svg_viewport(html)
