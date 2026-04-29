@@ -170,7 +170,15 @@ Non-main-thread (web-server / multiprocessing wrappers): `signal.signal()` raise
 
 ## Module layout
 
-- [scripts/html2pdf.py](../scripts/html2pdf.py) — single-file CLI; ~1700 lines. Self-contained except for shared `_errors.py` (cross-skill envelope) and `md2pdf.py` (DEFAULT_CSS / PAGE_SIZES reuse).
+- [scripts/html2pdf.py](../scripts/html2pdf.py) — thin CLI shim (~190 lines): argparse, format dispatch, error envelopes. Public contract.
+- [scripts/html2pdf_lib/](../scripts/html2pdf_lib/) — internals, split by responsibility:
+  - `normalize_css.py` — injected print-normalization stylesheet (data only)
+  - `dom_utils.py` — depth-tracked HTML scanning helpers (`find_all_elements`, `text_length`, …)
+  - `preprocess.py` — 11-step `preprocess_html()` pipeline (light-dark, font-face strip, draw.io SVG, icon/ad/chrome strip, table-code flatten, viewport fix)
+  - `reader_mode.py` — `reader_mode_html()` with tiered `_READER_CANDIDATES` and `<main>` body-ratio guard
+  - `archives.py` — `extract_mhtml` / `extract_webarchive` + URL rewrite
+  - `render.py` — `convert()`, `RenderTimeout`, SIGALRM watchdog, `_offline_url_fetcher`
+- Cross-skill deps unchanged: `_errors.py` (cross-skill envelope), `md2pdf.py` (DEFAULT_CSS / PAGE_SIZES reuse).
 
 ## Examples
 
