@@ -60,6 +60,7 @@ node scripts/html2docx.js \
     <output.docx> \
     [--header "page header"] \
     [--footer "page footer"] \
+    [--reader-mode] \
     [--json-errors]
 ```
 
@@ -70,6 +71,33 @@ with envelope `{"type":"SelfOverwriteRefused"}`. Missing input → exit
 `--json-errors` emits a single-line JSON envelope on stderr with
 `{v:1, error, code, type, details?}` matching the cross-5 schema used
 by the Python CLIs.
+
+### `--reader-mode`
+
+Replaces the default Confluence-priority article-root candidate list
+with a curated reader-mode list ordered by specificity:
+
+1. **High-confidence** (`#main-content`, `.wiki-content`,
+   `#content .pageSection`, `#content`) — accepted at any text length.
+   Diagram-heavy KB pages legitimately have very little body text; we
+   trust the selector.
+2. **CMS / blog classes** (`.entry`, `.post-content`,
+   `.article-content`, `.main-content`, `div.article`) — require ≥500
+   chars to filter out archive-page excerpts.
+3. **Generic semantics** (`article`, `[role="main"]`, `main[role="main"]`,
+   `main#main`) — also ≥500 chars.
+
+Within each candidate, the LONGEST match wins — handles archive pages
+with multiple `.entry` divs and Disqus-style threads where comment
+`<article>`s would otherwise beat the post body.
+
+Bare `<main>` is **deliberately omitted** in reader-mode: on news /
+blog sites it commonly wraps the entire site (header + body + footer +
+recommendations) so it would defeat `.entry` and reintroduce the chrome
+the flag was meant to strip.
+
+Default mode (no flag) keeps the existing Confluence-priority
+first-match behaviour for backward compatibility.
 
 ## Module layout
 
@@ -97,7 +125,32 @@ rasterizers and embeds the resulting PNG into the docx:
 | Tier | What | When | Quality |
 |---|---|---|---|
 | 1 | `chrome --headless --screenshot` via `spawnSync` | a Chromium-family browser is found on the host | 100% — real CSS layout, foreignObject + word-wrap render exactly like in the source page |
-| 2 | `@resvg/resvg-js` (Rust, pre-built binary) + walker-side preprocessing (xlink namespace, named-entity decode, `<foreignObject>`→`<text>` conversion, CSS `light-dark()` / `var()` resolution) | Tier 1 unavailable | ~85% — geometry, plain `<text>` labels and the converter's best-effort foreignObject text reproduction; rich-HTML labels may overlap or wrap differently |
+| 2 | `@resvg/resvg-js` (Rust, pre-built binary) + walker-side preprocessing (xlink namespace, named-entity decode, `<foreignObject>`→`<text>` conversion with drawio centring math + word-wrap, viewBox synthesis with 5% expansion for canvas-clipped diagrams, CSS `light-dark()` / `var()` resolution) | Tier 1 unavailable | ~95% — drawio Confluence diagrams render with all swim-lanes visible and labels word-wrapped to fit their boxes; nested rich-HTML labels (mixed-font runs, embedded lists) still flatten to plain text per line |
+
+### Tier-2 drawio fixups (`_html2docx_walker.js`)
+
+Tier 2 cannot run CSS layout, so the walker pre-processes every drawio
+inline SVG before handing it to resvg:
+
+- **`_ensureViewBox(svg, naturalW, naturalH, trustDims)`** — adds a viewBox
+  to drawio Confluence SVGs that omit it (`style="width:100%; height:100%;
+  min-width:Wpx; min-height:Hpx"`). Without a viewBox, content beyond the
+  natural pixel canvas clips. The synthesised viewBox is expanded by 5% in
+  both axes to absorb drawio's right/bottom-edge overshoot artifact.
+  Self-closing `<svg ... />` tags preserve their `/>` form. Skipped for
+  small SVGs (≤200px) — typically inline icons. Skipped on the
+  `_svgDimensions` `{600,400}` fallback sentinel where natural dims are
+  unknown — synthesising from fictional dims would crop the SVG.
+- **`_drawioForeignObjectsToText` centring** — drawio's flex encoding puts
+  `margin-left` at the LEFT EDGE of the label container and the actual
+  visual anchor at `left + width/2` for `justify-content:center`. Using
+  `margin-left` directly with `text-anchor=middle` would centre every label
+  at its container's left edge.
+- **Word-wrap (`wrapText`)** — long single-span labels without explicit
+  `<br>` are split into multiple `<tspan>` rows so they fit inside the
+  shape. Char-width is approximated as `fontSize × 0.62` for Cyrillic and
+  `× 0.55` for Latin (Cyrillic glyphs are visibly wider in Helvetica/Arial).
+  Skipped when `width:1px` (drawio's unconstrained-width marker).
 
 ### Browser detection
 

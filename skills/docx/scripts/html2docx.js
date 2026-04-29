@@ -24,13 +24,44 @@
 //   * Confluence `<ac:*>` macros are stripped with a single warning.
 //   * Remote `<img src="https://...">` are skipped (alt-text retained as text).
 //
+// Inline-SVG rendering (drawio / mermaid / PlantUML):
+//   Two-tier rasteriser, see _html2docx_svg_render.js. Tier 1 = headless
+//   Chrome / Chromium / Edge / Brave (auto-detected from conventional
+//   install paths or HTML2DOCX_BROWSER) gives pixel-perfect CSS layout
+//   including foreignObject labels and word-wrap. Tier 2 = @resvg/resvg-js
+//   fallback for hosts without a browser, with foreignObject → SVG <text>
+//   conversion in _html2docx_walker.js that synthesises a viewBox on
+//   canvas-clipped diagrams (5% expansion absorbs drawio's edge-overshoot
+//   artifact), preserves drawio's centring math (margin-left = container
+//   left edge, x-anchor shifted to left+width/2 for justify-content:center),
+//   and word-wraps long Cyrillic / Latin labels at the wrapper's `width:Npx`
+//   so text fits inside its box.
+//
 // Optional flags:
-//   --reader-mode   Extends the article-root candidate list with CMS / blog
-//                   wrappers (.entry, .post-content, .article-content, …)
-//                   and applies a 500-char min-text filter. Useful for
-//                   browser-saved news / blog pages where the default
-//                   Confluence-priority selectors fall through to <body>
-//                   and pull in the entire site chrome.
+//   --reader-mode   Replaces the default Confluence-priority candidate
+//                   list with a curated reader-mode list:
+//                     * Confluence/wiki selectors (#main-content, .wiki-
+//                       content) — accepted at any text length.
+//                     * CMS/blog classes (.entry, .post-content, …) — must
+//                       have ≥500 chars to filter out archive-page excerpts.
+//                     * Generic semantics (article, [role=main]) — ≥500
+//                       chars; bare `<main>` deliberately omitted because
+//                       on news/blog sites it wraps the entire chrome.
+//                   Within each candidate, picks the LONGEST match — handles
+//                   archive pages with multiple `.entry` divs and Disqus
+//                   threads where comment <article>s would otherwise beat
+//                   the post body.
+//
+// Environment variables:
+//   HTML2DOCX_BROWSER          /path/to/chrome — explicit override; setting
+//                              it to a non-existent path forces Tier-2
+//                              (resvg-js) for CI determinism.
+//   HTML2DOCX_ALLOW_NO_SANDBOX 1 — drop Chrome's --no-sandbox guard.
+//                              Default leaves the sandbox enabled. Only
+//                              set inside a trusted CI container; untrusted
+//                              SVG (Confluence drawio can include external
+//                              xlink images) under --no-sandbox would let
+//                              any browser-process exploit reach the host.
 
 const fs = require('fs');
 const path = require('path');

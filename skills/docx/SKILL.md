@@ -25,6 +25,7 @@ practical knowledge and make the common operations a single command.
 
 ## 2. Capabilities
 - Convert Markdown to `.docx` with headings, lists, tables, images, and optional mermaid diagrams via `md2docx.js`.
+- **Convert HTML / web archives to `.docx`** via `html2docx.js` — accepts `.html`/`.htm`, Chrome `.mhtml`/`.mht`, and Safari `.webarchive` (sub-resources extracted to a temp dir). Confluence, GitLab wiki, and CMS chrome (ARIA-role-tagged headers/sidebars/footers, namespaced `<ac:*>` macros, `tablesorter` `<button>` wrappers) is stripped automatically before walking. Inline SVG diagrams (drawio/mermaid/PlantUML) are rastered to PNG via a two-tier renderer: **Tier 1** = headless Chrome / Chromium / Edge / Brave (auto-detected from conventional install paths or `HTML2DOCX_BROWSER`) gives pixel-perfect CSS layout including foreignObject labels and word-wrap; **Tier 2** = `@resvg/resvg-js` fallback for hosts without a browser, with foreignObject → SVG `<text>` conversion that preserves drawio's centring math, synthesises a viewBox on canvas-clipped diagrams (5% expansion absorbs drawio's edge-overshoot artifact), and word-wraps long Cyrillic/Latin labels at the wrapper's `width:Npx` so text fits inside its box. `--reader-mode` opt-in: stripped CMS chrome via a curated candidate list (`#main-content`, `.entry`, `.post-content`, `article`) with per-candidate min-text filter — useful for browser-saved news / blog pages where Confluence-priority selectors fall through to `<body>`.
 - Extract `.docx` content back to Markdown preserving tables, lists, and embedded images via `docx2md.js`. Comments and tracked changes (which mammoth strips) are pulled into a JSON sidecar (`<output>.docx2md.json`) — useful for contract audits where the audit trail must accompany the converted markdown. Footnotes/endnotes are converted to pandoc-style `[^fn-N]` / `[^en-N]` markers with definitions appended at the end. Schema versioned (`v: 1`); the sidecar's `unsupported` field reports counts of revision types not yet captured (`rPrChange`, `pPrChange`, `moveFrom`, `moveTo`, `cellIns`, `cellDel`) so callers know what was lost. Opt-out via `--no-metadata` (skip sidecar) and `--no-footnotes` (skip pandoc conversion). Sidecar is **not** written when the source has no comments, no revisions, and zero unsupported counts — clean docs stay clean.
 - Fill `.docx` templates containing `{{placeholder}}` or `{{nested.key}}` markers from a JSON payload with safe run-merging.
 - Accept all tracked changes in a `.docx` via headless LibreOffice without leaving artefacts in the user's profile.
@@ -47,6 +48,7 @@ practical knowledge and make the common operations a single command.
 - **Commands**:
   - `node scripts/md2docx.js INPUT.md OUTPUT.docx [--header "TEXT"] [--footer "TEXT"]`
   - `node scripts/docx2md.js INPUT.docx OUTPUT.md [--metadata-json PATH] [--no-metadata] [--no-footnotes] [--json-errors]`
+  - `node scripts/html2docx.js INPUT OUTPUT.docx [--header "TEXT"] [--footer "TEXT"] [--reader-mode] [--json-errors]` — INPUT may be `.html`/`.htm`, `.mhtml`/`.mht`, or `.webarchive`; sub-resources in archives are extracted to a temp dir automatically (cleaned up on exit incl. SIGINT/SIGTERM). `--reader-mode` swaps the article-root candidate list for a CMS/blog-specific one (`#main-content`/`.entry`/`.post-content`/`article` with per-candidate min-text filter; bare `<main>` deliberately omitted as it wraps whole-site chrome on news sites). Override SVG renderer with `HTML2DOCX_BROWSER=/path/to/chrome` or set it to a non-existent path to force the resvg-js fallback for CI determinism. Set `HTML2DOCX_ALLOW_NO_SANDBOX=1` only inside a trusted CI container — default leaves Chrome's sandbox enabled.
   - `python3 scripts/docx_fill_template.py TEMPLATE.docx DATA.json OUTPUT.docx [--strict]`
   - `python3 scripts/docx_accept_changes.py INPUT.docx OUTPUT.docx [--timeout 120]`
   - `python3 scripts/office/unpack.py INPUT.docx OUTDIR/ [--no-pretty] [--no-escape-quotes] [--no-merge-runs]`
@@ -187,7 +189,8 @@ Fill a template with JSON data:
 |---|---|
 | Markdown → `.docx` | `node scripts/md2docx.js input.md output.docx` |
 | `.docx` → Markdown | `node scripts/docx2md.js input.docx output.md` |
-| HTML / `.webarchive` / `.mhtml` → `.docx` | `node scripts/html2docx.js input.html output.docx [--header ...] [--footer ...] [--json-errors]` |
+| HTML / `.webarchive` / `.mhtml` → `.docx` | `node scripts/html2docx.js input.html output.docx [--header ...] [--footer ...] [--reader-mode] [--json-errors]` |
+| Web page / archive → `.docx` (reader mode, strips chrome) | `node scripts/html2docx.js page.webarchive article.docx --reader-mode` |
 | Fill template | `python3 scripts/docx_fill_template.py template.docx data.json out.docx [--strict]` |
 | Accept tracked changes | `python3 scripts/docx_accept_changes.py in.docx out.docx` |
 | Unpack for raw editing | `python3 scripts/office/unpack.py in.docx unpacked/` |
