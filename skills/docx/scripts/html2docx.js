@@ -171,6 +171,14 @@ $('[role="banner"], [role="complementary"], [role="contentinfo"], [role="navigat
 // article's actual page title, extracted separately below.
 $('#header, #footer, #navigation, #navigation-next, #breadcrumb-section, #breadcrumbs, #page-metadata, #likes-and-labels-container, .page-metadata, .pageSection.group, .acs-side-bar, .ia-secondary-content, .acs-nav-children-pages, #comments-section, #footer-logo, #space-tools-menu').remove();
 
+// Snapshot the original body-text length BEFORE the reader-mode chrome
+// strip. pickContentRoot's `<main>` body-ratio guard compares
+// main_text / body_text — if we measured body AFTER stripping, the
+// denominator is already shrunken by however much chrome we removed,
+// and the empirically-calibrated 0.95 threshold drifts as the keyword
+// list grows. Capture once, before any reader-mode-specific strip.
+const _originalBodyText = $('body').text().trim().length || 1;
+
 // Reader-mode-only chrome strips. Match SPA-blog inline widgets that
 // `.entry` / `<article>` wrappers commonly include alongside the post
 // body — vc.ru's `<div class="entry">` contains the article PLUS a
@@ -180,23 +188,27 @@ $('#header, #footer, #navigation, #navigation-next, #breadcrumb-section, #breadc
 // legitimate text.
 //
 // Universal keyword-pattern matching via the CSS `[class*=KEYWORD]`
-// substring selector — catches any class name containing the keyword,
-// regardless of prefix/suffix (e.g. `rotator` matches `rotator`,
-// `entry-rotator`, `rotator--limitless`). Covers vc.ru, Habr, generic
-// WordPress / blog frameworks without naming each variant.
+// substring selector — catches any class name containing the keyword
+// regardless of prefix/suffix (e.g. `reaction` matches `reaction`,
+// `content__reactions`, `reactions-bar`, `like-reaction`). Covers
+// vc.ru, Habr, generic WordPress / blog frameworks without naming
+// each variant.
 //
-// Default mode skips this strip because:
-//   * `[class*=comment]` would remove a Confluence wiki page about
-//     comments, or a Word style template named "comments".
-//   * `[class*=banner]` could match a legitimate `.banner-image` inside
-//     a feature article.
-//   * Confluence content uses `#main-content` which already excludes
-//     these wrappers, so default-mode users see no benefit and lose a
-//     little safety margin.
+// Substring vs. word-boundary trade-off: word-boundary correctly
+// rejects BEM modifier positions (`tm-page__main_has-sidebar` won't
+// match `sidebar`) but also rejects plural / morphological variants
+// (`content__reactions` doesn't match the keyword `reaction`).
+// Real-world widget classes are overwhelmingly plurals/compound
+// nouns; BEM-modifier collisions are confined to a small set of
+// generic words. We therefore use substring matching but EXCLUDE
+// the generic words known to collide (`sidebar`, `widget`, `share`,
+// `meta`, `tags`) from the keyword list and target their compound
+// forms explicitly (`share-button`, `post-meta`, `entry-tags`, etc.).
+//
+// Default mode skips this strip because Confluence content uses
+// `#main-content` which already excludes these wrappers; default-mode
+// users see no benefit and lose the safety margin.
 if (readerMode) {
-    // Each entry is a substring matched against the `class` attribute via
-    // CSS `[class*=…]`. Group by intent so each entry's purpose is clear
-    // when the list is updated.
     const READER_STRIP_KEYWORDS = [
         // Recommendation widgets / related-articles blocks
         'rotator', 'recommend', 'related-post', 'related-article',
@@ -227,6 +239,12 @@ if (readerMode) {
         // is the MAIN article wrapper, not a sidebar) and would strip
         // legitimate body content. Use compound forms (`share-button`,
         // `post-meta`) to target the actual widget classes.
+        // Honest scope: substring matching can over-strip on niche
+        // articles where the topic literally mentions the keyword
+        // (e.g. a chemistry article with `<figure class="reaction-
+        // diagram">`). Reader-mode is an opt-in degraded view; users
+        // who need precise control should use default mode and
+        // post-process.
     ];
     const stripSelector = READER_STRIP_KEYWORDS
         .map(kw => `[class*="${kw}"]`)
@@ -344,17 +362,24 @@ function pickContentRoot($, opts) {
         // 0.95 was chosen empirically: mobile-review's article-only
         // `<main>` is ~89% of body (header+footer chrome outside is
         // ~11%); chrome-wrapping `<main>` on tested SPA blogs sits at
-        // 96-99%.
-        const bodyText = $('body').text().trim().length || 1;
-        let bestMain = null, bestMainLen = 0;
+        // 96-99%. The denominator MUST be the original body text length
+        // (captured before reader-mode strip) — measuring after-strip
+        // body would drift the calibration as the keyword list grows.
+        const bodyText = (opts && opts.originalBodyText) ||
+                         ($('body').text().trim().length || 1);
+        // HTML5 forbids multiple `<main>` per document but real-world
+        // pages violate this (template injection, third-party widgets).
+        // Prefer the FIRST `<main>` that satisfies the guard rather
+        // than the longest — the first is far more likely to be the
+        // primary article wrapper than a duplicate from a misbehaving
+        // template.
+        let pickedMain = null;
         $('main').each((_, el) => {
+            if (pickedMain) return;
             const len = $(el).text().trim().length;
-            if (len >= 500 && len / bodyText < 0.95 && len > bestMainLen) {
-                bestMain = el;
-                bestMainLen = len;
-            }
+            if (len >= 500 && len / bodyText < 0.95) pickedMain = el;
         });
-        if (bestMain) return { node: bestMain, selector: 'main (body-ratio<0.95)' };
+        if (pickedMain) return { node: pickedMain, selector: 'main (body-ratio<0.95)' };
     } else {
         // Default: Confluence-priority first-match (preserves the
         // pre-reader-mode behaviour byte-for-byte).
@@ -368,7 +393,10 @@ function pickContentRoot($, opts) {
     return { node: $('body').length ? $('body')[0] : $.root()[0], selector: 'body' };
 }
 
-const picked = pickContentRoot($, { readerMode });
+const picked = pickContentRoot($, {
+    readerMode,
+    originalBodyText: _originalBodyText,
+});
 if (picked.selector !== 'body') {
     console.log(`html2docx: article root detected via "${picked.selector}" (chrome stripped)`);
 }

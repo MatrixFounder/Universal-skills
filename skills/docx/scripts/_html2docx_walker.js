@@ -528,29 +528,65 @@ function detectImageType(filePath) {
 // transcode WebP → PNG on disk via whatever system tool is available,
 // then load the PNG bytes.
 //
-// Detection order: macOS `sips` (always present), `dwebp` (libwebp on
-// Linux when libwebp-tools is installed), `convert` / `magick` (ImageMagick
-// fallback). If none are available, the caller logs a warning and skips
-// the image — better than silently embedding a corrupt PNG.
-let _webpToolPath = undefined;  // undefined = not probed; null = none; string = path
+// Detection order: macOS `sips` (always present), `dwebp` (libwebp), then
+// ImageMagick (`magick`/`convert`). Each name is resolved against
+// $PATH first (covers pipx, asdf, nix, brew installs in non-standard
+// locations) and only falls through to a few hardcoded conventional
+// paths as a safety net. Windows binaries get their `.exe` suffix.
+const PNG_MAGIC = Buffer.from([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]);
+
+function _isValidPng(filePath) {
+    try {
+        const fd = fs.openSync(filePath, 'r');
+        const buf = Buffer.alloc(8);
+        const n = fs.readSync(fd, buf, 0, 8, 0);
+        fs.closeSync(fd);
+        return n === 8 && buf.equals(PNG_MAGIC);
+    } catch (_) { return false; }
+}
+
+let _webpToolPath = undefined;  // undefined = not probed; null = none; object = {bin, argsFn}
 function _findWebpConverter() {
-    if (_webpToolPath !== undefined) return _webpToolPath;
-    const candidates = [
-        // [tool, args-template factory(input, output) → string[]]
-        ['/usr/bin/sips',           (i, o) => ['-s', 'format', 'png', i, '--out', o]],
-        ['/usr/local/bin/dwebp',    (i, o) => [i, '-o', o]],
-        ['/opt/homebrew/bin/dwebp', (i, o) => [i, '-o', o]],
-        ['/usr/bin/dwebp',          (i, o) => [i, '-o', o]],
-        ['/usr/local/bin/magick',   (i, o) => ['convert', i, o]],
-        ['/usr/bin/convert',        (i, o) => [i, o]],
+    if (_webpToolPath !== undefined) {
+        // Re-stat the cached binary to catch apt/brew upgrades that move it.
+        if (_webpToolPath && !fs.existsSync(_webpToolPath.bin)) {
+            _webpToolPath = undefined;
+        } else {
+            return _webpToolPath;
+        }
+    }
+    const isWin = process.platform === 'win32';
+    const exe = isWin ? '.exe' : '';
+    const { spawnSync } = require('child_process');
+    // (binName, argsFn(input, output) → argv) tuples in priority order.
+    // sips is macOS-only and always present; dwebp/magick/convert may live
+    // anywhere on $PATH (homebrew, nix, asdf, pipx — none of these install
+    // to /usr/bin).
+    const tools = [
+        ['sips' + exe,    (i, o) => ['-s', 'format', 'png', i, '--out', o]],
+        ['dwebp' + exe,   (i, o) => [i, '-o', o]],
+        ['magick' + exe,  (i, o) => ['convert', i, o]],
+        ['convert' + exe, (i, o) => [i, o]],
     ];
-    for (const [bin, argsFn] of candidates) {
+    // PATH lookup via `command -v` (POSIX) / `where` (Windows). A bare
+    // `spawnSync('dwebp', …)` would also resolve $PATH but doesn't tell us
+    // WHERE it landed for the cache + re-stat invalidation logic.
+    const lookup = isWin ? 'where' : 'command';
+    const lookupArgs = (name) => isWin ? [name] : ['-v', name];
+    for (const [name, argsFn] of tools) {
         try {
-            if (fs.statSync(bin).isFile()) {
-                _webpToolPath = { bin, argsFn };
-                return _webpToolPath;
+            const r = spawnSync(lookup, lookupArgs(name), {
+                encoding: 'utf-8',
+                shell: !isWin,  // POSIX `command -v` is a builtin
+            });
+            if (r.status === 0 && r.stdout) {
+                const bin = r.stdout.split(/\r?\n/)[0].trim();
+                if (bin && fs.existsSync(bin)) {
+                    _webpToolPath = { bin, argsFn };
+                    return _webpToolPath;
+                }
             }
-        } catch (_) { /* not present */ }
+        } catch (_) { /* try next */ }
     }
     _webpToolPath = null;
     return null;
@@ -559,15 +595,43 @@ function _findWebpConverter() {
 function _transcodeWebpToPng(srcPath) {
     const tool = _findWebpConverter();
     if (!tool) {
-        throw new Error('WebP conversion unavailable: install libwebp (dwebp), ImageMagick, or run on macOS (sips)');
+        throw new Error(
+            'WebP conversion unavailable: install libwebp (dwebp), ' +
+            'ImageMagick (magick / convert), or run on macOS (sips)'
+        );
     }
     const dst = srcPath + '.transcoded.png';
-    if (fs.existsSync(dst)) return dst;  // cache from earlier call this run
+    // Cache hit MUST be a complete, valid PNG. A previous run killed
+    // mid-write (SIGKILL, OOM, disk-full, parent-process timeout) leaves
+    // a 0-byte / truncated `.transcoded.png` here — naïve `existsSync`
+    // would return that corrupt file, embedding broken bytes into the
+    // docx and reintroducing Word's "unreadable content" rejection on
+    // retry. Verify the magic bytes before trusting the cache.
+    if (fs.existsSync(dst) && _isValidPng(dst)) return dst;
+    // Atomic write: stage to `.tmp`, only rename to `dst` on success.
+    // If the process is killed mid-conversion, the next run sees no
+    // `dst` (stale `.tmp` is fine — it'll be overwritten) and re-runs
+    // the conversion instead of returning corrupt output.
+    const tmp = dst + '.tmp';
+    try { fs.unlinkSync(tmp); } catch (_) { /* not present yet */ }
     const { spawnSync } = require('child_process');
-    const r = spawnSync(tool.bin, tool.argsFn(srcPath, dst), { timeout: 30000 });
-    if (r.status !== 0 || !fs.existsSync(dst)) {
-        throw new Error(`WebP→PNG conversion failed (${tool.bin}): ${(r.stderr || '').toString().slice(0, 200)}`);
+    const r = spawnSync(tool.bin, tool.argsFn(srcPath, tmp), { timeout: 30000 });
+    if (r.error && r.error.code === 'ETIMEDOUT') {
+        try { fs.unlinkSync(tmp); } catch (_) { /* ignore */ }
+        throw new Error(
+            `WebP→PNG conversion timed out after 30s (${tool.bin}); ` +
+            `image likely an animated WebP (VP8X) too large for the converter — ` +
+            `pre-extract a still frame manually before conversion`
+        );
     }
+    if (r.status !== 0 || !fs.existsSync(tmp) || !_isValidPng(tmp)) {
+        try { fs.unlinkSync(tmp); } catch (_) { /* ignore */ }
+        throw new Error(
+            `WebP→PNG conversion failed (${tool.bin}): ` +
+            (r.stderr || '').toString().slice(0, 200)
+        );
+    }
+    fs.renameSync(tmp, dst);
     return dst;
 }
 
@@ -613,6 +677,9 @@ function buildBody({ $, root, inputDir, extractedImages }) {
     // Rebound when entering a table cell so emit-helpers push into the
     // cell's paragraph list instead of the document body.
     let target = children;
+    // One-shot warning flag for image-only InternalHyperlinks whose click
+    // target is dropped to dodge the docx-js v8.5 dangling-rId bug.
+    let imageOnlyInternalHyperlinkWarned = false;
 
     // Anchor management for internal links. Word bookmark names must
     // start with a letter, contain only [A-Za-z0-9_], and be ≤40 chars
@@ -643,27 +710,34 @@ function buildBody({ $, root, inputDir, extractedImages }) {
 
     function resolveLocalImagePath(rawHref) {
         if (!rawHref) return null;
+        // Probe the canonical-decoded form, the canonical-encoded form,
+        // and the raw form. HTML attributes can carry any mix:
+        //   • raw spaces: `/path with space.webp`
+        //   • already-encoded: `/path%20with%20space.webp`
+        //   • mixed (hand-edited): `/path%20with raw.webp`
+        // `_html2docx_archive` stores keys via `URL.pathname` which
+        // percent-encodes them. Decoding rawHref first then re-encoding
+        // gives an idempotent canonical form — `encodeURI` alone double-
+        // encodes existing `%20` sequences into `%2520`.
         if (extractedImages.has(rawHref)) return extractedImages.get(rawHref);
-        // Try the URL-encoded form too: HTML attributes carry raw spaces
-        // (`/path with space.webp`) but `_html2docx_archive` stores keys
-        // under `URL.pathname` which percent-encodes them
-        // (`/path%20with%20space.webp`). Without this both forms must be
-        // probed or 1/3 of real-world archive images go unmapped.
-        let encoded;
-        try { encoded = encodeURI(rawHref); } catch (_) { encoded = rawHref; }
-        if (encoded !== rawHref && extractedImages.has(encoded)) {
-            return extractedImages.get(encoded);
+        let decoded = rawHref;
+        try { decoded = decodeURI(rawHref); } catch (_) { /* keep raw */ }
+        if (decoded !== rawHref && extractedImages.has(decoded)) {
+            return extractedImages.get(decoded);
         }
-        let href;
-        try { href = decodeURI(rawHref); } catch (_) { href = rawHref; }
-        if (extractedImages.has(href)) return extractedImages.get(href);
-        if (!href) return null;
-        if (isRemoteOrDataUrl(href)) return null;
+        let canonical = decoded;
+        try { canonical = encodeURI(decoded); } catch (_) { /* keep decoded */ }
+        if (canonical !== rawHref && canonical !== decoded &&
+            extractedImages.has(canonical)) {
+            return extractedImages.get(canonical);
+        }
+        if (!decoded) return null;
+        if (isRemoteOrDataUrl(decoded)) return null;
         // Strip query/fragment before treating the URL as a filesystem
         // path. Files don't have `?v=1` in their basename — without this
         // we end up with a non-existent path AND a misleading
         // "Unsupported format" error from detectImageType.
-        const pathOnly = href.split('?')[0].split('#')[0];
+        const pathOnly = decoded.split('?')[0].split('#')[0];
         if (path.isAbsolute(pathOnly)) return pathOnly;
         return path.resolve(inputDir, pathOnly);
     }
@@ -695,7 +769,7 @@ function buildBody({ $, root, inputDir, extractedImages }) {
             w = Math.round(w * scale);
             h = Math.round(h * scale);
         }
-        return new ImageRun({
+        const run = new ImageRun({
             type: imageType,
             data: imgData,
             transformation: { width: w, height: h },
@@ -705,6 +779,13 @@ function buildBody({ $, root, inputDir, extractedImages }) {
                 name: path.basename(localPath),
             }
         });
+        // Tag instead of relying on `instanceof ImageRun` downstream:
+        // `instanceof` returns false across module duplication (npm
+        // peerDeps, hoisting differences, mocked docx in tests) — a
+        // tagged property survives all of those without a runtime
+        // dependency on the constructor identity.
+        run.__html2docxIsImage = true;
+        return run;
     }
 
     function walkInline(node, style, runs, opts) {
@@ -791,8 +872,14 @@ function buildBody({ $, root, inputDir, extractedImages }) {
             // work, but applying the same rule to both types keeps the
             // behaviour predictable and side-steps any other docx-js
             // surprises with image-in-hyperlink.
-            const imageRuns = innerRuns.filter(r => r instanceof ImageRun);
-            const nonImageRuns = innerRuns.filter(r => !(r instanceof ImageRun));
+            // Filter via a tagged property rather than `r instanceof ImageRun`.
+            // `instanceof` returns false across module duplication (npm
+            // peerDeps, hoisted vs nested node_modules, mocked docx in
+            // tests) — the tag is set by buildImageRun / buildSvgRun when
+            // they construct their ImageRun, so it survives those.
+            const isImage = (r) => r && r.__html2docxIsImage === true;
+            const imageRuns = innerRuns.filter(isImage);
+            const nonImageRuns = innerRuns.filter(r => !isImage(r));
             if ((isExternal || isInternal) && nonImageRuns.length > 0) {
                 if (isExternal) {
                     runs.push(new ExternalHyperlink({ link: href, children: nonImageRuns }));
@@ -804,8 +891,28 @@ function buildBody({ $, root, inputDir, extractedImages }) {
                     }));
                 }
                 for (const r of imageRuns) runs.push(r);
-            } else if (isExternal || isInternal) {
-                // image-only or empty after filtering — push images directly
+            } else if ((isExternal || isInternal) && imageRuns.length > 0) {
+                // Image-only `<a>`. We strip the hyperlink wrapper to dodge
+                // the docx-js v8.5 dangling-rId bug (Word "unreadable
+                // content" rejection). The image still renders; the click
+                // target is lost.
+                //
+                // For InternalHyperlink this means losing in-document
+                // cross-references like `<a href="#fig1"><img></a>` (common
+                // in academic articles) — warn ONCE per run so the user
+                // knows their figure-jumps are gone, instead of debugging
+                // a silent regression from the previous (Word-rejecting)
+                // behaviour.
+                if (isInternal && !imageOnlyInternalHyperlinkWarned) {
+                    console.warn(
+                        `html2docx: stripped click target from image-only ` +
+                        `internal link (e.g. <a href="${href.slice(0, 60)}…">` +
+                        `<img></a>) — image renders but loses cross-reference. ` +
+                        `Workaround for docx-js v8.5 dangling-rId bug; further ` +
+                        `instances suppressed.`
+                    );
+                    imageOnlyInternalHyperlinkWarned = true;
+                }
                 for (const r of imageRuns) runs.push(r);
             } else {
                 for (const r of innerRuns) runs.push(r);
@@ -968,12 +1075,14 @@ function buildBody({ $, root, inputDir, extractedImages }) {
         const w = Math.max(1, Math.round(logicalW * scale));
         const h = Math.max(1, Math.round(logicalH * scale));
 
-        return new ImageRun({
+        const run = new ImageRun({
             type: 'png',
             data: png,
             transformation: { width: w, height: h },
             altText: { title: 'Diagram', description: 'Rendered SVG diagram', name: 'diagram' },
         });
+        run.__html2docxIsImage = true;  // tag for cross-module-safe filter
+        return run;
     }
 
     function emitSvg(node, parentEl) {
