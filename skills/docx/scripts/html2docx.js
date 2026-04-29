@@ -209,6 +209,13 @@ if (readerMode) {
         'post-share', 'entry-share', 'share-button', 'share-bar',
         'social-share', 'social-button',
         'subscribe-block', 'subscribe-form', 'newsletter',
+        // vc.ru-style article-footer engagement widgets: emoji reactions
+        // (`.content__reactions`), floating engagement bar
+        // (`.content__floating`), and the post footer with comment-counter
+        // and share buttons (`.content-footer`). Same patterns appear on
+        // generic blogs as `.entry-footer` / `.post-footer`.
+        'reaction', 'floating-bar', 'floating-engage',
+        'content-footer', 'post-footer', 'entry-footer',
         // Ad / promo / sponsored blocks
         'ad-banner', 'ad-block', 'advert', 'sponsor-block',
         'promo-block', 'ya-ai',
@@ -307,9 +314,8 @@ const _READER_CANDIDATES = [
     { sel: '[role="main"]',          minText: 500 },
     { sel: 'main[role="main"]',      minText: 500 },
     { sel: 'main#main',              minText: 500 },
-    // Bare `main` deliberately omitted in reader-mode — on vc.ru / Habr /
-    // many news sites it wraps the whole site (header + article + footer +
-    // recommendations) and easily exceeds 500 chars, defeating .entry.
+    // Bare `main` deliberately omitted from this list — it's tried with a
+    // body-ratio guard below, see pickContentRoot().
 ];
 
 function pickContentRoot($, opts) {
@@ -329,6 +335,26 @@ function pickContentRoot($, opts) {
             });
             if (bestNode) return { node: bestNode, selector: sel };
         }
+        // Last-resort: bare `<main>` with a body-ratio guard. Used on
+        // sites that have `<main>` but no other recognised wrapper class
+        // (mobile-review.com, classic WP-block blogs). On vc.ru / Habr
+        // `<main>` typically isn't present at all; on news SPAs that DO
+        // use `<main>` to wrap the whole site (chrome included), its
+        // text is ≥ 95-99% of `<body>`'s, so the ratio guard rejects it.
+        // 0.95 was chosen empirically: mobile-review's article-only
+        // `<main>` is ~89% of body (header+footer chrome outside is
+        // ~11%); chrome-wrapping `<main>` on tested SPA blogs sits at
+        // 96-99%.
+        const bodyText = $('body').text().trim().length || 1;
+        let bestMain = null, bestMainLen = 0;
+        $('main').each((_, el) => {
+            const len = $(el).text().trim().length;
+            if (len >= 500 && len / bodyText < 0.95 && len > bestMainLen) {
+                bestMain = el;
+                bestMainLen = len;
+            }
+        });
+        if (bestMain) return { node: bestMain, selector: 'main (body-ratio<0.95)' };
     } else {
         // Default: Confluence-priority first-match (preserves the
         // pre-reader-mode behaviour byte-for-byte).
