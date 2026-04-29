@@ -150,7 +150,14 @@ function _drawioForeignObjectsToText(cheerio, svgXml) {
         // foreignObject, but be defensive against missing children.
         const wrap = $fo.children().first();
         const wrapStyle = wrap.attr('style') || '';
-        const x = extractPx(wrapStyle, 'margin-left') || 0;
+        // margin-left is the LEFT EDGE of the flex container, NOT the text
+        // anchor x. For justify-content:center the SVG anchor sits at
+        // (left + width/2); for flex-end at (left + width). Treating
+        // margin-left as the anchor x with text-anchor=middle would centre
+        // every label at the container's left edge — labels uniformly
+        // shifted left by half their box width.
+        const xLeft = extractPx(wrapStyle, 'margin-left') || 0;
+        const containerWidth = extractPx(wrapStyle, 'width') || 0;
         const y = extractPx(wrapStyle, 'padding-top') || 0;
         const justify = extractStyleProp(wrapStyle, 'justify-content') || '';
         const align = extractStyleProp(wrapStyle, 'align-items') || '';
@@ -174,8 +181,14 @@ function _drawioForeignObjectsToText(cheerio, svgXml) {
         const color = extractStyleProp(runStyle, 'color') || '#000000';
 
         let textAnchor = 'start';
-        if (/center/.test(justify)) textAnchor = 'middle';
-        else if (/flex-end|end/.test(justify)) textAnchor = 'end';
+        let textX = xLeft;
+        if (/center/.test(justify)) {
+            textAnchor = 'middle';
+            textX = xLeft + containerWidth / 2;
+        } else if (/flex-end|end/.test(justify)) {
+            textAnchor = 'end';
+            textX = xLeft + containerWidth;
+        }
         let baseline = 'central';
         if (/flex-start|start/.test(align)) baseline = 'hanging';
         else if (/flex-end|end/.test(align)) baseline = 'alphabetic';
@@ -204,12 +217,12 @@ function _drawioForeignObjectsToText(cheerio, svgXml) {
         } else {
             inner = lines.map((line, idx) => {
                 const dy = idx === 0 ? 0 : lineHeight;
-                return `<tspan x="${x}" dy="${dy}">${escapeXml(line)}</tspan>`;
+                return `<tspan x="${textX}" dy="${dy}">${escapeXml(line)}</tspan>`;
             }).join('');
         }
 
         const replacement =
-            `<text x="${x}" y="${anchorY}" font-family="${escapeXml(fontFamily)}" font-size="${fontSize}" ` +
+            `<text x="${textX}" y="${anchorY}" font-family="${escapeXml(fontFamily)}" font-size="${fontSize}" ` +
             `font-weight="${escapeXml(fontWeight)}" fill="${escapeXml(color)}" ` +
             `text-anchor="${textAnchor}" dominant-baseline="${baseline}">${inner}</text>`;
         $fo.replaceWith(replacement);
@@ -334,6 +347,50 @@ function _prepareSvgForResvg(rawSvgXml) {
     // light-dark() / var() → light-mode value / fallback.
     svgXml = _resolveCssFunctions(svgXml);
     return svgXml;
+}
+
+// Make a drawio / Confluence inline SVG render predictably regardless of
+// renderer tier:
+//
+//   Case 1 — SVG already carries a viewBox: expand it by 5% in both axes.
+//   Drawio's auto-generated diagrams sometimes place arrow heads / shape
+//   borders 1-2px past the declared canvas right/bottom edge; without
+//   breathing room the renderer clips them.
+//
+//   Case 2 — SVG has no viewBox: synthesise one from the natural pixel
+//   dimensions returned by _svgDimensions (which falls back to the
+//   parent .drawio-macro div's inline width/height when the SVG itself
+//   omits both attrs and viewBox). Without a viewBox, Chrome's
+//   `width:100%; height:100%` wrapper and resvg's fitTo:width both keep
+//   the SVG coordinate space at its 1:1 pixel size — content beyond the
+//   wrapper viewport simply clips. Adding a viewBox makes the SVG scale
+//   proportionally instead.
+//
+// Small SVGs (≤200px on either axis) are typically inline icons and are
+// left untouched — the 5% expansion would visibly offset them.
+function _ensureViewBox(svgXml, naturalW, naturalH) {
+    const VB_EXPAND = 1.05;
+    return svgXml.replace(/<svg\b([^>]*)>/i, (whole, attrs) => {
+        const vbMatch = attrs.match(/\sviewBox\s*=\s*(["'])([^"']+)\1/i);
+        if (vbMatch) {
+            const parts = vbMatch[2].trim().split(/[\s,]+/).map(parseFloat);
+            if (parts.length === 4 && parts.every(Number.isFinite) &&
+                parts[2] > 200 && parts[3] > 200) {
+                const [vx, vy, vw, vh] = parts;
+                const expanded =
+                    `viewBox="${vx} ${vy} ${(vw * VB_EXPAND).toFixed(1)} ${(vh * VB_EXPAND).toFixed(1)}"`;
+                const newAttrs = attrs.replace(vbMatch[0], ' ' + expanded);
+                return `<svg${newAttrs}>`;
+            }
+            return whole; // small icon or malformed — leave as-is
+        }
+        if (!naturalW || !naturalH || naturalW <= 200 || naturalH <= 200) {
+            return whole;
+        }
+        const vbW = (naturalW * VB_EXPAND).toFixed(1);
+        const vbH = (naturalH * VB_EXPAND).toFixed(1);
+        return `<svg${attrs} viewBox="0 0 ${vbW} ${vbH}">`;
+    });
 }
 
 function _svgDimensions($svg, parentEl) {
@@ -699,7 +756,11 @@ function buildBody({ $, root, inputDir, extractedImages }) {
         // matches what the renderer produced.
         const $svg = $(svgNode);
         const dims = _svgDimensions($svg, parentEl);
-        const rawSvgXml = $.html(svgNode);
+        // Ensure a viewBox before either tier renders the SVG. Both Chrome
+        // (`width:100%; height:100%`) and resvg (`fitTo:width`) need a
+        // viewBox to scale content proportionally; without one, drawio
+        // diagrams whose content reaches the canvas edge get clipped.
+        const rawSvgXml = _ensureViewBox($.html(svgNode), dims.w, dims.h);
         const png = svgRender.render({
             chromeReadySvg: () => rawSvgXml,
             resvgReadySvg: () => _prepareSvgForResvg(rawSvgXml),

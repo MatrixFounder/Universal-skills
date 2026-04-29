@@ -23,6 +23,14 @@
 //   * `<table>` rowspan/colspan are NOT reproduced (each cell stands alone).
 //   * Confluence `<ac:*>` macros are stripped with a single warning.
 //   * Remote `<img src="https://...">` are skipped (alt-text retained as text).
+//
+// Optional flags:
+//   --reader-mode   Extends the article-root candidate list with CMS / blog
+//                   wrappers (.entry, .post-content, .article-content, …)
+//                   and applies a 500-char min-text filter. Useful for
+//                   browser-saved news / blog pages where the default
+//                   Confluence-priority selectors fall through to <body>
+//                   and pull in the entire site chrome.
 
 const fs = require('fs');
 const path = require('path');
@@ -39,11 +47,13 @@ const walker = require('./_html2docx_walker');
 const argv = process.argv.slice(2);
 let inputFile, outputFile, headerText, footerText;
 let jsonErrors = false;
+let readerMode = false;
 const positional = [];
 for (let i = 0; i < argv.length; i++) {
     if (argv[i] === '--header' && i + 1 < argv.length) headerText = argv[++i];
     else if (argv[i] === '--footer' && i + 1 < argv.length) footerText = argv[++i];
     else if (argv[i] === '--json-errors') jsonErrors = true;
+    else if (argv[i] === '--reader-mode') readerMode = true;
     else positional.push(argv[i]);
 }
 inputFile = positional[0];
@@ -69,7 +79,7 @@ function reportError(msg, code, type, details) {
 
 if (!inputFile || !outputFile) {
     reportError(
-        'Usage: node html2docx.js <input.html|.htm|.webarchive|.mhtml> <output.docx> [--header "text"] [--footer "text"] [--json-errors]',
+        'Usage: node html2docx.js <input.html|.htm|.webarchive|.mhtml> <output.docx> [--header "text"] [--footer "text"] [--reader-mode] [--json-errors]',
         2, 'UsageError'
     );
 }
@@ -156,28 +166,52 @@ $('*').each((_, el) => {
 // Find the article-content root. Try the most specific selectors first
 // so we cleanly skip everything outside the article body even if the
 // ARIA / chrome strip above missed something. Falls back to <body>.
-function pickContentRoot($) {
-    const candidates = [
-        '#main-content',          // Confluence (modern), GitLab wiki
-        '[role="main"]',
-        'main#main',
-        'main[role="main"]',
-        'article',
-        '.wiki-content',          // Confluence (legacy / current)
-        '#content .pageSection',  // Confluence fallback
-        '#content',
-        'main',
-    ];
+//
+// `--reader-mode` extends the candidate list with CMS / blog wrappers
+// (vc.ru, generic post-content classes) and applies a min-text filter
+// so we don't pick a near-empty <article> shell that some sites place
+// in their navigation. Without reader-mode the default selectors target
+// Confluence/wiki-style chrome.
+const _BASE_CANDIDATES = [
+    '#main-content',          // Confluence (modern), GitLab wiki
+    '[role="main"]',
+    'main#main',
+    'main[role="main"]',
+    'article',
+    '.wiki-content',          // Confluence (legacy / current)
+    '#content .pageSection',  // Confluence fallback
+    '#content',
+    'main',
+];
+
+const _READER_MODE_EXTRA = [
+    '.entry',                 // vc.ru article wrapper
+    '.post-content',          // generic blog
+    '.article-content',
+    '.main-content',
+    'div.article',
+];
+
+const _READER_MIN_TEXT = 500;     // chars of plain text to qualify as the article
+
+function pickContentRoot($, opts) {
+    const reader = !!(opts && opts.readerMode);
+    const candidates = reader
+        ? [..._BASE_CANDIDATES, ..._READER_MODE_EXTRA]
+        : _BASE_CANDIDATES;
+    const minText = reader ? _READER_MIN_TEXT : 1;
     for (const sel of candidates) {
         const hit = $(sel).first();
-        if (hit.length && hit.text().trim().length > 0) {
+        if (!hit.length) continue;
+        const textLen = hit.text().trim().length;
+        if (textLen >= minText) {
             return { node: hit[0], selector: sel };
         }
     }
     return { node: $('body').length ? $('body')[0] : $.root()[0], selector: 'body' };
 }
 
-const picked = pickContentRoot($);
+const picked = pickContentRoot($, { readerMode });
 if (picked.selector !== 'body') {
     console.log(`html2docx: article root detected via "${picked.selector}" (chrome stripped)`);
 }
