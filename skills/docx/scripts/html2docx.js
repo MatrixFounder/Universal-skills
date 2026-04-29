@@ -171,6 +171,26 @@ $('[role="banner"], [role="complementary"], [role="contentinfo"], [role="navigat
 // article's actual page title, extracted separately below.
 $('#header, #footer, #navigation, #navigation-next, #breadcrumb-section, #breadcrumbs, #page-metadata, #likes-and-labels-container, .page-metadata, .pageSection.group, .acs-side-bar, .ia-secondary-content, .acs-nav-children-pages, #comments-section, #footer-logo, #space-tools-menu').remove();
 
+// Reader-mode-only chrome strips. These match SPA-blog inline widgets that
+// real-world `.entry` / `<article>` wrappers commonly include INSIDE the
+// article DOM — vc.ru's `<div class="entry">` contains the post body PLUS
+// a recommendation-carousel sibling (.rotator), a comments thread
+// (.comments), and a related-articles block (.recommendations). Without
+// this strip, --reader-mode picks `.entry` correctly but the resulting
+// docx still has 3-4× the legitimate text (visible in preview as repeated
+// promo cards interleaved with paragraphs).
+//
+// Skipped in default mode because:
+//   * `.rotator` is too generic — could match a Confluence page about UI
+//     rotators (unlikely but possible).
+//   * `.comments` matches a Word `comments` style on some templates.
+//   * Confluence pages are picked via #main-content which already excludes
+//     these wrappers, so default-mode users see no benefit and lose a tiny
+//     amount of safety.
+if (readerMode) {
+    $('.rotator, .entry-rotator, .comments, .recommendations, .related-posts, .related-articles, .post-meta, .entry-meta, .post-tags, .post-share, .share-buttons').remove();
+}
+
 // Confluence TOC double-numbering fix: the macro emits an <ol> wrapping
 // links whose label often ALREADY starts with "3.", "4.1.1" etc. (because
 // the wiki author numbered the source heading). Add to that the auto
