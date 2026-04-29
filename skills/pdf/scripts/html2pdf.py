@@ -16,7 +16,7 @@ weasyprint stylesheet and naturally override defaults.
 Usage:
     python3 html2pdf.py INPUT OUTPUT.pdf
         [--page-size letter|a4|legal] [--css EXTRA.css]
-        [--base-url DIR] [--no-default-css]
+        [--base-url DIR] [--no-default-css] [--reader-mode]
 
 For .mhtml and .webarchive inputs, sub-resources (images, CSS, fonts)
 are extracted to a temporary directory that is removed after conversion.
@@ -30,6 +30,22 @@ its own complete styling (BI dashboards, branded reports). The
 Structural normalisation CSS (_NORMALIZE_CSS) is always injected
 regardless of `--no-default-css` — it fixes layout bugs, not
 visual styling.
+
+`--reader-mode` extracts the main article content (first <article>,
+<main>, or known content container) and renders it with only the
+bundled clean CSS — strips navigation, ads, and sidebars.
+
+Pre-render preprocessing handles real-world compatibility issues
+automatically (no flags needed):
+
+  - draw.io / Confluence inline SVG diagrams: foreignObject labels are
+    converted to SVG <text> elements (weasyprint discards foreignObject
+    content), and oversized diagrams get a synthesised viewBox so they
+    scale to fit the page instead of being clipped.
+  - CSS light-dark() is resolved to the light variant (weasyprint does
+    not implement CSS Color Level 5).
+  - Web-font @font-face declarations are stripped; system fonts are used
+    instead to avoid garbled glyphs from CDN-subsetted fonts.
 
 Same-path I/O (input == output, including via symlink) is refused
 with exit 6 / SelfOverwriteRefused.
@@ -591,6 +607,27 @@ def _rewrite_urls(text: str, url_map: dict[str, str]) -> str:
     return text
 
 
+def _fixup_css_subresources(
+    css_parts: list[tuple[Path, bytes]],
+    page_url: str,
+    url_map: dict[str, str],
+) -> None:
+    """Rewrite URL references inside extracted CSS files in-place.
+
+    Called by both _extract_mhtml and _extract_webarchive after all
+    sub-resources have been written to disk. Strips @font-face blocks
+    and rewrites absolute/root-relative URLs to local filenames so
+    weasyprint can resolve @font-face / background-image without
+    a network round-trip.
+    """
+    for css_path, css_raw in css_parts:
+        css_text = css_raw.decode("utf-8", errors="replace")
+        css_text = _make_absolute_urls(css_text, page_url)
+        css_text = _strip_all_fontfaces(css_text)
+        css_text = _rewrite_urls(css_text, url_map)
+        css_path.write_text(css_text, encoding="utf-8")
+
+
 def _extract_mhtml(src: Path, work_dir: Path) -> tuple[str, str]:
     """Parse a MIME HTML archive into work_dir.
 
@@ -637,15 +674,7 @@ def _extract_mhtml(src: Path, work_dir: Path) -> tuple[str, str]:
     html_text = _make_absolute_urls(html_text, page_url)
     html_text = _rewrite_urls(html_text, url_map)
 
-    # Rewrite URLs inside CSS subresources so @font-face / background-image
-    # references resolve to local files instead of the original CDN.
-    for css_path, css_raw in css_parts:
-        css_text = css_raw.decode("utf-8", errors="replace")
-        css_text = _make_absolute_urls(css_text, page_url)
-        css_text = _strip_all_fontfaces(css_text)
-        css_text = _rewrite_urls(css_text, url_map)
-        css_path.write_text(css_text, encoding="utf-8")
-
+    _fixup_css_subresources(css_parts, page_url, url_map)
     return html_text, str(work_dir)
 
 
@@ -700,14 +729,7 @@ def _extract_webarchive(src: Path, work_dir: Path) -> tuple[str, str]:
     html_text = _make_absolute_urls(html_text, page_url)
     html_text = _rewrite_urls(html_text, url_map)
 
-    # Rewrite URLs inside CSS subresources (font-face, background-image).
-    for css_path, css_raw in css_parts:
-        css_text = css_raw.decode("utf-8", errors="replace")
-        css_text = _make_absolute_urls(css_text, page_url)
-        css_text = _strip_all_fontfaces(css_text)
-        css_text = _rewrite_urls(css_text, url_map)
-        css_path.write_text(css_text, encoding="utf-8")
-
+    _fixup_css_subresources(css_parts, page_url, url_map)
     return html_text, str(work_dir)
 
 
