@@ -56,15 +56,17 @@ import argparse
 import email
 import email.policy
 import html as html_module
+import os
 import plistlib
 import re
 import shutil
+import signal
 import sys
 import tempfile
 import urllib.parse
 from pathlib import Path
 
-from weasyprint import CSS, HTML  # type: ignore
+from weasyprint import CSS, HTML, default_url_fetcher  # type: ignore
 
 # Reuse md2pdf's CSS + page-size constants — keeps the two CLIs
 # visually consistent without duplicating ~85 lines of CSS that
@@ -168,6 +170,63 @@ header, nav, .navbar, .topbar, .top-bar,
 img, video, canvas {
     max-width: 100% !important;
     height: auto !important;
+}
+
+/* ── 7a. Code block styling (markdown-preview parity).
+        Modern docs sites (Mintlify, MkDocs, Docusaurus) wrap code blocks in
+        nested div trees with shiki/prism inline styles. After our preprocessing
+        strips external CSS and unwraps buttons, the bare <pre> is left. Apply
+        a minimal markdown-preview look: light grey background, thin border,
+        rounded corners, monospace inheritance, scoped padding. */
+pre {
+    background: #f6f8fa !important;
+    border: 1px solid #e1e4e8 !important;
+    border-radius: 6px !important;
+    padding: 12px 16px !important;
+    margin: 12px 0 !important;
+    overflow-x: auto !important;
+    font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace !important;
+    font-size: 0.85em !important;
+    line-height: 1.45 !important;
+}
+pre code {
+    background: transparent !important;
+    border: none !important;
+    padding: 0 !important;
+    font-size: inherit !important;
+    color: inherit !important;
+}
+:not(pre) > code {
+    background: #f6f8fa !important;
+    border-radius: 3px !important;
+    padding: 0.2em 0.4em !important;
+    font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace !important;
+    font-size: 0.9em !important;
+}
+
+/* ── 7b. Blockquote styling (markdown-preview parity). GitHub-style left
+        border + grey text. */
+blockquote {
+    border-left: 4px solid #dfe2e5 !important;
+    padding: 0 1em !important;
+    color: #6a737d !important;
+    margin: 12px 0 !important;
+}
+
+/* ── 7. Hide site-injected anchor / "copy heading link" buttons next to
+        headings. Confluence injects <button class="copy-heading-link-button">,
+        Sphinx/MkDocs use .headerlink, GitHub uses .anchor / .octicon-link.
+        Browsers normally style these as tiny icon buttons via the site CSS;
+        when reader-mode strips <link rel=stylesheet>, the default <button>
+        styling renders them as visible grey rounded rectangles next to every
+        heading. Same logic for Confluence's anchor-toggle buttons inside
+        headings, and the print-suppress-by-class convention used by many
+        wikis. */
+.copy-heading-link-container, .copy-heading-link-button,
+.headerlink, .anchor-link, a.anchor, .octicon-link,
+.heading-anchor, button.anchorjs-link,
+h1 button, h2 button, h3 button, h4 button, h5 button, h6 button {
+    display: none !important;
 }
 </style>
 """
@@ -430,6 +489,289 @@ def _fix_svg_viewport(html: str) -> str:
     return re.sub(r'<svg\b[^>]*>', _patch, html, flags=re.IGNORECASE | re.DOTALL)
 
 
+# Universal ad-block class substrings, matched against the `class=` attribute
+# of any element. Removed in BOTH regular and reader modes — ads are never
+# legitimate content on any site, and they otherwise consume the first PDF
+# page (e.g. Хабр's ".tm-header-banner" + ".adfox-banner-placeholder" stack
+# pushes the article body to page 2).
+#
+# Patterns are deliberately conservative substrings of well-known ad-network
+# / sponsor markers that have no legitimate semantic-content overlap:
+#   * adfox — Yandex AdFox
+#   * googletag, gpt-ad — Google Publisher Tag
+#   * taboola, outbrain — recommendation networks
+#   * sponsor-mark, sponsor-block, sponsored- — explicit sponsor labels
+#   * adfox-banner, banner-target, banner-slider, banner-container — Хабр-style
+#     banner wrappers (compound classes; bare "banner" alone is too generic
+#     and would match e.g. `.user-banner` profile pictures)
+_AD_STRIP_KEYWORDS: list[str] = [
+    "adfox", "googletag", "gpt-ad", "taboola", "outbrain",
+    "sponsor-mark", "sponsor-block", "sponsored-",
+    "adfox-banner", "banner-target", "banner-slider",
+    "banner-container", "banner-placeholder", "header-banner",
+    "tm-header-banner", "tm-banner",
+    "ya-ai",
+]
+
+
+def _strip_universal_ads(html: str) -> str:
+    """Remove ad-network / sponsor wrappers from HTML in-place.
+
+    Reuses the same outermost-only depth-tracked stripping logic as
+    `_strip_reader_widgets` but with an ad-specific keyword list. Applied
+    unconditionally in `_preprocess_html`, before reader-mode root extraction
+    and before weasyprint render — keeps ads from pushing real content off
+    the first page in regular mode.
+    """
+    matches = _find_all_elements(html, class_substring_any=_AD_STRIP_KEYWORDS)
+    if not matches:
+        return html
+    matches.sort(key=lambda se: (se[0], -se[1]))
+    outer: list[tuple[int, int]] = []
+    last_end = -1
+    for s, e in matches:
+        if s >= last_end:
+            outer.append((s, e))
+            last_end = e
+    out = html
+    for s, e in reversed(outer):
+        out = out[:s] + out[e:]
+    return out
+
+
+def _strip_external_stylesheets(html: str) -> str:
+    """Remove `<link rel="stylesheet">` references — universal compatibility fix.
+
+    Site-shipped CSS is the leading cause of weasyprint rendering bugs in
+    real-world inputs:
+      * Хабр's main stylesheet contains a layout rule that makes weasyprint
+        silently drop the 4th `<p>` in `.article-formatted-body` (paragraphs
+        after a tall figure go missing — confirmed by bisection).
+      * vc.ru's deeply-nested flex/grid CSS sends weasyprint's layout engine
+        into multi-minute CPU loops on otherwise-modest HTML (~330 KB).
+      * Many sites ship `@font-face` declarations with CDN-subset glyph maps
+        that don't match the woff2 files captured in the webarchive,
+        producing garbled Latin text.
+    Stripping `<link rel=stylesheet>` lets weasyprint render with only:
+      * The bundled DEFAULT_CSS (typography),
+      * Our _NORMALIZE_CSS (chrome strip),
+      * Inline `<style>` blocks (structural styles like table layout, which
+        usually work fine — Confluence's content survives intact).
+    Tested across Confluence, Хабр, vc.ru, mobile-review, generic blogs:
+    output is more consistent, faster, and content-complete.
+    """
+    # `<link rel="stylesheet" href="...">` and the lazy-loaded variant
+    # `<link rel="preload" as="style">` (often used to defer-load same file).
+    html = re.sub(
+        r'<link\b[^>]*\brel\s*=\s*["\']?(?:stylesheet|preload)["\']?[^>]*/?>',
+        "",
+        html,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    # Defensive: also catch `<link href="*.css">` without explicit rel=
+    # (rare but seen on some legacy templates).
+    html = re.sub(
+        r'<link\b(?=[^>]*\.css)[^>]*/?>',
+        "",
+        html,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    return html
+
+
+# Threshold for "icon-sized" SVGs. Real diagrams (drawio, mermaid, plant-UML)
+# always exceed this; UI icons (anchor links, copy buttons, AI sparkles,
+# expand/collapse arrows, callout markers) almost never do.
+_ICON_SVG_MAX_PX = 64
+
+
+def _strip_icon_svgs(html: str) -> str:
+    """Remove small decorative `<svg>` elements (UI icons), keep large diagrams.
+
+    Modern docs sites (Mintlify, MkDocs Material, Docusaurus, Anthropic docs)
+    inject inline `<svg>` icons everywhere: anchor-link icons next to headings,
+    copy-to-clipboard buttons on code blocks, "AI explain" sparkles, callout
+    markers (info/warn/note), expand/collapse arrows. Without site CSS to
+    position and size them, weasyprint renders each on its own line as a
+    visible glyph, scattering the layout.
+
+    A real content SVG (architecture diagram, flow chart) is at least a few
+    hundred pixels per side. UI icons are 16/24/32 px. Strip only icons whose
+    declared `width` AND `height` (in pixels) are both ≤ _ICON_SVG_MAX_PX.
+
+    SVGs without explicit pixel dimensions (style-only sizing or 100%) are
+    KEPT — they may be content. The trade-off is conservative; we'd rather
+    leave a few decorative icons than drop a legitimate diagram.
+    """
+    # Tailwind size utility classes that map to ≤ 64 px:
+    # h-1=4, h-2=8, h-3=12, h-4=16, h-5=20, h-6=24, h-7=28, h-8=32, h-10=40,
+    # h-12=48, h-14=56, h-16=64. Same for w-* width.
+    _tw_icon_re = re.compile(
+        r'\bclass\s*=\s*["\'][^"\']*\b(?:h-(?:[1-9]|1[0-6])|w-(?:[1-9]|1[0-6]))\b',
+        re.IGNORECASE,
+    )
+
+    def _is_icon(svg_open_tag: str) -> bool:
+        # `aria-hidden="true"` is the W3C-standard marker for decorative
+        # content. Combined with `<svg>` it's a universal "this is an icon"
+        # signal — Font Awesome, Heroicons, Phosphor, Lucide, custom site
+        # icon sprites all set it. Real diagrams omit aria-hidden (they
+        # have semantic content). Catches OpenRouter / Mintlify icons that
+        # have no explicit pixel dimensions and would otherwise render at
+        # full viewBox size (page-filling).
+        if re.search(r'\baria-hidden\s*=\s*["\']?true', svg_open_tag, re.IGNORECASE):
+            return True
+        # Font Awesome prefix attribute (`prefix="far"`, `"fas"`, `"fab"`,
+        # `"fal"`, `"fa"`, `"fak"`, `"fad"`). These are always icons.
+        if re.search(r'\bprefix\s*=\s*["\']f[arsblkd]+["\']', svg_open_tag, re.IGNORECASE):
+            return True
+        # Numeric width/height attrs (px or unit-less). Match if EITHER axis
+        # is small — UI icons frequently constrain only one dimension and
+        # let the other derive from `viewBox` aspect ratio (e.g. Mintlify
+        # anchor links: `<svg height="12px" viewBox="0 0 576 512">`).
+        # Content diagrams typically declare both dimensions at full size.
+        wm = re.search(r'\bwidth\s*=\s*["\']?(\d+)(?:px)?\b', svg_open_tag)
+        hm = re.search(r'\bheight\s*=\s*["\']?(\d+)(?:px)?\b', svg_open_tag)
+        for m in (wm, hm):
+            if m:
+                try:
+                    if int(m.group(1)) <= _ICON_SVG_MAX_PX:
+                        return True
+                except ValueError:
+                    pass
+        # Tailwind/utility class with h-/w- size token ≤ 16 (= 64 px).
+        if _tw_icon_re.search(svg_open_tag):
+            return True
+        # Inline style with small width/height (px or em).
+        sm = re.search(r'\bstyle\s*=\s*["\']([^"\']*)["\']', svg_open_tag)
+        if sm:
+            style = sm.group(1)
+            sw = re.search(r'\bwidth\s*:\s*(\d+(?:\.\d+)?)\s*(?:px|em|rem)?', style)
+            sh = re.search(r'\bheight\s*:\s*(\d+(?:\.\d+)?)\s*(?:px|em|rem)?', style)
+            if sw and sh:
+                try:
+                    if float(sw.group(1)) <= _ICON_SVG_MAX_PX and float(sh.group(1)) <= _ICON_SVG_MAX_PX:
+                        return True
+                except ValueError:
+                    pass
+        return False
+
+    # Match `<svg ...>...</svg>` with depth-tracked end (SVGs can nest).
+    out: list[str] = []
+    pos = 0
+    open_re = re.compile(r"<svg\b[^>]*>", re.IGNORECASE)
+    close_re = re.compile(r"</svg\s*>", re.IGNORECASE)
+    while True:
+        m = open_re.search(html, pos)
+        if not m:
+            out.append(html[pos:])
+            break
+        out.append(html[pos:m.start()])
+        # Find matching </svg> with depth tracking.
+        depth = 1
+        scan = m.end()
+        while depth > 0 and scan < len(html):
+            o = open_re.search(html, scan)
+            c = close_re.search(html, scan)
+            if c is None:
+                break
+            if o is not None and o.start() < c.start():
+                depth += 1
+                scan = o.end()
+            else:
+                depth -= 1
+                scan = c.end()
+        if depth != 0:
+            out.append(html[m.start():])
+            break
+        if _is_icon(m.group(0)):
+            pass  # drop entire SVG
+        else:
+            out.append(html[m.start():scan])
+        pos = scan
+    return "".join(out)
+
+
+def _strip_empty_anchor_links(html: str) -> str:
+    """Remove `<a href="#...">…</a>` whose visible content is empty after icon strip.
+
+    Modern docs sites (Mintlify, MkDocs, Docusaurus, GitBook) wrap each heading
+    in a hash-link anchor whose body is just an SVG icon. After `_strip_icon_svgs`
+    drops the icon, the anchor has empty content but still renders as an
+    inline element with default `<a>` styling — sometimes leaving a tiny
+    visible artifact. Drop the empty wrapper too.
+
+    Conservative: only matches anchors whose body, after tag-stripping, has no
+    non-whitespace text. External links and meaningful in-text anchors survive.
+    """
+    def _maybe_drop(m: re.Match) -> str:
+        body = m.group(1)
+        text = re.sub(r"<[^>]+>", "", body).strip()
+        return "" if not text else m.group(0)
+
+    return re.sub(
+        r'<a\b[^>]*\bhref\s*=\s*["\']#[^"\']*["\'][^>]*>(.*?)</a>',
+        _maybe_drop,
+        html,
+        flags=re.DOTALL | re.IGNORECASE,
+    )
+
+
+def _strip_interactive_chrome(html: str) -> str:
+    """Universal removal of interactive UI chrome that renders as grey blocks.
+
+    Browsers paint empty/icon-only `<button>` elements, `<video>` players,
+    `<audio>` players, and `<iframe>` placeholders as grey rounded rectangles
+    when their site CSS is stripped. None of these can be meaningfully
+    interacted with in a PDF, so we replace them with their renderable
+    content (text inside) or remove them outright.
+
+      * `<button>`: UNWRAP — keep inner text/markup, drop the tag. Confluence
+        wraps `<th>` cell titles in `<button class="headerButton">`; vc.ru
+        wraps share/follow CTAs in `<button>`; Хабр wraps voting controls.
+        Unwrap preserves any text content while killing the grey-rectangle
+        rendering. Empty/icon-only buttons collapse to empty spans (invisible).
+      * `<video>`, `<audio>`: REMOVE entirely. The element body holds only
+        `<source>` / track refs that can't render in PDF, and the controls
+        bar always renders as a grey block.
+      * `<iframe>`: REMOVE entirely. Cross-origin embeds (YouTube, Twitter,
+        Yandex AdFox) are blocked by our offline_url_fetcher anyway and
+        render as a grey placeholder.
+    """
+    html = re.sub(
+        r"<button\b[^>]*>(.*?)</button>",
+        r"\1",
+        html,
+        flags=re.DOTALL | re.IGNORECASE,
+    )
+    html = re.sub(
+        r"<video\b[^>]*>.*?</video>",
+        "",
+        html,
+        flags=re.DOTALL | re.IGNORECASE,
+    )
+    html = re.sub(
+        r"<audio\b[^>]*>.*?</audio>",
+        "",
+        html,
+        flags=re.DOTALL | re.IGNORECASE,
+    )
+    html = re.sub(
+        r"<iframe\b[^>]*>.*?</iframe>",
+        "",
+        html,
+        flags=re.DOTALL | re.IGNORECASE,
+    )
+    # Self-closing forms of the same elements.
+    html = re.sub(
+        r"<(video|audio|iframe)\b[^>]*/?>",
+        "",
+        html,
+        flags=re.IGNORECASE,
+    )
+    return html
+
+
 def _preprocess_html(html: str) -> str:
     """Apply weasyprint-compatibility fixes before rendering.
 
@@ -437,7 +779,12 @@ def _preprocess_html(html: str) -> str:
     browser-saved pages render correctly without manual intervention.
     """
     html = _fix_light_dark(html)
+    html = _strip_external_stylesheets(html)
     html = _strip_all_fontfaces_in_styles(html)
+    html = _strip_interactive_chrome(html)
+    html = _strip_icon_svgs(html)
+    html = _strip_empty_anchor_links(html)
+    html = _strip_universal_ads(html)
     html = _fo_to_svg_text(html)
     html = _fix_svg_viewport(html)
 
@@ -456,92 +803,304 @@ def _preprocess_html(html: str) -> str:
 
 # ── reader mode ───────────────────────────────────────────────────────────────
 
-# Priority-ordered list of (tag, class_token) content candidates.
-# Empty class_token matches any element of that tag.
-_READER_CANDIDATES: list[tuple[str, str]] = [
-    ("article", ""),        # HTML5 <article> — blogs / news / wikis
-    ("main", ""),           # HTML5 <main> — docs / portals
-    ("div", "entry"),       # vc.ru article wrapper
-    ("div", "post-content"),
-    ("div", "article-content"),
-    ("div", "main-content"),
-    ("div", "article"),
+# Tiered article-root selectors with per-row text-length thresholds.
+#
+#   * High-confidence (Confluence/wiki conventions): `min_text=1` because
+#     diagram-heavy KB pages legitimately have <500 chars and we trust the
+#     selector. `id="main-content"` / `.wiki-content` rarely false-positive.
+#   * Specific CMS / blog classes: `min_text=500` to skip excerpts on archive
+#     index pages and small metadata divs (`.entry-meta`, `.post-meta`).
+#   * Generic semantics (`<article>`, `[role=main]`): `min_text=500` because
+#     false positives are common (sites use `<article>` for comments, etc.).
+#   * Bare `<main>` is INTENTIONALLY OMITTED — it's tried separately with a
+#     body-ratio guard (see `_reader_mode_html`). On news/blog SPAs `<main>`
+#     often wraps the entire site (header + body + footer + recommendations).
+#
+# Within each row, the LONGEST qualifying match wins — handles archive pages
+# with multiple `.entry` divs (post body is longer than excerpts) and Disqus
+# comment threads (post body is longer than any single comment article).
+_READER_CANDIDATES: list[dict] = [
+    {"lookup": {"attr_name": "id",   "attr_value": "main-content"},   "min_text": 1},
+    {"lookup": {"class_token": "wiki-content"},                       "min_text": 1},
+    {"lookup": {"attr_name": "id",   "attr_value": "content"},        "min_text": 1},
+    {"lookup": {"class_token": "entry"},                              "min_text": 500},
+    {"lookup": {"class_token": "post-content"},                       "min_text": 500},
+    {"lookup": {"class_token": "article-content"},                    "min_text": 500},
+    {"lookup": {"class_token": "main-content"},                       "min_text": 500},
+    {"lookup": {"tag": "div", "class_token": "article"},              "min_text": 500},
+    {"lookup": {"tag": "article"},                                    "min_text": 500},
+    {"lookup": {"attr_name": "role", "attr_value": "main"},           "min_text": 500},
 ]
-_READER_MIN_TEXT = 500      # minimum character count for a candidate to qualify
+
+# Reader-mode-only widget strip. Match SPA-blog inline widgets that
+# `.entry` / `<article>` wrappers commonly include alongside the post body
+# — vc.ru's `<div class="entry">` contains the article PLUS recommendation
+# carousels, comments threads, and emoji-reaction bars all as siblings.
+# Without this strip, reader-mode picks `.entry` correctly but the resulting
+# PDF still has 3-4× the legitimate text plus tail emoji counters.
+#
+# Substring matching via class= contains (mirror of CSS [class*=KEYWORD]) —
+# catches plurals and compound forms (`reaction` matches `content__reactions`,
+# `reactions-bar`, `like-reaction`). Generic words (`sidebar`, `widget`,
+# `share`, `meta`, `tags`) are EXCLUDED because they appear in BEM modifier
+# positions on Habr (e.g. `tm-page__main_has-sidebar` is the MAIN article
+# wrapper, not a sidebar). Use compound forms (`share-button`, `post-meta`)
+# to target actual widget classes.
+#
+# Honest scope: substring matching can over-strip on niche articles where the
+# topic literally mentions the keyword (e.g. a chemistry article with
+# `<figure class="reaction-diagram">`). Reader-mode is an opt-in degraded view.
+_READER_STRIP_KEYWORDS: list[str] = [
+    # Recommendation widgets / related-articles blocks
+    "rotator", "recommend", "related-post", "related-article",
+    # Comment threads (whole section)
+    "comments", "discussion-list", "replies-list",
+    # Post-footer meta widgets: tags, share, subscribe
+    "post-meta", "entry-meta", "post-tags", "entry-tags",
+    "post-share", "entry-share", "share-button", "share-bar",
+    "social-share", "social-button",
+    "subscribe-block", "subscribe-form", "newsletter",
+    # vc.ru-style article-footer engagement widgets: emoji reactions
+    # (`.content__reactions`), floating engagement bar
+    # (`.content__floating`), and post-footer with comment-counter +
+    # share buttons. Same patterns appear on generic blogs as
+    # `.entry-footer` / `.post-footer`.
+    "reaction", "floating-bar", "floating-engage",
+    "content-footer", "post-footer", "entry-footer",
+    # Ad / promo / sponsored blocks
+    "ad-banner", "ad-block", "advert", "sponsor-block",
+    "promo-block", "ya-ai",
+    # Cookie / GDPR consent prompts
+    "cookie-banner", "cookie-consent", "gdpr-",
+]
+
+# Bare `<main>` body-ratio threshold: if `<main>` text is ≥95% of the
+# original `<body>` text, `<main>` is wrapping the entire site (chrome
+# included) and we reject it. Calibrated empirically — mobile-review's
+# article-only `<main>` is ~89% of body; chrome-wrapping `<main>` on
+# tested SPA blogs sits at 96-99%.
+_MAIN_BODY_RATIO_MAX = 0.95
+
+# Generic any-tag opener — captures tag name, attribute blob, and the
+# self-closing slash. Used to enumerate every element start, then per-match
+# attribute checks decide which ones to keep.
+_ANY_OPEN_RE = re.compile(r"<([a-zA-Z][a-zA-Z0-9-]*)(\s[^>]*)?(/?)>", re.DOTALL)
+
+# HTML void elements that have no closing tag (skip depth tracking).
+_VOID_ELEMENTS = frozenset({
+    "area", "base", "br", "col", "embed", "hr", "img", "input", "link",
+    "meta", "param", "source", "track", "wbr",
+})
 
 
-def _extract_element(html: str, tag: str, class_token: str = "") -> str:
-    """Return the outer HTML of the first element matching tag (and class).
+def _attr_value(attrs: str, name: str) -> str | None:
+    """Return the value of attribute `name` from a tag's attribute blob, or None."""
+    m = re.search(
+        rf'\b{re.escape(name)}\s*=\s*["\']([^"\']*)["\']',
+        attrs,
+        flags=re.IGNORECASE,
+    )
+    return m.group(1) if m else None
 
-    Handles nested same-tag elements by tracking depth. Returns empty string
-    when no match is found or the closing tag cannot be located.
+
+def _find_all_elements(
+    html: str,
+    *,
+    tag: str | None = None,
+    class_token: str | None = None,
+    class_substring_any: list[str] | None = None,
+    attr_name: str | None = None,
+    attr_value: str | None = None,
+) -> list[tuple[int, int]]:
+    """Find all elements matching the given constraints; depth-tracked.
+
+    Returns a list of (start, end) byte offsets into `html` for the outer
+    HTML of each match. Multiple constraints AND together. Returns nested
+    matches too (parent + child both included if both qualify); callers
+    decide whether to keep all (longest-match) or only outermost (strip).
+
+      * `tag`                 → tag name equals (case-insensitive).
+      * `class_token`         → class= attribute contains exact token (CSS `.X`).
+      * `class_substring_any` → class= attribute contains ANY of the given
+                                substrings as substring (CSS `[class*=X]`).
+      * `attr_name`+`attr_value` → exact attribute value match (id, role, …).
     """
-    if class_token:
-        open_pat = re.compile(
-            rf"<{re.escape(tag)}(?=[^>]*\b{re.escape(class_token)}\b)[^>]*>",
-            re.IGNORECASE | re.DOTALL,
+    out: list[tuple[int, int]] = []
+    for m in _ANY_OPEN_RE.finditer(html):
+        name = m.group(1).lower()
+        if name in _VOID_ELEMENTS:
+            continue
+        attrs = m.group(2) or ""
+        if m.group(3) == "/":          # self-closing form, no body
+            continue
+        if tag and name != tag.lower():
+            continue
+        if class_token is not None:
+            cv = _attr_value(attrs, "class") or ""
+            if class_token not in cv.split():
+                continue
+        if class_substring_any:
+            cv = _attr_value(attrs, "class") or ""
+            if not any(kw in cv for kw in class_substring_any):
+                continue
+        if attr_name and attr_value is not None:
+            av = _attr_value(attrs, attr_name)
+            if av is None or av.strip() != attr_value:
+                continue
+        # Find the matching close tag with depth tracking.
+        start = m.start()
+        pos = m.end()
+        depth = 1
+        open_n = re.compile(
+            rf"<{re.escape(name)}(?:\s[^>]*)?(/?)>",
+            re.IGNORECASE,
         )
-    else:
-        open_pat = re.compile(
-            rf"<{re.escape(tag)}(?:\s[^>]*)?>",
-            re.IGNORECASE | re.DOTALL,
-        )
+        close_n = re.compile(rf"</{re.escape(name)}\s*>", re.IGNORECASE)
+        while pos < len(html) and depth > 0:
+            o = open_n.search(html, pos)
+            c = close_n.search(html, pos)
+            if c is None:
+                break
+            if o is not None and o.start() < c.start():
+                if o.group(1) != "/":
+                    depth += 1
+                pos = o.end()
+            else:
+                depth -= 1
+                pos = c.end()
+        if depth == 0:
+            out.append((start, pos))
+    return out
 
-    m = open_pat.search(html)
-    if not m:
-        return ""
 
-    start = m.start()
-    pos = m.end()
-    depth = 1
-    any_open = re.compile(rf"<{re.escape(tag)}[\s>]", re.IGNORECASE)
-    any_close = re.compile(rf"</{re.escape(tag)}\s*>", re.IGNORECASE)
+def _text_length(fragment: str) -> int:
+    """Length of `fragment` after stripping all tags, leading/trailing whitespace."""
+    return len(re.sub(r"<[^>]+>", "", fragment).strip())
 
-    while pos < len(html) and depth > 0:
-        o = any_open.search(html, pos)
-        c = any_close.search(html, pos)
-        if c is None:
-            return ""
-        if o is not None and o.start() < c.start():
-            depth += 1
-            pos = o.end()
-        else:
-            depth -= 1
-            pos = c.end()
 
-    return html[start:pos] if depth == 0 else ""
+def _body_text_length(html: str) -> int:
+    """Text-content length of the document `<body>` (or whole doc if no body)."""
+    body_m = re.search(r"<body\b[^>]*>(.*?)</body>", html, re.DOTALL | re.IGNORECASE)
+    inner = body_m.group(1) if body_m else html
+    return max(1, _text_length(inner))
+
+
+def _strip_reader_widgets(html: str) -> str:
+    """Remove elements whose class= attr contains any _READER_STRIP_KEYWORDS substring.
+
+    Outermost-only: when a stripped element contains another stripped element,
+    only the outer one is removed (the inner range is already gone). Splices
+    from the END of the document backwards so offsets remain valid.
+    """
+    matches = _find_all_elements(html, class_substring_any=_READER_STRIP_KEYWORDS)
+    if not matches:
+        return html
+    matches.sort(key=lambda se: (se[0], -se[1]))
+    outer: list[tuple[int, int]] = []
+    last_end = -1
+    for s, e in matches:
+        if s >= last_end:
+            outer.append((s, e))
+            last_end = e
+    out = html
+    for s, e in reversed(outer):
+        out = out[:s] + out[e:]
+    return out
 
 
 def _reader_mode_html(html: str) -> str:
-    """Extract the main article content and return a clean HTML document.
+    """Extract main article content and return a clean HTML document.
 
-    Searches content candidates in priority order, picks the first with more
-    than _READER_MIN_TEXT characters of text (tags stripped). Falls back to
-    the full HTML if nothing qualifying is found.
+    Pipeline:
+      1. Snapshot body-text length BEFORE the widget strip — the bare-`<main>`
+         body-ratio guard compares against the original body, otherwise the
+         empirically-calibrated 0.95 threshold drifts as the keyword list grows.
+      2. Strip widget keywords (recommendation carousels, share bars, comment
+         threads, etc.) from the full document — vc.ru's `.entry` wrapper
+         contains them as siblings of the article body, so they survive the
+         later root-extraction step unless removed first.
+      3. Walk `_READER_CANDIDATES` in priority order; within each row pick the
+         LONGEST qualifying match (handles archive pages with multiple
+         `.entry` divs and Disqus comment threads).
+      4. If nothing matched, try bare `<main>` with body-ratio guard.
+      5. Fall back to the full HTML if still nothing qualifies.
 
-    The returned document preserves the original <head> (for charset/lang)
-    but strips all <link rel=stylesheet> and <script> tags so the PDF is
-    rendered with only the bundled default CSS and _NORMALIZE_CSS — giving
-    clean, consistent typography free of site-specific layout rules.
+    The returned document keeps the original `<head>` (for charset/lang) but
+    strips `<link rel=stylesheet>` and `<script>` tags so the PDF is rendered
+    with only the bundled default CSS and _NORMALIZE_CSS — clean, consistent
+    typography free of site-specific layout rules.
     """
+    body_text_len = _body_text_length(html)
+    html = _strip_reader_widgets(html)
+
     best = ""
-    for tag, cls in _READER_CANDIDATES:
-        element = _extract_element(html, tag, cls)
-        if element:
-            text_len = len(re.sub(r"<[^>]+>", "", element))
-            if text_len >= _READER_MIN_TEXT:
-                best = element
+    selector_used = ""
+    for cand in _READER_CANDIDATES:
+        matches = _find_all_elements(html, **cand["lookup"])
+        if not matches:
+            continue
+        qualifying = [
+            (s, e) for s, e in matches
+            if _text_length(html[s:e]) >= cand["min_text"]
+        ]
+        if not qualifying:
+            continue
+        s, e = max(qualifying, key=lambda se: se[1] - se[0])
+        best = html[s:e]
+        selector_used = repr(cand["lookup"])
+        break
+
+    if not best:
+        # Bare `<main>` with body-ratio guard. HTML5 forbids multiple `<main>`
+        # per document but real-world pages violate this — prefer the FIRST
+        # `<main>` satisfying the guard.
+        for s, e in _find_all_elements(html, tag="main"):
+            t_len = _text_length(html[s:e])
+            if t_len >= 500 and t_len / body_text_len < _MAIN_BODY_RATIO_MAX:
+                best = html[s:e]
+                selector_used = f"main (body-ratio<{_MAIN_BODY_RATIO_MAX})"
                 break
 
     if not best:
-        return html  # nothing found: return unchanged (full HTML + CSS)
+        return html  # nothing qualified: return unchanged (full HTML + CSS)
 
-    # Preserve the original <head> but strip external resources so the PDF
-    # uses only our clean default CSS.
+    # Strip site-injected styling from the extracted article body. Reader
+    # mode renders with only DEFAULT_CSS + _NORMALIZE_CSS for clean,
+    # consistent typography — site stylesheets reintroduce the chrome we
+    # are trying to remove. Universal across sites:
+    #
+    #   * <style> blocks survive head-strip below; sites also embed style
+    #     blocks INSIDE the article body (Confluence's tablesorter, GitHub
+    #     <details>, etc.) which paint grey rounded rectangles on table
+    #     headers, button-shaped <th>s, "copy heading link" hover targets.
+    #   * <button> elements are NEVER article content — they're voting
+    #     widgets (Хабр), share/anchor toggles (Confluence), navigation
+    #     ("back to top", prev/next), "copy code" overlays. Default <button>
+    #     styling renders as a grey rounded rectangle when the site CSS is
+    #     stripped, so they appear as visible blank pills next to headings
+    #     and at article boundaries.
+    #   * Inline `style="..."` attributes on tags inside the body that
+    #     reference colors / backgrounds / fonts can also leak; we keep
+    #     them for now (some are legitimate, e.g. cell alignment) and rely
+    #     on _NORMALIZE_CSS overriding the worst offenders with !important.
+    best = re.sub(
+        r"<style\b[^>]*>.*?</style>",
+        "",
+        best,
+        flags=re.DOTALL | re.IGNORECASE,
+    )
+    # NB: <button>/<video>/<audio>/<iframe> chrome strip is handled by
+    # `_strip_interactive_chrome` in `_preprocess_html` (universal — applies
+    # in regular mode too). No reader-specific duplicate needed here.
+
+    # Preserve original <head> for charset/lang but strip ALL external CSS
+    # AND inline <style> blocks. Reader mode uses only our bundled default
+    # CSS + _NORMALIZE_CSS so the PDF has clean, consistent typography
+    # regardless of source site.
     head_m = re.search(r"<head[^>]*>.*?</head>", html, re.DOTALL | re.IGNORECASE)
     if head_m:
         head = re.sub(
-            r"<(link|script)\b[^>]*>(?:.*?</\1>)?",
+            r"<(link|script|style)\b[^>]*>(?:.*?</\1>)?",
             "",
             head_m.group(0),
             flags=re.DOTALL | re.IGNORECASE,
@@ -549,6 +1108,7 @@ def _reader_mode_html(html: str) -> str:
     else:
         head = '<head><meta charset="utf-8"></head>'
 
+    print(f"html2pdf: reader-mode root via {selector_used}", file=sys.stderr)
     return f"<!DOCTYPE html>\n{head}\n<body>\n{best}\n</body>\n</html>"
 
 
@@ -735,6 +1295,66 @@ def _extract_webarchive(src: Path, work_dir: Path) -> tuple[str, str]:
 
 # ── core renderer ─────────────────────────────────────────────────────────────
 
+def _offline_url_fetcher(url: str) -> dict:
+    """weasyprint URL fetcher that refuses remote (http/https) URLs.
+
+    Default weasyprint behaviour is to fetch any external URL with no timeout
+    (urllib's blocking call). On real-world web pages with dozens of CDN
+    references (fonts, analytics pixels, social-media badges) this hangs the
+    whole conversion for 10+ minutes per stalled request.
+
+    Local schemes (`file://`, `data:`) fall through to weasyprint's default —
+    we explicitly raise to force weasyprint to skip the remote resource and
+    continue rendering. Skipped resources produce an "Failed to load X"
+    weasyprint warning to stderr but the PDF still renders with whatever
+    fonts / images were resolvable locally.
+    """
+    if url.startswith(("file://", "data:")):
+        return default_url_fetcher(url)
+    raise ValueError(f"remote fetch refused (offline mode): {url}")
+
+
+class RenderTimeout(Exception):
+    """Raised when weasyprint render exceeds the watchdog deadline."""
+
+
+def _install_render_watchdog(seconds: int):
+    """Install a SIGALRM-based watchdog that raises RenderTimeout after `seconds`.
+
+    Returns the previous handler so the caller can restore it after the
+    protected region. macOS / Linux only (signal.alarm is POSIX); on Windows
+    the install is a no-op and the watchdog disables itself.
+
+    SIGALRM interrupts blocking syscalls AND fires between Python bytecodes,
+    so it can break weasyprint out of pure-Python layout loops as well as
+    network reads. Pathological CSS layouts on SPA pages can otherwise hold
+    the GIL for tens of minutes — the watchdog turns those into a clean
+    timeout error rather than a stalled pipeline.
+    """
+    if not hasattr(signal, "SIGALRM") or seconds <= 0:
+        return None
+
+    def _on_alarm(signum, frame):
+        raise RenderTimeout(
+            f"weasyprint render exceeded {seconds}s — "
+            "input may be too large or its CSS pathological for layout. "
+            "Try --reader-mode (strips site CSS) or set HTML2PDF_TIMEOUT=0 "
+            "to disable the watchdog."
+        )
+
+    prev = signal.signal(signal.SIGALRM, _on_alarm)
+    signal.alarm(seconds)
+    return prev
+
+
+def _clear_render_watchdog(prev) -> None:
+    if not hasattr(signal, "SIGALRM"):
+        return
+    signal.alarm(0)
+    if prev is not None:
+        signal.signal(signal.SIGALRM, prev)
+
+
 def convert(
     html_text: str,
     output_path: Path,
@@ -744,6 +1364,7 @@ def convert(
     extra_css_path: Path | None,
     use_default_css: bool,
     reader_mode: bool = False,
+    timeout: int = 0,
 ) -> None:
     if reader_mode:
         html_text = _reader_mode_html(html_text)
@@ -755,9 +1376,16 @@ def convert(
     if extra_css_path is not None:
         stylesheets.append(CSS(filename=str(extra_css_path)))
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    HTML(string=html_text, base_url=base_url).write_pdf(
-        str(output_path), stylesheets=stylesheets,
-    )
+
+    prev_handler = _install_render_watchdog(timeout)
+    try:
+        HTML(
+            string=html_text,
+            base_url=base_url,
+            url_fetcher=_offline_url_fetcher,
+        ).write_pdf(str(output_path), stylesheets=stylesheets)
+    finally:
+        _clear_render_watchdog(prev_handler)
 
 
 # ── CLI ───────────────────────────────────────────────────────────────────────
@@ -790,6 +1418,19 @@ def main(argv: list[str] | None = None) -> int:
                              "first <article>, <main>, or known content "
                              "container. Implies --no-default-css is NOT set "
                              "— the bundled clean stylesheet is always used.")
+    # Watchdog default: 180s. SPA pages with pathological CSS (vc.ru-style
+    # nested flex/grid layouts) can hang weasyprint's box-layout engine for
+    # tens of minutes on otherwise-modest HTML — without a timeout the whole
+    # pipeline stalls. Override via --timeout SECONDS or HTML2PDF_TIMEOUT env;
+    # set to 0 to disable. Honest scope: timeout fires only on POSIX
+    # (signal.SIGALRM); on Windows it's a no-op.
+    parser.add_argument(
+        "--timeout", dest="timeout", type=int,
+        default=int(os.environ.get("HTML2PDF_TIMEOUT", "180")),
+        help="Render watchdog deadline in seconds (default 180; "
+             "$HTML2PDF_TIMEOUT overrides; 0 disables). Kills weasyprint "
+             "if its layout exceeds the deadline (POSIX only).",
+    )
     add_json_errors_argument(parser)
     args = parser.parse_args(argv)
     je = args.json_errors
@@ -850,6 +1491,12 @@ def main(argv: list[str] | None = None) -> int:
             extra_css_path=args.css,
             use_default_css=not args.no_default_css,
             reader_mode=args.reader_mode,
+            timeout=args.timeout,
+        )
+    except RenderTimeout as exc:
+        return report_error(
+            str(exc), code=1, error_type="RenderTimeout",
+            details={"timeout": args.timeout}, json_mode=je,
         )
     except Exception as exc:
         return report_error(
