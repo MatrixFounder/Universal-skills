@@ -223,6 +223,34 @@ blockquote {
     margin: 12px 0 !important;
 }
 
+/* ── 7c. ARIA-role tables. GitBook (and some Notion / Material themes) build
+        their data tables out of <div role="table">/<div role="row">/
+        <div role="cell"> markup instead of native <table>. After the site
+        CSS is stripped, those divs collapse to vertical block flow — every
+        cell on its own line — making 3-column field tables (Name / Type /
+        Description) impossible to read. Render the ARIA-table tree as a
+        real CSS table; the W3C ARIA spec says these roles MUST be visually
+        equivalent to a <table>, so we honour that universally. */
+[role="table"] {
+    display: table !important;
+    width: 100% !important;
+    border-collapse: collapse !important;
+    margin: 8px 0 !important;
+}
+[role="rowgroup"] { display: table-row-group !important; }
+[role="row"]      { display: table-row !important; }
+[role="columnheader"], [role="cell"] {
+    display: table-cell !important;
+    padding: 6px 10px !important;
+    border: 1px solid #e1e4e8 !important;
+    vertical-align: top !important;
+}
+[role="columnheader"] {
+    font-weight: 600 !important;
+    background: #f6f8fa !important;
+    text-align: left !important;
+}
+
 /* ── 7. Hide site-injected anchor / "copy heading link" buttons next to
         headings. Confluence injects <button class="copy-heading-link-button">,
         Sphinx/MkDocs use .headerlink, GitHub uses .anchor / .octicon-link.
@@ -615,9 +643,11 @@ def _strip_icon_svgs(html: str) -> str:
     """
     # Tailwind size utility classes that map to ≤ 64 px:
     # h-1=4, h-2=8, h-3=12, h-4=16, h-5=20, h-6=24, h-7=28, h-8=32, h-10=40,
-    # h-12=48, h-14=56, h-16=64. Same for w-* width.
+    # h-12=48, h-14=56, h-16=64. Same for w-* width and size-* (sets BOTH
+    # width and height to the given size). `size-5` is the standard Mintlify
+    # icon size — appears in Discord/Berachain "Info" callouts.
     _tw_icon_re = re.compile(
-        r'\bclass\s*=\s*["\'][^"\']*\b(?:h-(?:[1-9]|1[0-6])|w-(?:[1-9]|1[0-6]))\b',
+        r'\bclass\s*=\s*["\'][^"\']*\b(?:[hw]-|size-)(?:[1-9]|1[0-6])\b',
         re.IGNORECASE,
     )
 
@@ -661,6 +691,26 @@ def _strip_icon_svgs(html: str) -> str:
             if sw and sh:
                 try:
                     if float(sw.group(1)) <= _ICON_SVG_MAX_PX and float(sh.group(1)) <= _ICON_SVG_MAX_PX:
+                        return True
+                except ValueError:
+                    pass
+        # Final fallback: small viewBox (no explicit dimensions, no recognizable
+        # icon class). Mintlify "info" callouts ship as
+        # `<svg viewBox="0 0 20 20" class="..." aria-label="Info">` where
+        # `aria-label` (semantic content!) is not the W3C decorative marker.
+        # Such SVGs without explicit pixel dims default to 100% of the
+        # containing block, painting page-filling glyphs in PDF. A viewBox
+        # whose max dimension is ≤ 64 px is iconographic per design (real
+        # diagrams have viewBox 0 0 600 400 or similar).
+        vbm = re.search(r'\bviewBox\s*=\s*["\'][^"\']*["\']', svg_open_tag)
+        if vbm:
+            parts = re.findall(r'-?\d+(?:\.\d+)?', vbm.group(0))
+            if len(parts) == 4:
+                try:
+                    w, h = float(parts[2]), float(parts[3])
+                    # Has no explicit dims (we're past the numeric / Tailwind
+                    # / inline-style checks) and a small viewBox — icon.
+                    if max(w, h) <= _ICON_SVG_MAX_PX:
                         return True
                 except ValueError:
                     pass
