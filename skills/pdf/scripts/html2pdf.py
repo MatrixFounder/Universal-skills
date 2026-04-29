@@ -72,21 +72,26 @@ html, body {
     overflow-clip-margin: unset !important;
 }
 
-/* ── 2. Confluence / draw.io diagrams: inline SVGs have overflow:hidden
-        and min-width > page width set via inline style; both clip the diagram.
-        height:auto overrides the explicit pixel height set on the container. */
+/* ── 2. Confluence / draw.io diagrams + all viewBox SVGs: scale to fit page
+        width and prevent edge clipping.
+        .drawio-macro is the Confluence draw.io container. Its inline style
+        carries fixed pixel width/height; we reset both so the SVG inside
+        drives the layout via its viewBox aspect ratio (_fix_svg_viewport adds
+        viewBox to SVGs that lack one). overflow:visible prevents the
+        container from clipping labels that slightly overshoot the canvas.
+        svg[viewBox] catches all other diagram SVGs (Mermaid, PlantUML, etc.)
+        regardless of their wrapper element or Confluence version. */
 .drawio-macro {
     overflow: visible !important;
-    width: 100% !important;
     max-width: 100% !important;
     height: auto !important;
 }
-.drawio-macro svg {
+.drawio-macro svg,
+svg[viewBox] {
     min-width: 0 !important;
-    min-height: 0 !important;
-    width: 100% !important;
     max-width: 100% !important;
     height: auto !important;
+    overflow: visible !important;
 }
 
 /* ── 3. Hide application chrome that is useless / harmful in PDF:
@@ -274,6 +279,83 @@ def _fo_to_svg_text(html: str) -> str:
     )
 
 
+def _fix_svg_viewport(html: str) -> str:
+    """Make large inline SVGs responsive by ensuring they carry a viewBox.
+
+    Two cases:
+
+    Case 1 — SVG with explicit pixel ``width`` attribute and an existing
+    ``viewBox``:  set ``width="100%"``, remove ``height``, expand the viewBox
+    by 5 % in both dimensions so that content marginally overshooting the
+    declared canvas right/bottom boundary (a draw.io artefact) is not clipped.
+
+    Case 2 — draw.io Confluence pattern: the SVG has NO ``viewBox`` and uses
+    ``style="width:100%; height:100%; min-width:Wpx; min-height:Hpx;"``
+    inside a fixed-pixel-size container div.  Without a viewBox,
+    ``max-width:100%`` just creates a smaller viewport into the same 1:1
+    coordinate space — content beyond the viewport is clipped.  We synthesise
+    ``viewBox="0 0 W H"`` from those style values; combined with the CSS rules
+    for ``.drawio-macro svg`` (``min-width:0; height:auto``), this makes the
+    SVG scale proportionally to the page content width.
+
+    Small inline icons (width ≤ 200 px, or min-width ≤ 200 px) are left
+    untouched.
+    """
+    _VB_EXPAND = 1.05
+
+    def _expand(vb_inner: str) -> str:
+        parts = vb_inner.split()
+        if len(parts) != 4:
+            return vb_inner
+        try:
+            x, y, w, h = float(parts[0]), float(parts[1]), float(parts[2]), float(parts[3])
+            return f"{x} {y} {w * _VB_EXPAND:.1f} {h * _VB_EXPAND:.1f}"
+        except ValueError:
+            return vb_inner
+
+    def _patch(m: re.Match) -> str:
+        tag = m.group(0)
+
+        # ── Case 1: explicit pixel width attribute + existing viewBox ──────────
+        w_attr_m = re.search(r'\bwidth\s*=\s*["\']?([\d.]+)["\']?', tag)
+        vb_found = None
+        for vb_pat in (r'\bviewBox\s*=\s*"([^"]+)"', r"\bviewBox\s*=\s*'([^']+)'"):
+            vb_found = re.search(vb_pat, tag, re.IGNORECASE)
+            if vb_found:
+                break
+
+        if w_attr_m and float(w_attr_m.group(1)) > 200 and vb_found:
+            new_inner = _expand(vb_found.group(1))
+            tag = tag[: vb_found.start(1)] + new_inner + tag[vb_found.end(1):]
+            tag = re.sub(
+                r'\bwidth\s*=\s*["\']?[^"\'>\s]+["\']?', 'width="100%"', tag, count=1,
+            )
+            tag = re.sub(r'\bheight\s*=\s*["\']?[\d.]+["\']?', '', tag, count=1)
+            return tag
+
+        # ── Case 2: no viewBox — draw.io Confluence inline-SVG pattern ────────
+        # The SVG carries its natural pixel size in min-width/min-height
+        # inline-style values.  Synthesise a viewBox from those so the CSS
+        # height:auto rule can derive the correct aspect ratio.
+        if vb_found:
+            return tag  # already has viewBox, nothing to synthesise
+        style_m = re.search(r'\bstyle\s*=\s*"([^"]*)"', tag)
+        if not style_m:
+            return tag
+        style = style_m.group(1)
+        mw_m = re.search(r'\bmin-width\s*:\s*([\d.]+)px', style)
+        mh_m = re.search(r'\bmin-height\s*:\s*([\d.]+)px', style)
+        if not mw_m or not mh_m:
+            return tag
+        mw, mh = float(mw_m.group(1)), float(mh_m.group(1))
+        if mw <= 200:
+            return tag
+        new_vb = f'viewBox="0 0 {mw * _VB_EXPAND:.1f} {mh * _VB_EXPAND:.1f}"'
+        return tag[:-1] + f' {new_vb}>'
+
+    return re.sub(r'<svg\b[^>]*>', _patch, html, flags=re.IGNORECASE | re.DOTALL)
+
+
 def _preprocess_html(html: str) -> str:
     """Apply weasyprint-compatibility fixes before rendering.
 
@@ -283,6 +365,7 @@ def _preprocess_html(html: str) -> str:
     html = _fix_light_dark(html)
     html = _strip_all_fontfaces_in_styles(html)
     html = _fo_to_svg_text(html)
+    html = _fix_svg_viewport(html)
 
     # Inject normalization CSS into <head>; fall back to before <body>
     # or prepend if neither tag is present.
