@@ -232,25 +232,51 @@ def _strip_all_fontfaces_in_styles(html: str) -> str:
 def _fo_to_svg_text(html: str) -> str:
     """Convert draw.io <foreignObject> text labels to SVG <text> elements.
 
-    weasyprint silently discards <foreignObject> content. draw.io stores ALL
-    node text labels inside <foreignObject> divs. This function extracts the
-    visible text and the anchor coordinates (padding-top → y, margin-left → x
-    from the inner flex container) and emits an SVG <text> element.
+    weasyprint silently discards <foreignObject> content.  draw.io stores ALL
+    node labels inside <foreignObject> divs using a flex-box encoding:
 
-    Position accuracy is approximate (~2px): the padding-top / margin-left
-    values in draw.io foreignObject always represent the visual centre of the
-    shape, so text-anchor="middle" + dominant-baseline="middle" lands the
-    label correctly for the common case.
+      padding-top  → absolute y-centre of the shape in the current SVG
+                     coordinate space (inside the enclosing <g> transform)
+      margin-left  → x-anchor: the CENTRE for justify-content:center elements
+                     (column headers, node boxes) or the LEFT EDGE for
+                     justify-content:flex-start elements (swimlane titles,
+                     left-aligned labels)
+      width        → text-container width for word-wrap (draw.io uses 1px for
+                     unconstrained / content-sized labels)
+      font-size    → LAST occurrence in the foreignObject (the outermost div
+                     often carries a layout/spacing size; the innermost span
+                     carries the actual label size)
+
+    Multiple <text> elements are emitted for labels that need word-wrapping
+    (container width > 1 px), each vertically centred as a block around y.
     """
+    def _wrap(text: str, max_width: float, font_size: int) -> list[str]:
+        if max_width <= 1:
+            return [text]
+        char_w = font_size * 0.58       # empirical Helvetica avg char width
+        max_chars = max(5, int(max_width / char_w))
+        words = text.split()
+        lines: list[str] = []
+        current = ""
+        for w in words:
+            trial = (current + " " + w).strip()
+            if len(trial) <= max_chars:
+                current = trial
+            else:
+                if current:
+                    lines.append(current)
+                current = w
+        if current:
+            lines.append(current)
+        return lines or [text]
+
     def _replace(m: re.Match) -> str:
         fo = m.group(0)
-        # Extract all visible text (strip HTML tags, collapse whitespace).
         raw = re.sub(r"<[^>]+>", " ", fo)
-        text = html_module.unescape(" ".join(raw.split()))
+        text = html_module.unescape(" ".join(raw.split())).replace("\xa0", " ")
         if not text:
             return ""
 
-        # Anchor: padding-top → y, margin-left → x (draw.io flex-centre div).
         pos = re.search(
             r"padding-top:\s*([\d.]+)px.*?margin-left:\s*([\d.]+)px",
             fo, re.DOTALL,
@@ -260,16 +286,38 @@ def _fo_to_svg_text(html: str) -> str:
         y = float(pos.group(1))
         x = float(pos.group(2))
 
-        fs_m = re.search(r"font-size:\s*([\d.]+)px", fo)
-        fs = int(float(fs_m.group(1))) if fs_m else 12
-        bold = ' font-weight="bold"' if "font-weight: bold" in fo else ""
-
-        return (
-            f'<text x="{x}" y="{y}" text-anchor="middle" '
-            f'dominant-baseline="middle" font-family="Helvetica" '
-            f'font-size="{fs}"{bold} fill="#000000">'
-            f"{html_module.escape(text)}</text>"
+        # SVG text-anchor mirrors the flex justify-content of the container.
+        jc_m = re.search(
+            r"justify-content:\s*(?:unsafe\s+)?(flex-start|flex-end|center)", fo,
         )
+        jc = jc_m.group(1) if jc_m else "center"
+        anchor = "start" if jc == "flex-start" else ("end" if jc == "flex-end" else "middle")
+
+        # Container width for word-wrap.
+        w_m = re.search(r"width:\s*([\d.]+)px", fo)
+        cw = float(w_m.group(1)) if w_m else 0
+
+        # Use the LAST (innermost) font-size; the outer div may carry a smaller
+        # layout/spacing size that does not match the visible label.
+        all_fs = re.findall(r"font-size:\s*([\d.]+)px", fo)
+        fs = int(float(all_fs[-1])) if all_fs else 12
+        bold = (' font-weight="bold"'
+                if "font-weight: bold" in fo or re.search(r"<b[\s>]", fo) else "")
+
+        lines = _wrap(text, cw, fs)
+        lh = fs * 1.25
+        start_y = y - (len(lines) - 1) * lh / 2
+
+        out = []
+        for j, line in enumerate(lines):
+            ly = start_y + j * lh
+            out.append(
+                f'<text x="{x:.1f}" y="{ly:.1f}" text-anchor="{anchor}" '
+                f'dominant-baseline="middle" font-family="Helvetica" '
+                f'font-size="{fs}"{bold} fill="#000000">'
+                f"{html_module.escape(line)}</text>"
+            )
+        return "\n".join(out)
 
     return re.sub(
         r"<foreignObject[^>]*>.*?</foreignObject>",
