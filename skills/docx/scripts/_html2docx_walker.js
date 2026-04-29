@@ -696,14 +696,45 @@ function buildBody({ $, root, inputDir, extractedImages }) {
                 (isExternal || isInternal) ? { color: "0563C1" } : {});
             for (const c of node.children || []) walkInline(c, linkStyle, innerRuns, opts);
             if (innerRuns.length === 0) return;
-            if (isExternal) {
-                runs.push(new ExternalHyperlink({ link: href, children: innerRuns }));
-            } else if (isInternal) {
-                const fragment = decodeURIComponent(href.slice(hashIdx + 1));
-                runs.push(new InternalHyperlink({
-                    anchor: sanitizeAnchor(fragment),
-                    children: innerRuns,
-                }));
+            // docx-js v8.5 emits `<a:hlinkClick r:id="rId…"/>` inside the
+            // image's `<wp:docPr>` whenever an `ImageRun` is rendered with
+            // an `ExternalHyperlink` OR `InternalHyperlink` ancestor in
+            // the prepForXml context stack. For ImageRun:
+            //   * Inside ExternalHyperlink: the linkId IS registered as a
+            //     hyperlink relationship → works correctly.
+            //   * Inside InternalHyperlink: the linkId is for a bookmark
+            //     anchor (no rels entry). docx-js still emits the rId on
+            //     the image's docPr but the rels file has no matching
+            //     Relationship → Word reports "unreadable content"
+            //     ("содержимое, которое не удалось прочитать") and offers
+            //     recovery. Real-world trigger: vc.ru's
+            //     `<a href="/post#comments">` comment-counter link
+            //     wrapping `<svg>icon</svg>60`.
+            //
+            // Workaround: split innerRuns into images vs. non-images. The
+            // hyperlink wraps ONLY non-image runs (text); images are
+            // emitted as siblings of the hyperlink, losing their (rarely-
+            // useful-in-docx) click target but never producing a dangling
+            // rId. ExternalHyperlink wrapping images would technically
+            // work, but applying the same rule to both types keeps the
+            // behaviour predictable and side-steps any other docx-js
+            // surprises with image-in-hyperlink.
+            const imageRuns = innerRuns.filter(r => r instanceof ImageRun);
+            const nonImageRuns = innerRuns.filter(r => !(r instanceof ImageRun));
+            if ((isExternal || isInternal) && nonImageRuns.length > 0) {
+                if (isExternal) {
+                    runs.push(new ExternalHyperlink({ link: href, children: nonImageRuns }));
+                } else {
+                    const fragment = decodeURIComponent(href.slice(hashIdx + 1));
+                    runs.push(new InternalHyperlink({
+                        anchor: sanitizeAnchor(fragment),
+                        children: nonImageRuns,
+                    }));
+                }
+                for (const r of imageRuns) runs.push(r);
+            } else if (isExternal || isInternal) {
+                // image-only or empty after filtering — push images directly
+                for (const r of imageRuns) runs.push(r);
             } else {
                 for (const r of innerRuns) runs.push(r);
             }

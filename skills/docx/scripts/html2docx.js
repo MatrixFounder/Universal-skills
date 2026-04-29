@@ -171,24 +171,60 @@ $('[role="banner"], [role="complementary"], [role="contentinfo"], [role="navigat
 // article's actual page title, extracted separately below.
 $('#header, #footer, #navigation, #navigation-next, #breadcrumb-section, #breadcrumbs, #page-metadata, #likes-and-labels-container, .page-metadata, .pageSection.group, .acs-side-bar, .ia-secondary-content, .acs-nav-children-pages, #comments-section, #footer-logo, #space-tools-menu').remove();
 
-// Reader-mode-only chrome strips. These match SPA-blog inline widgets that
-// real-world `.entry` / `<article>` wrappers commonly include INSIDE the
-// article DOM — vc.ru's `<div class="entry">` contains the post body PLUS
-// a recommendation-carousel sibling (.rotator), a comments thread
-// (.comments), and a related-articles block (.recommendations). Without
-// this strip, --reader-mode picks `.entry` correctly but the resulting
-// docx still has 3-4× the legitimate text (visible in preview as repeated
-// promo cards interleaved with paragraphs).
+// Reader-mode-only chrome strips. Match SPA-blog inline widgets that
+// `.entry` / `<article>` wrappers commonly include alongside the post
+// body — vc.ru's `<div class="entry">` contains the article PLUS a
+// recommendation carousel, a comments thread, and a related-articles
+// block all as siblings. Without this strip, --reader-mode picks
+// `.entry` correctly but the resulting docx still has 3-4× the
+// legitimate text.
 //
-// Skipped in default mode because:
-//   * `.rotator` is too generic — could match a Confluence page about UI
-//     rotators (unlikely but possible).
-//   * `.comments` matches a Word `comments` style on some templates.
-//   * Confluence pages are picked via #main-content which already excludes
-//     these wrappers, so default-mode users see no benefit and lose a tiny
-//     amount of safety.
+// Universal keyword-pattern matching via the CSS `[class*=KEYWORD]`
+// substring selector — catches any class name containing the keyword,
+// regardless of prefix/suffix (e.g. `rotator` matches `rotator`,
+// `entry-rotator`, `rotator--limitless`). Covers vc.ru, Habr, generic
+// WordPress / blog frameworks without naming each variant.
+//
+// Default mode skips this strip because:
+//   * `[class*=comment]` would remove a Confluence wiki page about
+//     comments, or a Word style template named "comments".
+//   * `[class*=banner]` could match a legitimate `.banner-image` inside
+//     a feature article.
+//   * Confluence content uses `#main-content` which already excludes
+//     these wrappers, so default-mode users see no benefit and lose a
+//     little safety margin.
 if (readerMode) {
-    $('.rotator, .entry-rotator, .comments, .recommendations, .related-posts, .related-articles, .post-meta, .entry-meta, .post-tags, .post-share, .share-buttons').remove();
+    // Each entry is a substring matched against the `class` attribute via
+    // CSS `[class*=…]`. Group by intent so each entry's purpose is clear
+    // when the list is updated.
+    const READER_STRIP_KEYWORDS = [
+        // Recommendation widgets / related-articles blocks
+        'rotator', 'recommend', 'related-post', 'related-article',
+        // Comment threads (whole section — not the single `<a href="#comments">`
+        // counter link, which is small and harmless once unwrapped from
+        // its hyperlink in the walker)
+        'comments', 'discussion-list', 'replies-list',
+        // Post-footer meta widgets: tags, share, subscribe, author bio
+        'post-meta', 'entry-meta', 'post-tags', 'entry-tags',
+        'post-share', 'entry-share', 'share-button', 'share-bar',
+        'social-share', 'social-button',
+        'subscribe-block', 'subscribe-form', 'newsletter',
+        // Ad / promo / sponsored blocks
+        'ad-banner', 'ad-block', 'advert', 'sponsor-block',
+        'promo-block', 'ya-ai',
+        // Cookie / GDPR consent prompts
+        'cookie-banner', 'cookie-consent', 'gdpr-',
+        // NB: deliberately NOT including `sidebar`, `widget`, or
+        // `share`/`meta`/`tags` alone — those substrings appear in BEM
+        // modifier positions on Habr (e.g. `tm-page__main_has-sidebar`
+        // is the MAIN article wrapper, not a sidebar) and would strip
+        // legitimate body content. Use compound forms (`share-button`,
+        // `post-meta`) to target the actual widget classes.
+    ];
+    const stripSelector = READER_STRIP_KEYWORDS
+        .map(kw => `[class*="${kw}"]`)
+        .join(',');
+    $(stripSelector).remove();
 }
 
 // Confluence TOC double-numbering fix: the macro emits an <ol> wrapping
