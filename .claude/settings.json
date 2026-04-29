@@ -50,7 +50,26 @@
       "Bash(./.venv/bin/python3 preview.py /Users/sergey/Antigravity/Universal-skills/tmp/out_pdf/confluence-elma365-1.pdf /tmp/final_conf1.png --dpi 72 --cols 2)",
       "Bash(./.venv/bin/python3 -c \"from PIL import Image; Image.open\\('/tmp/conf_p-1.ppm'\\).save\\('/tmp/conf_p1.png'\\)\")",
       "Bash(./.venv/bin/python3 -c \"from PIL import Image; import glob; f=glob.glob\\('/tmp/conf_p1*'\\)[0]; Image.open\\(f\\).save\\('/tmp/conf_p1_out.png'\\); print\\('size:', Image.open\\(f\\).size\\)\")",
-      "Bash(git commit -m ' *)"
+      "Bash(git commit -m ' *)",
+      "Bash(./.venv/bin/python html2pdf.py '/Users/sergey/Antigravity/Universal-skills/tmp/Интеграция ELMA365 с телефонией 3CX - Ярли - Confluence Wiki.webarchive' /tmp/confluence_elma_fixed.pdf --page-size a4)",
+      "Bash(./.venv/bin/python html2pdf.py '/Users/sergey/Antigravity/Universal-skills/tmp/Интеграция ELMA365 с телефонией 3CX - Ярли - Confluence Wiki-2.mhtml' /tmp/confluence_elma_mhtml_fixed.pdf --page-size a4)",
+      "Bash(python3 -c ' *)",
+      "Bash(./.venv/bin/python html2pdf.py '/Users/sergey/Antigravity/Universal-skills/tmp/Интеграция ELMA365 с телефонией 3CX - Ярли - Confluence Wiki-2.mhtml' /tmp/confluence_v2.pdf --page-size a4)",
+      "Bash(./.venv/bin/python html2pdf.py '/Users/sergey/Antigravity/Universal-skills/tmp/Интеграция ELMA365 с телефонией 3CX - Ярли - Confluence Wiki-2.mhtml' /tmp/confluence_v3.pdf --page-size a4)",
+      "Bash(./.venv/bin/python html2pdf.py '/Users/sergey/Antigravity/Universal-skills/tmp/Интеграция ELMA365 с телефонией 3CX - Ярли - Confluence Wiki-2.mhtml' /tmp/confluence_final.pdf --page-size a4)",
+      "Bash(./.venv/bin/python html2pdf.py '/Users/sergey/Antigravity/Universal-skills/tmp/Интеграция ELMA365 с телефонией 3CX - Ярли - Confluence Wiki-2.mhtml' /tmp/confluence_v4.pdf --page-size a4)",
+      "Bash(python3 -c \"from PIL import Image; Image.open\\('/tmp/v4_p3-03.ppm'\\).save\\('/tmp/v4_page3.png'\\)\")",
+      "Bash(./.venv/bin/python html2pdf.py /Users/sergey/Antigravity/Universal-skills/tmp/confluence-elma365.mhtml /Users/sergey/Antigravity/Universal-skills/tmp/confluence-elma365-fixed.pdf)",
+      "Bash(./.venv/bin/python html2pdf.py \"/Users/sergey/Antigravity/Universal-skills/tmp/Интеграция ELMA365 с телефонией 3CX - Ярли - Confluence Wiki-2.mhtml\" /Users/sergey/Antigravity/Universal-skills/tmp/confluence-elma365-fixed.pdf)",
+      "Bash(./.venv/bin/python -c ' *)",
+      "Bash(./.venv/bin/python html2pdf.py \"/Users/sergey/Antigravity/Universal-skills/tmp/Интеграция ELMA365 с телефонией 3CX - Ярли - Confluence Wiki-2.mhtml\" /tmp/html2pdf-refactor-check.pdf)",
+      "Bash(node html2docx.js \"/Users/sergey/Antigravity/Universal-skills/tmp/Интеграция ELMA365 с телефонией 3CX - Ярли - Confluence Wiki-2.mhtml\" /tmp/h2d-fixed.docx)",
+      "Bash(node html2docx.js \"/Users/sergey/Antigravity/Universal-skills/tmp/Интеграция ELMA365 с телефонией 3CX - Ярли - Confluence Wiki-2.mhtml\" /tmp/h2d-reader.docx --reader-mode)",
+      "Bash(node /tmp/test_dollar_replace.js)",
+      "Bash(node --eval ' *)",
+      "Bash(node html2docx.js \"/Users/sergey/Antigravity/Universal-skills/tmp/Интеграция ELMA365 с телефонией 3CX - Ярли - Confluence Wiki-2.mhtml\" /tmp/h2d-final.docx)",
+      "Bash(HTML2DOCX_BROWSER=/no/such/binary node html2docx.js \"/Users/sergey/Antigravity/Universal-skills/tmp/Интеграция ELMA365 с телефонией 3CX - Ярли - Confluence Wiki-2.mhtml\" /tmp/h2d-tier2.docx)",
+      "Bash(HTML2DOCX_BROWSER=/no/such/binary node html2docx.js \"/Users/sergey/Antigravity/Universal-skills/tmp/Интеграция ELMA365 с телефонией 3CX - Ярли - Confluence Wiki-2.mhtml\" /tmp/h2d-tier2-wrap.docx)"
     ]
   }
 }
