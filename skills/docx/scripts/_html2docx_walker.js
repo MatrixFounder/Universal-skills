@@ -119,6 +119,40 @@ function _drawioForeignObjectsToText(cheerio, svgXml) {
             return code !== undefined ? String.fromCharCode(code) : m;
         });
     }
+    // Soft-wrap a single line so it fits within `maxWidthPx` at the given
+    // `fontSize`. Drawio's HTML labels often have a long single-span body
+    // with no <br> — without this the converted SVG <text> is one wide
+    // line that overflows the shape's bounding box. Browsers handle this
+    // via CSS `width:Npx; word-wrap`; resvg doesn't, so we approximate
+    // here.
+    //
+    // Char-width is approximated as `fontSize × ratio`. Cyrillic glyphs
+    // are noticeably wider than Latin in Helvetica/Arial, so detect them
+    // and bump the ratio. The ratio is intentionally on the high side so
+    // estimated lines fit slightly under the actual width — overflowing
+    // a box is much more visually offensive than a half-character gap.
+    function wrapText(text, maxWidthPx, fontSize) {
+        if (!maxWidthPx || maxWidthPx <= 1) return [text];
+        const hasCyrillic = /[Ѐ-ӿ]/.test(text);
+        const charW = fontSize * (hasCyrillic ? 0.62 : 0.55);
+        const maxChars = Math.max(5, Math.floor(maxWidthPx / charW));
+        const words = text.split(/\s+/).filter(Boolean);
+        if (!words.length) return [text];
+        const lines = [];
+        let current = '';
+        for (const w of words) {
+            const trial = current ? current + ' ' + w : w;
+            if (trial.length <= maxChars) {
+                current = trial;
+            } else {
+                if (current) lines.push(current);
+                current = w;
+            }
+        }
+        if (current) lines.push(current);
+        return lines.length ? lines : [text];
+    }
+
     // Walk the foreignObject DOM and split it into visual lines following
     // drawio's HTML conventions: <br> always starts a new line; sibling
     // block elements (<div>, <p>, <li>) close the current line and open
@@ -211,10 +245,18 @@ function _drawioForeignObjectsToText(cheerio, svgXml) {
         if (/flex-start|start/.test(align)) baseline = 'hanging';
         else if (/flex-end|end/.test(align)) baseline = 'alphabetic';
 
-        const lines = extractLines($fo[0]);
-        if (lines.length === 0) {
+        const rawLines = extractLines($fo[0]);
+        if (rawLines.length === 0) {
             $fo.remove();
             return;
+        }
+        // Apply soft-wrap to each explicit line. drawio sometimes emits a
+        // long single-span label without internal <br>; without wrapping
+        // the rendered SVG <text> overflows the box. Skipped when
+        // containerWidth is the unconstrained marker (≤1).
+        const lines = [];
+        for (const ln of rawLines) {
+            for (const w of wrapText(ln, containerWidth, fontSize)) lines.push(w);
         }
 
         // Multi-line block: emit each line as a <tspan> with vertical
@@ -1049,4 +1091,5 @@ module.exports = {
     // Test-only exports — exercised by tests/test_e2e.sh.
     _ensureViewBox,
     _svgDimensions,
+    _drawioForeignObjectsToText,
 };

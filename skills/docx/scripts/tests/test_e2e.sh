@@ -232,6 +232,45 @@ echo "$out" | grep -q '^OK$' \
     && ok "_ensureViewBox: 7 unit tests (self-closing, fallback, icon, drawio)" \
     || nok "_ensureViewBox unit" "$out"
 
+# VDD-iter-3 wrap regression: long unwrapped Cyrillic label inside a
+# narrow drawio box must produce multiple <tspan> elements (one per
+# wrapped line). Pre-fix: single <text> overflowed the box because
+# extractLines only split on <br> / <div>; long single-span labels
+# stayed as one line that escaped the shape.
+out=$(cd "$SKILL_DIR" && node --eval "
+const { _drawioForeignObjectsToText } = require('./_html2docx_walker');
+const cheerio = require('cheerio');
+const assert = require('assert');
+
+// Single foreignObject, container width 120px, long unwrapped Cyrillic.
+const svgIn = '<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 400 200\">' +
+    '<foreignObject>' +
+    '<div xmlns=\"http://www.w3.org/1999/xhtml\" style=\"display:flex; align-items: unsafe center; justify-content: unsafe center; width: 120px; height: 1px; padding-top: 80px; margin-left: 100px;\">' +
+    '<div style=\"font-size: 12px;\">Принимает звонок (в интерфейсе ELMA365, либо снимает трубку)</div>' +
+    '</div></foreignObject></svg>';
+const out = _drawioForeignObjectsToText(cheerio, svgIn);
+const tspans = (out.match(/<tspan /g) || []).length;
+assert(tspans >= 2, 'expected ≥2 tspans for wrapped label, got ' + tspans + ': ' + out);
+assert(/text-anchor=\"middle\"/.test(out), 'centred anchor preserved: ' + out);
+
+// Container width 1px (drawio's unconstrained marker) must NOT wrap —
+// label rendered as a single line at the declared anchor.
+const svgUnconstrained = '<svg xmlns=\"http://www.w3.org/2000/svg\">' +
+    '<foreignObject>' +
+    '<div xmlns=\"http://www.w3.org/1999/xhtml\" style=\"display:flex; align-items: unsafe center; justify-content: unsafe flex-start; width: 1px; height: 1px; padding-top: 50px; margin-left: 30px;\">' +
+    '<div style=\"font-size: 14px;\">Очень длинная строка которая не должна переноситься</div>' +
+    '</div></foreignObject></svg>';
+const out2 = _drawioForeignObjectsToText(cheerio, svgUnconstrained);
+const tspans2 = (out2.match(/<tspan /g) || []).length;
+assert.strictEqual(tspans2, 0, 'unconstrained label stays single-line, got ' + tspans2 + ': ' + out2);
+assert(/text-anchor=\"start\"/.test(out2), 'flex-start anchor preserved');
+
+console.log('OK');
+" 2>&1)
+echo "$out" | grep -q '^OK$' \
+    && ok "_drawioForeignObjectsToText: word-wraps long Cyrillic labels at containerWidth" \
+    || nok "wrap unit" "$out"
+
 # VDD-iter-3 reader-mode integration test: vc.ru-style HTML where <main>
 # wraps the entire site. Default mode picks <main> (chrome included).
 # --reader-mode must pick .entry (article body only). Pre-fix additive
