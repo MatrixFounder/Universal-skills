@@ -598,8 +598,12 @@ def _strip_external_stylesheets(html: str) -> str:
     Tested across Confluence, Хабр, vc.ru, mobile-review, generic blogs:
     output is more consistent, faster, and content-complete.
     """
-    # `<link rel="stylesheet" href="...">` and the lazy-loaded variant
-    # `<link rel="preload" as="style">` (often used to defer-load same file).
+    # `<link rel="stylesheet">` plus ALL `<link rel="preload">` variants
+    # (preload covers as="style", as="font", as="image", as="script", etc.).
+    # Preloads are hints to the browser to fetch resources we either embed
+    # locally OR refuse via offline_url_fetcher anyway, so dropping all of
+    # them is safe and avoids edge cases where preload-as=style ships the
+    # main stylesheet via the lazy-loaded variant.
     html = re.sub(
         r'<link\b[^>]*\brel\s*=\s*["\']?(?:stylesheet|preload)["\']?[^>]*/?>',
         "",
@@ -665,20 +669,23 @@ def _strip_icon_svgs(html: str) -> str:
         # `"fal"`, `"fa"`, `"fak"`, `"fad"`). These are always icons.
         if re.search(r'\bprefix\s*=\s*["\']f[arsblkd]+["\']', svg_open_tag, re.IGNORECASE):
             return True
-        # Numeric width/height attrs (px or unit-less). Match if EITHER axis
-        # is small — UI icons frequently constrain only one dimension and
-        # let the other derive from `viewBox` aspect ratio (e.g. Mintlify
-        # anchor links: `<svg height="12px" viewBox="0 0 576 512">`).
-        # Content diagrams typically declare both dimensions at full size.
+        # Numeric width/height attrs (px or unit-less). Rule: ALL declared
+        # explicit numeric dims must be ≤ _ICON_SVG_MAX_PX. UI icons that
+        # constrain only ONE dimension (Mintlify anchor links:
+        # `<svg height="12px" viewBox="0 0 576 512">`) still match because
+        # only one is checked. Content SVGs with mixed dims like
+        # 50×500 (legitimate vertical timeline / progress bar) FAIL because
+        # height=500 > 64. Earlier "EITHER axis ≤ 64" rule wrongly stripped
+        # those. (VDD-iter-5 fix.)
         wm = re.search(r'\bwidth\s*=\s*["\']?(\d+)(?:px)?\b', svg_open_tag)
         hm = re.search(r'\bheight\s*=\s*["\']?(\d+)(?:px)?\b', svg_open_tag)
-        for m in (wm, hm):
-            if m:
-                try:
-                    if int(m.group(1)) <= _ICON_SVG_MAX_PX:
-                        return True
-                except ValueError:
-                    pass
+        explicit_dims = [m for m in (wm, hm) if m]
+        if explicit_dims:
+            try:
+                if all(int(m.group(1)) <= _ICON_SVG_MAX_PX for m in explicit_dims):
+                    return True
+            except ValueError:
+                pass
         # Tailwind/utility class with h-/w- size token ≤ 16 (= 64 px).
         if _tw_icon_re.search(svg_open_tag):
             return True
@@ -717,9 +724,14 @@ def _strip_icon_svgs(html: str) -> str:
         return False
 
     # Match `<svg ...>...</svg>` with depth-tracked end (SVGs can nest).
+    # Self-closing `<svg .../>` is also legal SVG/XHTML and must be handled
+    # separately — otherwise depth never reaches 0, the loop hits
+    # `if depth != 0: break` and EVERY SVG after the first self-closing one
+    # leaks through unstripped (silent regression of giant-icon bug).
+    # (VDD-iter-5 fix.)
     out: list[str] = []
     pos = 0
-    open_re = re.compile(r"<svg\b[^>]*>", re.IGNORECASE)
+    open_re = re.compile(r"<svg\b[^>]*?(/?)>", re.IGNORECASE)
     close_re = re.compile(r"</svg\s*>", re.IGNORECASE)
     while True:
         m = open_re.search(html, pos)
@@ -727,6 +739,13 @@ def _strip_icon_svgs(html: str) -> str:
             out.append(html[pos:])
             break
         out.append(html[pos:m.start()])
+        is_self_closing = m.group(1) == "/"
+        if is_self_closing:
+            # `<svg .../>` is its own complete element; no body to scan.
+            if not _is_icon(m.group(0)):
+                out.append(m.group(0))
+            pos = m.end()
+            continue
         # Find matching </svg> with depth tracking.
         depth = 1
         scan = m.end()
@@ -736,14 +755,20 @@ def _strip_icon_svgs(html: str) -> str:
             if c is None:
                 break
             if o is not None and o.start() < c.start():
-                depth += 1
+                # Nested open — but skip self-closing nested too.
+                if o.group(1) != "/":
+                    depth += 1
                 scan = o.end()
             else:
                 depth -= 1
                 scan = c.end()
         if depth != 0:
-            out.append(html[m.start():])
-            break
+            # Unclosed SVG (malformed input). Don't lose the rest of the
+            # document — keep the SVG verbatim and resume scanning AFTER
+            # its open tag so subsequent SVGs still get processed.
+            out.append(m.group(0))
+            pos = m.end()
+            continue
         if _is_icon(m.group(0)):
             pass  # drop entire SVG
         else:
@@ -768,6 +793,15 @@ def _flatten_table_code_blocks(html: str) -> str:
     or `class*="hl-row"` (Docusaurus). Extract the line content cell from
     each row, join with `\\n`, and emit a clean `<pre><code>line1\\nline2\\n
     ...</code></pre>` that paginates cleanly via the bundled `_NORMALIZE_CSS`.
+
+    Honest scope: shiki / Prism inline `<span style="color:#...">` token
+    highlighting is STRIPPED — output is monochrome. weasyprint cannot
+    paginate complex nested span-styled <pre> reliably across pages
+    (this is the bug being worked around), and re-emitting the styles
+    would risk reintroducing the same interleaving problem. If syntax
+    colours matter more than completeness, a future iteration could
+    preserve token <span>s and pin the table to a single page via
+    `page-break-inside: avoid` — but loses content past one page.
     """
     # Match a <table> wrapper that's an obvious code-block table:
     # contains <tr class="*code-block-line*"> or similar markers.
@@ -776,12 +810,25 @@ def _flatten_table_code_blocks(html: str) -> str:
         re.DOTALL | re.IGNORECASE,
     )
 
+    # Pre-compiled element-anchored matchers — substring-anywhere
+    # ('code-block-line' in inner) was a false positive risk: a
+    # documentation page with `<table>` containing inline `<a class="line-link">`
+    # AND any element with `class*=highlight` would misclassify as code and
+    # get flattened to plain text. Anchor at `<tr>` / `<span>` boundaries.
+    # (VDD-iter-5 fix.)
+    _tr_code_re = re.compile(
+        r'<tr\b[^>]*\bclass="[^"]*(?:code-block-line|hl-row)\b',
+        re.IGNORECASE,
+    )
+    _span_line_re = re.compile(r'<span\b[^>]*\bclass="line"', re.IGNORECASE)
+
     def _is_code_table(inner: str) -> bool:
-        if 'code-block-line' in inner:        # Fern, Mintlify
+        # Mintlify/Fern: <tr class="code-block-line">
+        # Docusaurus:    <tr class="hl-row">
+        if _tr_code_re.search(inner):
             return True
-        if 'class="line"' in inner and 'highlight' in inner:  # Pygments
-            return True
-        if 'hl-row' in inner:                  # Docusaurus
+        # Pygments: <span class="line"> directly + 'highlight' marker.
+        if _span_line_re.search(inner) and 'highlight' in inner:
             return True
         return False
 
@@ -836,14 +883,24 @@ def _strip_empty_anchor_links(html: str) -> str:
 
     Conservative: only matches anchors whose body, after tag-stripping, has no
     non-whitespace text. External links and meaningful in-text anchors survive.
+
+    Two-stage scan to avoid the O(n×k) backtracking that the previous combined
+    regex `<a\\b[^>]*\\bhref...#[^"']*["'][^>]*>` exhibited on TOC pages with
+    thousands of `<a href="https://...">` (no #) anchors. The hash-href check
+    now runs as a Python predicate per matched <a>, not as part of the master
+    regex. (VDD-iter-5 fix.)
     """
     def _maybe_drop(m: re.Match) -> str:
-        body = m.group(1)
+        opener_attrs = m.group(1)
+        body = m.group(2)
+        # Fast pre-check: does this anchor have a hash href? If not, keep.
+        if not re.search(r'\bhref\s*=\s*["\']#', opener_attrs):
+            return m.group(0)
         text = re.sub(r"<[^>]+>", "", body).strip()
         return "" if not text else m.group(0)
 
     return re.sub(
-        r'<a\b[^>]*\bhref\s*=\s*["\']#[^"\']*["\'][^>]*>(.*?)</a>',
+        r'<a\b([^>]*)>(.*?)</a>',
         _maybe_drop,
         html,
         flags=re.DOTALL | re.IGNORECASE,
@@ -871,12 +928,23 @@ def _strip_interactive_chrome(html: str) -> str:
         Yandex AdFox) are blocked by our offline_url_fetcher anyway and
         render as a grey placeholder.
     """
-    html = re.sub(
-        r"<button\b[^>]*>(.*?)</button>",
-        r"\1",
-        html,
-        flags=re.DOTALL | re.IGNORECASE,
-    )
+    # Iterative <button> unwrap: handles nested buttons (illegal HTML5 but
+    # observed in some Mintlify "expand-all" wrappers). Single regex.sub with
+    # non-greedy `.*?` matches at the FIRST `</button>` after a `<button>`
+    # open, leaving stray `</button>` tags on nested input. Repeat until
+    # stable: each pass unwraps the innermost button (because non-greedy
+    # picks the smallest body), the next pass unwraps the now-innermost,
+    # and so on. (VDD-iter-5 fix.)
+    while True:
+        new_html = re.sub(
+            r"<button\b[^>]*>(.*?)</button>",
+            r"\1",
+            html,
+            flags=re.DOTALL | re.IGNORECASE,
+        )
+        if new_html == html:
+            break
+        html = new_html
     html = re.sub(
         r"<video\b[^>]*>.*?</video>",
         "",
@@ -1028,9 +1096,17 @@ _VOID_ELEMENTS = frozenset({
 
 
 def _attr_value(attrs: str, name: str) -> str | None:
-    """Return the value of attribute `name` from a tag's attribute blob, or None."""
+    """Return the value of attribute `name` from a tag's attribute blob, or None.
+
+    Anchors at the start of the blob OR at a whitespace boundary — without
+    this, `data-foo="role='main'"` would return `"main"` for a `role` lookup
+    (the `\\b` word boundary plus search-anywhere matches inside the
+    `data-foo` value). Tag attribute names ALWAYS follow whitespace or
+    start-of-blob; nothing else can be interpreted as an attribute. (VDD-iter-5
+    fix.)
+    """
     m = re.search(
-        rf'\b{re.escape(name)}\s*=\s*["\']([^"\']*)["\']',
+        rf'(?:^|\s){re.escape(name)}\s*=\s*["\']([^"\']*)["\']',
         attrs,
         flags=re.IGNORECASE,
     )
@@ -1108,7 +1184,24 @@ def _find_all_elements(
 
 
 def _text_length(fragment: str) -> int:
-    """Length of `fragment` after stripping all tags, leading/trailing whitespace."""
+    """Length of `fragment` after stripping all tags + script/style content,
+    leading/trailing whitespace.
+
+    Tag-strip alone leaves `<script>...JS body...</script>` content visible
+    as "text" — which inflates the length on Mintlify / Next.js docs whose
+    `<article>` wrappers contain `<script id="__NEXT_DATA__">{...JSON...}
+    </script>` hydration blobs of 100s of KB. Without the script/style
+    pre-strip, the candidate trivially passes any `min_text` gate even when
+    the visible prose is 0 chars. (VDD-iter-5 fix.)
+    """
+    fragment = re.sub(
+        r"<script\b[^>]*>.*?</script>", "", fragment,
+        flags=re.DOTALL | re.IGNORECASE,
+    )
+    fragment = re.sub(
+        r"<style\b[^>]*>.*?</style>", "", fragment,
+        flags=re.DOTALL | re.IGNORECASE,
+    )
     return len(re.sub(r"<[^>]+>", "", fragment).strip())
 
 
@@ -1459,24 +1552,42 @@ def _install_render_watchdog(seconds: int):
     protected region. macOS / Linux only (signal.alarm is POSIX); on Windows
     the install is a no-op and the watchdog disables itself.
 
-    SIGALRM interrupts blocking syscalls AND fires between Python bytecodes,
-    so it can break weasyprint out of pure-Python layout loops as well as
-    network reads. Pathological CSS layouts on SPA pages can otherwise hold
-    the GIL for tens of minutes — the watchdog turns those into a clean
-    timeout error rather than a stalled pipeline.
+    Honest scope (best-effort, NOT a hard guarantee):
+
+      * SIGALRM interrupts blocking syscalls and fires between Python
+        bytecodes — works for pure-Python loops and network reads.
+      * BUT cairo (PDF backend) and lxml (HTML parser) hold the GIL inside
+        their C extension calls. SIGALRM is queued and delivered only when
+        control returns to Python. A pathological cairo layout that stays
+        in C code for minutes won't be interrupted until the C call
+        completes. Real-world stuck PIDs of 6+ hours observed on vc.ru
+        SPA pages.
+      * The watchdog is the LAST line of defence; the primary fix is the
+        site-CSS strip in `_strip_external_stylesheets` which neutralises
+        most pathological layouts before render starts.
+
+    Non-main thread: `signal.signal()` raises ValueError outside the main
+    thread (web-server / multiprocessing wrappers). We catch and degrade
+    gracefully — the call returns None and the watchdog is disabled for
+    this invocation.
     """
     if not hasattr(signal, "SIGALRM") or seconds <= 0:
         return None
 
     def _on_alarm(signum, frame):
         raise RenderTimeout(
-            f"weasyprint render exceeded {seconds}s — "
+            f"html2pdf render exceeded {seconds}s — "
             "input may be too large or its CSS pathological for layout. "
             "Try --reader-mode (strips site CSS) or set HTML2PDF_TIMEOUT=0 "
             "to disable the watchdog."
         )
 
-    prev = signal.signal(signal.SIGALRM, _on_alarm)
+    try:
+        prev = signal.signal(signal.SIGALRM, _on_alarm)
+    except (ValueError, OSError):
+        # Non-main thread or platform without signal support. Degrade
+        # gracefully — pipeline runs uncapped but doesn't crash.
+        return None
     signal.alarm(seconds)
     return prev
 
@@ -1500,19 +1611,23 @@ def convert(
     reader_mode: bool = False,
     timeout: int = 0,
 ) -> None:
-    if reader_mode:
-        html_text = _reader_mode_html(html_text)
-    html_text = _preprocess_html(html_text)
-    stylesheets = []
-    if use_default_css:
-        css = DEFAULT_CSS.replace("{page_size}", PAGE_SIZES.get(page_size, "letter"))
-        stylesheets.append(CSS(string=css))
-    if extra_css_path is not None:
-        stylesheets.append(CSS(filename=str(extra_css_path)))
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-
+    # Watchdog wraps the FULL pipeline (reader-mode extraction + preprocessing
+    # + weasyprint render). Preprocessing involves ~12 regex passes; on
+    # adversarial 4 MB HTML some of them have O(n²) characteristics
+    # (`_strip_empty_anchor_links` over thousands of <a> tags) and could
+    # exceed the deadline before render even starts. (VDD-iter-5 fix.)
     prev_handler = _install_render_watchdog(timeout)
     try:
+        if reader_mode:
+            html_text = _reader_mode_html(html_text)
+        html_text = _preprocess_html(html_text)
+        stylesheets = []
+        if use_default_css:
+            css = DEFAULT_CSS.replace("{page_size}", PAGE_SIZES.get(page_size, "letter"))
+            stylesheets.append(CSS(string=css))
+        if extra_css_path is not None:
+            stylesheets.append(CSS(filename=str(extra_css_path)))
+        output_path.parent.mkdir(parents=True, exist_ok=True)
         HTML(
             string=html_text,
             base_url=base_url,
