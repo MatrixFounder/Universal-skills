@@ -87,7 +87,20 @@
       "Bash(npm uninstall *)",
       "Bash(pdfinfo \"tmp/reader_pdf_out/API Reference - Documentation - Discord \\(reader\\).pdf\")",
       "Bash(pdfinfo \"tmp/regular_pdf_out/Incentive Marketplace - Berachain - mintify.pdf\")",
-      "Bash(pdfinfo \"tmp/reader_pdf_out/Hyperliquid_Docs_gitbook \\(reader\\).pdf\")"
+      "Bash(pdfinfo \"tmp/reader_pdf_out/Hyperliquid_Docs_gitbook \\(reader\\).pdf\")",
+      "Bash(\"skills/pdf/scripts/.venv/bin/python\" skills/pdf/scripts/preview.py \"tmp/reader_pdf_out/API Reference - Documentation - Discord \\(reader\\).pdf\" /tmp/disc_grid.jpg --cols 5 --dpi 60)",
+      "Bash(\"skills/pdf/scripts/.venv/bin/python\" skills/pdf/scripts/preview.py \"tmp/regular_pdf_out/Incentive Marketplace - Berachain - mintify.pdf\" /tmp/bera_grid.jpg --cols 4 --dpi 60)",
+      "Bash(\"skills/pdf/scripts/.venv/bin/python\" skills/pdf/scripts/preview.py \"tmp/reader_pdf_out/Hyperliquid_Docs_gitbook \\(reader\\).pdf\" /tmp/hl_grid.jpg --cols 6 --dpi 50)",
+      "Bash(\"skills/pdf/scripts/.venv/bin/python\" skills/pdf/scripts/preview.py \"tmp/reader_pdf_out/API Reference - Documentation - Discord \\(reader\\).pdf\" /tmp/disc_grid2.jpg --cols 5 --dpi 60)",
+      "Bash(\"skills/pdf/scripts/.venv/bin/python\" skills/pdf/scripts/preview.py \"tmp/regular_pdf_out/Incentive Marketplace - Berachain - mintify.pdf\" /tmp/bera_grid2.jpg --cols 4 --dpi 60)",
+      "Bash(.venv/bin/python -c \"import html2pdf_lib; from html2pdf_lib import convert, RenderTimeout, SUPPORTED_EXTENSIONS; from html2pdf_lib.archives import extract_mhtml, extract_webarchive; print\\('OK', SUPPORTED_EXTENSIONS\\)\")",
+      "Bash(.venv/bin/python html2pdf.py --help)",
+      "Bash(.venv/bin/python /tmp/html2pdf_before.py ../examples/fixture.html /tmp/h2p_before.pdf)",
+      "Bash(PYTHONPATH=. .venv/bin/python /tmp/h2p_orig.py ../examples/fixture.html /tmp/h2p_before.pdf)",
+      "Bash(.venv/bin/python html2pdf.py ../examples/fixture.html /tmp/h2p_after.pdf)",
+      "Bash(bash /tmp/h2p_batch.sh)",
+      "Bash(.venv/bin/python html2pdf.py \"../../tmp/Интеграция ELMA365 с телефонией 3CX - Ярли - Confluence Wiki.html\" /tmp/elma_html_fixed.pdf)",
+      "Bash(.venv/bin/python html2pdf.py --reader-mode \"../../tmp/Интеграция ELMA365 с телефонией 3CX - Ярли - Confluence Wiki.html\" /tmp/elma_html_reader_fixed.pdf)"
     ]
   }
 }
