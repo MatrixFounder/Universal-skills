@@ -501,21 +501,74 @@ function detectImageType(filePath) {
     if (ext === '.gif') return 'gif';
     if (ext === '.bmp') return 'bmp';
     if (ext === '.svg') return 'svg';
+    if (ext === '.webp') return 'webp';
     // Confluence-style assets (atl.site.logo, global.logo) ship without
     // an extension; sniff the magic bytes as a fallback.
     try {
         const fd = fs.openSync(filePath, 'r');
-        const buf = Buffer.alloc(8);
-        fs.readSync(fd, buf, 0, 8, 0);
+        const buf = Buffer.alloc(16);
+        fs.readSync(fd, buf, 0, 16, 0);
         fs.closeSync(fd);
         if (buf[0] === 0x89 && buf[1] === 0x50 && buf[2] === 0x4E && buf[3] === 0x47) return 'png';
         if (buf[0] === 0xFF && buf[1] === 0xD8 && buf[2] === 0xFF) return 'jpg';
         if (buf.slice(0, 4).toString('ascii') === 'GIF8') return 'gif';
         if (buf[0] === 0x42 && buf[1] === 0x4D) return 'bmp';
+        // WebP: RIFF????WEBP (4-byte size between RIFF and WEBP markers)
+        if (buf.slice(0, 4).toString('ascii') === 'RIFF' &&
+            buf.slice(8, 12).toString('ascii') === 'WEBP') return 'webp';
         const head = buf.toString('ascii');
         if (head.startsWith('<?xml') || head.startsWith('<svg')) return 'svg';
     } catch (_) { /* fall through */ }
     return null;
+}
+
+// docx-js v8.5 hardcodes `.png` as the image extension and the
+// [Content_Types].xml lists only png/jpeg/jpg/bmp/gif — no webp. Embedding
+// raw WebP bytes into a `.png` stream gives Word a broken image icon. We
+// transcode WebP → PNG on disk via whatever system tool is available,
+// then load the PNG bytes.
+//
+// Detection order: macOS `sips` (always present), `dwebp` (libwebp on
+// Linux when libwebp-tools is installed), `convert` / `magick` (ImageMagick
+// fallback). If none are available, the caller logs a warning and skips
+// the image — better than silently embedding a corrupt PNG.
+let _webpToolPath = undefined;  // undefined = not probed; null = none; string = path
+function _findWebpConverter() {
+    if (_webpToolPath !== undefined) return _webpToolPath;
+    const candidates = [
+        // [tool, args-template factory(input, output) → string[]]
+        ['/usr/bin/sips',           (i, o) => ['-s', 'format', 'png', i, '--out', o]],
+        ['/usr/local/bin/dwebp',    (i, o) => [i, '-o', o]],
+        ['/opt/homebrew/bin/dwebp', (i, o) => [i, '-o', o]],
+        ['/usr/bin/dwebp',          (i, o) => [i, '-o', o]],
+        ['/usr/local/bin/magick',   (i, o) => ['convert', i, o]],
+        ['/usr/bin/convert',        (i, o) => [i, o]],
+    ];
+    for (const [bin, argsFn] of candidates) {
+        try {
+            if (fs.statSync(bin).isFile()) {
+                _webpToolPath = { bin, argsFn };
+                return _webpToolPath;
+            }
+        } catch (_) { /* not present */ }
+    }
+    _webpToolPath = null;
+    return null;
+}
+
+function _transcodeWebpToPng(srcPath) {
+    const tool = _findWebpConverter();
+    if (!tool) {
+        throw new Error('WebP conversion unavailable: install libwebp (dwebp), ImageMagick, or run on macOS (sips)');
+    }
+    const dst = srcPath + '.transcoded.png';
+    if (fs.existsSync(dst)) return dst;  // cache from earlier call this run
+    const { spawnSync } = require('child_process');
+    const r = spawnSync(tool.bin, tool.argsFn(srcPath, dst), { timeout: 30000 });
+    if (r.status !== 0 || !fs.existsSync(dst)) {
+        throw new Error(`WebP→PNG conversion failed (${tool.bin}): ${(r.stderr || '').toString().slice(0, 200)}`);
+    }
+    return dst;
 }
 
 // Insert zero-width spaces inside long unbreakable runs so Word/LibreOffice
@@ -591,6 +644,16 @@ function buildBody({ $, root, inputDir, extractedImages }) {
     function resolveLocalImagePath(rawHref) {
         if (!rawHref) return null;
         if (extractedImages.has(rawHref)) return extractedImages.get(rawHref);
+        // Try the URL-encoded form too: HTML attributes carry raw spaces
+        // (`/path with space.webp`) but `_html2docx_archive` stores keys
+        // under `URL.pathname` which percent-encodes them
+        // (`/path%20with%20space.webp`). Without this both forms must be
+        // probed or 1/3 of real-world archive images go unmapped.
+        let encoded;
+        try { encoded = encodeURI(rawHref); } catch (_) { encoded = rawHref; }
+        if (encoded !== rawHref && extractedImages.has(encoded)) {
+            return extractedImages.get(encoded);
+        }
         let href;
         try { href = decodeURI(rawHref); } catch (_) { href = rawHref; }
         if (extractedImages.has(href)) return extractedImages.get(href);
@@ -610,8 +673,17 @@ function buildBody({ $, root, inputDir, extractedImages }) {
         // accurate "Local image not found" instead of "Unsupported format"
         // from a magic-byte sniff that couldn't open the file.
         if (!fs.existsSync(localPath)) throw new Error(`Local image not found: ${localPath}`);
-        const imageType = detectImageType(localPath);
+        let imageType = detectImageType(localPath);
         if (!imageType) throw new Error(`Unsupported image format: ${localPath}`);
+        // docx-js v8.5 hardcodes `.png` extension regardless of the `type`
+        // we pass and the package's [Content_Types].xml only lists png /
+        // jpeg / bmp / gif. WebP bytes embedded as `.png` give Word a
+        // broken-image icon. Transcode to PNG via system tool (sips on
+        // macOS, dwebp/convert on Linux) before reading the bytes.
+        if (imageType === 'webp') {
+            localPath = _transcodeWebpToPng(localPath);
+            imageType = 'png';
+        }
         const imgData = fs.readFileSync(localPath);
         const dims = sizeOf(imgData);
         const maxWidth = 620;
