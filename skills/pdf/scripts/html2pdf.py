@@ -237,10 +237,11 @@ def _fo_to_svg_text(html: str) -> str:
 
       padding-top  → absolute y-centre of the shape in the current SVG
                      coordinate space (inside the enclosing <g> transform)
-      margin-left  → x-anchor: the CENTRE for justify-content:center elements
-                     (column headers, node boxes) or the LEFT EDGE for
-                     justify-content:flex-start elements (swimlane titles,
-                     left-aligned labels)
+      margin-left  → LEFT EDGE of the text container div (always); the actual
+                     SVG text-anchor x is derived as:
+                       center   → margin_left + container_width / 2
+                       flex-end → margin_left + container_width
+                       flex-start → margin_left
       width        → text-container width for word-wrap (draw.io uses 1px for
                      unconstrained / content-sized labels)
       font-size    → LAST occurrence in the foreignObject (the outermost div
@@ -277,32 +278,38 @@ def _fo_to_svg_text(html: str) -> str:
         if not text:
             return ""
 
-        pos = re.search(
-            r"padding-top:\s*([\d.]+)px.*?margin-left:\s*([\d.]+)px",
-            fo, re.DOTALL,
-        )
-        if not pos:
+        # Independent searches — don't assume CSS property order in the DOM.
+        pt_m = re.search(r"padding-top:\s*([\d.]+)px", fo)
+        ml_m = re.search(r"margin-left:\s*([\d.]+)px", fo)
+        if not pt_m or not ml_m:
             return ""
-        y = float(pos.group(1))
-        x = float(pos.group(2))
+        y = float(pt_m.group(1))
+        x_left = float(ml_m.group(1))  # margin-left = left edge of container div
 
-        # SVG text-anchor mirrors the flex justify-content of the container.
+        # Container width — needed for both word-wrap and x-anchor calculation.
+        w_m = re.search(r"width:\s*([\d.]+)px", fo)
+        cw = float(w_m.group(1)) if w_m else 0
+
+        # SVG text-anchor and x position mirror the flex justify-content.
+        # margin-left is always the LEFT EDGE; shift x to the actual anchor.
         jc_m = re.search(
             r"justify-content:\s*(?:unsafe\s+)?(flex-start|flex-end|center)", fo,
         )
         jc = jc_m.group(1) if jc_m else "center"
-        anchor = "start" if jc == "flex-start" else ("end" if jc == "flex-end" else "middle")
-
-        # Container width for word-wrap.
-        w_m = re.search(r"width:\s*([\d.]+)px", fo)
-        cw = float(w_m.group(1)) if w_m else 0
+        if jc == "center":
+            x, anchor = x_left + cw / 2, "middle"
+        elif jc == "flex-end":
+            x, anchor = x_left + cw, "end"
+        else:  # flex-start
+            x, anchor = x_left, "start"
 
         # Use the LAST (innermost) font-size; the outer div may carry a smaller
         # layout/spacing size that does not match the visible label.
         all_fs = re.findall(r"font-size:\s*([\d.]+)px", fo)
-        fs = int(float(all_fs[-1])) if all_fs else 12
+        fs = round(float(all_fs[-1])) if all_fs else 12
         bold = (' font-weight="bold"'
-                if "font-weight: bold" in fo or re.search(r"<b[\s>]", fo) else "")
+                if re.search(r'font-weight\s*:\s*(bold|[6-9]\d{2}|bolder)', fo, re.IGNORECASE)
+                or re.search(r"<b[\s>]|<strong[\s>]", fo) else "")
 
         lines = _wrap(text, cw, fs)
         lh = fs * 1.25
@@ -378,7 +385,7 @@ def _fix_svg_viewport(html: str) -> str:
             tag = re.sub(
                 r'\bwidth\s*=\s*["\']?[^"\'>\s]+["\']?', 'width="100%"', tag, count=1,
             )
-            tag = re.sub(r'\bheight\s*=\s*["\']?[\d.]+["\']?', '', tag, count=1)
+            tag = re.sub(r'\bheight\s*=\s*["\']?[\d.%]+["\']?', '', tag, count=1)
             return tag
 
         # ── Case 2: no viewBox — draw.io Confluence inline-SVG pattern ────────
@@ -399,6 +406,9 @@ def _fix_svg_viewport(html: str) -> str:
         if mw <= 200:
             return tag
         new_vb = f'viewBox="0 0 {mw * _VB_EXPAND:.1f} {mh * _VB_EXPAND:.1f}"'
+        # Handle both `>` and `/>` closing forms (XHTML/XML SVGs).
+        if tag.endswith("/>"):
+            return tag[:-2] + f' {new_vb}>'
         return tag[:-1] + f' {new_vb}>'
 
     return re.sub(r'<svg\b[^>]*>', _patch, html, flags=re.IGNORECASE | re.DOTALL)
