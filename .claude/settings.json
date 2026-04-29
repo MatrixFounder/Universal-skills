@@ -69,7 +69,14 @@
       "Bash(node --eval ' *)",
       "Bash(node html2docx.js \"/Users/sergey/Antigravity/Universal-skills/tmp/Интеграция ELMA365 с телефонией 3CX - Ярли - Confluence Wiki-2.mhtml\" /tmp/h2d-final.docx)",
       "Bash(HTML2DOCX_BROWSER=/no/such/binary node html2docx.js \"/Users/sergey/Antigravity/Universal-skills/tmp/Интеграция ELMA365 с телефонией 3CX - Ярли - Confluence Wiki-2.mhtml\" /tmp/h2d-tier2.docx)",
-      "Bash(HTML2DOCX_BROWSER=/no/such/binary node html2docx.js \"/Users/sergey/Antigravity/Universal-skills/tmp/Интеграция ELMA365 с телефонией 3CX - Ярли - Confluence Wiki-2.mhtml\" /tmp/h2d-tier2-wrap.docx)"
+      "Bash(HTML2DOCX_BROWSER=/no/such/binary node html2docx.js \"/Users/sergey/Antigravity/Universal-skills/tmp/Интеграция ELMA365 с телефонией 3CX - Ярли - Confluence Wiki-2.mhtml\" /tmp/h2d-tier2-wrap.docx)",
+      "Bash(export HTML2DOCX_BROWSER=/no/such/binary)",
+      "Bash(awk '{printf \"%-9s %s\\\\n\", $5, substr\\($0, index\\($0,$9\\)\\)}')",
+      "Bash(node html2docx.js '__TRACKED_VAR__/R&D – это не бэкстейдж, а часть продукта. Почему? — Техника на vc.ru.webarchive' /tmp/vcru-default.docx)",
+      "Bash(node html2docx.js __TRACKED_VAR__/Обзор.webarchive '__TRACKED_VAR__/Обзор \\(from .webarchive\\).docx')",
+      "Bash(node -e \"console.log\\(require\\('docx/package.json'\\).version\\)\")",
+      "Bash(python3 -c \"import json,sys; print\\('docx version:', json.load\\(sys.stdin\\)['version']\\)\")",
+      "Bash(sips --help)"
     ]
   }
 }
