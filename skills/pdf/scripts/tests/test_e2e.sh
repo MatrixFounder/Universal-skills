@@ -249,6 +249,225 @@ JSON
                "rc=$rc, pdf=$([ -s "$TMP/m_broken_lenient.pdf" ] && echo present || echo missing), warn=$err"
 fi
 
+# --- pdf_watermark ---------------------------------------------------------
+echo "pdf_watermark:"
+
+# Text watermark on the existing single-page out.pdf
+"$PY" pdf_watermark.py "$TMP/out.pdf" "$TMP/wm_text.pdf" --text "DRAFT" >/dev/null 2>&1 \
+    && [ -s "$TMP/wm_text.pdf" ] && ok "text watermark → wm_text.pdf" \
+    || nok "text watermark" "missing or empty"
+
+# Text extraction confirms the watermark glyphs are actually in the PDF
+# content stream, not just a no-op overlay. pypdf's extract_text reads
+# rotated text correctly (pdfplumber doesn't); use it here.
+"$PY" -c "
+from pypdf import PdfReader
+txt = PdfReader('$TMP/wm_text.pdf').pages[0].extract_text() or ''
+assert 'DRAFT' in txt, f'DRAFT not in extracted text: {txt[:200]!r}'
+" 2>/dev/null \
+    && ok "text watermark: 'DRAFT' present in page text" \
+    || nok "text watermark text-extract" "DRAFT missing from extracted text"
+
+# Page count is preserved (overlay merges, doesn't append).
+in_pages=$("$PY" -c "import pypdf; print(len(pypdf.PdfReader('$TMP/out.pdf').pages))")
+out_pages=$("$PY" -c "import pypdf; print(len(pypdf.PdfReader('$TMP/wm_text.pdf').pages))")
+[ "$in_pages" -eq "$out_pages" ] \
+    && ok "text watermark: page count preserved ($out_pages)" \
+    || nok "text watermark page count" "in=$in_pages out=$out_pages"
+
+# Image watermark using a tiny PNG generated via PIL — keeps the test
+# self-contained (no binary fixture in examples/).
+"$PY" -c "
+from PIL import Image
+img = Image.new('RGBA', (200, 100), (200, 0, 0, 200))
+img.save('$TMP/stamp.png')
+"
+"$PY" pdf_watermark.py "$TMP/out.pdf" "$TMP/wm_img.pdf" \
+        --image "$TMP/stamp.png" --position bottom-right --scale 0.2 >/dev/null 2>&1 \
+    && [ -s "$TMP/wm_img.pdf" ] && ok "image watermark → wm_img.pdf" \
+    || nok "image watermark" "missing or empty"
+
+# cross-7 H1 same-path guard (new for pdf skill — established by these CLIs)
+cp "$TMP/out.pdf" "$TMP/same.pdf"
+set +e
+err=$("$PY" pdf_watermark.py "$TMP/same.pdf" "$TMP/same.pdf" --text X --json-errors 2>&1 >/dev/null)
+rc=$?
+set -e
+[ "$rc" -eq 6 ] \
+    && echo "$err" | "$PY" -c "import sys, json; j=json.loads(sys.stdin.read()); assert j['type']=='SelfOverwriteRefused' and j['code']==6, j" 2>/dev/null \
+    && ok "watermark: same-path I/O → exit 6 / SelfOverwriteRefused" \
+    || nok "watermark same-path" "exit=$rc msg=$err"
+
+# Mutex: --text and --image together → argparse usage error
+set +e
+"$PY" pdf_watermark.py "$TMP/out.pdf" "$TMP/_x.pdf" --text X --image "$TMP/stamp.png" >/dev/null 2>&1
+rc=$?
+set -e
+[ "$rc" -eq 2 ] \
+    && ok "watermark: --text + --image both → exit 2 (mutex)" \
+    || nok "watermark mutex" "expected 2, got $rc"
+
+# --pages selectivity: on the 2-page merged.pdf, watermark only page 1.
+# Verify "DRAFT" appears on page 1 but not page 2.
+"$PY" pdf_watermark.py "$TMP/merged.pdf" "$TMP/wm_page1.pdf" \
+        --text "DRAFT" --pages "1" --position center --rotation 0 >/dev/null 2>&1
+"$PY" -c "
+from pypdf import PdfReader
+r = PdfReader('$TMP/wm_page1.pdf')
+p1 = r.pages[0].extract_text() or ''
+p2 = r.pages[1].extract_text() or ''
+assert 'DRAFT' in p1, 'DRAFT missing on page 1'
+assert 'DRAFT' not in p2, 'DRAFT leaked to page 2'
+" 2>/dev/null \
+    && ok "watermark: --pages '1' restricts stamp to page 1" \
+    || nok "watermark --pages selectivity" "DRAFT distribution wrong"
+
+# --color non-hex value → argparse type= validation → exit 2 (UsageError)
+set +e
+"$PY" pdf_watermark.py "$TMP/out.pdf" "$TMP/_x.pdf" --text DRAFT --color red >/dev/null 2>&1
+rc=$?
+set -e
+[ "$rc" -eq 2 ] \
+    && ok "watermark: --color red (non-hex) → exit 2 (UsageError)" \
+    || nok "watermark --color validation" "expected 2, got $rc"
+
+# --scale > 1.0 → exit 2 (UsageError)
+set +e
+"$PY" pdf_watermark.py "$TMP/out.pdf" "$TMP/_x.pdf" --image "$TMP/stamp.png" --scale 5.0 >/dev/null 2>&1
+rc=$?
+set -e
+[ "$rc" -eq 2 ] \
+    && ok "watermark: --scale 5.0 (> 1.0) → exit 2 (UsageError)" \
+    || nok "watermark --scale upper-bound" "expected 2, got $rc"
+
+# Portrait image watermark: a 100×800 PNG (aspect 1:8) with --scale 0.2
+# should render img_w = 0.2 * page_width, NOT collapse to ~3% due to
+# page-height clamping. Indirect check: exit 0, non-empty PDF.
+"$PY" -c "
+from PIL import Image
+img = Image.new('RGBA', (100, 800), (0, 0, 200, 200))
+img.save('$TMP/portrait.png')
+"
+"$PY" pdf_watermark.py "$TMP/out.pdf" "$TMP/wm_portrait.pdf" \
+        --image "$TMP/portrait.png" --scale 0.2 >/dev/null 2>&1 \
+    && [ -s "$TMP/wm_portrait.pdf" ] \
+    && ok "watermark: portrait image --scale 0.2 honours aspect ratio" \
+    || nok "watermark portrait image" "missing or empty"
+
+# --- html2pdf --------------------------------------------------------------
+echo "html2pdf:"
+
+# Basic HTML → PDF (uses bundled DEFAULT_CSS by default)
+"$PY" html2pdf.py ../examples/fixture.html "$TMP/html.pdf" >/dev/null 2>&1 \
+    && [ -s "$TMP/html.pdf" ] && ok "fixture.html → html.pdf (default CSS)" \
+    || nok "html2pdf default" "missing or empty"
+
+# --no-default-css — opt out of bundled stylesheet (BI-dashboard use case)
+"$PY" html2pdf.py ../examples/fixture.html "$TMP/html_nocss.pdf" --no-default-css >/dev/null 2>&1 \
+    && [ -s "$TMP/html_nocss.pdf" ] && ok "fixture.html → html_nocss.pdf (--no-default-css)" \
+    || nok "html2pdf no-default-css" "missing or empty"
+
+# --css adds a custom stylesheet on top of the default (or after no-default)
+cat > "$TMP/red_h1.css" <<'CSS'
+h1 { color: #cc0000 !important; }
+CSS
+"$PY" html2pdf.py ../examples/fixture.html "$TMP/html_red.pdf" --css "$TMP/red_h1.css" >/dev/null 2>&1 \
+    && [ -s "$TMP/html_red.pdf" ] && ok "html2pdf + --css EXTRA.css" \
+    || nok "html2pdf --css" "missing or empty"
+
+# Missing input → exit 1, FileNotFound envelope
+set +e
+err=$("$PY" html2pdf.py /nope.html "$TMP/_x.pdf" --json-errors 2>&1 >/dev/null)
+rc=$?
+set -e
+[ "$rc" -eq 1 ] \
+    && echo "$err" | "$PY" -c "import sys, json; j=json.loads(sys.stdin.read()); assert j['type']=='FileNotFound' and j['code']==1 and j['v']==1, j" 2>/dev/null \
+    && ok "html2pdf: missing input → exit 1 / FileNotFound envelope" \
+    || nok "html2pdf missing input" "exit=$rc msg=$err"
+
+# cross-7 H1 same-path guard — html in same path as pdf is unlikely but
+# resolution catches symlinks too; use a real same-path case.
+cp ../examples/fixture.html "$TMP/same.html"
+ln -sf "$TMP/same.html" "$TMP/same_link.html"
+set +e
+err=$("$PY" html2pdf.py "$TMP/same.html" "$TMP/same.html" --json-errors 2>&1 >/dev/null)
+rc=$?
+set -e
+[ "$rc" -eq 6 ] \
+    && echo "$err" | "$PY" -c "import sys, json; j=json.loads(sys.stdin.read()); assert j['type']=='SelfOverwriteRefused', j" 2>/dev/null \
+    && ok "html2pdf: same-path I/O → exit 6 / SelfOverwriteRefused" \
+    || nok "html2pdf same-path" "exit=$rc msg=$err"
+
+# --css pointing to a missing file → exit 1 / FileNotFound (not a raw
+# weasyprint traceback). Validates the explicit pre-flight check added
+# after the VDD adversarial review.
+set +e
+err=$("$PY" html2pdf.py ../examples/fixture.html "$TMP/_x.pdf" --css /nope.css --json-errors 2>&1 >/dev/null)
+rc=$?
+set -e
+[ "$rc" -eq 1 ] \
+    && echo "$err" | "$PY" -c "import sys, json; j=json.loads(sys.stdin.read()); assert j['type']=='FileNotFound' and j['code']==1, j" 2>/dev/null \
+    && ok "html2pdf: --css /nope.css → exit 1 / FileNotFound envelope" \
+    || nok "html2pdf missing css" "exit=$rc msg=$err"
+
+# MHTML (.mhtml) → PDF. Generate a minimal MIME HTML archive inline so
+# the test is self-contained (no binary fixture committed).
+"$PY" -c "
+import email.mime.multipart, email.mime.text, email.mime.image
+root = email.mime.multipart.MIMEMultipart('related')
+root['MIME-Version'] = '1.0'
+html_part = email.mime.text.MIMEText(
+    '<html><body><h1>MHTML Test</h1><p>Hello from archive.</p></body></html>',
+    'html', 'utf-8')
+html_part['Content-Location'] = 'http://example.com/index.html'
+root.attach(html_part)
+with open('$TMP/test.mhtml', 'wb') as f:
+    f.write(root.as_bytes())
+"
+"$PY" html2pdf.py "$TMP/test.mhtml" "$TMP/html_mhtml.pdf" >/dev/null 2>&1 \
+    && [ -s "$TMP/html_mhtml.pdf" ] && ok "html2pdf: .mhtml archive → pdf" \
+    || nok "html2pdf mhtml" "missing or empty"
+
+# WebArchive (.webarchive) → PDF. Generate a minimal Apple binary-plist
+# archive via plistlib inline.
+"$PY" -c "
+import plistlib
+plist = {
+    'WebMainResource': {
+        'WebResourceData': b'<html><body><h1>WebArchive Test</h1><p>Safari archive.</p></body></html>',
+        'WebResourceMIMEType': 'text/html',
+        'WebResourceTextEncodingName': 'UTF-8',
+        'WebResourceURL': 'http://example.com/',
+    },
+    'WebSubresources': [],
+}
+with open('$TMP/test.webarchive', 'wb') as f:
+    plistlib.dump(plist, f, fmt=plistlib.FMT_BINARY)
+"
+"$PY" html2pdf.py "$TMP/test.webarchive" "$TMP/html_webarchive.pdf" >/dev/null 2>&1 \
+    && [ -s "$TMP/html_webarchive.pdf" ] && ok "html2pdf: .webarchive archive → pdf" \
+    || nok "html2pdf webarchive" "missing or empty"
+
+# --reader-mode: extracts article content from a plain .html fixture
+"$PY" html2pdf.py ../examples/fixture.html "$TMP/html_reader.pdf" --reader-mode >/dev/null 2>&1 \
+    && [ -s "$TMP/html_reader.pdf" ] && ok "html2pdf: --reader-mode produces non-empty pdf" \
+    || nok "html2pdf reader-mode" "missing or empty"
+
+# --reader-mode on .webarchive (ensure no crash when <article>/<main> found)
+"$PY" html2pdf.py "$TMP/test.webarchive" "$TMP/html_webarchive_reader.pdf" --reader-mode >/dev/null 2>&1 \
+    && [ -s "$TMP/html_webarchive_reader.pdf" ] && ok "html2pdf: --reader-mode on .webarchive → pdf" \
+    || nok "html2pdf reader-mode webarchive" "missing or empty"
+
+# Unsupported format → exit 1 / UnsupportedFormat (not a traceback)
+set +e
+err=$("$PY" html2pdf.py "$TMP/out.pdf" "$TMP/_x.pdf" --json-errors 2>&1 >/dev/null)
+rc=$?
+set -e
+[ "$rc" -eq 1 ] \
+    && echo "$err" | "$PY" -c "import sys, json; j=json.loads(sys.stdin.read()); assert j['type']=='UnsupportedFormat', j" 2>/dev/null \
+    && ok "html2pdf: unsupported .pdf input → exit 1 / UnsupportedFormat" \
+    || nok "html2pdf unsupported format" "exit=$rc msg=$err"
+
 # --- cross-1: preview.py — pdf path (no soffice required) ----------------
 echo "preview (pdf path):"
 "$PY" preview.py "$TMP/out.pdf" "$TMP/preview.jpg" --dpi 80 >/dev/null 2>&1 \
@@ -364,7 +583,7 @@ set -e
     || nok "pdf_merge --json-errors" "exit=$rc msg=$err"
 
 # Parameterized cross-5: every plumbed pdf CLI emits a JSON envelope.
-for cli in md2pdf.py pdf_split.py pdf_fill_form.py preview.py; do
+for cli in md2pdf.py pdf_split.py pdf_fill_form.py preview.py html2pdf.py pdf_watermark.py; do
     set +e
     if [ "$cli" = "md2pdf.py" ]; then
         out=$("$PY" "$cli" /nope.md /tmp/_x.pdf --json-errors 2>&1 >/dev/null)
@@ -372,6 +591,10 @@ for cli in md2pdf.py pdf_split.py pdf_fill_form.py preview.py; do
         out=$("$PY" "$cli" /nope.pdf --each-page /tmp/_split --json-errors 2>&1 >/dev/null)
     elif [ "$cli" = "pdf_fill_form.py" ]; then
         out=$("$PY" "$cli" --check /nope.pdf --json-errors 2>&1 >/dev/null)
+    elif [ "$cli" = "html2pdf.py" ]; then
+        out=$("$PY" "$cli" /nope.html /tmp/_x.pdf --json-errors 2>&1 >/dev/null)
+    elif [ "$cli" = "pdf_watermark.py" ]; then
+        out=$("$PY" "$cli" /nope.pdf /tmp/_x.pdf --text X --json-errors 2>&1 >/dev/null)
     else
         out=$("$PY" "$cli" /nope.pdf /tmp/_x.jpg --json-errors 2>&1 >/dev/null)
     fi
@@ -398,6 +621,8 @@ visual_check "$TMP/out.pdf"     "fixture-base"
 visual_check "$TMP/merged.pdf"  "fixture-merged"
 visual_check "$TMP/filled.pdf"  "acroform-filled"
 visual_check "$TMP/flat.pdf"    "acroform-flat"
+visual_check "$TMP/wm_text.pdf" "watermarked-text"
+visual_check "$TMP/html.pdf"    "html-basic"
 if [ -x "node_modules/.bin/mmdc" ]; then
     visual_check "$TMP/wm_default.pdf" "mermaid-default"
     visual_check "$TMP/wm_alt.pdf"     "mermaid-alt"

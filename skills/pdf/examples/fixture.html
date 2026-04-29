@@ -1,0 +1,173 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Q1 2026 Operating Report — fixture.html</title>
+<style>
+    /* Embedded styles cascade over weasyprint's stylesheets, so this
+       block demonstrates that html2pdf passes embedded CSS through
+       intact (a real BI-dashboard export would do the same).        */
+    body { font-family: "Helvetica Neue", Helvetica, Arial, sans-serif;
+           color: #1f2937; }
+    .report-header {
+        display: flex; align-items: center; gap: 1.2em;
+        border-bottom: 2px solid #1f2937;
+        padding-bottom: 0.7em; margin-bottom: 1.2em;
+    }
+    .report-header img { width: 60px; height: 60px; }
+    .report-meta { flex: 1; font-size: 9.5pt; color: #4b5563; }
+    .report-meta strong { color: #111827; }
+    .frame {
+        border: 1px solid #d1d5db; border-radius: 6px;
+        padding: 0.8em 1em; margin: 0.8em 0;
+        background: #f9fafb;
+        page-break-inside: avoid;
+    }
+    .frame-title {
+        font-weight: 700; color: #111827; font-size: 11pt;
+        margin: 0 0 0.4em 0;
+    }
+    .two-col {
+        display: flex; gap: 1em; margin: 0.6em 0;
+    }
+    .two-col > .frame { flex: 1; }
+    .pill {
+        display: inline-block; padding: 0.1em 0.55em;
+        border-radius: 999px; font-size: 8.5pt; font-weight: 600;
+        background: #dbeafe; color: #1e3a8a;
+    }
+    .pill.green { background: #d1fae5; color: #065f46; }
+    .pill.red   { background: #fee2e2; color: #7f1d1d; }
+    table.fin {
+        width: 100%; border-collapse: collapse; font-size: 10pt;
+        margin: 0.4em 0;
+    }
+    table.fin th, table.fin td {
+        border: 1px solid #e5e7eb; padding: 0.35em 0.6em;
+    }
+    table.fin thead th {
+        background: #1f2937; color: #f9fafb; text-align: left;
+    }
+    table.fin tfoot td {
+        background: #f3f4f6; font-weight: 700;
+    }
+    table.fin td.num { text-align: right; font-variant-numeric: tabular-nums; }
+    .chart-block { text-align: center; margin: 0.5em 0 0.2em; }
+    .chart-block img { max-width: 100%; max-height: 1.6in; }
+    .signoff { margin-top: 1.6em; font-size: 9.5pt; color: #4b5563; }
+    .signoff .line { border-top: 1px solid #9ca3af; width: 220px;
+                     display: inline-block; margin: 0 0.5em; }
+</style>
+</head>
+<body>
+
+<header class="report-header">
+    <img alt="Acme logo"
+         src="data:image/png;base64,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">
+    <div class="report-meta">
+        <strong>Acme Inc.</strong> — Q1 2026 Operating Report<br>
+        Issued <strong>2026-04-15</strong> · Reporting period 2026-01-01 to 2026-03-31<br>
+        Distribution: Board members, CFO office, External auditor (Wilkinson &amp; Co.)
+    </div>
+</header>
+
+<h1>Executive summary</h1>
+
+<div class="two-col">
+    <div class="frame">
+        <p class="frame-title">Headline metrics</p>
+        <ul style="margin: 0; padding-left: 1.1em;">
+            <li>Revenue: <strong>$4.62M</strong> <span class="pill green">+12% YoY</span></li>
+            <li>Gross margin: <strong>62.4%</strong> <span class="pill green">+1.1 pt</span></li>
+            <li>Operating expense: <strong>$2.18M</strong> <span class="pill red">+8% QoQ</span></li>
+            <li>Cash runway: <strong>14 months</strong> <span class="pill">stable</span></li>
+        </ul>
+    </div>
+    <div class="frame">
+        <p class="frame-title">Key risks</p>
+        <ol style="margin: 0; padding-left: 1.2em;">
+            <li>Concentration: top-3 customers = 41% of MRR.</li>
+            <li>Hosting cost accelerating faster than revenue.</li>
+            <li>Q2 hire plan unfunded past month 2.</li>
+        </ol>
+    </div>
+</div>
+
+<blockquote style="border-left: 3px solid #2563eb; padding: 0.4em 1em;
+                   background: #eff6ff; margin: 0.8em 0;">
+    The board approved the Q2 plan on <strong>2026-04-12</strong>; this
+    document is the supporting financial pack. <em>All figures are
+    USD, unaudited unless explicitly noted.</em>
+</blockquote>
+
+<h2>1. Income statement</h2>
+
+<table class="fin">
+    <thead>
+        <tr>
+            <th>Line item</th>
+            <th class="num">Q4 2025</th>
+            <th class="num">Q1 2026</th>
+            <th class="num">Δ QoQ</th>
+            <th class="num">% of revenue</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr><td>Subscription revenue</td>           <td class="num">$3,820,000</td><td class="num">$4,260,000</td><td class="num">+11.5%</td><td class="num">92.2%</td></tr>
+        <tr><td>Professional services</td>          <td class="num">$  300,000</td><td class="num">$  360,000</td><td class="num">+20.0%</td><td class="num">7.8%</td></tr>
+        <tr><td><strong>Total revenue</strong></td> <td class="num"><strong>$4,120,000</strong></td><td class="num"><strong>$4,620,000</strong></td><td class="num">+12.1%</td><td class="num">100.0%</td></tr>
+        <tr><td>Cost of revenue (hosting + support)</td><td class="num">$1,540,000</td><td class="num">$1,737,000</td><td class="num">+12.8%</td><td class="num">37.6%</td></tr>
+        <tr><td><strong>Gross profit</strong></td>  <td class="num"><strong>$2,580,000</strong></td><td class="num"><strong>$2,883,000</strong></td><td class="num">+11.7%</td><td class="num">62.4%</td></tr>
+        <tr><td>R&amp;D</td>                         <td class="num">$  840,000</td><td class="num">$  912,000</td><td class="num">+8.6%</td><td class="num">19.7%</td></tr>
+        <tr><td>Sales &amp; marketing</td>           <td class="num">$  720,000</td><td class="num">$  810,000</td><td class="num">+12.5%</td><td class="num">17.5%</td></tr>
+        <tr><td>G&amp;A</td>                         <td class="num">$  410,000</td><td class="num">$  455,000</td><td class="num">+11.0%</td><td class="num">9.8%</td></tr>
+    </tbody>
+    <tfoot>
+        <tr><td>Operating result</td>                <td class="num">$  610,000</td><td class="num">$  706,000</td><td class="num">+15.7%</td><td class="num">15.3%</td></tr>
+    </tfoot>
+</table>
+
+<h2>2. Revenue trajectory</h2>
+
+<p>Weekly subscription revenue, last seven weeks (taller bars are
+   above target):</p>
+
+<div class="chart-block">
+    <img alt="Weekly revenue bar chart"
+         src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAASwAAAB4CAYAAABIFc8gAAAB8UlEQVR4nO3cwY3CQBAAQYMuAAgKwroHYUFQkMGSAQLdSes2VQl4xaM1MuvZjTHGAhCwn30AgHcJFpAhWECGYAEZggVkCBaQIVhAhmABGYIFZAgWkCFYQIZgARmCBWQIFpDxM/sA8B+O18u0H/J+/p327G9jwgIyBAvIECwgQ7CADMECMgQLyBAsIEOwgAzBAjIEC8gQLCBDsIAMwQIyBAvIsF6Gl6xtYU1MWECGYAEZggVkCBaQIVhAhmABGYIFZAgWkCFYQIab7kDmCwcTFpAhWECGYAEZggVkCBaQIVhAhmABGYIFZAgWkLG5m+5rvaEL/J0JC8gQLCBDsIAMwQIyNvfSHdbscTpNe/bhdlvqTFhAhmABGYIFZAgWkCFYQIZgARmCBWQIFpAhWECGYAEZggVkCBaQIVhAhmAB21svYy0GMJsJC8gQLCBDsIAMwQIy7HSfxJ8Y8DkTFpAhWECGYAEZggVkCBaQIVhAhmABGYIFZAgWkCFYQIZgARmCBWQIFpAhWECGYAEZggVkCBaQIVhAhmABGYIFZAgWkCFYQIZgARmCBWQIFpAhWECGYAEZggVkCBaQIVhAhmABGYIFZAgWkCFYQIZgARm7McaYfQiAd5iwgAzBAjIEC8gQLCBDsIAMwQIyBAvIECxgqXgCFa4d9Q5fyEkAAAAASUVORK5CYII=">
+</div>
+
+<h2>3. Headcount and ratios</h2>
+
+<div class="frame">
+    <p class="frame-title">Plan vs actual</p>
+    <table class="fin">
+        <thead>
+            <tr><th>Function</th><th class="num">Plan EoQ1</th><th class="num">Actual EoQ1</th><th class="num">Gap</th><th>Status</th></tr>
+        </thead>
+        <tbody>
+            <tr><td>Engineering</td>      <td class="num">42</td><td class="num">40</td><td class="num">−2</td><td><span class="pill">on track</span></td></tr>
+            <tr><td>Customer success</td> <td class="num">14</td><td class="num">14</td><td class="num"> 0</td><td><span class="pill green">complete</span></td></tr>
+            <tr><td>Sales</td>            <td class="num">18</td><td class="num">15</td><td class="num">−3</td><td><span class="pill red">behind</span></td></tr>
+            <tr><td>G&amp;A</td>          <td class="num"> 9</td><td class="num"> 9</td><td class="num"> 0</td><td><span class="pill green">complete</span></td></tr>
+        </tbody>
+    </table>
+</div>
+
+<h2>4. Disclosure note</h2>
+
+<p>Figures presented in this report are management estimates as of
+   <code>2026-04-15</code> and have not been audited. The
+   reconciliation with the general ledger was completed on
+   2026-04-13; minor classification adjustments may flow through to
+   the Q2 board pack.</p>
+
+<div class="signoff">
+    <p>Prepared by <strong>Finance Operations</strong> · Reviewed by
+       <strong>CFO Office</strong> · Approved on 2026-04-15.</p>
+    <p>Signatures: <span class="line"></span> CFO &nbsp;
+                   <span class="line"></span> Audit chair</p>
+</div>
+
+</body>
+</html>

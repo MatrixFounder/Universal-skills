@@ -24,8 +24,10 @@ scripts that embed those choices removes the variance.
 
 ## 2. Capabilities
 - Render Markdown (+ optional custom CSS) to a typeset PDF via `weasyprint`. Fenced ```mermaid blocks pre-render to PNG via `mmdc`; bundled `scripts/mermaid-config.json` ships an office-friendly Cyrillic-capable font stack (override with `--mermaid-config PATH`, opt out with `--no-mermaid-config`).
+- **Render HTML / web archives to PDF** via `html2pdf.py` — same weasyprint pipeline, natively handles `.html`/`.htm`, `.mhtml`/`.mht` (MIME HTML, "Save as Single File"), and `.webarchive` (Apple WebKit/Safari archive). Bundled stylesheet on by default; `--no-default-css` for fully-styled inputs (BI dashboards, branded reports); `--css EXTRA.css` stacks on top.
 - Merge multiple PDFs into one preserving bookmarks (`pdf_merge.py`).
 - Split a PDF by explicit page ranges, one-per-page, or fixed-size chunks (`pdf_split.py`).
+- **Stamp a text or image watermark on every (or selected) page** via `pdf_watermark.py` (drafts, "CONFIDENTIAL", brand stamps). `--position center|top-left|top-right|bottom-left|bottom-right|diagonal`, `--opacity`, `--rotation`, `--pages "1-5,8"`. Builds one overlay per unique page mediabox, so heterogeneous decks (Letter+A4) keep correct proportions.
 - **Detect, inspect, and fill AcroForm fields** via `pdf_fill_form.py` — three modes: `--check` (form-type triage with exit codes 0/11/12 = AcroForm/XFA/none), `--extract-fields` (dump field schema as JSON for editing), and fill mode (`INPUT.pdf DATA.json -o OUT.pdf [--flatten]`). XFA forms are detected and refused with a clear message.
 - Extract text, tables, and layout via `pdfplumber` (documented; inline usage from the agent is fine).
 - Render any `.pdf` (or peer-skill `.docx`/`.xlsx`/`.pptx`) into a single PNG-grid preview via `preview.py` (uses Poppler directly for `.pdf`; LibreOffice + Poppler for OOXML).
@@ -39,10 +41,12 @@ scripts that embed those choices removes the variance.
 
 - **Commands**:
   - `python3 scripts/md2pdf.py INPUT.md OUTPUT.pdf [--page-size letter|a4|legal] [--css EXTRA.css] [--base-url DIR] [--no-mermaid] [--strict-mermaid] [--mermaid-config PATH | --no-mermaid-config]`
+  - `python3 scripts/html2pdf.py INPUT OUTPUT.pdf [--page-size letter|a4|legal] [--css EXTRA.css] [--base-url DIR] [--no-default-css] [--reader-mode]`  — INPUT may be `.html`/`.htm`, `.mhtml`/`.mht`, or `.webarchive`; sub-resources in archives are extracted to a temp dir automatically. `--reader-mode` extracts the main `<article>`/`<main>` content (like Safari Reader View), stripping navigation, ads, and sidebars — ideal for browser-saved news/blog pages.
   - `python3 scripts/pdf_merge.py OUTPUT.pdf INPUT1.pdf INPUT2.pdf [INPUT3.pdf ...]`
   - `python3 scripts/pdf_split.py INPUT.pdf --ranges "1-5:part1.pdf,6-10:part2.pdf"`
   - `python3 scripts/pdf_split.py INPUT.pdf --each-page OUTDIR/`
   - `python3 scripts/pdf_split.py INPUT.pdf --every N OUTDIR/`
+  - `python3 scripts/pdf_watermark.py INPUT.pdf OUTPUT.pdf (--text "DRAFT" | --image STAMP.png) [--opacity 0.3] [--position center|top-left|top-right|bottom-left|bottom-right|diagonal] [--rotation 45] [--font-size 60] [--color "#888"] [--scale 0.5] [--pages "all"|"1-5,8,12-end"]`
   - `python3 scripts/pdf_fill_form.py --check INPUT.pdf` — exit 0/11/12 = AcroForm/XFA/none. (Custom codes start at 10 to leave 0–9 for argparse / shell convention.)
   - `python3 scripts/pdf_fill_form.py --extract-fields INPUT.pdf -o fields.json`
   - `python3 scripts/pdf_fill_form.py INPUT.pdf DATA.json -o OUTPUT.pdf [--flatten]`
@@ -159,10 +163,16 @@ Extract text (inline, no bundled script):
 |---|---|
 | Markdown → PDF | `python3 scripts/md2pdf.py doc.md doc.pdf --page-size letter` |
 | Markdown → PDF with custom mermaid theme | `python3 scripts/md2pdf.py doc.md doc.pdf --mermaid-config theme.json` |
+| HTML → PDF | `python3 scripts/html2pdf.py report.html report.pdf` |
+| HTML → PDF (skip bundled CSS, only embedded styles) | `python3 scripts/html2pdf.py dashboard.html out.pdf --no-default-css` |
+| Web page / archive → PDF (reader mode, strips nav/ads) | `python3 scripts/html2pdf.py page.webarchive article.pdf --reader-mode` |
 | Merge PDFs | `python3 scripts/pdf_merge.py out.pdf a.pdf b.pdf c.pdf` |
 | Split by ranges | `python3 scripts/pdf_split.py in.pdf --ranges "1-5:intro.pdf,6-10:body.pdf"` |
 | Split one-per-page | `python3 scripts/pdf_split.py in.pdf --each-page pages/` |
 | Split in chunks of N | `python3 scripts/pdf_split.py in.pdf --every N out/` |
+| Text watermark on every page | `python3 scripts/pdf_watermark.py in.pdf out.pdf --text "DRAFT"` |
+| Image watermark, bottom-right corner | `python3 scripts/pdf_watermark.py in.pdf out.pdf --image stamp.png --position bottom-right --scale 0.2` |
+| Watermark only specific pages | `python3 scripts/pdf_watermark.py in.pdf out.pdf --text CONFIDENTIAL --pages "1-5,8"` |
 | Inspect AcroForm fields | `python3 scripts/pdf_fill_form.py --check form.pdf` |
 | Extract field schema as JSON | `python3 scripts/pdf_fill_form.py --extract-fields form.pdf -o fields.json` |
 | Fill AcroForm from JSON | `python3 scripts/pdf_fill_form.py form.pdf data.json -o filled.pdf [--flatten]` |
@@ -197,14 +207,32 @@ python3 scripts/pdf_merge.py annual.pdf q1.pdf q2.pdf q3.pdf q4.pdf
 python3 scripts/pdf_split.py handbook.pdf --every 10 chapters/
 ```
 
+**Input** — user request:
+> Convert this Confluence-export HTML report to PDF.
+
+**Output** — agent action:
+```bash
+python3 scripts/html2pdf.py q1-report.html q1-report.pdf --base-url ./q1-report_files/
+```
+
+**Input** — user request:
+> Stamp every page of this draft contract with "DRAFT" diagonally.
+
+**Output** — agent action:
+```bash
+python3 scripts/pdf_watermark.py contract.pdf contract-draft.pdf --text "DRAFT"
+```
+
 ## 12. Resources
 
 - [references/library-selection.md](references/library-selection.md) — which PDF library for which task, installation shortcuts.
 - [references/forms.md](references/forms.md) — AcroForm vs XFA, filling with pypdf, flattening, visual overlay fallback.
 - [references/weasyprint-setup.md](references/weasyprint-setup.md) — install platform notes, `@page` recipes, font embedding, page breaks.
 - [scripts/md2pdf.py](scripts/md2pdf.py) — Markdown → PDF via weasyprint + markdown2; mermaid blocks pre-rendered to PNG via `mmdc`.
+- [scripts/html2pdf.py](scripts/html2pdf.py) — HTML → PDF via the same weasyprint pipeline; reuses md2pdf's default stylesheet (opt-out via `--no-default-css`).
 - [scripts/pdf_merge.py](scripts/pdf_merge.py) — bookmark-preserving merger via pypdf.
 - [scripts/pdf_split.py](scripts/pdf_split.py) — range, per-page, or fixed-chunk splitter.
+- [scripts/pdf_watermark.py](scripts/pdf_watermark.py) — text/image watermark overlay via reportlab + pypdf; per-mediabox overlay caching for heterogeneous decks; cross-7 same-path guard.
 - [scripts/pdf_fill_form.py](scripts/pdf_fill_form.py) — AcroForm inspect/extract/fill/flatten via pypdf; XFA forms detected and refused.
 - [scripts/preview.py](scripts/preview.py) — universal `INPUT → PNG-grid` renderer for `.pdf` (via Poppler) and `.docx`/`.xlsx`/`.pptx` (via LibreOffice + Poppler). Byte-identical across all four office skills.
 - [scripts/mermaid-config.json](scripts/mermaid-config.json) — bundled office-friendly mermaid config (Cyrillic-capable font stack, auto-applied unless overridden via `--mermaid-config`).
