@@ -163,15 +163,31 @@ $('*').each((_, el) => {
     }
 });
 
-// Find the article-content root. Try the most specific selectors first
-// so we cleanly skip everything outside the article body even if the
-// ARIA / chrome strip above missed something. Falls back to <body>.
+// Find the article-content root. Two distinct modes:
 //
-// `--reader-mode` extends the candidate list with CMS / blog wrappers
-// (vc.ru, generic post-content classes) and applies a min-text filter
-// so we don't pick a near-empty <article> shell that some sites place
-// in their navigation. Without reader-mode the default selectors target
-// Confluence/wiki-style chrome.
+//   Default: Confluence-priority list, first-match wins. Backwards
+//            compatible with pre-reader-mode behaviour. No min-text
+//            filter — Confluence pages with mostly diagrams (< 500
+//            chars of body text) still get correctly extracted.
+//
+//   --reader-mode: curated list optimised for browser-saved blog /
+//            news / wiki pages. Each candidate has its OWN min-text
+//            threshold:
+//              * High-confidence selectors (Confluence IDs, .wiki-content)
+//                — minText:1 because diagram-heavy KB pages legitimately
+//                have very little body text and we trust the selector.
+//              * Specific blog/CMS classes (.entry, .post-content) —
+//                minText:500 to skip excerpts on archive index pages.
+//              * Generic semantics (article, [role=main], main#main) —
+//                minText:500 to skip empty <article> shells in nav.
+//              * Bare `<main>` is INTENTIONALLY OMITTED in reader mode:
+//                on vc.ru / Habr / many news sites it wraps the entire
+//                site (header + body + footer + recommendations), so
+//                including it would defeat the whole point of the flag.
+//            Within each selector, picks the LONGEST match — handles
+//            archive pages with multiple `.entry` divs (the post body
+//            is longer than each excerpt) and Disqus comment threads
+//            (post body is longer than any single comment).
 const _BASE_CANDIDATES = [
     '#main-content',          // Confluence (modern), GitLab wiki
     '[role="main"]',
@@ -184,28 +200,56 @@ const _BASE_CANDIDATES = [
     'main',
 ];
 
-const _READER_MODE_EXTRA = [
-    '.entry',                 // vc.ru article wrapper
-    '.post-content',          // generic blog
-    '.article-content',
-    '.main-content',
-    'div.article',
+const _READER_CANDIDATES = [
+    // High-confidence: Confluence/wiki conventions. No min-text — diagram-
+    // heavy KB pages legitimately have < 500 chars and we trust the selector.
+    { sel: '#main-content',          minText: 1 },
+    { sel: '.wiki-content',          minText: 1 },
+    { sel: '#content .pageSection',  minText: 1 },
+    { sel: '#content',               minText: 1 },
+    // Specific CMS / blog classes. Min-text filters out excerpts in archive
+    // index pages and metadata divs (.entry-meta, .post-meta on some themes).
+    { sel: '.entry',                 minText: 500 },
+    { sel: '.post-content',          minText: 500 },
+    { sel: '.article-content',       minText: 500 },
+    { sel: '.main-content',          minText: 500 },
+    { sel: 'div.article',            minText: 500 },
+    // Generic semantics. Stronger filter because false positives are
+    // common — sites use <article> for comments, [role=main] for nav.
+    { sel: 'article',                minText: 500 },
+    { sel: '[role="main"]',          minText: 500 },
+    { sel: 'main[role="main"]',      minText: 500 },
+    { sel: 'main#main',              minText: 500 },
+    // Bare `main` deliberately omitted in reader-mode — on vc.ru / Habr /
+    // many news sites it wraps the whole site (header + article + footer +
+    // recommendations) and easily exceeds 500 chars, defeating .entry.
 ];
-
-const _READER_MIN_TEXT = 500;     // chars of plain text to qualify as the article
 
 function pickContentRoot($, opts) {
     const reader = !!(opts && opts.readerMode);
-    const candidates = reader
-        ? [..._BASE_CANDIDATES, ..._READER_MODE_EXTRA]
-        : _BASE_CANDIDATES;
-    const minText = reader ? _READER_MIN_TEXT : 1;
-    for (const sel of candidates) {
-        const hit = $(sel).first();
-        if (!hit.length) continue;
-        const textLen = hit.text().trim().length;
-        if (textLen >= minText) {
-            return { node: hit[0], selector: sel };
+    if (reader) {
+        // Reader mode: curated list, longest-within-selector, per-candidate
+        // min-text. First selector that yields ANY qualifying match wins.
+        for (const { sel, minText } of _READER_CANDIDATES) {
+            let bestNode = null;
+            let bestLen = 0;
+            $(sel).each((_, el) => {
+                const len = $(el).text().trim().length;
+                if (len >= minText && len > bestLen) {
+                    bestNode = el;
+                    bestLen = len;
+                }
+            });
+            if (bestNode) return { node: bestNode, selector: sel };
+        }
+    } else {
+        // Default: Confluence-priority first-match (preserves the
+        // pre-reader-mode behaviour byte-for-byte).
+        for (const sel of _BASE_CANDIDATES) {
+            const hit = $(sel).first();
+            if (hit.length && hit.text().trim().length > 0) {
+                return { node: hit[0], selector: sel };
+            }
         }
     }
     return { node: $('body').length ? $('body')[0] : $.root()[0], selector: 'body' };

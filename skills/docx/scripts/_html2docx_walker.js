@@ -80,10 +80,17 @@ function _drawioForeignObjectsToText(cheerio, svgXml) {
     }
     function extractPx(style, prop) {
         if (!style) return null;
-        const m = style.match(new RegExp(`(?:^|;)\\s*${prop}\\s*:\\s*(-?\\d+(?:\\.\\d+)?)\\s*(px|pt)?`, 'i'));
+        // Unit MUST be present and MUST be px / pt. Drawio always emits px;
+        // making the unit mandatory means em / rem / % / vw values return
+        // null instead of being silently treated as raw pixels (a label
+        // wrapper with `width: 5em` for a 14em label previously produced
+        // `containerWidth=5` and mis-positioned anchors).
+        const m = style.match(
+            new RegExp(`(?:^|;)\\s*${prop}\\s*:\\s*(-?\\d+(?:\\.\\d+)?)\\s*(px|pt)\\b`, 'i')
+        );
         if (!m) return null;
         let v = parseFloat(m[1]);
-        if ((m[2] || '').toLowerCase() === 'pt') v = v * 96 / 72;
+        if (m[2].toLowerCase() === 'pt') v = v * 96 / 72;
         return v;
     }
     function extractStyleProp(style, prop) {
@@ -180,14 +187,25 @@ function _drawioForeignObjectsToText(cheerio, svgXml) {
         const fontWeight = (extractStyleProp(runStyle, 'font-weight') || 'normal').replace(/\s/g, '');
         const color = extractStyleProp(runStyle, 'color') || '#000000';
 
+        // Drawio uses `width: 1px` as the unconstrained-width marker; some
+        // foreignObjects omit `width:Npx` entirely (extractPx → null → 0).
+        // In both cases applying center/end math with width≈0 collapses the
+        // anchor onto xLeft and reintroduces the pre-fix bug (text-anchor=
+        // middle centred at the container's left edge → label drifts left
+        // by half a viewport). Fall back to a left-anchored render so the
+        // label stays near its declared position; visually correct for
+        // every drawio template I've inspected with width:1px (column
+        // headers, swimlane titles, free-floating annotations).
         let textAnchor = 'start';
         let textX = xLeft;
-        if (/center/.test(justify)) {
-            textAnchor = 'middle';
-            textX = xLeft + containerWidth / 2;
-        } else if (/flex-end|end/.test(justify)) {
-            textAnchor = 'end';
-            textX = xLeft + containerWidth;
+        if (containerWidth > 1) {
+            if (/center/.test(justify)) {
+                textAnchor = 'middle';
+                textX = xLeft + containerWidth / 2;
+            } else if (/flex-end|end/.test(justify)) {
+                textAnchor = 'end';
+                textX = xLeft + containerWidth;
+            }
         }
         let baseline = 'central';
         if (/flex-start|start/.test(align)) baseline = 'hanging';
@@ -358,38 +376,54 @@ function _prepareSvgForResvg(rawSvgXml) {
 //   breathing room the renderer clips them.
 //
 //   Case 2 — SVG has no viewBox: synthesise one from the natural pixel
-//   dimensions returned by _svgDimensions (which falls back to the
-//   parent .drawio-macro div's inline width/height when the SVG itself
-//   omits both attrs and viewBox). Without a viewBox, Chrome's
+//   dimensions returned by _svgDimensions. Without a viewBox, Chrome's
 //   `width:100%; height:100%` wrapper and resvg's fitTo:width both keep
 //   the SVG coordinate space at its 1:1 pixel size — content beyond the
 //   wrapper viewport simply clips. Adding a viewBox makes the SVG scale
 //   proportionally instead.
 //
-// Small SVGs (≤200px on either axis) are typically inline icons and are
-// left untouched — the 5% expansion would visibly offset them.
-function _ensureViewBox(svgXml, naturalW, naturalH) {
+// Skip rules:
+//   * Self-closing `<svg .../>` tags preserve their `/>` — the regex
+//     captures the trailing slash separately so the rewritten tag stays
+//     valid XML (an earlier version corrupted self-closing tags by
+//     letting `[^>]*` greedily eat the slash, producing invalid markup
+//     resvg refused to parse).
+//   * Small SVGs are left untouched on BOTH axes — natural pixel size ≤
+//     200 (typically an inline icon) AND viewBox ≤ 200 user units. Tools
+//     like Material Symbols use 40×40 rendered with viewBox 1024×1024,
+//     which would otherwise hit Case 1 expansion and gain a 2-3px white
+//     margin. Checking both signals independently protects against either
+//     class of icon.
+//   * `trustDims=false` (caller passes 0/0): _svgDimensions hit its
+//     {600,400} sentinel fallback. Case 2 is skipped — synthesising a
+//     viewBox from fictional dimensions would crop SVGs whose true
+//     coordinate space exceeds 600×400.
+function _ensureViewBox(svgXml, naturalW, naturalH, trustDims) {
     const VB_EXPAND = 1.05;
-    return svgXml.replace(/<svg\b([^>]*)>/i, (whole, attrs) => {
+    const SMALL = 200;
+    const renderedSmall = trustDims && (naturalW <= SMALL || naturalH <= SMALL);
+    return svgXml.replace(/<svg\b([^>]*?)(\/?)>/i, (whole, attrs, selfClose) => {
+        // Case 1: existing viewBox.
         const vbMatch = attrs.match(/\sviewBox\s*=\s*(["'])([^"']+)\1/i);
         if (vbMatch) {
             const parts = vbMatch[2].trim().split(/[\s,]+/).map(parseFloat);
-            if (parts.length === 4 && parts.every(Number.isFinite) &&
-                parts[2] > 200 && parts[3] > 200) {
-                const [vx, vy, vw, vh] = parts;
-                const expanded =
-                    `viewBox="${vx} ${vy} ${(vw * VB_EXPAND).toFixed(1)} ${(vh * VB_EXPAND).toFixed(1)}"`;
-                const newAttrs = attrs.replace(vbMatch[0], ' ' + expanded);
-                return `<svg${newAttrs}>`;
-            }
-            return whole; // small icon or malformed — leave as-is
+            if (parts.length !== 4 || !parts.every(Number.isFinite)) return whole;
+            const [vx, vy, vw, vh] = parts;
+            // Skip when EITHER signal indicates an icon: tiny rendered size
+            // or tiny viewBox extent.
+            if (renderedSmall || vw <= SMALL || vh <= SMALL) return whole;
+            const expanded =
+                `viewBox="${vx} ${vy} ${(vw * VB_EXPAND).toFixed(1)} ${(vh * VB_EXPAND).toFixed(1)}"`;
+            const newAttrs = attrs.replace(vbMatch[0], ' ' + expanded);
+            return `<svg${newAttrs}${selfClose}>`;
         }
-        if (!naturalW || !naturalH || naturalW <= 200 || naturalH <= 200) {
-            return whole;
-        }
+        // Case 2: synthesise. Need trusted natural dims; never extrapolate
+        // from the {600,400} fallback sentinel because the SVG's real
+        // coordinate space could be any size.
+        if (!trustDims || naturalW <= SMALL || naturalH <= SMALL) return whole;
         const vbW = (naturalW * VB_EXPAND).toFixed(1);
         const vbH = (naturalH * VB_EXPAND).toFixed(1);
-        return `<svg${attrs} viewBox="0 0 ${vbW} ${vbH}">`;
+        return `<svg${attrs} viewBox="0 0 ${vbW} ${vbH}"${selfClose}>`;
     });
 }
 
@@ -398,10 +432,10 @@ function _svgDimensions($svg, parentEl) {
     // div's inline style — drawio-macro uses fixed pixel sizes there.
     const widthAttr = _parsePixelLength($svg.attr('width'));
     const heightAttr = _parsePixelLength($svg.attr('height'));
-    if (widthAttr && heightAttr) return { w: widthAttr, h: heightAttr };
+    if (widthAttr && heightAttr) return { w: widthAttr, h: heightAttr, fallback: false };
     const vb = ($svg.attr('viewBox') || '').trim().split(/[\s,]+/).map(parseFloat);
     if (vb.length === 4 && vb[2] > 0 && vb[3] > 0) {
-        return { w: vb[2], h: vb[3] };
+        return { w: vb[2], h: vb[3], fallback: false };
     }
     if (parentEl) {
         const style = (parentEl.attribs && parentEl.attribs.style) || '';
@@ -409,9 +443,13 @@ function _svgDimensions($svg, parentEl) {
         const hMatch = style.match(/(?:^|;)\s*height\s*:\s*([^;]+)/i);
         const w = wMatch ? _parsePixelLength(wMatch[1]) : null;
         const h = hMatch ? _parsePixelLength(hMatch[1]) : null;
-        if (w && h) return { w, h };
+        if (w && h) return { w, h, fallback: false };
     }
-    return { w: 600, h: 400 };
+    // Sentinel fallback: callers (notably _ensureViewBox) MUST treat this
+    // as "dimensions unknown" rather than "natural size is 600×400". An SVG
+    // whose content actually spans 0–10000 user units would be silently
+    // cropped if a viewBox of 600×400 was synthesised.
+    return { w: 600, h: 400, fallback: true };
 }
 
 function detectImageType(filePath) {
@@ -760,7 +798,10 @@ function buildBody({ $, root, inputDir, extractedImages }) {
         // (`width:100%; height:100%`) and resvg (`fitTo:width`) need a
         // viewBox to scale content proportionally; without one, drawio
         // diagrams whose content reaches the canvas edge get clipped.
-        const rawSvgXml = _ensureViewBox($.html(svgNode), dims.w, dims.h);
+        // `trustDims=!fallback` so _ensureViewBox won't synthesise a
+        // viewBox from the {600,400} sentinel (which has nothing to do
+        // with the SVG's actual coordinate space).
+        const rawSvgXml = _ensureViewBox($.html(svgNode), dims.w, dims.h, !dims.fallback);
         const png = svgRender.render({
             chromeReadySvg: () => rawSvgXml,
             resvgReadySvg: () => _prepareSvgForResvg(rawSvgXml),
@@ -1003,4 +1044,9 @@ function buildBody({ $, root, inputDir, extractedImages }) {
     return { children, numberedListConfigs };
 }
 
-module.exports = { buildBody };
+module.exports = {
+    buildBody,
+    // Test-only exports — exercised by tests/test_e2e.sh.
+    _ensureViewBox,
+    _svgDimensions,
+};

@@ -167,6 +167,117 @@ rc=$?
     && ok "Tier 2 output passes office.validate" \
     || nok "tier-2 validate" "rejected"
 
+# VDD-iter-3 unit tests for _ensureViewBox and _svgDimensions: exercise the
+# new code paths the cc24b55 backport added, since the Tier-2 fixture above
+# is too small (60×40) to hit the > 200 expansion gate or the no-viewBox
+# synthesis branch. Without these, "117 tests pass" would be uninformative.
+out=$(cd "$SKILL_DIR" && node --eval "
+const { _ensureViewBox, _svgDimensions } = require('./_html2docx_walker');
+const cheerio = require('cheerio');
+const assert = require('assert');
+
+// (1) Self-closing SVG must stay self-closing AND get a viewBox synthesised.
+//     Pre-fix: regex ate the '/' as part of attrs, output was
+//     '<svg width=\"500\" height=\"500\"/ viewBox=\"...\">' — invalid XML.
+const r1 = _ensureViewBox('<svg width=\"500\" height=\"500\"/>', 500, 500, true);
+assert(r1.includes('viewBox=\"0 0 525.0 525.0\"'), 'viewBox synthesised: ' + r1);
+assert(r1.endsWith('/>'), 'self-closing preserved: ' + r1);
+assert(!/\/ /.test(r1), 'no stray / inside tag: ' + r1);
+
+// (2) Existing-viewBox path must also keep self-closing form intact.
+const r2 = _ensureViewBox(
+    '<svg viewBox=\"0 0 800 600\" width=\"800\" height=\"600\"/>', 800, 600, true);
+assert(r2.includes('viewBox=\"0 0 840.0 630.0\"'), '5%-expanded viewBox: ' + r2);
+assert(r2.endsWith('/>'), 'self-closing preserved on Case 1: ' + r2);
+
+// (3) Fallback dims (trustDims=false) must NOT synthesise from a
+//     fictional 600×400 sentinel. Output must equal input.
+const fallbackInput = '<svg xmlns=\"http://www.w3.org/2000/svg\"><circle r=\"5\"/></svg>';
+const r3 = _ensureViewBox(fallbackInput, 600, 400, false);
+assert.strictEqual(r3, fallbackInput, 'no synthesis on fallback: ' + r3);
+
+// (4) Material-Symbols-style icon (40px rendered, viewBox 1024×1024) must
+//     NOT get its viewBox expanded. Otherwise 5% extra user-units shrink
+//     the icon visibly inside its 40×40 wrapper.
+const iconIn = '<svg width=\"40\" height=\"40\" viewBox=\"0 0 1024 1024\"><path/></svg>';
+const r4 = _ensureViewBox(iconIn, 40, 40, true);
+assert.strictEqual(r4, iconIn, 'icon left untouched: ' + r4);
+
+// (5) _svgDimensions sentinel returns {fallback:true} for shape-less SVG.
+const \$ = cheerio.load('<svg></svg>', { xmlMode: true });
+const dims = _svgDimensions(\$('svg'), null);
+assert.strictEqual(dims.fallback, true, 'sentinel marked fallback');
+assert.strictEqual(dims.w, 600, 'sentinel w preserved for backward-compat');
+
+// (6) _svgDimensions with explicit width/height returns fallback:false.
+const \$2 = cheerio.load('<svg width=\"800\" height=\"600\"></svg>', { xmlMode: true });
+const dims2 = _svgDimensions(\$2('svg'), null);
+assert.strictEqual(dims2.fallback, false, 'explicit dims not flagged fallback');
+
+// (7) Drawio Confluence pattern: SVG without viewBox, parent has min-width/
+//     min-height in inline style. Synthesised viewBox must equal parent dims
+//     × 5% expansion, AND the result must parse cleanly as XML (no double
+//     attrs, no broken tags).
+const drawioIn =
+    '<svg style=\"width:100%;height:100%;min-width:955px;min-height:720px\">' +
+    '<g><rect width=\"50\" height=\"50\"/></g></svg>';
+const r7 = _ensureViewBox(drawioIn, 955, 720, true);
+assert(r7.includes('viewBox=\"0 0 1002.8 756.0\"'), 'drawio viewBox synthesised: ' + r7);
+const \$7 = cheerio.load(r7, { xmlMode: true });
+assert.strictEqual(\$7('svg').attr('viewBox'), '0 0 1002.8 756.0', 'parses as one attr');
+
+console.log('OK');
+" 2>&1)
+echo "$out" | grep -q '^OK$' \
+    && ok "_ensureViewBox: 7 unit tests (self-closing, fallback, icon, drawio)" \
+    || nok "_ensureViewBox unit" "$out"
+
+# VDD-iter-3 reader-mode integration test: vc.ru-style HTML where <main>
+# wraps the entire site. Default mode picks <main> (chrome included).
+# --reader-mode must pick .entry (article body only). Pre-fix additive
+# reader-mode also picked <main> because it tried base candidates first.
+# `printf 'fmt %.0s' $(seq 1 N)` repeats fmt N times. We avoid `yes | head`
+# because under `set -o pipefail` that yields exit 141 (SIGPIPE) and aborts.
+NAV=$(printf 'site nav text %.0s' $(seq 1 50))
+ART=$(printf 'article body paragraph %.0s' $(seq 1 40))
+FOOT=$(printf 'site footer %.0s' $(seq 1 30))
+cat > "$TMP/vcru.html" <<HTML
+<!doctype html><html><body>
+<main>
+  <nav>${NAV}— navigation that exceeds 500 chars.</nav>
+  <div class="entry"><h1>Real article title</h1>
+    <p>${ART}— article content the user wants.</p>
+  </div>
+  <footer>${FOOT}— copyright.</footer>
+</main>
+</body></html>
+HTML
+
+out_default=$(node html2docx.js "$TMP/vcru.html" "$TMP/vcru-default.docx" 2>&1)
+out_reader=$(node html2docx.js "$TMP/vcru.html" "$TMP/vcru-reader.docx" --reader-mode 2>&1)
+
+echo "$out_default" | grep -q 'via "main"' \
+    && ok "default mode: picks <main> (preserves backward-compat)" \
+    || nok "default mode root" "got: $out_default"
+
+echo "$out_reader" | grep -q 'via "\.entry"' \
+    && ok "--reader-mode: picks .entry (skips bare <main> chrome wrapper)" \
+    || nok "reader mode root" "got: $out_reader"
+
+# VDD-iter-3 reader-mode: Confluence diagram-only page (< 500 chars) must
+# still pick #main-content. The 500-char filter applies only to fuzzy
+# selectors; high-confidence Confluence IDs accept any length.
+cat > "$TMP/conf-sparse.html" <<'HTML'
+<!doctype html><html><body>
+<div id="header">site chrome here</div>
+<div id="main-content"><h1>Diagram</h1><p>Short.</p></div>
+</body></html>
+HTML
+out_sparse=$(node html2docx.js "$TMP/conf-sparse.html" "$TMP/conf-sparse.docx" --reader-mode 2>&1)
+echo "$out_sparse" | grep -q 'via "#main-content"' \
+    && ok "--reader-mode: sparse Confluence page still picks #main-content" \
+    || nok "reader mode sparse" "got: $out_sparse"
+
 # VDD-iter-2 MED-1: nested <ol> inside <ul> must render as numbered, not
 # inherit "bullets" reference. Round-trip via docx2md detects bullet
 # regression because mammoth/turndown preserve list markers.
