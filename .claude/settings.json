@@ -1,4 +1,7 @@
 {
+  "env": {
+    "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "1"
+  },
   "permissions": {
     "allow": [
       "Bash(ls *)",
@@ -35,10 +38,19 @@
       "Bash(python3 .agent/tools/task_id_tool.py *)",
       "Bash(python3 .agent/skills/skill-creator/scripts/validate_skill.py *)",
       "Bash(python3 .agent/skills/skill-creator/scripts/init_skill.py *)",
-      "Bash(python3 System/scripts/doctor.py*)"
+      "Bash(python3 System/scripts/doctor.py*)",
+      "Bash(./.venv/bin/python3 -c ' *)",
+      "Bash(./.venv/bin/python3 html2pdf.py '/Users/sergey/Antigravity/Universal-skills/tmp/R&D – это не бэкстейдж, а часть продукта. Почему? — Техника на vc.ru.webarchive' /Users/sergey/Antigravity/Universal-skills/tmp/out_pdf/rnd-vc-ru.pdf --page-size a4 --reader-mode)",
+      "Bash(./.venv/bin/python3 html2pdf.py '/Users/sergey/Antigravity/Universal-skills/tmp/Представлен трекер Claude Code для умных часов Garmin : Хабр.webarchive' /Users/sergey/Antigravity/Universal-skills/tmp/out_pdf/garmin-habr.pdf --page-size a4 --reader-mode)",
+      "Bash(./.venv/bin/python3 html2pdf.py '/Users/sergey/Antigravity/Universal-skills/tmp/Интеграция ELMA365 с телефонией 3CX - Ярли - Confluence Wiki.webarchive' /Users/sergey/Antigravity/Universal-skills/tmp/out_pdf/confluence-elma365-1.pdf --page-size a4)",
+      "Bash(./.venv/bin/python3 html2pdf.py '/Users/sergey/Antigravity/Universal-skills/tmp/Интеграция ELMA365 с телефонией 3CX - Ярли - Confluence Wiki-2.mhtml' /Users/sergey/Antigravity/Universal-skills/tmp/out_pdf/confluence-elma365-2.pdf --page-size a4)",
+      "Bash(wait)",
+      "Bash(./.venv/bin/python3 preview.py /Users/sergey/Antigravity/Universal-skills/tmp/out_pdf/rnd-vc-ru.pdf /tmp/final_vc.png --dpi 72 --cols 2)",
+      "Bash(./.venv/bin/python3 preview.py /Users/sergey/Antigravity/Universal-skills/tmp/out_pdf/garmin-habr.pdf /tmp/final_habr.png --dpi 72 --cols 2)",
+      "Bash(./.venv/bin/python3 preview.py /Users/sergey/Antigravity/Universal-skills/tmp/out_pdf/confluence-elma365-1.pdf /tmp/final_conf1.png --dpi 72 --cols 2)",
+      "Bash(./.venv/bin/python3 -c \"from PIL import Image; Image.open\\('/tmp/conf_p-1.ppm'\\).save\\('/tmp/conf_p1.png'\\)\")",
+      "Bash(./.venv/bin/python3 -c \"from PIL import Image; import glob; f=glob.glob\\('/tmp/conf_p1*'\\)[0]; Image.open\\(f\\).save\\('/tmp/conf_p1_out.png'\\); print\\('size:', Image.open\\(f\\).size\\)\")",
+      "Bash(git commit -m ' *)"
     ]
-  },
-  "env": {
-    "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "1"
   }
 }
