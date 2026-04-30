@@ -1,0 +1,19 @@
+<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Regression: self-closing SVG</title></head>
+<body>
+<!--
+  VDD-iter-5 HIGH-1: a self-closing `<svg width="50"/>` early in the document
+  caused the SVG icon strip's depth tracker to break and silently leak every
+  later SVG verbatim. This fixture has TWO icon-sized SVGs: one self-closing,
+  one normal. Both must be stripped from the rendered PDF.
+-->
+<p>BEFORE_NEEDLE</p>
+<svg xmlns="http://www.w3.org/2000/svg" width="40" height="40" viewBox="0 0 40 40"/>
+<p>MIDDLE_NEEDLE</p>
+<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 32 32">
+    <path d="M0 0h32v32H0z" fill="black"/>
+</svg>
+<p>AFTER_NEEDLE</p>
+</body>
+</html>

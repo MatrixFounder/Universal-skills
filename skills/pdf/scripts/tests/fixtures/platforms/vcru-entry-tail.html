@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>vc.ru .entry tail widgets (slice from R&amp;D article)</title>
+<!--
+  Hand-stripped slice from `R&D – это не бэкстейдж, а часть продукта.
+  Почему? — Техника на vc.ru.webarchive`. Preserves vc.ru's signature
+  pattern: `<div class="entry">` wrapping the article body PLUS
+  recommendation carousels, comments threads, and emoji-reaction bars
+  as siblings.
+
+  Without `_strip_reader_widgets` (READER_STRIP_KEYWORDS for "reaction",
+  "comments", "post-share", etc.), reader-mode picks `.entry` correctly
+  but the resulting PDF has 3-4× the legitimate text plus tail emoji
+  counters.
+
+  After fix: `.entry` content survives (article body), tail widgets removed.
+
+  Sentinels are REAL strings from the vc.ru article.
+-->
+</head>
+<body>
+<div class="entry">
+
+    <h1>R&amp;D – это не бэкстейдж, а часть продукта. Почему?</h1>
+
+    <div class="content-author">
+        <span>Автор: Anton Bushkov</span>
+    </div>
+
+    <p>Когда я говорю «исследования и разработки», большинство собеседников
+       представляют себе небольшую закрытую лабораторию, где умные люди
+       что-то изобретают вдали от продакшена.</p>
+
+    <p>Но на самом деле R&amp;D — это часть продукта. И вот почему.</p>
+
+    <p>Главная мысль: исследовательская функция должна быть встроена в
+       продуктовую разработку, а не существовать в параллельном измерении.</p>
+
+    <!-- vc.ru widget tail: emoji reaction bar (forbidden in reader mode) -->
+    <div class="content__reactions">
+        <button class="reaction-button">🔥 4422</button>
+        <button class="reaction-button">👍 1133</button>
+        <button class="reaction-button">💩 76</button>
+    </div>
+
+    <!-- vc.ru floating engagement bar -->
+    <div class="content__floating floating-bar">
+        <button>Поделиться</button>
+        <button>Сохранить</button>
+    </div>
+
+    <!-- vc.ru post-footer with share buttons -->
+    <div class="content-footer">
+        <div class="post-share">
+            <a href="https://twitter.com/intent/tweet">Twitter</a>
+            <a href="https://t.me/share/url">Telegram</a>
+        </div>
+    </div>
+
+    <!-- vc.ru comments section -->
+    <div class="comments-section">
+        <h3>Комментарии (15)</h3>
+        <div class="discussion-list">
+            <div class="comment">
+                <p>SHOULD_NOT_APPEAR_IN_READER_MODE_comment_one</p>
+            </div>
+            <div class="comment">
+                <p>SHOULD_NOT_APPEAR_IN_READER_MODE_comment_two</p>
+            </div>
+        </div>
+    </div>
+
+    <!-- vc.ru recommendation widget -->
+    <div class="recommend-block">
+        <h3>Похожие статьи</h3>
+        <ul>
+            <li>SHOULD_NOT_APPEAR_IN_READER_MODE_rec_one</li>
+            <li>SHOULD_NOT_APPEAR_IN_READER_MODE_rec_two</li>
+        </ul>
+    </div>
+
+</div>
+</body>
+</html>

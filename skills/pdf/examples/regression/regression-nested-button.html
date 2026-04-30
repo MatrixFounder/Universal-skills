@@ -1,0 +1,16 @@
+<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Regression: nested button unwrap</title></head>
+<body>
+<!--
+  VDD-iter-5 MED-7: nested <button> elements (illegal HTML5 but observed
+  in some Mintlify "expand-all" wrappers) were unwrapped by a single
+  non-greedy regex pass that matched the FIRST </button>, leaving stray
+  closing tags. Iterative-until-stable unwrap fixes this.
+  All three needles must appear in the PDF text in order: OUTER, INNER, TAIL.
+-->
+<p>This document tests the nested-button unwrap.</p>
+<button>OUTER_X<button>INNER_Y</button>TAIL_Z</button>
+<p>Done.</p>
+</body>
+</html>

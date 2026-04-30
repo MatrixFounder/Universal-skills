@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Regression: broken external stylesheet</title>
+<!--
+  Commit 3857d6d: `_strip_external_stylesheets` removes <link rel=stylesheet>
+  before render, AND `_offline_url_fetcher` refuses any http(s) URL with no
+  timeout. Without these fixes, weasyprint tries to fetch this nonsense URL
+  via urllib (no timeout!) and the render hangs for minutes.
+
+  After fix: render completes well under the 90 s battery timeout because:
+    1. `_strip_external_stylesheets` removes the <link> tag from HTML.
+    2. Even if the tag survived, `_offline_url_fetcher` would refuse the
+       https:// URL.
+  Either path keeps the render bounded.
+
+  The <invalid> TLD .invalid is reserved by RFC 2606 and guaranteed never
+  to resolve — so a regression that disables both fixes would deterministically
+  hang against this fixture.
+-->
+<link rel="stylesheet" href="https://broken.example.invalid/missing.css">
+<link rel="preload" as="font" href="https://broken.example.invalid/font.woff2">
+</head>
+<body>
+<h1>BROKEN_CSS_HEADER</h1>
+<p>BROKEN_CSS_BODY — this paragraph must render even though the stylesheet
+   reference and font preload point to an unresolvable host. The render
+   relies on bundled DEFAULT_CSS and offline URL fetcher refusing remote
+   fetches with no network round-trip.</p>
+</body>
+</html>

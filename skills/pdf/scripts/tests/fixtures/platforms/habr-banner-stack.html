@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Хабр banner stack + article (slice from Garmin trekker article)</title>
+<!--
+  Hand-stripped slice from `Представлен трекер Claude Code для умных
+  часов Garmin : Хабр.webarchive`. Preserves Хабр's two signature
+  patterns:
+
+    1. Ad-network banner stack at top of page:
+         <div class="adfox-banner-placeholder above-header">
+         <div class="banner-target tm-header-banner">
+       — must be stripped by `_strip_universal_ads`
+
+    2. Article body with the SPECIFIC paragraph that was DROPPED by
+       weasyprint due to Хабр's main stylesheet (`_strip_external_
+       stylesheets` fix). The "Демон запускается локально" paragraph
+       was the 4th <p> after a tall figure, and weasyprint silently
+       dropped it. Without the fix, this needle is missing from the PDF.
+
+  Sentinels are REAL strings from the Хабр article.
+-->
+</head>
+<body>
+
+<!-- Ad-network banner stack (must be stripped by _strip_universal_ads) -->
+<div id="adfox_above_header" class="adfox-banner-placeholder above-header">
+    <div class="banner-target tm-header-banner">
+        ООО 'Хабр' в навыки ИНН 7705756279 РЕКЛАМА erid:2VSb5yvZvKk
+    </div>
+</div>
+
+<header class="tm-page__header">
+    <nav class="tm-header-banner-nav">
+        <a href="/news/">Новости</a>
+        <a href="/articles/">Статьи</a>
+    </nav>
+</header>
+
+<article class="tm-article-presenter">
+
+<h1>Представлен трекер Claude Code для умных часов Garmin</h1>
+
+<div class="article-formatted-body article-formatted-body article-formatted-body_version-2">
+
+<p>Разработчик Йенс Ларссон представил открытый проект фитнес-трекер
+   ИИ-ассистента Claude Code, который показывает результаты работы ИИ
+   на умных часах Garmin на руке пользователя.</p>
+
+<figure class="full-width">
+    <img src="figure-1-placeholder.png" width="715" height="212" alt="figure 1"
+         srcset="figure-1-placeholder.png 781w">
+</figure>
+
+<p>«Записывает ваши сеансы работы с Claude Code как реальные действия
+   Garmin. Во время выполнения кода ваши часы фиксируют спортивную
+   активность с помощью пульса на запястье», — пояснил автор проекта.</p>
+
+<figure class="full-width">
+    <img src="figure-2-placeholder.png" width="706" height="656" alt="figure 2"
+         srcset="figure-2-placeholder.png 781w">
+</figure>
+
+<!--
+  THIS PARAGRAPH IS THE "Хабр-bug" CANARY.
+  Without `_strip_external_stylesheets` (commit 3857d6d), Хабр's main
+  stylesheet causes weasyprint to silently drop this paragraph (it's
+  the 4th <p> in `.article-formatted-body` after a tall figure). The
+  test asserts "Демон запускается локально" appears in the PDF — if
+  the fix is reverted, the assertion fails.
+-->
+<p>«Демон запускается локально и предоставляет вашему ноутбуку доступ
+   к Интернету через туннель Cloudflare. Он подключается только к
+   вашим собственным часам, аутентифицируемым с помощью созданного
+   вами ключа на предъявителя. Ничего не передаётся Anthropic или
+   какой-либо третьей стороне.», — написал разработчик.</p>
+
+</div>
+</article>
+
+</body>
+</html>

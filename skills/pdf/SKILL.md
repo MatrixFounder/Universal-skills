@@ -67,7 +67,8 @@ scripts that embed those choices removes the variance.
 ## 6. Validation Evidence
 - **Local verification**:
   - `python3 -m venv .venv && source .venv/bin/activate && pip install -r scripts/requirements.txt` — installs pypdf, pdfplumber, weasyprint, markdown2, reportlab.
-  - `bash scripts/tests/test_e2e.sh` — runs the end-to-end smoke suite (md2pdf, merge, split, fill-form, mermaid).
+  - `bash scripts/tests/test_e2e.sh` — runs the end-to-end smoke suite (md2pdf, merge, split, fill-form, mermaid). Includes the html2pdf regression battery: ~37 unit tests for `html2pdf_lib/` helpers + data-driven fixture battery (6 synthetic micro-fixtures + 6 hand-stripped real-platform slices + N tmp/ originals when present on disk; per-fixture page-count / size / required+forbidden-needle assertions, see [tests/battery_signatures.json](scripts/tests/battery_signatures.json)).
+  - **Adding a new platform fixture** (e.g. you found a Notion/Stripe page that breaks): drop the `.webarchive`/`.html`/`.mhtml` file into `tmp/`, run `python3 scripts/tests/capture_signatures.py` (auto-captures page count + needles + size band; only ADDs new fixtures unless `--refresh` is passed), hand-add chrome strings to `forbidden_needles` in [battery_signatures.json](scripts/tests/battery_signatures.json), commit the JSON delta. Total ~5 min per new site. Detailed in [references/html-conversion.md](references/html-conversion.md) §Regression coverage.
   - `python3 scripts/md2pdf.py examples/fixture.md /tmp/invoice.pdf --page-size letter` — produces a non-empty PDF.
   - `python3 -c "from pypdf import PdfReader; r=PdfReader('/tmp/invoice.pdf'); print(len(r.pages))"` — returns at least 1.
   - `python3 scripts/pdf_merge.py /tmp/merged.pdf /tmp/invoice.pdf /tmp/invoice.pdf && python3 -c "from pypdf import PdfReader; print(len(PdfReader('/tmp/merged.pdf').pages))"` — 2× the page count.

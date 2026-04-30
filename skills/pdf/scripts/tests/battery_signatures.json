@@ -1,0 +1,864 @@
+{
+  "API Reference - Documentation - Discord.webarchive": {
+    "platform": "discord",
+    "regular": {
+      "min_pages": 25,
+      "max_pages": 27,
+      "min_size_kb": 265,
+      "max_size_kb": 325,
+      "required_needles": [
+        "to 64 bits in size (e.g. a uint64), they are always returned",
+        "serialized back to JSON by Discord, it is not transformed in",
+        "персонализировать рекламные объявления и другие материалы, о"
+      ],
+      "forbidden_needles": []
+    },
+    "reader": {
+      "min_pages": 18,
+      "max_pages": 20,
+      "min_size_kb": 223,
+      "max_size_kb": 273,
+      "required_needles": [
+        "The file upload size limit applies to each file in a request",
+        "with RFC 6585. API users that regularly hit and ignore rate",
+        "various API requests, like Get User. Below are the formats,"
+      ],
+      "forbidden_needles": []
+    }
+  },
+  "Hyperliquid_Docs_gitbook.webarchive": {
+    "platform": "gitbook",
+    "regular": {
+      "min_pages": 37,
+      "max_pages": 41,
+      "min_size_kb": 108,
+      "max_size_kb": 132,
+      "required_needles": [
+        "Responses that take a time range will only return 500 elemen",
+        "The endpoints in this section as well as websocket subscript",
+        "tokens [150, 0] . Note that some assets may be remapped on u"
+      ],
+      "forbidden_needles": []
+    },
+    "reader": {
+      "min_pages": 37,
+      "max_pages": 41,
+      "min_size_kb": 108,
+      "max_size_kb": 132,
+      "required_needles": [
+        "Responses that take a time range will only return 500 elemen",
+        "The endpoints in this section as well as websocket subscript",
+        "tokens [150, 0] . Note that some assets may be remapped on u"
+      ],
+      "forbidden_needles": [
+        "Powered by GitBook",
+        "Skip to main content"
+      ]
+    }
+  },
+  "Incentive Marketplace - Berachain - mintify.webarchive": {
+    "platform": "mintlify",
+    "regular": {
+      "min_pages": 7,
+      "max_pages": 9,
+      "min_size_kb": 87,
+      "max_size_kb": 107,
+      "required_needles": [
+        "A portion of protocol incentives is automatically redirected",
+        "Reward Vault can have up to two unique Incentive Tokens whit",
+        "A validator can change their commission percentage by first"
+      ],
+      "forbidden_needles": []
+    },
+    "reader": {
+      "min_pages": 3,
+      "max_pages": 5,
+      "min_size_kb": 50,
+      "max_size_kb": 62,
+      "required_needles": [
+        "A portion of protocol incentives is automatically redirected",
+        "Reward Vault can have up to two unique Incentive Tokens whit",
+        "A validator can change their commission percentage by first"
+      ],
+      "forbidden_needles": [
+        "Skip to main content",
+        "Was this page helpful?"
+      ]
+    }
+  },
+  "JetBrains IDEs - Claude Code Docs.webarchive": {
+    "platform": "anthropic-mintlify",
+    "regular": {
+      "min_pages": 7,
+      "max_pages": 9,
+      "min_size_kb": 113,
+      "max_size_kb": 137,
+      "required_needles": [
+        "Find and install the Claude Code plugin from the JetBrains m",
+        "modify IDE configuration files that can be automatically exe",
+        "If you’re using Claude Code on WSL2 with a JetBrains IDE and"
+      ],
+      "forbidden_needles": []
+    },
+    "reader": {
+      "min_pages": 4,
+      "max_pages": 6,
+      "min_size_kb": 47,
+      "max_size_kb": 57,
+      "required_needles": [
+        "Find and install the Claude Code plugin from the JetBrains m",
+        "modify IDE configuration files that can be automatically exe",
+        "the cause is usually WSL2’s NAT networking or Windows Firewa"
+      ],
+      "forbidden_needles": [
+        "Skip to main content",
+        "Was this page helpful?"
+      ]
+    }
+  },
+  "OAuth2 and Permissions - Documentation - Discord.webarchive": {
+    "platform": "discord",
+    "regular": {
+      "min_pages": 5,
+      "max_pages": 7,
+      "min_size_kb": 77,
+      "max_size_kb": 93,
+      "required_needles": [
+        "персонализировать рекламные объявления и другие материалы, о",
+        "персонализировать рекламные объявления и другие материалы, о",
+        "социальных сетей и анализировать сетевой трафик. Мы также пр"
+      ],
+      "forbidden_needles": []
+    },
+    "reader": {
+      "min_pages": 1,
+      "max_pages": 3,
+      "min_size_kb": 30,
+      "max_size_kb": 40,
+      "required_needles": [
+        "uses this token to authenticate as the bot user, a dedicated",
+        "Discord uses OAuth2 as the standard authorization framework",
+        "• Let your app read or write data on behalf of the user as a"
+      ],
+      "forbidden_needles": []
+    }
+  },
+  "OpenRouter Quickstart Guide - fern.webarchive": {
+    "platform": "fern",
+    "regular": {
+      "min_pages": 6,
+      "max_pages": 8,
+      "min_size_kb": 81,
+      "max_size_kb": 99,
+      "required_needles": [
+        "For AI agents: a documentation index is available at the roo",
+        "OpenAPI spec, and zero boilerplate. It is intentionally lean",
+        "The Client SDKs wrap the OpenRouter API with full type safet"
+      ],
+      "forbidden_needles": []
+    },
+    "reader": {
+      "min_pages": 4,
+      "max_pages": 6,
+      "min_size_kb": 41,
+      "max_size_kb": 51,
+      "required_needles": [
+        "handles multi-turn conversation loops, tool execution, and s",
+        "single endpoint, while automatically handling fallbacks and",
+        "The API also supports streaming. You can also use the OpenAI"
+      ],
+      "forbidden_needles": [
+        "Ask AI",
+        "Built with",
+        "Was this page helpful?"
+      ]
+    }
+  },
+  "R&D – это не бэкстейдж, а часть продукта. Почему? — Техника на vc.ru.webarchive": {
+    "platform": "vcru",
+    "regular": {
+      "min_pages": 17,
+      "max_pages": 19,
+      "min_size_kb": 2360,
+      "max_size_kb": 2884,
+      "required_needles": [
+        "Генеративный AI в BIOCAD, hh.ru, Северстали, Яндекс Лавке и",
+        "PwC Global Consumer Insights Survey (2023) показал: 73% потр",
+        "Как вы относитесь к брендам, которые открыто показывают проц"
+      ],
+      "forbidden_needles": []
+    },
+    "reader": {
+      "min_pages": 2,
+      "max_pages": 4,
+      "min_size_kb": 214,
+      "max_size_kb": 262,
+      "required_needles": [
+        "которые особенно чувствительны к перегреву. И это только лаб",
+        "Считается, что потребителю это неинтересно. Но данные говоря",
+        "доверяют брендам больше, если те открыто рассказывают о проц"
+      ],
+      "forbidden_needles": []
+    }
+  },
+  "What is Intelligence.webarchive": {
+    "platform": "unknown",
+    "regular": {
+      "min_pages": 96,
+      "max_pages": 106,
+      "min_size_kb": 27388,
+      "max_size_kb": 33474,
+      "required_needles": [
+        "of seawater, which likely contained about a billion virus pa",
+        "threats and opportunities, should they arise—and assuming we",
+        "Then, the really clever part: if the program itself is writt"
+      ],
+      "forbidden_needles": []
+    },
+    "reader": {
+      "min_pages": 100,
+      "max_pages": 110,
+      "min_size_kb": 27397,
+      "max_size_kb": 33485,
+      "required_needles": [
+        "apparent impossibility of order arising spontaneously out of",
+        "his colleagues figured out what was really going on. Their c",
+        "The “Candelabra” black smoker in the Logatchev hydrothermal"
+      ],
+      "forbidden_needles": []
+    }
+  },
+  "confluence-version-table.html": {
+    "platform": "confluence",
+    "source": "platform",
+    "regular": {
+      "min_pages": 1,
+      "max_pages": 2,
+      "min_size_kb": 5,
+      "max_size_kb": 60,
+      "required_needles": [
+        "Управление версиями",
+        "Версия",
+        "Дата",
+        "Автор",
+        "V0.01",
+        "V0.02",
+        "Демидова Татьяна",
+        "1. Ограничения"
+      ],
+      "forbidden_needles": [
+        "Копировать ссылку"
+      ]
+    },
+    "reader": {
+      "min_pages": 1,
+      "max_pages": 2,
+      "min_size_kb": 5,
+      "max_size_kb": 60,
+      "required_needles": [
+        "Управление версиями",
+        "Версия",
+        "Дата",
+        "Автор",
+        "V0.01",
+        "Демидова Татьяна"
+      ],
+      "forbidden_needles": [
+        "Копировать ссылку"
+      ]
+    }
+  },
+  "fern-shiki-codeblock.html": {
+    "platform": "fern",
+    "source": "platform",
+    "regular": {
+      "min_pages": 1,
+      "max_pages": 2,
+      "min_size_kb": 5,
+      "max_size_kb": 50,
+      "required_needles": [
+        "import requests",
+        "openai/gpt-5.2",
+        "What is the meaning of life?",
+        "url=\"https://openrouter.ai/api/v1/chat/completions\""
+      ],
+      "forbidden_needles": []
+    },
+    "reader": {
+      "min_pages": 1,
+      "max_pages": 2,
+      "min_size_kb": 5,
+      "max_size_kb": 50,
+      "required_needles": [
+        "import requests",
+        "openai/gpt-5.2",
+        "What is the meaning of life?"
+      ],
+      "forbidden_needles": []
+    }
+  },
+  "gitbook-api-table.html": {
+    "platform": "gitbook",
+    "source": "platform",
+    "regular": {
+      "min_pages": 1,
+      "max_pages": 2,
+      "min_size_kb": 5,
+      "max_size_kb": 60,
+      "required_needles": [
+        "Retrieve mids for all coins",
+        "https://api.hyperliquid.xyz/info",
+        "Content-Type",
+        "application/json",
+        "allMids"
+      ],
+      "forbidden_needles": []
+    },
+    "reader": {
+      "min_pages": 1,
+      "max_pages": 2,
+      "min_size_kb": 5,
+      "max_size_kb": 60,
+      "required_needles": [
+        "Retrieve mids for all coins",
+        "Content-Type",
+        "application/json"
+      ],
+      "forbidden_needles": []
+    }
+  },
+  "habr-banner-stack.html": {
+    "platform": "habr",
+    "source": "platform",
+    "regular": {
+      "min_pages": 1,
+      "max_pages": 3,
+      "min_size_kb": 5,
+      "max_size_kb": 60,
+      "required_needles": [
+        "Представлен трекер Claude Code",
+        "Йенс Ларссон",
+        "Демон запускается локально",
+        "Cloudflare"
+      ],
+      "forbidden_needles": [
+        "ИНН 7705756279",
+        "РЕКЛАМА",
+        "erid:2VSb5yvZvKk"
+      ]
+    },
+    "reader": {
+      "min_pages": 1,
+      "max_pages": 3,
+      "min_size_kb": 5,
+      "max_size_kb": 60,
+      "required_needles": [
+        "Представлен трекер Claude Code",
+        "Йенс Ларссон",
+        "Демон запускается локально"
+      ],
+      "forbidden_needles": [
+        "ИНН 7705756279",
+        "РЕКЛАМА",
+        "Новости",
+        "Статьи"
+      ]
+    }
+  },
+  "mintlify-callout.html": {
+    "platform": "mintlify",
+    "source": "platform",
+    "regular": {
+      "min_pages": 1,
+      "max_pages": 2,
+      "min_size_kb": 5,
+      "max_size_kb": 50,
+      "required_needles": [
+        "Supported IDEs",
+        "Claude Code integrates with JetBrains IDEs",
+        "IntelliJ IDEA",
+        "PyCharm",
+        "After installing the plugin"
+      ],
+      "forbidden_needles": []
+    },
+    "reader": {
+      "min_pages": 1,
+      "max_pages": 2,
+      "min_size_kb": 5,
+      "max_size_kb": 50,
+      "required_needles": [
+        "Supported IDEs",
+        "Claude Code integrates with JetBrains IDEs",
+        "IntelliJ IDEA"
+      ],
+      "forbidden_needles": []
+    }
+  },
+  "regression-broken-link-stylesheet.html": {
+    "platform": "synthetic",
+    "source": "synthetic",
+    "regular": {
+      "min_pages": 1,
+      "max_pages": 2,
+      "min_size_kb": 5,
+      "max_size_kb": 50,
+      "required_needles": [
+        "BROKEN_CSS_HEADER",
+        "BROKEN_CSS_BODY"
+      ],
+      "forbidden_needles": []
+    },
+    "reader": {
+      "min_pages": 1,
+      "max_pages": 2,
+      "min_size_kb": 5,
+      "max_size_kb": 50,
+      "required_needles": [
+        "BROKEN_CSS_HEADER",
+        "BROKEN_CSS_BODY"
+      ],
+      "forbidden_needles": []
+    }
+  },
+  "regression-empty-anchor-perf.html": {
+    "platform": "synthetic",
+    "source": "synthetic",
+    "regular": {
+      "min_pages": 1,
+      "max_pages": 3,
+      "min_size_kb": 5,
+      "max_size_kb": 50,
+      "required_needles": [
+        "PERF_NEEDLE",
+        "PERF_NEEDLE_END"
+      ],
+      "forbidden_needles": []
+    },
+    "reader": {
+      "min_pages": 1,
+      "max_pages": 3,
+      "min_size_kb": 5,
+      "max_size_kb": 50,
+      "required_needles": [
+        "PERF_NEEDLE",
+        "PERF_NEEDLE_END"
+      ],
+      "forbidden_needles": []
+    }
+  },
+  "regression-nested-button.html": {
+    "platform": "synthetic",
+    "source": "synthetic",
+    "regular": {
+      "min_pages": 1,
+      "max_pages": 2,
+      "min_size_kb": 5,
+      "max_size_kb": 30,
+      "required_needles": [
+        "OUTER_X",
+        "INNER_Y",
+        "TAIL_Z"
+      ],
+      "forbidden_needles": []
+    },
+    "reader": {
+      "min_pages": 1,
+      "max_pages": 2,
+      "min_size_kb": 5,
+      "max_size_kb": 30,
+      "required_needles": [
+        "OUTER_X",
+        "INNER_Y",
+        "TAIL_Z"
+      ],
+      "forbidden_needles": []
+    }
+  },
+  "regression-script-blob.html": {
+    "platform": "synthetic",
+    "source": "synthetic",
+    "regular": {
+      "min_pages": 1,
+      "max_pages": 2,
+      "min_size_kb": 5,
+      "max_size_kb": 50,
+      "required_needles": [
+        "HEADER_X",
+        "REAL_CONTENT_NEEDLE"
+      ],
+      "forbidden_needles": []
+    },
+    "reader": {
+      "min_pages": 1,
+      "max_pages": 2,
+      "min_size_kb": 5,
+      "max_size_kb": 30,
+      "required_needles": [
+        "REAL_CONTENT_NEEDLE"
+      ],
+      "forbidden_needles": [
+        "HEADER_X",
+        "synthetic JSON content"
+      ]
+    }
+  },
+  "regression-self-closing-svg.html": {
+    "platform": "synthetic",
+    "source": "synthetic",
+    "regular": {
+      "min_pages": 1,
+      "max_pages": 2,
+      "min_size_kb": 5,
+      "max_size_kb": 30,
+      "required_needles": [
+        "BEFORE_NEEDLE",
+        "MIDDLE_NEEDLE",
+        "AFTER_NEEDLE"
+      ],
+      "forbidden_needles": []
+    },
+    "reader": {
+      "min_pages": 1,
+      "max_pages": 2,
+      "min_size_kb": 5,
+      "max_size_kb": 30,
+      "required_needles": [
+        "BEFORE_NEEDLE",
+        "MIDDLE_NEEDLE",
+        "AFTER_NEEDLE"
+      ],
+      "forbidden_needles": []
+    }
+  },
+  "regression-tall-svg-content.html": {
+    "platform": "synthetic",
+    "source": "synthetic",
+    "regular": {
+      "min_pages": 1,
+      "max_pages": 2,
+      "min_size_kb": 5,
+      "max_size_kb": 30,
+      "required_needles": [
+        "VERTICAL_NEEDLE_TOP",
+        "VERTICAL_NEEDLE_MID",
+        "VERTICAL_NEEDLE_BOT",
+        "HEADER_LINE",
+        "FOOTER_LINE"
+      ],
+      "forbidden_needles": []
+    },
+    "reader": {
+      "min_pages": 1,
+      "max_pages": 2,
+      "min_size_kb": 5,
+      "max_size_kb": 30,
+      "required_needles": [
+        "VERTICAL_NEEDLE_TOP",
+        "VERTICAL_NEEDLE_MID",
+        "VERTICAL_NEEDLE_BOT",
+        "HEADER_LINE",
+        "FOOTER_LINE"
+      ],
+      "forbidden_needles": []
+    }
+  },
+  "vcru-entry-tail.html": {
+    "platform": "vcru",
+    "source": "platform",
+    "regular": {
+      "min_pages": 1,
+      "max_pages": 3,
+      "min_size_kb": 5,
+      "max_size_kb": 400,
+      "required_needles": [
+        "R&D – это не бэкстейдж",
+        "Anton Bushkov",
+        "исследовательская функция"
+      ],
+      "forbidden_needles": []
+    },
+    "reader": {
+      "min_pages": 1,
+      "max_pages": 2,
+      "min_size_kb": 5,
+      "max_size_kb": 60,
+      "required_needles": [
+        "R&D – это не бэкстейдж",
+        "исследовательская функция"
+      ],
+      "forbidden_needles": [
+        "SHOULD_NOT_APPEAR_IN_READER_MODE_comment_one",
+        "SHOULD_NOT_APPEAR_IN_READER_MODE_comment_two",
+        "SHOULD_NOT_APPEAR_IN_READER_MODE_rec_one",
+        "SHOULD_NOT_APPEAR_IN_READER_MODE_rec_two",
+        "Поделиться",
+        "Сохранить"
+      ]
+    }
+  },
+  "В Claude добавили интеграции с Blender, Adobe и другими приложениями для дизайна и 3D-моделирования .webarchive": {
+    "platform": "unknown",
+    "regular": {
+      "min_pages": 13,
+      "max_pages": 15,
+      "min_size_kb": 1324,
+      "max_size_kb": 1618,
+      "required_needles": [
+        "платеж мобильного или см. п.2 ниже) телефон вообще не будет",
+        "Если у вас его нет (как в случае с покупкой в аэропорту, ког",
+        "уже к банку привязали) можно только очно, только в течение 3"
+      ],
+      "forbidden_needles": []
+    },
+    "reader": {
+      "min_pages": 1,
+      "max_pages": 3,
+      "min_size_kb": 98,
+      "max_size_kb": 120,
+      "required_needles": [
+        "• Для работы с Adobe нужна подписка Creative Cloud. Возможно",
+        "дизайнеров интерьеров и мебели, а также Splice — для поиска",
+        "• Теперь доступны программа для 3D-графики и анимации Blende"
+      ],
+      "forbidden_needles": []
+    }
+  },
+  "Интеграция ELMA365 с телефонией 3CX - Ярли - Confluence Wiki-2.mhtml": {
+    "platform": "confluence",
+    "regular": {
+      "min_pages": 32,
+      "max_pages": 36,
+      "min_size_kb": 395,
+      "max_size_kb": 483,
+      "required_needles": [
+        "https://crm-dev.npkyarli.ru/api/integrations/webhook/voip/e",
+        "pickupincoming, callerid = номер абонента, user =",
+        "// Вызывать автоматически при изменении ссылки на"
+      ],
+      "forbidden_needles": []
+    },
+    "reader": {
+      "min_pages": 26,
+      "max_pages": 28,
+      "min_size_kb": 376,
+      "max_size_kb": 460,
+      "required_needles": [
+        "10. 3CX отправляет POST запрос в ELMA365: event = ringing, c",
+        "10. 3CX отправляет POST запрос в ELMA365 event = incoming, c",
+        "20. 3CX отправляет POST запрос в ELMA365 event = incoming, c"
+      ],
+      "forbidden_needles": [
+        "Копировать ссылку",
+        "Скопировано!"
+      ]
+    }
+  },
+  "Интеграция ELMA365 с телефонией 3CX - Ярли - Confluence Wiki-3.html": {
+    "platform": "confluence",
+    "regular": {
+      "min_pages": 24,
+      "max_pages": 26,
+      "min_size_kb": 100,
+      "max_size_kb": 122,
+      "required_needles": [
+        "▪ telephony-8 — запустить бизнеспроцесс: Создать задачу, Уда",
+        "10. 3CX отправляет POST запрос в ELMA365: event =",
+        "10. 3CX отправляет POST запрос в ELMA365 event ="
+      ],
+      "forbidden_needles": []
+    },
+    "reader": {
+      "min_pages": 17,
+      "max_pages": 19,
+      "min_size_kb": 88,
+      "max_size_kb": 108,
+      "required_needles": [
+        "10. 3CX отправляет POST запрос в ELMA365: event = ringing, c",
+        "10. 3CX отправляет POST запрос в ELMA365 event = incoming, c",
+        "20. 3CX отправляет POST запрос в ELMA365 event = incoming, c"
+      ],
+      "forbidden_needles": [
+        "Копировать ссылку",
+        "Скопировано!"
+      ]
+    }
+  },
+  "Интеграция ELMA365 с телефонией 3CX - Ярли - Confluence Wiki.html": {
+    "platform": "confluence",
+    "regular": {
+      "min_pages": 35,
+      "max_pages": 39,
+      "min_size_kb": 585,
+      "max_size_kb": 715,
+      "required_needles": [
+        "/plugins/pagetree/naturalchildren.action?decorator=none&exce",
+        "Входящий звонок принят (Пользователь не работает в ELMA365)",
+        "pickupincoming, callerid = номер абонента, user ="
+      ],
+      "forbidden_needles": []
+    },
+    "reader": {
+      "min_pages": 27,
+      "max_pages": 29,
+      "min_size_kb": 558,
+      "max_size_kb": 682,
+      "required_needles": [
+        "10. 3CX отправляет POST запрос в ELMA365: event = ringing, c",
+        "10. 3CX отправляет POST запрос в ELMA365 event = incoming, c",
+        "20. 3CX отправляет POST запрос в ELMA365 event = incoming, c"
+      ],
+      "forbidden_needles": [
+        "Копировать ссылку",
+        "Скопировано!"
+      ]
+    }
+  },
+  "Интеграция ELMA365 с телефонией 3CX - Ярли - Confluence Wiki.webarchive": {
+    "platform": "confluence",
+    "regular": {
+      "min_pages": 31,
+      "max_pages": 35,
+      "min_size_kb": 397,
+      "max_size_kb": 485,
+      "required_needles": [
+        "/plugins/pagetree/naturalchildren.action?decorator=none&exce",
+        "https://crm-dev.npkyarli.ru/api/integrations/webhook/voip/e",
+        "Здесь Вы можете добавлять ссылки быстрого доступа к"
+      ],
+      "forbidden_needles": []
+    },
+    "reader": {
+      "min_pages": 26,
+      "max_pages": 28,
+      "min_size_kb": 377,
+      "max_size_kb": 461,
+      "required_needles": [
+        "10. 3CX отправляет POST запрос в ELMA365: event = ringing, c",
+        "10. 3CX отправляет POST запрос в ELMA365 event = incoming, c",
+        "20. 3CX отправляет POST запрос в ELMA365 event = incoming, c"
+      ],
+      "forbidden_needles": [
+        "Копировать ссылку",
+        "Скопировано!"
+      ]
+    }
+  },
+  "Обзор-2.webarchive": {
+    "platform": "mobile-review",
+    "regular": {
+      "min_pages": 42,
+      "max_pages": 46,
+      "min_size_kb": 10427,
+      "max_size_kb": 12743,
+      "required_needles": [
+        "Молодежный смартфон, флагман линейки nova. Качественные фото",
+        "Модель доступна в четырех вариантах по памяти 8/256, 12/256",
+        "Получилось адекватное соотношение цена/качество, аппарат не"
+      ],
+      "forbidden_needles": []
+    },
+    "reader": {
+      "min_pages": 72,
+      "max_pages": 80,
+      "min_size_kb": 11044,
+      "max_size_kb": 13498,
+      "required_needles": [
+        "Wi-Fi a/b/g/n/ac, WiFi 6, двухдиапазонный, Bluetooth 5.4, NF",
+        "рынке, то мы увидим, что его цена за версию 8/256 ГБ около 2",
+        "У нас модель зеленого цвета, ее можно назвать изумрудной, цв"
+      ],
+      "forbidden_needles": []
+    }
+  },
+  "Обзор.webarchive": {
+    "platform": "mobile-review",
+    "regular": {
+      "min_pages": 16,
+      "max_pages": 18,
+      "min_size_kb": 1129,
+      "max_size_kb": 1379,
+      "required_needles": [
+        "Молодежный смартфон, флагман линейки nova. Качественные фото",
+        "Модель доступна в четырех вариантах по памяти 8/256, 12/256",
+        "Получилось адекватное соотношение цена/качество, аппарат не"
+      ],
+      "forbidden_needles": []
+    },
+    "reader": {
+      "min_pages": 22,
+      "max_pages": 24,
+      "min_size_kb": 2203,
+      "max_size_kb": 2693,
+      "required_needles": [
+        "Wi-Fi a/b/g/n/ac, WiFi 6, двухдиапазонный, Bluetooth 5.4, NF",
+        "рынке, то мы увидим, что его цена за версию 8/256 ГБ около 2",
+        "У нас модель зеленого цвета, ее можно назвать изумрудной, цв"
+      ],
+      "forbidden_needles": []
+    }
+  },
+  "Опыт оформления банковской карты в Узбекистане в апреле 2026 года — Личный опыт на vc.ru.webarchive": {
+    "platform": "vcru",
+    "regular": {
+      "min_pages": 19,
+      "max_pages": 21,
+      "min_size_kb": 2330,
+      "max_size_kb": 2848,
+      "required_needles": [
+        "то-ли из-за того, что не умеют пользоваться программой регис",
+        "ботов, ради хулиганства, положил его сервак. Сын подумал, по",
+        "У вас пропущено несколько очень важных моментов, которые сил"
+      ],
+      "forbidden_needles": []
+    },
+    "reader": {
+      "min_pages": 6,
+      "max_pages": 8,
+      "min_size_kb": 798,
+      "max_size_kb": 976,
+      "required_needles": [
+        "то-ли из-за того, что не умеют пользоваться программой регис",
+        "KapitalBank выпускает карту в центральном офисе (ул. Сайилго",
+        "организации в Узбекистане, работают только в будни с 9 до 18"
+      ],
+      "forbidden_needles": []
+    }
+  },
+  "Представлен трекер Claude Code для умных часов Garmin : Хабр.webarchive": {
+    "platform": "habr",
+    "regular": {
+      "min_pages": 8,
+      "max_pages": 10,
+      "min_size_kb": 465,
+      "max_size_kb": 569,
+      "_canary": "Демон запускается локально — paragraph-4 drop bug from commit 3857d6d",
+      "required_needles": [
+        "Демон запускается локально",
+        "— средняя зарплата во всех IT-специализациях по данным из 33",
+        "Claude Code, он не использует API‑интерфейс прокси. Если что",
+        "Разработчик Йенс Ларссон представил открытый проект фитнес-т"
+      ],
+      "forbidden_needles": []
+    },
+    "reader": {
+      "min_pages": 2,
+      "max_pages": 4,
+      "min_size_kb": 399,
+      "max_size_kb": 487,
+      "required_needles": [
+        "на запястье, а также настраиваемых графиков: количество токе",
+        "«Записывает ваши сеансы работы с Claude Code как реальные де",
+        "IMPLEMENTATION_PLAN.md проекта, где описана вся его полная а"
+      ],
+      "forbidden_needles": [
+        "erid:2VSb5yvZvKk",
+        "© 2006",
+        "Зарегистрируйтесь на Хабре",
+        "ИНН 7705756279",
+        "Корпоративный блог",
+        "Медийная реклама"
+      ]
+    }
+  }
+}

@@ -1,0 +1,22 @@
+<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Regression: tall content SVG kept</title></head>
+<body>
+<!--
+  VDD-iter-5 HIGH-2: AND-rule on declared numeric dims. Old OR-rule
+  stripped this SVG because width=50 ≤ 64; legitimate vertical content
+  (timeline / progress bar) was lost. New AND rule: ALL declared dims
+  must be ≤ 64 → with height=500 this fails the gate → SVG kept.
+-->
+<p>HEADER_LINE</p>
+<svg xmlns="http://www.w3.org/2000/svg" width="50" height="500" viewBox="0 0 50 500">
+    <text x="25" y="50" font-family="sans-serif" font-size="14"
+          text-anchor="middle">VERTICAL_NEEDLE_TOP</text>
+    <text x="25" y="250" font-family="sans-serif" font-size="14"
+          text-anchor="middle">VERTICAL_NEEDLE_MID</text>
+    <text x="25" y="450" font-family="sans-serif" font-size="14"
+          text-anchor="middle">VERTICAL_NEEDLE_BOT</text>
+</svg>
+<p>FOOTER_LINE</p>
+</body>
+</html>

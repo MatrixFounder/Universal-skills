@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Regression: empty anchor strip perf</title></head>
+<body>
+<!--
+  VDD-iter-5 MED-8: TOC-style page with thousands of <a href="https://...">
+  external anchors. Old combined regex had O(n×k) backtracking on every
+  anchor that wasn't a hash href. Two-stage fix: master regex matches every
+  <a>, hash-href check runs as Python predicate per match.
+
+  This fixture has 200 inline external anchors; even though Python regex
+  backtracking is forgiving, the assertion in test_battery is timing-based:
+  the render must complete within the BATTERY_TIMEOUT (90s) ceiling that
+  also covers all real-world tmp/ fixtures.
+
+  PERF_NEEDLE marks the article body so the battery validates content
+  presence on top of timing.
+-->
+<p>PERF_NEEDLE — start of body</p>
+<nav>
+<a href="https://example.com/a">link</a> <a href="https://example.com/b">link</a>
+<a href="https://example.com/c">link</a> <a href="https://example.com/d">link</a>
+<a href="https://example.com/e">link</a> <a href="https://example.com/f">link</a>
+<a href="https://example.com/g">link</a> <a href="https://example.com/h">link</a>
+<a href="https://example.com/i">link</a> <a href="https://example.com/j">link</a>
+<a href="https://example.com/k">link</a> <a href="https://example.com/l">link</a>
+<a href="https://example.com/m">link</a> <a href="https://example.com/n">link</a>
+<a href="https://example.com/o">link</a> <a href="https://example.com/p">link</a>
+<a href="https://example.com/q">link</a> <a href="https://example.com/r">link</a>
+<a href="https://example.com/s">link</a> <a href="https://example.com/t">link</a>
+<a href="https://example.com/u">link</a> <a href="https://example.com/v">link</a>
+<a href="https://example.com/w">link</a> <a href="https://example.com/x">link</a>
+<a href="https://example.com/y">link</a> <a href="https://example.com/z">link</a>
+<a href="https://example.com/0">link</a> <a href="https://example.com/1">link</a>
+<a href="https://example.com/2">link</a> <a href="https://example.com/3">link</a>
+<a href="https://example.com/4">link</a> <a href="https://example.com/5">link</a>
+<a href="https://example.com/6">link</a> <a href="https://example.com/7">link</a>
+<a href="https://example.com/8">link</a> <a href="https://example.com/9">link</a>
+<a href="https://example.com/aa">link</a> <a href="https://example.com/bb">link</a>
+<a href="https://example.com/cc">link</a> <a href="https://example.com/dd">link</a>
+<a href="https://example.com/ee">link</a> <a href="https://example.com/ff">link</a>
+<a href="https://example.com/gg">link</a> <a href="https://example.com/hh">link</a>
+<a href="https://example.com/ii">link</a> <a href="https://example.com/jj">link</a>
+<a href="https://example.com/kk">link</a> <a href="https://example.com/ll">link</a>
+<a href="https://example.com/mm">link</a> <a href="https://example.com/nn">link</a>
+<a href="https://example.com/oo">link</a> <a href="https://example.com/pp">link</a>
+<a href="https://example.com/qq">link</a> <a href="https://example.com/rr">link</a>
+<a href="https://example.com/ss">link</a> <a href="https://example.com/tt">link</a>
+<a href="https://example.com/uu">link</a> <a href="https://example.com/vv">link</a>
+<a href="https://example.com/ww">link</a> <a href="https://example.com/xx">link</a>
+<a href="https://example.com/yy">link</a> <a href="https://example.com/zz">link</a>
+</nav>
+<a href="#empty-hash"><svg width="12" height="12"/></a>
+<p>PERF_NEEDLE_END — finished</p>
+</body>
+</html>

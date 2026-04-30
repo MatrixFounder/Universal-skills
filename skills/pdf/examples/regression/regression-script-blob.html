@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Regression: script-blob in article</title></head>
+<body>
+<!--
+  VDD-iter-5 HIGH-3: <script> body content was counted as visible text
+  by `text_length`, inflating reader-mode candidate scoring. A Mintlify-
+  style page might have <article><h1>X</h1><script>{huge JSON}</script>
+  </article> with only 1 char of visible text but 2KB of "text" measured
+  by tag-strip alone — passes min_text=500 gate trivially.
+
+  After fix: `text_length` strips <script>/<style> bodies first. This
+  article has visible_text="HEADER_X" (8 chars) → fails min_text=500
+  gate; reader mode falls through to the next candidate (the .entry
+  div below with real content).
+-->
+<article>
+    <h1>HEADER_X</h1>
+    <script id="__NEXT_DATA__">
+{"props":{"pageProps":{"data":{"foo":"bar","items":[
+"a long stream of synthetic JSON content that would inflate text_length",
+"if the script body were not stripped before tag-strip in the candidate gate.",
+"This blob is intentionally over 500 characters long so that without the",
+"script-strip fix it would pass the min_text=500 candidate gate easily.",
+"Real Mintlify pages embed __NEXT_DATA__ JSON of 100+ KB inside the article,",
+"which made the article wrapper a runaway false-positive candidate.",
+"Padding padding padding padding padding padding padding padding padding."]}}}}
+    </script>
+</article>
+<div class="entry">
+    REAL_CONTENT_NEEDLE — this is the legitimate article body that
+    should be picked when reader-mode falls through past the empty
+    article. It contains plenty of paragraph text to comfortably
+    exceed the 500-char threshold for the .entry candidate tier.
+    Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do
+    eiusmod tempor incididunt ut labore et dolore magna aliqua. Ut
+    enim ad minim veniam, quis nostrud exercitation ullamco laboris
+    nisi ut aliquip ex ea commodo consequat. Duis aute irure dolor
+    in reprehenderit in voluptate velit esse cillum dolore eu fugiat
+    nulla pariatur. Excepteur sint occaecat cupidatat non proident.
+</div>
+</body>
+</html>

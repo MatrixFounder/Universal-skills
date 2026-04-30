@@ -468,6 +468,41 @@ set -e
     && ok "html2pdf: unsupported .pdf input → exit 1 / UnsupportedFormat" \
     || nok "html2pdf unsupported format" "exit=$rc msg=$err"
 
+# --- html2pdf regression battery -------------------------------------------
+# Tier 1: pure-Python unit tests for html2pdf_lib helpers.
+# Tier 0+2+3: data-driven battery — synthetic micro-fixtures
+# (`examples/regression/`) + hand-stripped real-platform slices
+# (`tests/fixtures/platforms/`) + tmp/ originals when present on disk.
+# See `tests/battery_signatures.json` for the per-fixture spec
+# (page count + size tolerance bands, required + forbidden needles).
+echo "html2pdf regressions:"
+
+set +e
+out=$("$PY" -m unittest tests.test_preprocess 2>&1)
+rc=$?
+set -e
+if [ "$rc" -eq 0 ]; then
+    n=$(echo "$out" | awk '/^Ran [0-9]+ tests/ {print $2}')
+    ok "preprocess unit tests (${n} cases)"
+else
+    nok "preprocess unit tests" "see: $PY -m unittest tests.test_preprocess -v"
+fi
+
+set +e
+out=$("$PY" -m unittest tests.test_battery 2>&1)
+rc=$?
+set -e
+if [ "$rc" -eq 0 ]; then
+    # `Ran N tests` — split across "OK" or "OK (skipped=X)" outputs.
+    total=$(echo "$out" | awk '/^Ran [0-9]+ tests/ {print $2}')
+    skipped=$(echo "$out" | awk '/skipped=/ {match($0, /skipped=[0-9]+/); print substr($0, RSTART+8, RLENGTH-8); exit}')
+    [ -n "$skipped" ] || skipped=0
+    ran=$((total - skipped))
+    ok "battery: ${ran} fixtures × modes ($skipped skipped — tmp/ absent or mode null)"
+else
+    nok "battery" "see: $PY -m unittest tests.test_battery -v"
+fi
+
 # --- cross-1: preview.py — pdf path (no soffice required) ----------------
 echo "preview (pdf path):"
 "$PY" preview.py "$TMP/out.pdf" "$TMP/preview.jpg" --dpi 80 >/dev/null 2>&1 \

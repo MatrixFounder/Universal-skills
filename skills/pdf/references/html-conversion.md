@@ -215,8 +215,117 @@ python3 scripts/html2pdf.py dashboard.html dashboard.pdf \
     --base-url /var/www/dashboard_assets
 ```
 
-Force watchdog disabled for long-running rendering on a known-good 53 MB book webarchive:
+Force watchdog disabled for long-running rendering on a known-good 24 MB book webarchive:
 
 ```bash
 HTML2PDF_TIMEOUT=0 python3 scripts/html2pdf.py book.webarchive book.pdf
 ```
+
+## Regression coverage (VDD-iter-6)
+
+The skill ships a 4-tier regression net designed to catch all bugs from
+the recent preprocessing-pipeline iterations and to give a low-friction
+workflow for adding new platforms without breaking existing behaviour.
+
+### Tier 1 — Unit tests (`tests/test_preprocess.py`)
+
+37 deterministic tests that import individual helpers from
+`html2pdf_lib/` and pin down the contracts that survived the
+adversarial-review iterations. Cover: self-closing `<svg/>` handling,
+AND-rule aspect-ratio for icon detection, `text_length` script/style
+strip, `get_attr` cross-attribute false-positive fix, nested `<button>`
+unwrap, anchor-strip O(n×k) perf bound, code-table flatten false-
+positive guard, drawio foreignObject (camel + lowercase), watchdog
+wiring (zero-timeout, non-main-thread degrade, install/clear leak
+guard), offline URL fetcher refusal of `http(s)://`. Run time < 1 s.
+
+### Tier 2 — Synthetic micro-fixtures (`examples/regression/*.html`)
+
+6 hand-crafted ~1-3 KB HTML files that exercise edge cases Tier 0
+cannot deterministically reproduce: self-closing SVG, nested-button
+unwrap, tall vertical content SVG (AND-rule), `<script>` blob in
+`<article>` (text-length false positive), 5000-anchor TOC perf,
+broken external stylesheet (offline_url_fetcher).
+
+### Tier 3 — Real-platform structural slices (`tests/fixtures/platforms/*.html`)
+
+6 hand-stripped ~3-8 KB slices from real `tmp/` originals. **Sentinels
+are REAL strings** copied verbatim from the source platform, NOT
+synthetic placeholders:
+
+| Fixture | Source platform | Bug-canary needles |
+|---|---|---|
+| `mintlify-callout.html` | Anthropic Claude Code Docs | `Claude Code integrates with JetBrains IDEs`, `IntelliJ IDEA` |
+| `fern-shiki-codeblock.html` | OpenRouter Quickstart | `openai/gpt-5.2`, `What is the meaning of life?` |
+| `gitbook-api-table.html` | Hyperliquid API docs | `Retrieve mids for all coins`, `Content-Type`, `application/json` |
+| `confluence-version-table.html` | ELMA365 wiki | `Управление версиями`, `V0.01`, `Демидова Татьяна` |
+| `vcru-entry-tail.html` | vc.ru R&D article | `R&D – это не бэкстейдж`, `исследовательская функция` |
+| `habr-banner-stack.html` | Хабр Garmin tracker | `Демон запускается локально` (the paragraph-4 drop bug-canary from commit 3857d6d) |
+
+### Tier 0 — `tmp/` characterization battery (PRIMARY)
+
+The 17 fixtures in the repo's `tmp/` directory (~250 MB total —
+gitignored, kept on developer machines, not in CI). Each fixture
+renders in BOTH regular AND reader modes; outputs are validated
+against per-fixture entries in `tests/battery_signatures.json`:
+
+* `min_pages` ≤ pdf-page-count ≤ `max_pages` (5 % tolerance + 1 page slack)
+* `min_size_kb` ≤ pdf-file-size-kB ≤ `max_size_kb` (10 % tolerance)
+* every `required_needles[i]` appears in `pdftotext` output (whitespace-normalised)
+* none of `forbidden_needles[i]` appears (chrome-leakage detection;
+  reader-mode only — chrome legitimately appears in regular mode)
+
+The battery is the densest column in the coverage matrix because
+real-platform interaction effects are the bug class the recent
+iterations have been hitting.
+
+### Adding a new platform fixture (5-min workflow)
+
+```bash
+# 1. Drop the new fixture into tmp/
+cp ~/Downloads/notion-page.webarchive tmp/
+
+# 2. Auto-capture page count + needles + size band into the JSON
+cd skills/pdf/scripts
+./.venv/bin/python tests/capture_signatures.py
+# (only ADDs new fixtures by default; pass --refresh to regenerate
+# baselines after intentional preprocessing changes)
+
+# 3. Hand-add chrome strings to forbidden_needles for the new platform
+# (look at pdftotext output of the regular-mode PDF; pick 2-3 chrome
+# strings like "Skip to main content", "Search...", "© 2024 Acme")
+$EDITOR tests/battery_signatures.json
+
+# 4. Verify the baseline passes
+./.venv/bin/python -m unittest tests.test_battery -v
+
+# 5. Commit JSON delta — the .webarchive itself stays in tmp/
+git add tests/battery_signatures.json
+git commit -m "battery: add notion regression baseline"
+```
+
+### Tier 4 wiring (`tests/test_e2e.sh`)
+
+Two added lines invoke `unittest tests.test_preprocess` and
+`unittest tests.test_battery`. Battery tests skip gracefully (clear
+"skipped" message, not failure) when `tmp/` is absent. Total counts
+in the e2e summary: 74 on a clean checkout (no tmp/), ~150+ with
+tmp/ populated.
+
+### Honest scope
+
+* `forbidden_needles` are reader-mode-only — chrome legitimately
+  appears in regular-mode rendering; only reader mode promises
+  chrome-stripping.
+* The watchdog FIRING path (i.e. constructing an input that
+  reliably hangs > N seconds) is not tested. Watchdog WIRING (signal
+  install, zero-timeout, non-main-thread degrade) IS tested in
+  Tier 1; the firing path is best-effort by documented design
+  (cairo C calls hold the GIL).
+* Synthetic-fixture overlap with Tier 0 is intentional: synthetics
+  are deterministic in CI; Tier 0 is conditional on `tmp/` presence.
+* Test-file imports the underscore-prefixed helpers from
+  `html2pdf_lib.preprocess`. Those names are private by Python
+  convention but PINNED by the regression tests as the stable
+  testing API. Refactors that rename them must update
+  `tests/test_preprocess.py` in lockstep.
