@@ -13,8 +13,9 @@ locations:
     hand-stripped real-platform slices with verbatim sentinels).
 
 Each entry in the JSON describes both `regular` and `reader` modes
-(plus an optional `synthetic_fixture` / `platform_slice` flag for
-where to look on disk; default is `tmp/`). Per-mode assertions:
+plus an optional `"source"` field (`"synthetic"` → examples/regression/,
+`"platform"` → tests/fixtures/platforms/, default → tmp/). Per-mode
+assertions:
 
   * `min_pages` ≤ pdf-page-count ≤ `max_pages`
   * `min_size_kb` ≤ pdf-file-kb ≤ `max_size_kb`
@@ -59,10 +60,29 @@ SIGNATURES_PATH = HERE / "battery_signatures.json"
 BATTERY_TIMEOUT = 90
 
 
+class _SignaturesLoadError(Exception):
+    """Surfaced via a SkipTest class instead of crashing the test loader."""
+
+
 def _signatures() -> dict:
+    """Load battery_signatures.json; return {} if file missing.
+
+    Raises `_SignaturesLoadError` (NOT json.JSONDecodeError directly) on
+    parse failure — the caller registers a single explanatory SkipTest
+    instead of letting the loader crash with a Python traceback. Triggered
+    when the user is mid-edit (saving the JSON in a text editor while CI
+    runs) or when a merge conflict left invalid JSON in the file.
+    """
     if not SIGNATURES_PATH.exists():
         return {}
-    return json.loads(SIGNATURES_PATH.read_text(encoding="utf-8"))
+    try:
+        return json.loads(SIGNATURES_PATH.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise _SignaturesLoadError(
+            f"battery_signatures.json is not valid JSON at "
+            f"line {exc.lineno}, col {exc.colno}: {exc.msg}. "
+            f"Run `python3 -m json.tool {SIGNATURES_PATH}` to locate."
+        ) from exc
 
 
 def _resolve_source(fixture_name: str, sig: dict) -> Path | None:
@@ -105,7 +125,9 @@ def _pdf_pages(pdf: Path) -> int:
     out = subprocess.run(
         ["pdfinfo", str(pdf)], capture_output=True, text=True, timeout=30,
     ).stdout
-    m = re.search(r"^Pages:\s*(\d+)", out, re.MULTILINE)
+    # No leading-line anchor — some Poppler builds prefix `Pages:` with
+    # whitespace or interleave other status lines first.
+    m = re.search(r"Pages:\s*(\d+)", out)
     return int(m.group(1)) if m else 0
 
 
@@ -158,9 +180,14 @@ class _BatteryMixin:
             # the PDF's typeset width; a needle phrase like "продуктовую
             # разработку" can land on either side of a line break depending
             # on font metrics. Normalising lets sentinels work regardless
-            # of typesetting decisions. Same normalisation runs on both
-            # sides of the search.
-            text = re.sub(r"\s+", " ", _pdf_text(pdf))
+            # of typesetting decisions. Apply identical normalisation to
+            # both the PDF text AND each needle — capture-time-sampled
+            # needles may carry their original multi-space runs, which
+            # would otherwise miss the now-collapsed text. (VDD-iter-7.)
+            def _norm(s: str) -> str:
+                return re.sub(r"\s+", " ", s).strip()
+
+            text = _norm(_pdf_text(pdf))
 
             self.assertGreaterEqual(
                 pages, entry["min_pages"],
@@ -184,13 +211,13 @@ class _BatteryMixin:
             )
             for needle in entry.get("required_needles", []):
                 self.assertIn(
-                    needle, text,
+                    _norm(needle), text,
                     f"required needle {needle!r} missing from "
                     f"{self.fixture_name} ({self.mode})",
                 )
             for needle in entry.get("forbidden_needles", []):
                 self.assertNotIn(
-                    needle, text,
+                    _norm(needle), text,
                     f"forbidden needle {needle!r} leaked into "
                     f"{self.fixture_name} ({self.mode}) — chrome bypass",
                 )
@@ -215,9 +242,41 @@ def _slugify(name: str) -> str:
 
 
 # Generate one TestCase class per fixture × mode at module import.
-_signatures_data = _signatures()
+# Three early-exit conditions register a single explanatory SkipTest
+# instead of letting unittest's loader crash:
+#   1. No `battery_signatures.json` on disk (fresh checkout / CI without
+#      tmp/ + capture_signatures.py never run).
+#   2. JSON parse error (file mid-edit, merge conflict, etc.).
+#   3. pdfinfo / pdftotext (Poppler) missing from PATH.
+# Beyond that, slug collisions are detected and raised loudly — silently
+# overwriting one fixture's tests with another's would mask regressions.
 _globals = globals()
-if not _signatures_data:
+try:
+    _signatures_data = _signatures()
+    _load_error: str | None = None
+except _SignaturesLoadError as _exc:
+    _signatures_data = {}
+    _load_error = str(_exc)
+
+_poppler_missing = (
+    shutil.which("pdfinfo") is None or shutil.which("pdftotext") is None
+)
+
+if _load_error is not None:
+    class TestBatterySignaturesInvalid(unittest.TestCase):
+        def test_signatures_invalid(self) -> None:
+            self.fail(_load_error)
+    _globals["TestBatterySignaturesInvalid"] = TestBatterySignaturesInvalid
+elif _poppler_missing:
+    class TestBatteryPopplerMissing(unittest.TestCase):
+        def test_poppler_missing(self) -> None:
+            self.skipTest(
+                "Poppler tools (pdfinfo / pdftotext) not on PATH. "
+                "Install: macOS `brew install poppler`; "
+                "Debian/Ubuntu `sudo apt install poppler-utils`."
+            )
+    _globals["TestBatteryPopplerMissing"] = TestBatteryPopplerMissing
+elif not _signatures_data:
     class TestBatteryEmpty(unittest.TestCase):
         def test_no_signatures_file(self) -> None:
             self.skipTest(
@@ -226,10 +285,24 @@ if not _signatures_data:
             )
     _globals["TestBatteryEmpty"] = TestBatteryEmpty
 else:
+    _registered_slugs: set[str] = set()
     for _fixture_name, _sig in _signatures_data.items():
         _slug = _slugify(_fixture_name)
         for _mode in ("regular", "reader"):
             _cls_name = f"TestBattery_{_slug}_{_mode}"
+            if _cls_name in _registered_slugs:
+                # Slug collision — `_slugify` collapses non-word chars to
+                # `_`, so `'foo bar.html'` and `'foo-bar.html'` both
+                # produce `foo_bar_html`. Silent overwrite would mask
+                # regressions; raise instead so the user notices.
+                raise RuntimeError(
+                    f"battery: slug collision on {_cls_name!r} "
+                    f"(fixture {_fixture_name!r}). "
+                    "Two fixtures slugified to the same Python class name; "
+                    "rename one in tmp/ or in `battery_signatures.json` "
+                    "so their slugs differ."
+                )
+            _registered_slugs.add(_cls_name)
             _globals[_cls_name] = _make_test_class(
                 _cls_name, _fixture_name, _mode, _sig,
             )

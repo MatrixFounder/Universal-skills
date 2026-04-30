@@ -477,6 +477,34 @@ set -e
 # (page count + size tolerance bands, required + forbidden needles).
 echo "html2pdf regressions:"
 
+# Helper: parse unittest summary text to extract `(failures=N, errors=M)`
+# tuple AND the first failed test name. Surfaces useful triage info on
+# failure instead of just "rerun the whole thing yourself".
+_parse_unittest_failure() {
+    local out="$1"
+    # FAILED (failures=2, errors=1) → "2 failures, 1 errors"
+    local counts
+    counts=$(echo "$out" | awk '
+        /^FAILED \(/ {
+            f = ""; e = "";
+            if (match($0, /failures=[0-9]+/)) f = substr($0, RSTART+9, RLENGTH-9);
+            if (match($0, /errors=[0-9]+/))   e = substr($0, RSTART+7,  RLENGTH-7);
+            out = "";
+            if (f != "") out = out f " failure" (f == "1" ? "" : "s");
+            if (e != "") out = out (out ? ", " : "") e " error"  (e == "1" ? "" : "s");
+            print out; exit
+        }')
+    local first
+    first=$(echo "$out" | awk '/^(FAIL|ERROR): / {sub(/^[A-Z]+: /, ""); print; exit}')
+    if [ -n "$counts" ] && [ -n "$first" ]; then
+        echo "${counts}; first: ${first}"
+    elif [ -n "$counts" ]; then
+        echo "$counts"
+    else
+        echo "see full output"
+    fi
+}
+
 set +e
 out=$("$PY" -m unittest tests.test_preprocess 2>&1)
 rc=$?
@@ -485,7 +513,7 @@ if [ "$rc" -eq 0 ]; then
     n=$(echo "$out" | awk '/^Ran [0-9]+ tests/ {print $2}')
     ok "preprocess unit tests (${n} cases)"
 else
-    nok "preprocess unit tests" "see: $PY -m unittest tests.test_preprocess -v"
+    nok "preprocess unit tests" "$(_parse_unittest_failure "$out")"
 fi
 
 set +e
@@ -500,7 +528,7 @@ if [ "$rc" -eq 0 ]; then
     ran=$((total - skipped))
     ok "battery: ${ran} fixtures × modes ($skipped skipped — tmp/ absent or mode null)"
 else
-    nok "battery" "see: $PY -m unittest tests.test_battery -v"
+    nok "battery" "$(_parse_unittest_failure "$out")"
 fi
 
 # --- cross-1: preview.py — pdf path (no soffice required) ----------------

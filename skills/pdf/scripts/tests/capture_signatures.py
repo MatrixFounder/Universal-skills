@@ -113,7 +113,8 @@ def _pdf_page_count(pdf: Path) -> int:
     out = subprocess.run(
         ["pdfinfo", str(pdf)], capture_output=True, text=True, timeout=30,
     ).stdout
-    m = re.search(r"^Pages:\s*(\d+)", out, re.MULTILINE)
+    # No leading-line anchor — some Poppler builds prefix with whitespace.
+    m = re.search(r"Pages:\s*(\d+)", out)
     return int(m.group(1)) if m else 0
 
 
@@ -124,14 +125,42 @@ def _pdf_text(pdf: Path) -> str:
     ).stdout
 
 
+# Minimum needle length. Below this, sampling falls back to whatever
+# the document offers; the test_battery harness will treat under-needle'd
+# fixtures as low-coverage but not auto-fail.
+_NEEDLE_MIN_LEN = 25
+# Maximum needle length. Pick at the next whitespace boundary AT OR AFTER
+# this position so we never cut a word in half (which would produce
+# needles like "...прод" that mismatch on the next render).
+_NEEDLE_TARGET_LEN = 60
+
+
+def _truncate_at_word(line: str, target: int) -> str:
+    """Trim `line` to roughly `target` chars, ending on a word boundary."""
+    if len(line) <= target:
+        return line.rstrip()
+    # Find next whitespace at or after `target`. If none found, cut at
+    # the last whitespace BEFORE `target` (avoids mid-word cut). If still
+    # none, fall back to the hard target (single long token).
+    idx = line.find(" ", target)
+    if idx == -1:
+        idx = line.rfind(" ", 0, target)
+    if idx == -1:
+        idx = target
+    return line[:idx].rstrip()
+
+
 def _sample_needles(text: str, count: int) -> list[str]:
     """Pick `count` distinctive phrases from pdftotext output.
 
     Strategy: split on linebreaks, drop empty / short / all-numeric /
     all-whitespace lines, sort by length (longest first to favour
     sentences over headings), pick from positions 25%, 50%, 75% into
-    the qualifying-line list to get spread across the document, take
-    the first ~50 chars of each line as the needle.
+    the qualifying-line list to get spread across the document. Each
+    picked needle is truncated at a WORD BOUNDARY at/after ~60 chars
+    (no mid-word cuts → stable across font drift) AND must be at least
+    25 chars after truncation (otherwise it's filtered out — too-short
+    needles are noise like "1 / 5" page numbers).
     """
     lines = [
         ln.strip() for ln in text.splitlines()
@@ -139,18 +168,31 @@ def _sample_needles(text: str, count: int) -> list[str]:
     ]
     if not lines:
         return []
-    # Sort by length desc; pick from positions {25%, 50%, 75%} of the
-    # sorted list. Long lines first — sentences make better needles
-    # than short headings ("On this page" / "Search").
     by_len = sorted(lines, key=len, reverse=True)[:max(count * 5, 15)]
     if len(by_len) < count:
-        return [ln[:60] for ln in by_len]
-    picks = [by_len[i * len(by_len) // count] for i in range(count)]
-    return [ln[:60].strip() for ln in picks]
+        candidates = by_len
+    else:
+        candidates = [by_len[i * len(by_len) // count] for i in range(count)]
+    needles = [_truncate_at_word(ln, _NEEDLE_TARGET_LEN) for ln in candidates]
+    return [n for n in needles if len(n) >= _NEEDLE_MIN_LEN]
 
 
-def _capture_one(src: Path, mode: str) -> dict | None:
-    """Render `src` in `mode` ∈ {regular, reader}; return signature dict or None."""
+def _capture_one(src: Path, mode: str, *, prev: dict | None = None) -> dict | None:
+    """Render `src` in `mode` ∈ {regular, reader}; return signature dict or None.
+
+    `prev` is the previous entry for this fixture/mode if one exists in
+    the JSON. Used to PRESERVE user-curated fields across `--refresh`:
+
+      * `forbidden_needles` — hand-added chrome / sidebar / ad strings
+        that must NOT appear in the rendered output. These are the
+        highest-value chrome-leakage detectors per the regression-net
+        plan; auto-refresh would silently nuke hours of curation.
+      * Any field starting with `_` (e.g. `_canary`) — user annotations
+        that the schema treats as opaque. Reserved namespace.
+
+    Bands and `required_needles` ARE refreshed (they're the auto-captured
+    parts that drift with content/font changes).
+    """
     with tempfile.TemporaryDirectory() as td:
         pdf = Path(td) / f"capture-{mode}.pdf"
         rc = _run_html2pdf(src, pdf, reader=(mode == "reader"))
@@ -165,10 +207,18 @@ def _capture_one(src: Path, mode: str) -> dict | None:
         size_kb = pdf.stat().st_size // 1024
         text = _pdf_text(pdf)
         needles = _sample_needles(text, REQUIRED_NEEDLE_COUNT)
+        if len(needles) < 2:
+            print(
+                f"  ! {mode}: only {len(needles)} stable needle(s) sampled "
+                "from rendered text — fixture has very little body content "
+                "(or render failed silently). Hand-add `required_needles` "
+                "in the JSON before relying on this baseline.",
+                file=sys.stderr,
+            )
         # Tolerance bands.
         page_slack = max(PAGE_SLACK, int(round(pages * PAGE_TOLERANCE_PCT)))
         size_slack = max(5, int(round(size_kb * SIZE_TOLERANCE_PCT)))
-        return {
+        entry: dict = {
             "min_pages": max(1, pages - page_slack),
             "max_pages": pages + page_slack,
             "min_size_kb": max(1, size_kb - size_slack),
@@ -176,6 +226,15 @@ def _capture_one(src: Path, mode: str) -> dict | None:
             "required_needles": needles,
             "forbidden_needles": [],
         }
+        # Preserve user-curated fields from previous capture (HIGH-4 fix).
+        if prev is not None and isinstance(prev, dict):
+            preserved_forbidden = prev.get("forbidden_needles", [])
+            if preserved_forbidden:
+                entry["forbidden_needles"] = preserved_forbidden
+            for key, val in prev.items():
+                if key.startswith("_"):
+                    entry[key] = val
+        return entry
 
 
 def _load_existing() -> dict:
@@ -246,19 +305,28 @@ def main(argv: list[str] | None = None) -> int:
 
     for f in new_or_refresh:
         print(f"capture {f.name}")
-        sig: dict = {"platform": _platform_guess(f.name)}
+        # Preserve previous platform field + any user-added top-level
+        # `_*` annotations across --refresh (HIGH-4 fix).
+        prev_full = existing.get(f.name) or {}
+        sig: dict = {"platform": prev_full.get("platform", _platform_guess(f.name))}
+        for key, val in prev_full.items():
+            if key.startswith("_"):
+                sig[key] = val
         for mode in ("regular", "reader"):
-            entry = _capture_one(f, mode)
+            prev_mode = prev_full.get(mode) if isinstance(prev_full, dict) else None
+            entry = _capture_one(f, mode, prev=prev_mode)
             if entry is None:
                 print(f"  ! {mode}: capture FAILED — entry will be empty",
                       file=sys.stderr)
                 sig[mode] = None
             else:
                 sig[mode] = entry
+                forbidden_n = len(entry.get("forbidden_needles", []))
                 print(
                     f"  {mode}: pages={entry['min_pages']}–{entry['max_pages']}, "
                     f"size={entry['min_size_kb']}–{entry['max_size_kb']}kB, "
                     f"needles={len(entry['required_needles'])}"
+                    + (f", preserved {forbidden_n} forbidden" if forbidden_n else "")
                 )
         existing[f.name] = sig
 

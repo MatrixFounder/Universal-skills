@@ -312,6 +312,43 @@ Two added lines invoke `unittest tests.test_preprocess` and
 in the e2e summary: 74 on a clean checkout (no tmp/), ~150+ with
 tmp/ populated.
 
+### `battery_signatures.json` schema
+
+Per-fixture entry:
+
+```jsonc
+{
+  "<fixture-filename>.webarchive": {
+    "platform": "habr",                 // freeform tag (auto-guessed at capture)
+    "source":   "tmp",                  // "tmp" (default), "synthetic", "platform"
+    "_canary":  "Free-form annotation", // ANY field starting with `_` is treated
+                                        // as user-annotation: opaque to the test
+                                        // harness, PRESERVED across `--refresh`.
+                                        // Convention: use `_canary` to flag a
+                                        // bug-canary needle (e.g. "Демон
+                                        // запускается локально — paragraph-4
+                                        // drop bug from commit 3857d6d").
+    "regular": {
+      "min_pages":   8,                 // page-count tolerance band (auto)
+      "max_pages":   10,
+      "min_size_kb": 465,                // file-size tolerance band (auto)
+      "max_size_kb": 569,
+      "required_needles": [             // text that MUST be in pdftotext output
+        "Демон запускается локально"    // — bug-canary referenced via _canary
+      ],
+      "forbidden_needles": []           // chrome that must NOT appear
+    },
+    "reader": { /* same shape; can be `null` for synthetic-only fixtures */ }
+  }
+}
+```
+
+Fields starting with `_` (any depth) are treated as user-annotation
+and preserved verbatim across `capture_signatures.py --refresh`.
+Built-in fields (`required_needles`, bands) are auto-refreshed;
+`forbidden_needles` is auto-preserved (it's the highest-value
+chrome-leakage detector, never overwritten by capture).
+
 ### Honest scope
 
 * `forbidden_needles` are reader-mode-only — chrome legitimately
