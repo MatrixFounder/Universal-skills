@@ -71,7 +71,7 @@ Applied **unconditionally** in both regular and reader modes — these are weasy
 | 6 | `_strip_empty_anchor_links` | Drop `<a href="#anchor">` whose body is empty after icon strip. Two-stage scan (no O(n²) backtracking) — runs in 3.4 ms on a 5000-anchor TOC. |
 | 7 | `_flatten_table_code_blocks` | Convert Fern/Mintlify/Docusaurus syntax-highlighting tables (`<pre><table><tr class="code-block-line">`) to plain `<pre><code>line1\nline2…</code></pre>`. weasyprint mishandles `<table>` inside `<pre>` when paginating — subsequent block siblings interleave with mid-table rows. Output is monochrome (shiki/prism `<span style=color>` runs are stripped). |
 | 8 | `_strip_universal_ads` | Remove ad-network wrappers by class-substring match: `adfox`, `googletag`, `gpt-ad`, `taboola`, `outbrain`, `sponsor-mark`, `tm-banner`, `header-banner`, etc. Conservative — bare `banner` excluded (would over-strip `.user-banner`). |
-| 9 | `_fo_to_svg_text` | Convert drawio `<foreignObject>` text labels to SVG `<text>` elements. weasyprint silently discards foreignObject content. Drawio's flex encoding (`margin-left` = LEFT EDGE, x-anchor derived; `padding-top` = absolute y-centre) is decoded; word-wrap splits long single-span labels into `<tspan>` rows. |
+| 9 | `_fo_to_svg_text` | Convert drawio `<foreignObject>` text labels to SVG `<text>` elements. weasyprint silently discards foreignObject content. Drawio's flex encoding is decoded: `margin-left` = LEFT EDGE (x-anchor derived from `justify-content`); `padding-top` semantics depend on `align-items` (`center` → y-CENTRE; `flex-start` → y-TOP of first line; `flex-end` → y-BOTTOM of last line). Word-wrap splits long single-span labels into multiple `<text>` rows. **Backdrop rect** (`_parse_label_bg`): emitted IMMEDIATELY BEFORE each `<text>` when the foreignObject's inner div carries an inline `background-color`. Heuristic covers BOTH (a) edge/arrow labels (drawio always emits `background-color: #ffffff` so the arrow's stroke does not cross the glyphs) and (b) vertex labels with `labelBackgroundColor` style (intentional highlight inside a shape). Absence of `background-color` ⇒ skip the rect (the shape's own fill suffices; a white rect would punch a hole through it). Parser is **scoped to `style="…"` / `style='…'` attribute bodies only** — never raw text content or `data-*` attrs (otherwise label text mentioning `background-color: red;` triggers a false-positive backdrop). Value pipeline: strip `!important` → unwrap `light-dark(LIGHT, DARK)` to LIGHT (print=light) → unwrap `var(--name, fallback)` to fallback (single level only; nested var → None) → reject `transparent` / `none` / `currentcolor` → whitelist `#…`, `rgb(…)`/`rgba(…)`/`hsl(…)`/`hsla(…)`/`hwb(…)`/`oklch(…)`/`oklab(…)`/`lab(…)`/`lch(…)`/`color(…)`, named colours. Rect width ≈ `len * fs * 0.60` (+7 % for bold) with `max(4 px, fs·0.40)` horizontal and `max(2 px, fs·0.20)` vertical padding — Cyrillic-safe; CJK underflows. Z-order assumes drawio's canonical "path-then-foreignObject" doc order; layer-reordering plugins out of scope. |
 | 10 | `_fix_svg_viewport` | Synthesise viewBox for drawio Confluence SVGs that ship as `style="width:100%;height:100%;min-width:Wpx;min-height:Hpx"` without an explicit `viewBox`. Expands by 5 % to absorb drawio's right/bottom-edge overshoot. Skipped for SVGs ≤ 200 px (icons). |
 
 Then `_NORMALIZE_CSS` is injected into `<head>` (or before `<body>`).
@@ -229,15 +229,22 @@ workflow for adding new platforms without breaking existing behaviour.
 
 ### Tier 1 — Unit tests (`tests/test_preprocess.py`)
 
-37 deterministic tests that import individual helpers from
+49 deterministic tests that import individual helpers from
 `html2pdf_lib/` and pin down the contracts that survived the
 adversarial-review iterations. Cover: self-closing `<svg/>` handling,
 AND-rule aspect-ratio for icon detection, `text_length` script/style
 strip, `get_attr` cross-attribute false-positive fix, nested `<button>`
 unwrap, anchor-strip O(n×k) perf bound, code-table flatten false-
-positive guard, drawio foreignObject (camel + lowercase), watchdog
-wiring (zero-timeout, non-main-thread degrade, install/clear leak
-guard), offline URL fetcher refusal of `http(s)://`. Run time < 1 s.
+positive guard, drawio foreignObject — camel + lowercase casing,
+`align-items: flex-start` vertical anchoring, edge-label backdrop
+emission, vertex-label no-false-positive guard, `transparent` guard,
+text-content-leak guard (label text mentioning `background-color:`),
+`data-*` attr leak guard, single-quoted `style='…'` parsing,
+`!important` strip, modern colour functions (`oklch`/`hsl`/`lab`/`rgba`),
+named CSS colours, `var(--name)` no-fallback returns None, multi-line
+edge-label rect-per-line invariant; watchdog wiring (zero-timeout,
+non-main-thread degrade, install/clear leak guard), offline URL fetcher
+refusal of `http(s)://`. Run time < 1 s.
 
 ### Tier 2 — Synthetic micro-fixtures (`examples/regression/*.html`)
 
@@ -264,7 +271,7 @@ synthetic placeholders:
 
 ### Tier 0 — `tmp/` characterization battery (PRIMARY)
 
-The 17 fixtures in the repo's `tmp/` directory (~250 MB total —
+The 19 fixtures in the repo's `tmp/` directory (~300 MB total —
 gitignored, kept on developer machines, not in CI). Each fixture
 renders in BOTH regular AND reader modes; outputs are validated
 against per-fixture entries in `tests/battery_signatures.json`:

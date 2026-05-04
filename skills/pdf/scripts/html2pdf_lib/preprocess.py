@@ -90,6 +90,108 @@ def _strip_all_fontfaces_in_styles(html: str) -> str:
     )
 
 
+# Pre-compiled patterns for _parse_label_bg (hot path — runs per foreignObject
+# match). `_STYLE_ATTR_RE` extracts EITHER double- or single-quoted style="…"
+# attribute bodies; `_BG_IN_STYLE_RE` finds background-color values inside one
+# such body. We deliberately do NOT scan the foreignObject HTML at large —
+# doing so leaks regex matches from the rendered TEXT CONTENT (verified
+# CRITICAL bug: a vertex label whose text mentions `background-color: red;`
+# triggered a false-positive backdrop).
+_STYLE_ATTR_RE = re.compile(
+    r"""\bstyle\s*=\s*(?:"([^"]*)"|'([^']*)')""",
+    re.IGNORECASE,
+)
+_BG_IN_STYLE_RE = re.compile(
+    r"background-color\s*:\s*([^;]+?)\s*(?:;|$)",
+    re.IGNORECASE,
+)
+_IMPORTANT_TAIL_RE = re.compile(r"\s*!\s*important\s*$", re.IGNORECASE)
+_LIGHT_DARK_RE = re.compile(
+    # Capture the LIGHT arg of `light-dark(LIGHT, DARK)`. LIGHT may itself
+    # contain ONE level of parens (e.g. `rgb(255,255,255)` or `var(--c, #fff)`).
+    r"^light-dark\(\s*([^,()]+(?:\([^)]*\))?[^,]*?)\s*,",
+    re.IGNORECASE,
+)
+_VAR_RE = re.compile(
+    # `var(--name, fallback)` → fallback. No-fallback `var(--name)` does NOT
+    # match (no comma) and falls through to whitelist validation, which
+    # rejects it (no `#`, no colour-fn prefix) → returns None.
+    r"^var\(\s*[^,]+,\s*([^)]+)\s*\)$",
+    re.IGNORECASE,
+)
+_COLOUR_FN_RE = re.compile(
+    # `\(` is the right anchor (every CSS colour-function syntax demands an
+    # opening paren). `\b` does NOT work because `rgb` followed by `a`
+    # (rgba) has no word boundary — both are word characters.
+    r"^(rgba?|hsla?|hwb|oklch|oklab|lab|lch|color)\(",
+    re.IGNORECASE,
+)
+_NAMED_COLOUR_RE = re.compile(r"^[a-zA-Z]+$")
+
+
+def _parse_label_bg(fo: str) -> str | None:
+    """Extract a usable backdrop colour from a drawio <foreignObject>.
+
+    Heuristic: presence of `background-color` on the foreignObject's inner
+    div(s) ⇒ user wants a backdrop. Two real-world cases satisfy this:
+
+      1. **Edge labels** (text on an arrow / connector). drawio always
+         emits `background-color: #ffffff` (often wrapped in `light-dark()`
+         for theme-awareness) so the canvas colour shows through the arrow
+         stroke. `width: 1px; height: 1px` content-sized container is the
+         secondary signal.
+      2. **Vertex labels with `labelBackgroundColor` style** (text inside a
+         shape, with an explicit background highlight — e.g. yellow
+         callout text). drawio emits the same `background-color` CSS.
+
+    Absence of `background-color` ⇒ skip the backdrop: the shape's own
+    fill already provides the visual background, and a white rect would
+    punch a hole through it.
+
+    Returns a colour string ready for SVG `fill=`:
+      * `#abc` / `#aabbcc` / `#aabbccdd` → as-is
+      * `rgb(…)` / `rgba(…)` / `hsl(…)` / `hwb(…)` / `oklch(…)` /
+        `oklab(…)` / `lab(…)` / `lch(…)` / `color(…)` → as-is
+      * Named colour (`white`, `red`, `LightSkyBlue`) → as-is
+      * `light-dark(LIGHT, DARK)` → LIGHT arg (print is light-mode)
+      * `var(--name, fallback)` → fallback (single level only; nested
+        `var()` falls through to None — defensive)
+      * `transparent` / `none` / unparseable → None
+      * `!important` suffix is stripped before validation
+
+    Scope: ONLY scans `style="…"` and `style='…'` attribute bodies — never
+    raw text content, `data-*` attrs, `title="…"`, etc. Critical because
+    the foreignObject contains the rendered label text, which can
+    legitimately mention `background-color: red;` (CSS-tutorial diagrams,
+    SQL examples) and would otherwise produce a false-positive backdrop.
+
+    Multiple `background-color` declarations: take the LAST (innermost div
+    is closest to the visible glyphs and overrides outer wrappers).
+    """
+    bgs: list[str] = []
+    for dq, sq in _STYLE_ATTR_RE.findall(fo):
+        body = dq or sq
+        for value in _BG_IN_STYLE_RE.findall(body):
+            bgs.append(value)
+    if not bgs:
+        return None
+    bg = bgs[-1].strip()
+    bg = _IMPORTANT_TAIL_RE.sub("", bg).strip()
+    m = _LIGHT_DARK_RE.match(bg)
+    if m:
+        bg = m.group(1).strip()
+    m = _VAR_RE.match(bg)
+    if m:
+        bg = m.group(1).strip()
+    if bg.lower() in ("transparent", "none", "currentcolor", ""):
+        return None
+    if not (bg.startswith("#")
+            or _COLOUR_FN_RE.match(bg)
+            or _NAMED_COLOUR_RE.match(bg)):
+        return None
+    return bg
+
+
 def _fo_to_svg_text(html: str) -> str:
     """Convert draw.io <foreignObject> text labels to SVG <text> elements.
 
@@ -119,10 +221,37 @@ def _fo_to_svg_text(html: str) -> str:
       font-size    → LAST occurrence in the foreignObject (the outermost div
                      often carries a layout/spacing size; the innermost span
                      carries the actual label size)
+      bg-colour    → presence of `background-color` on the foreignObject
+                     inner div(s) ⇒ user wants a backdrop. Covers BOTH:
+                       (a) edge/arrow labels — drawio emits white bg so
+                           the canvas colour shows through the stroke;
+                       (b) vertex labels with `labelBackgroundColor` style
+                           (intentional highlight inside a shape).
+                     ABSENCE of `background-color` ⇒ skip the backdrop:
+                     the shape's own fill is sufficient, and a white rect
+                     would punch a hole through it. Without the backdrop,
+                     edge labels render with the arrow's stroke running
+                     visibly THROUGH the glyphs (Confluence US-Отчёт
+                     fixture, observed 2026-04-30). See `_parse_label_bg`
+                     for value-extraction details (light-dark / var /
+                     !important / colour-function whitelist).
 
     Multiple <text> elements are emitted for labels that need word-wrapping
     (container width > 1 px), each placed according to align-items vertical
-    semantics.
+    semantics. Each <text> for a backed label is preceded by a matching
+    <rect> in document order — this works because (i) SVG z-order = doc
+    order and (ii) drawio's canonical serialization emits the foreignObject
+    AFTER its associated arrow path. Plugins / DOM mutations that re-order
+    layers are out of scope (would require a wrapping `<g>` with
+    `isolation: isolate` to enforce a higher stacking context).
+
+    Rect sizing uses an empirical Helvetica char-width estimate
+    (`fs * 0.60`, +7 % for bold). It is approximate — Cyrillic glyphs sit
+    near the upper bound of that estimate; CJK is ~1.0×fs and currently
+    underflows. The padding (`max(4 px, fs*0.40)` horizontal, `max(2 px,
+    fs*0.20)` vertical) is sized generously to absorb metric drift,
+    transform-quantisation rounding (drawio frequently nests labels under
+    a `scale(0.977)` group), and pdf-rasterizer anti-alias spillover.
     """
     def _wrap(text: str, max_width: float, font_size: int) -> list[str]:
         if max_width <= 1:
@@ -210,9 +339,36 @@ def _fo_to_svg_text(html: str) -> str:
         else:  # center
             start_y = y - (len(lines) - 1) * lh / 2
 
+        # Edge-label backdrop: parse background-color from inner div(s).
+        # See docstring §"bg-colour" for the heuristic and rationale.
+        bg = _parse_label_bg(fo)
+        # Helvetica avg char width — bumped from 0.58 to 0.60 because Cyrillic
+        # glyphs (the dominant non-Latin alphabet in the corpus) sit near
+        # 0.60-0.62 × fs. Bold runs are ~7 % wider than regular weight.
+        char_w = fs * 0.60
+        if bold:
+            char_w *= 1.07
+        # Generous padding — see docstring §rect sizing for rationale.
+        pad_x = max(4.0, fs * 0.40)
+        pad_y = max(2.0, fs * 0.20)
+
         out = []
         for j, line in enumerate(lines):
             ly = start_y + j * lh
+            if bg:
+                line_w = len(line) * char_w
+                if anchor == "middle":
+                    rx = x - line_w / 2 - pad_x
+                elif anchor == "end":
+                    rx = x - line_w - pad_x
+                else:                # start
+                    rx = x - pad_x
+                out.append(
+                    f'<rect x="{rx:.1f}" y="{ly - fs / 2 - pad_y:.1f}" '
+                    f'width="{line_w + 2 * pad_x:.1f}" '
+                    f'height="{fs + 2 * pad_y:.1f}" '
+                    f'fill="{bg}" stroke="none"/>'
+                )
             out.append(
                 f'<text x="{x:.1f}" y="{ly:.1f}" text-anchor="{anchor}" '
                 f'dominant-baseline="middle" font-family="Helvetica" '

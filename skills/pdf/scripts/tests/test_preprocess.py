@@ -374,6 +374,220 @@ class TestFoToSvgText(unittest.TestCase):
             msg=f"flex-start label y={y_value}; expected 53.5 "
                 f"(padding-top=46 + line-height/2)")
 
+    def test_edge_label_bg_emits_rect_backdrop(self) -> None:
+        """drawio EDGE labels (text on an arrow) carry `background-color:
+        #ffffff` on inner div(s) — without a matching <rect> backdrop the
+        arrow's stroke runs visibly through the glyphs. Confluence
+        US-Отчёт fixture, observed 2026-04-30. Also covers the CSS
+        `light-dark(LIGHT, DARK)` wrapper drawio emits for theme-awareness:
+        we extract LIGHT (print = light mode)."""
+        html = (
+            '<svg><foreignObject>'
+            '<div style="display:flex; align-items:unsafe center; '
+            'justify-content:unsafe center; width:1px; height:1px; '
+            'padding-top:209px; margin-left:413px;">'
+            '<div style="background-color: #ffffff;">'
+            '<div style="font-size:11px; '
+            'background-color: light-dark(#ffffff, #1d2125);">'
+            'EDGE_LABEL_TEXT</div></div></div>'
+            '</foreignObject></svg>'
+        )
+        out = _fo_to_svg_text(html)
+        self.assertIn("EDGE_LABEL_TEXT", out)
+        self.assertIn("<rect", out, "no <rect> backdrop emitted for edge label")
+        # SVG z-order = document order: rect must precede text.
+        self.assertLess(out.index("<rect"), out.index("<text"),
+            "rect must come BEFORE text (z-order = doc order)")
+        self.assertIn('fill="#ffffff"', out)
+
+    def test_vertex_label_no_bg_no_rect(self) -> None:
+        """Vertex labels (text inside a coloured shape) have NO
+        background-color on the foreignObject inner divs — the shape's
+        rect provides the fill. A false-positive <rect> would punch a
+        white hole through the shape. Regression guard."""
+        html = (
+            '<svg><foreignObject>'
+            '<div style="align-items:unsafe center; '
+            'justify-content:unsafe center; '
+            'padding-top:50px; margin-left:100px; width:200px; '
+            'font-size:14px;">VERTEX_LABEL</div>'
+            '</foreignObject></svg>'
+        )
+        out = _fo_to_svg_text(html)
+        self.assertIn("VERTEX_LABEL", out)
+        self.assertNotIn("<rect", out,
+            "false-positive rect on vertex label (no background-color)")
+
+    def test_transparent_bg_no_rect(self) -> None:
+        """`background-color: transparent` / `none` must NOT emit a backdrop."""
+        html = (
+            '<svg><foreignObject>'
+            '<div style="padding-top:50px; margin-left:100px; width:1px;">'
+            '<div style="background-color: transparent;">TRANSPARENT_LBL'
+            '</div></div>'
+            '</foreignObject></svg>'
+        )
+        out = _fo_to_svg_text(html)
+        self.assertIn("TRANSPARENT_LBL", out)
+        self.assertNotIn("<rect", out,
+            "transparent background must not emit a <rect>")
+
+    def test_label_text_mentioning_bgcolor_no_false_positive(self) -> None:
+        """CRITICAL regression guard: a vertex label whose TEXT CONTENT
+        mentions `background-color: red;` (e.g. SQL/CSS-tutorial
+        diagrams) must NOT trigger a false-positive backdrop.
+
+        The earlier implementation scanned the entire foreignObject HTML
+        for the substring; with a `;` terminator nearby in the text, the
+        regex captured `red` and emitted `<rect fill="red"/>` over the
+        glyphs. Fixed by scoping the scan to `style="…"` attribute
+        bodies only. See VDD-iter critique CRITICAL row."""
+        html = (
+            '<svg><foreignObject>'
+            '<div style="align-items:unsafe center; '
+            'justify-content:unsafe center; padding-top:50px; '
+            'margin-left:100px; width:300px; font-size:14px;">'
+            'SQL: ALTER TABLE x background-color: red; END;'
+            '</div></foreignObject></svg>'
+        )
+        out = _fo_to_svg_text(html)
+        # Body is word-wrapped (300px / 14px·0.6 ≈ 35 chars/line) so the
+        # SQL string is split across multiple <text> elements; check
+        # presence of an unambiguous fragment instead of the full string.
+        self.assertIn("ALTER TABLE", out)
+        self.assertNotIn('<rect', out,
+            "regex matched bg-color from TEXT CONTENT — should only "
+            "scan style='…' / style=\"…\" attribute bodies")
+
+    def test_data_attribute_mentioning_bgcolor_no_false_positive(self) -> None:
+        """`<div data-info="background-color: #fff">` must NOT trigger a
+        backdrop — only `style=` attributes are authoritative."""
+        html = (
+            '<svg><foreignObject>'
+            '<div style="align-items:unsafe center; '
+            'justify-content:unsafe center; padding-top:50px; '
+            'margin-left:100px; width:200px; font-size:14px;" '
+            'data-info="background-color: #fff">DATA_ATTR_LBL</div>'
+            '</foreignObject></svg>'
+        )
+        out = _fo_to_svg_text(html)
+        self.assertIn("DATA_ATTR_LBL", out)
+        self.assertNotIn("<rect", out,
+            "data-* attribute leaked into bg-colour parser")
+
+    def test_single_quoted_style_attribute_parsed(self) -> None:
+        """drawio HTML5-serialized output occasionally uses single-quoted
+        style attributes. The bg-colour parser must accept BOTH forms."""
+        html = (
+            "<svg><foreignObject>"
+            "<div style='align-items:unsafe center; "
+            "justify-content:unsafe center; width:1px; height:1px; "
+            "padding-top:50px; margin-left:100px;'>"
+            "<div style='background-color: #ffffff; font-size:11px;'>"
+            "SINGLE_QUOTED_LBL</div></div>"
+            "</foreignObject></svg>"
+        )
+        out = _fo_to_svg_text(html)
+        self.assertIn("SINGLE_QUOTED_LBL", out)
+        self.assertIn("<rect", out,
+            "single-quoted style attr was missed by bg-colour regex")
+        self.assertIn('fill="#ffffff"', out)
+
+    def test_important_keyword_stripped(self) -> None:
+        """`background-color: #fff !important;` must NOT leak the
+        `!important` keyword into the SVG `fill=` attribute (would
+        produce `fill="#fff !important"` — invalid SVG)."""
+        html = (
+            '<svg><foreignObject>'
+            '<div style="align-items:unsafe center; '
+            'justify-content:unsafe center; width:1px; height:1px; '
+            'padding-top:50px; margin-left:100px;">'
+            '<div style="background-color: #ffaa00 !important; '
+            'font-size:11px;">IMPORTANT_LBL</div>'
+            '</div></foreignObject></svg>'
+        )
+        out = _fo_to_svg_text(html)
+        self.assertIn("IMPORTANT_LBL", out)
+        self.assertIn('fill="#ffaa00"', out,
+            "!important keyword leaked into the fill value")
+        self.assertNotIn("important", out.split("<text")[0].lower(),
+            "!important keyword present in <rect> emission")
+
+    def test_modern_color_function_oklch_accepted(self) -> None:
+        """`oklch()` / `lab()` / `hsl()` etc. are valid CSS Color L4/L5
+        functions; the whitelist must accept them so future drawio
+        themes don't silently lose backdrops."""
+        for fn in ("oklch(0.7 0.15 250)", "hsl(120 100% 50%)",
+                   "lab(50% 40 -20)", "rgba(255,255,255,0.8)"):
+            with self.subTest(colour=fn):
+                html = (
+                    '<svg><foreignObject>'
+                    '<div style="align-items:unsafe center; '
+                    'justify-content:unsafe center; width:1px; '
+                    'height:1px; padding-top:50px; margin-left:100px;">'
+                    f'<div style="background-color: {fn}; '
+                    f'font-size:11px;">MODERN_{fn[:4]}</div></div>'
+                    '</foreignObject></svg>'
+                )
+                out = _fo_to_svg_text(html)
+                self.assertIn("<rect", out,
+                    f"modern colour fn {fn!r} rejected — backdrop lost")
+                self.assertIn(f'fill="{fn}"', out,
+                    f"colour fn {fn!r} not preserved in fill=")
+
+    def test_named_color_white_accepted(self) -> None:
+        """CSS named colours (`white`, `red`, `LightSkyBlue`) must pass
+        the validation whitelist."""
+        html = (
+            '<svg><foreignObject>'
+            '<div style="align-items:unsafe center; '
+            'justify-content:unsafe center; width:1px; height:1px; '
+            'padding-top:50px; margin-left:100px;">'
+            '<div style="background-color: white; font-size:11px;">'
+            'NAMED_LBL</div></div></foreignObject></svg>'
+        )
+        out = _fo_to_svg_text(html)
+        self.assertIn("<rect", out)
+        self.assertIn('fill="white"', out)
+
+    def test_var_no_fallback_returns_none(self) -> None:
+        """`var(--name)` without a fallback is unresolvable at static-
+        analysis time — must return None (no backdrop) rather than emit
+        an invalid `fill="var(--name)"`."""
+        html = (
+            '<svg><foreignObject>'
+            '<div style="align-items:unsafe center; '
+            'justify-content:unsafe center; width:1px; height:1px; '
+            'padding-top:50px; margin-left:100px;">'
+            '<div style="background-color: var(--surface); '
+            'font-size:11px;">VAR_NOFB_LBL</div></div>'
+            '</foreignObject></svg>'
+        )
+        out = _fo_to_svg_text(html)
+        self.assertIn("VAR_NOFB_LBL", out)
+        self.assertNotIn("<rect", out,
+            "var(--name) without fallback must not produce a backdrop")
+
+    def test_multiline_edge_label_emits_rect_per_line(self) -> None:
+        """Word-wrapped edge label (container width > 1 px) emits one
+        `<rect>` per visible line, each preceding its `<text>`. Without
+        per-line backdrops, the arrow shows through inter-line gaps."""
+        html = (
+            '<svg><foreignObject>'
+            '<div style="align-items:unsafe center; '
+            'justify-content:unsafe center; width:80px; height:1px; '
+            'padding-top:100px; margin-left:200px;">'
+            '<div style="background-color: #ffffff;">'
+            '<div style="font-size:11px; '
+            'background-color: #ffffff;">two line label here</div>'
+            '</div></div></foreignObject></svg>'
+        )
+        out = _fo_to_svg_text(html)
+        self.assertEqual(out.count("<rect"), out.count("<text"),
+            "rect count must match text count (one backdrop per line)")
+        self.assertGreaterEqual(out.count("<rect"), 2,
+            "expected ≥2 lines for word-wrapped edge label")
+
 
 # ── _fix_svg_viewport ────────────────────────────────────────────────────
 
