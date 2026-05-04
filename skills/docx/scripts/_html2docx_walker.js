@@ -70,8 +70,76 @@ function _parsePixelLength(s) {
 //
 // Honest scope: deeply-nested rich content (mixed-font/colour runs,
 // embedded HTML lists, tables) is flattened to plain text per line.
+// Extract a usable backdrop colour from a drawio <foreignObject>'s
+// inline `style=""` / `style=''` declarations only.
+//
+// Heuristic mirrors the PDF skill (commit 6d70f6c, ports
+// `_parse_label_bg` to JS): presence of `background-color` ⇒ user
+// wants a backdrop (covers BOTH edge labels AND vertex labels with
+// `labelBackgroundColor`). Absence ⇒ no backdrop.
+//
+// Critical scope: ONLY scans `style="…"` / `style='…'` attribute
+// bodies — never raw text content or `data-*` attrs (otherwise a
+// vertex label whose text reads `background-color: red;` triggers a
+// false-positive).
+//
+// Value pipeline: strip `!important` → unwrap `light-dark(LIGHT,
+// DARK)` to LIGHT (print is light-mode) → unwrap `var(--name,
+// fallback)` to fallback (single level only; nested var → null) →
+// reject `transparent` / `none` / `currentcolor` → whitelist `#…`,
+// `rgb()`/`rgba()`/`hsl()`/`hsla()`/`hwb()`/`oklch()`/`oklab()`/
+// `lab()`/`lch()`/`color()`, named colours.
+//
+// Multiple `background-color` declarations ⇒ take the LAST (innermost
+// div is closest to the visible glyphs).
+function _parseLabelBg($fo) {
+    const STYLE_ATTR_RE = /\bstyle\s*=\s*(?:"([^"]*)"|'([^']*)')/gi;
+    const BG_RE = /background-color\s*:\s*([^;]+?)\s*(?:;|$)/gi;
+    const IMPORTANT_RE = /\s*!\s*important\s*$/i;
+    const LIGHT_DARK_RE = /^light-dark\(\s*([^,()]+(?:\([^)]*\))?[^,]*?)\s*,/i;
+    const VAR_RE = /^var\(\s*[^,]+,\s*([^)]+)\s*\)$/i;
+    const COLOUR_FN_RE = /^(rgba?|hsla?|hwb|oklch|oklab|lab|lch|color)\(/i;
+    const NAMED_RE = /^[a-zA-Z]+$/;
+
+    // Stringify the foreignObject HTML and scan style="…" bodies only.
+    const html = $fo.toString();
+    const bgs = [];
+    let m;
+    while ((m = STYLE_ATTR_RE.exec(html)) !== null) {
+        const body = m[1] !== undefined ? m[1] : m[2];
+        let bg;
+        BG_RE.lastIndex = 0;
+        while ((bg = BG_RE.exec(body)) !== null) {
+            bgs.push(bg[1].trim());
+        }
+    }
+    if (!bgs.length) return null;
+    let v = bgs[bgs.length - 1].replace(IMPORTANT_RE, '').trim();
+    let mm = v.match(LIGHT_DARK_RE);
+    if (mm) v = mm[1].trim();
+    mm = v.match(VAR_RE);
+    if (mm) v = mm[1].trim();
+    const lower = v.toLowerCase();
+    if (!v || lower === 'transparent' || lower === 'none' || lower === 'currentcolor') {
+        return null;
+    }
+    if (!(v.startsWith('#') || COLOUR_FN_RE.test(v) || NAMED_RE.test(v))) {
+        return null;
+    }
+    return v;
+}
+
+
 function _drawioForeignObjectsToText(cheerio, svgXml) {
-    if (!svgXml || svgXml.indexOf('<foreignObject') === -1) return svgXml;
+    // Case-insensitive presence check: SVG canonical is camel-case
+    // `<foreignObject>`, but the HTML5 serializer (browsers' "Save Page
+    // As → Webpage, Complete") lowercases tag names → `<foreignobject>`.
+    // Confluence `.html` exports hit this path; `.mhtml`/`.webarchive`
+    // archives preserve the original namespace casing. Without this
+    // tolerance, the walker silently drops 100 % of HTML5-serialized
+    // drawio diagrams and they render as empty boxes. (PDF parity:
+    // commit a8933b9.)
+    if (!svgXml || !/<foreignObject/i.test(svgXml)) return svgXml;
     let $$;
     try {
         $$ = cheerio.load(svgXml, { xmlMode: true });
@@ -184,7 +252,8 @@ function _drawioForeignObjectsToText(cheerio, svgXml) {
             .filter(Boolean);
     }
 
-    $$('foreignObject').each((_, el) => {
+    // Match both casings — cheerio xmlMode is case-sensitive on tag names.
+    $$('foreignObject, foreignobject').each((_, el) => {
         const $fo = $$(el);
         // Outer wrapper div carries margin-left / padding-top + flex
         // alignment. Drawio always places exactly one wrapper div inside
@@ -281,7 +350,59 @@ function _drawioForeignObjectsToText(cheerio, svgXml) {
             }).join('');
         }
 
-        const replacement =
+        // Edge-label backdrop. drawio EDGE labels (text on an arrow /
+        // connector) carry `background-color` on the foreignObject inner
+        // div(s) so the canvas colour shows through the arrow stroke.
+        // Without a matching <rect> backdrop, the arrow's stroke runs
+        // visibly THROUGH the glyphs (Confluence US-Отчёт fixture). The
+        // PDF skill carries the exact same fix in `_parse_label_bg` /
+        // `_fo_to_svg_text` (commit 6d70f6c).
+        //
+        // Heuristic: presence of inline `style=` carrying a
+        // `background-color` value on ANY div under the foreignObject ⇒
+        // user wants a backdrop (covers BOTH edge labels AND vertex
+        // labels with `labelBackgroundColor` highlight). Absence ⇒ skip:
+        // the shape's own fill suffices and a white rect would punch a
+        // hole. Scan ONLY style="…" / style='…' attribute bodies — not
+        // raw text or `data-*` attrs (verified text-content-leak bug
+        // class in PDF parity review).
+        const bg = _parseLabelBg($fo);
+        let bgRectXml = '';
+        if (bg) {
+            // Estimate text width per line. Match the same Cyrillic-aware
+            // ratio used by `wrapText` above (0.62 vs 0.55) so the
+            // backdrop covers Russian-Cyrillic glyphs without sliver
+            // leakage. +5 px each side absorbs metric drift, scale
+            // transforms, and pdf rasterizer anti-alias spillover.
+            const padX = Math.max(4, fontSize * 0.40);
+            const padY = Math.max(2, fontSize * 0.20);
+            const widestLine = lines.reduce((m, l) => Math.max(m, l.length), 0);
+            const hasCyrillic = lines.some(l => /[Ѐ-ӿ]/.test(l));
+            const charW = fontSize * (hasCyrillic ? 0.62 : 0.58);
+            const rectW = widestLine * charW + 2 * padX;
+            const rectH = lines.length * lineHeight + 2 * padY;
+            let rectX;
+            if (textAnchor === 'middle')      rectX = textX - rectW / 2;
+            else if (textAnchor === 'end')    rectX = textX - rectW;
+            else                              rectX = textX - padX;
+            // Vertical: `anchorY` is the FIRST line's baseline (varies by
+            // baseline mode). For `central` anchorY = visual centre of
+            // line 0 → rect top = anchorY - lineHeight/2 - padY.
+            // For `hanging` (flex-start) anchorY = top of line 0 →
+            // rect top = anchorY - padY. For `alphabetic` (flex-end)
+            // anchorY = bottom of last line → rect top = anchorY -
+            // lineHeight*lines.length + lineHeight/2 - padY (approx).
+            let rectY;
+            if (baseline === 'hanging')        rectY = anchorY - padY;
+            else if (baseline === 'alphabetic') rectY = anchorY - rectH + padY;
+            else                                rectY = anchorY - lineHeight / 2 - padY;
+            bgRectXml =
+                `<rect x="${rectX.toFixed(1)}" y="${rectY.toFixed(1)}" ` +
+                `width="${rectW.toFixed(1)}" height="${rectH.toFixed(1)}" ` +
+                `fill="${escapeXml(bg)}" stroke="none"/>`;
+        }
+
+        const replacement = bgRectXml +
             `<text x="${textX}" y="${anchorY}" font-family="${escapeXml(fontFamily)}" font-size="${fontSize}" ` +
             `font-weight="${escapeXml(fontWeight)}" fill="${escapeXml(color)}" ` +
             `text-anchor="${textAnchor}" dominant-baseline="${baseline}">${inner}</text>`;
