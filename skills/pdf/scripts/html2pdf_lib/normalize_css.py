@@ -80,6 +80,33 @@ header, nav, .navbar, .topbar, .top-bar,
     top: auto !important;
 }
 
+/* ── 4a. Confluence Server's `<main id="main" style="margin-left:430px">`
+        and `<div id="main-header-placeholder" style="padding-top:55px;
+        height:100px">` carry inline geometry that compensates for the
+        fixed left sidebar (430 px) and top header (55 px). After §3
+        hides those nav containers and §7d hides the rest of the
+        sidebar, the article body still has the offsets and gets
+        squeezed into a narrow right column with the title inline-
+        wrapping into the version-table area on page 1 (US-Отчет
+        Полнотекстовый поиск and similar Confluence pages, observed
+        2026-05-04). Override the inline styles so the article reclaims
+        the full page width. We target `<main>` / `#main` /
+        `#main-content` / `#content` plus the header-placeholder
+        explicitly — generic `body > *` would over-strip legitimate
+        layout. */
+main, #main, #main-content, #content,
+#main-header, #main-header-placeholder {
+    margin-left: 0 !important;
+    padding-top: 0 !important;
+    padding-left: 0 !important;
+    padding-right: 0 !important;
+    top: 0 !important;
+    height: auto !important;
+    min-height: 0 !important;
+    width: auto !important;
+    max-width: 100% !important;
+}
+
 /* ── 5. Collapse multi-column article layouts to single column.
         SPA pages (vc.ru, Habr) use flex/grid to place an author card
         to the left of the article body. In print this creates a narrow
@@ -237,6 +264,95 @@ blockquote {
 .headerlink, .anchor-link, a.anchor, .octicon-link,
 .heading-anchor, button.anchorjs-link,
 h1 button, h2 button, h3 button, h4 button, h5 button, h6 button {
+    display: none !important;
+}
+
+/* ── 7d. Confluence Server / Atlassian DC chrome strip.
+        Confluence Server pages embed many UI containers around the
+        article body that, once site CSS is stripped, ALL render
+        visibly into the PDF — leaking sidebars, page-tree data tables,
+        page-action toolbars, AUI dropdowns, etc.
+
+        Three categories:
+
+        (a) AUI dropdowns and overlay layers. `<div id="action-menu"
+            class="aui-dropdown2 aui-layer …">` is absolutely positioned
+            in the source HTML and contains the page-actions list (Save
+            for later / Watching / Share / Page History / Export to PDF /
+            …). The AUI runtime keeps it `display:none` until the user
+            clicks the trigger; once site CSS is stripped, every
+            `.aui-dropdown2` and `.aui-layer` panel becomes visible.
+            Same applies to share menus, JIRA-issue popups, etc.
+        (b) Left-rail sidebar. `<div class="ia-fixed-sidebar"
+            role="complementary">` wraps the space logo, "Pages / Blog /
+            Calendars / Analytics" navigation, "Quick links" widget, and
+            the page-tree component. Without site CSS its absolute
+            position is lost and it stacks on top of the article — first
+            two PDF pages become a list of sibling page titles instead of
+            article content (observed on ELMA365 ↔ 3CX wiki, 2026-05-04).
+        (c) Page-action toolbar `<div id="navigation"
+            class="content-navigation view" role="region">` containing
+            `<ul class="ajs-menu-bar">` with Edit / View comments / Save
+            for later / Watching / Share / JIRA links. Different from the
+            #action-menu dropdown (a) — this is the always-visible icon
+            toolbar above the page title.
+        (d) Page-tree macro `<div class="plugin_pagetree">` with its
+            `data-*` config attributes. The pageTree plugin renders the
+            tree via JS at runtime; the static HTML it ships contains
+            only configuration data (URLs, page IDs, "Loading…" / "Could
+            not load page tree" error strings) wrapped in invisible
+            divs that become visible cells once CSS is stripped.
+
+        Comprehensive selector list — overlapping by design (a Confluence
+        page typically uses 3-4 of these containers nested), so a single
+        broad `display: none !important` is the cheapest valid reset.
+        Mirror of html2docx's preprocess `stripConfluenceChromeIds` +
+        `stripAriaLandmarks` stages.
+
+        Note: do NOT include `#title-heading` here — its `<h1>` is the
+        article's actual page title (extracted separately into the docx
+        via `extractPageTitle()`; in html2pdf it remains in the article
+        flow because we don't narrow the root the same way). */
+/* (a) AUI dropdowns + overlay layers + edit toolbar. */
+#action-menu, #share-menu, #share-on-page,
+.aui-dropdown2, .aui-layer, .aui-toolbar2,
+#likes-and-labels-container, #labels-section, #labels-section-panel,
+#space-tools-menu,
+/* (b) Left-rail sidebar (everything inside .ia-fixed-sidebar +
+       role=complementary covers the same region twice — Confluence
+       sometimes wraps it without setting role, sometimes the inverse). */
+.ia-fixed-sidebar, .ia-splitter-handle,
+[role="complementary"], [role="banner"], [role="contentinfo"],
+[role="search"],
+.acs-side-bar, .acs-nav-wrapper, .acs-nav-children-pages,
+.ia-secondary-container, .ia-secondary-content,
+.space-tools-section,
+/* (c) Page-action icon toolbar (`<ul class="ajs-menu-bar">`). The wrapper
+       `<div id="navigation" role="region">` is the Confluence page nav
+       toolbar — distinct from semantic `<nav>` and from the AUI
+       dropdown above. We also strip `[role="navigation"]` and `<nav>`
+       in §3, which catches some variants but not the `role="region"`
+       wrapper. */
+#navigation, .content-navigation, .ajs-menu-bar,
+[role="region"][aria-label*="страниц"],
+[role="region"][aria-label*="Pages"],
+/* (d) Page-tree macro static HTML config (visible cells without site CSS). */
+.plugin_pagetree, .plugin_pagetree_children,
+/* Generic Confluence chrome IDs not yet covered. */
+#header, #footer, #breadcrumb-section, #breadcrumbs,
+#page-metadata, #comments-section, #footer-logo,
+.page-metadata, .pageSection.group,
+/* Page-metadata banner row. Confluence renders system metadata (Pinned,
+   page restrictions, attachment counter, JIRA links, watching, etc.) as
+   `<ul class="banner"> <li id="system-content-items"> … <li
+   id="content-metadata-jira-wrapper"> …`. The `.banner` class is too
+   generic to strip wholesale (real article banners exist), but its
+   children IDs and `.page-metadata-item` are distinctive enough. */
+.page-metadata-item, #system-content-items,
+#content-metadata-jira-wrapper, #content-metadata-jira,
+#content-metadata-page-restrictions,
+ul.banner > li[id^="content-metadata-"],
+ul.banner > li[id="system-content-items"] {
     display: none !important;
 }
 </style>

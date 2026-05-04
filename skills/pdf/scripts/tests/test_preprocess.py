@@ -43,6 +43,7 @@ from html2pdf_lib.preprocess import (  # noqa: E402
     _fix_svg_viewport,
     _flatten_table_code_blocks,
     _fo_to_svg_text,
+    _parse_label_bg,
     _strip_empty_anchor_links,
     _strip_icon_svgs,
     _strip_interactive_chrome,
@@ -838,6 +839,75 @@ class TestNormalizeCSS(unittest.TestCase):
             NORMALIZE_CSS.count("white-space: pre-wrap !important"), 2,
             "white-space: pre-wrap !important must appear twice — "
             "once in <pre> and once in the Prism <code> rule")
+
+    def test_confluence_action_menu_hidden(self) -> None:
+        """Confluence Server's `<div id="action-menu" class="aui-dropdown2
+        aui-layer …">` is absolutely positioned in the source HTML and
+        leaks the page-actions menu (Save for later / Watching / Share /
+        Page History / Export to PDF / …) on top of the article body
+        when site CSS is stripped. Observed on the ELMA365 ↔ 3CX wiki
+        page, 2026-05-04. Regression guard: `#action-menu` and
+        `.aui-dropdown2` MUST be hidden in §7d.
+        """
+        self.assertIn('#action-menu', NORMALIZE_CSS,
+            "Confluence action-menu chrome strip deleted — page-actions "
+            "menu will overlap article body in regular-mode renders")
+        self.assertIn('.aui-dropdown2', NORMALIZE_CSS,
+            "AUI dropdown panel strip deleted — every Confluence Server "
+            "dropdown will leak as overlapping content")
+        self.assertIn('.aui-layer', NORMALIZE_CSS,
+            "AUI layer/overlay strip deleted")
+
+
+class TestParseLabelBgKeywords(unittest.TestCase):
+    """Pin `_parse_label_bg`'s deny list against CSS-wide keywords —
+    accepting any of these into the SVG-rect `fill=` attribute is the
+    drawio black-rectangle bug observed 2026-05-04 on the ELMA365 ↔ 3CX
+    swimlane diagram (Confluence wiki)."""
+
+    def test_initial_rejected(self) -> None:
+        """`background-color: initial` MUST NOT produce a backdrop. SVG
+        spec resolves `<rect fill="initial">` to BLACK — it's the
+        load-bearing case for this regression guard. Drawio emits
+        `background-color: initial` on vertex labels where the user
+        explicitly cleared the bg in the style picker."""
+        self.assertIsNone(_parse_label_bg(
+            '<foreignObject><div style="background-color: initial;">x</div></foreignObject>'
+        ))
+
+    def test_inherit_rejected(self) -> None:
+        """`inherit` resolves to whatever the parent element has —
+        unpredictable; must skip the backdrop."""
+        self.assertIsNone(_parse_label_bg(
+            '<foreignObject><div style="background-color: inherit;">x</div></foreignObject>'
+        ))
+
+    def test_unset_rejected(self) -> None:
+        self.assertIsNone(_parse_label_bg(
+            '<foreignObject><div style="background-color: unset;">x</div></foreignObject>'
+        ))
+
+    def test_revert_rejected(self) -> None:
+        self.assertIsNone(_parse_label_bg(
+            '<foreignObject><div style="background-color: revert;">x</div></foreignObject>'
+        ))
+        self.assertIsNone(_parse_label_bg(
+            '<foreignObject><div style="background-color: revert-layer;">x</div></foreignObject>'
+        ))
+
+    def test_real_colour_still_accepted(self) -> None:
+        """Negative case: real bg-colour values (the common drawio edge-
+        label case `#ffffff`) must STILL produce a backdrop string."""
+        self.assertEqual('#ffffff', _parse_label_bg(
+            '<foreignObject><div style="background-color: #ffffff;">x</div></foreignObject>'
+        ))
+
+    def test_initial_in_light_dark_LIGHT_arg_rejected(self) -> None:
+        """If the LIGHT branch of `light-dark()` is `initial`, the
+        result after light-dark resolution should still be skipped."""
+        self.assertIsNone(_parse_label_bg(
+            '<foreignObject><div style="background-color: light-dark(initial, #1d2125);">x</div></foreignObject>'
+        ))
 
 
 if __name__ == "__main__":

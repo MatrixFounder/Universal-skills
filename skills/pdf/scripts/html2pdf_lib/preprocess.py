@@ -183,7 +183,25 @@ def _parse_label_bg(fo: str) -> str | None:
     m = _VAR_RE.match(bg)
     if m:
         bg = m.group(1).strip()
-    if bg.lower() in ("transparent", "none", "currentcolor", ""):
+    # Skip non-paintable values:
+    #   * `transparent` / `none` — no backdrop intended.
+    #   * `currentcolor` — without a parent colour context we can't resolve;
+    #      defensive skip.
+    #   * CSS-wide keywords (`initial`, `inherit`, `unset`, `revert`,
+    #      `revert-layer`) — these are placeholder values that the browser
+    #      resolves at render time. SVG `<rect fill="initial">` is the
+    #      pathological case: the SVG spec resolves `initial` for `fill` to
+    #      *black*, so emitting a `fill="initial"` backdrop turns into a
+    #      solid black bar over the label text. Drawio's editor has been
+    #      observed (Confluence ELMA365 swimlane diagram, 2026-04-30) emitting
+    #      `background-color: initial` on vertex labels when the user
+    #      explicitly clears the label background-color in the style picker —
+    #       we MUST treat that as "no backdrop".
+    #   * `auto` — not a paint value but appears in malformed templates.
+    if bg.lower() in (
+        "transparent", "none", "currentcolor", "",
+        "initial", "inherit", "unset", "revert", "revert-layer", "auto",
+    ):
         return None
     if not (bg.startswith("#")
             or _COLOUR_FN_RE.match(bg)
