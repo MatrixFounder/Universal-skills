@@ -48,6 +48,7 @@ from html2pdf_lib.preprocess import (  # noqa: E402
     _strip_icon_svgs,
     _strip_interactive_chrome,
     _strip_universal_ads,
+    preprocess_html,
 )
 from html2pdf_lib.normalize_css import NORMALIZE_CSS  # noqa: E402
 from html2pdf_lib.reader_mode import reader_mode_html  # noqa: E402
@@ -840,23 +841,134 @@ class TestNormalizeCSS(unittest.TestCase):
             "white-space: pre-wrap !important must appear twice — "
             "once in <pre> and once in the Prism <code> rule")
 
+    @staticmethod
+    def _strip_css_comments(css: str) -> str:
+        """Strip /* … */ blocks so substring / pattern matches don't
+        false-positive on selectors that appear only in comments. CSS
+        does NOT support nested comments, so the simple non-greedy
+        regex is sufficient. (q-7 VDD-A2 fix.)"""
+        import re as _re
+        return _re.sub(r"/\*.*?\*/", "", css, flags=_re.DOTALL)
+
+    def _assert_selector_in_active_rule(
+        self, selector_literal: str,
+        property_decl: str = "display: none",
+    ) -> None:
+        """Assert that `selector_literal` appears as part of a selector
+        list in an ACTIVE CSS rule whose body contains
+        `property_decl`. The check strips comments first, then matches
+        the selector followed (eventually) by `{` and a body
+        containing the property — guaranteeing a refactor that demotes
+        the selector to a comment, or removes its declaration block,
+        fails this test.
+
+        Mirrors the pattern of `test_no_wordbreak_breakword_alias` —
+        substring `assertIn` is too weak; selector-presence in active
+        CSS is the real invariant."""
+        import re as _re
+        css = self._strip_css_comments(NORMALIZE_CSS)
+        # Selector list ends at `{`; body ends at `}`. Use [^{}] to
+        # forbid nested braces (CSS doesn't have them at top level).
+        # Anchor on a non-word char before the selector so `#action`
+        # doesn't match inside `#action-menu-secondary`.
+        pat = _re.compile(
+            r"(?:^|[\s,])"
+            + _re.escape(selector_literal)
+            + r"\b[^{}]*\{[^}]*"
+            + _re.escape(property_decl),
+            _re.DOTALL | _re.MULTILINE,
+        )
+        self.assertIsNotNone(
+            pat.search(css),
+            f"Selector {selector_literal!r} is not present in any ACTIVE "
+            f"CSS rule with `{property_decl}` body — either deleted, "
+            f"demoted to a comment, or its rule body lost the declaration. "
+            f"This breaks the chrome-strip / layout-reset contract.",
+        )
+
     def test_confluence_action_menu_hidden(self) -> None:
         """Confluence Server's `<div id="action-menu" class="aui-dropdown2
         aui-layer …">` is absolutely positioned in the source HTML and
         leaks the page-actions menu (Save for later / Watching / Share /
         Page History / Export to PDF / …) on top of the article body
         when site CSS is stripped. Observed on the ELMA365 ↔ 3CX wiki
-        page, 2026-05-04. Regression guard: `#action-menu` and
-        `.aui-dropdown2` MUST be hidden in §7d.
-        """
-        self.assertIn('#action-menu', NORMALIZE_CSS,
-            "Confluence action-menu chrome strip deleted — page-actions "
-            "menu will overlap article body in regular-mode renders")
-        self.assertIn('.aui-dropdown2', NORMALIZE_CSS,
-            "AUI dropdown panel strip deleted — every Confluence Server "
-            "dropdown will leak as overlapping content")
-        self.assertIn('.aui-layer', NORMALIZE_CSS,
-            "AUI layer/overlay strip deleted")
+        page, 2026-05-04. Regression guard: `#action-menu` /
+        `.aui-dropdown2` / `.aui-layer` MUST be in §7d's `display:none`
+        rule (NOT just present somewhere in the file as a comment)."""
+        self._assert_selector_in_active_rule('#action-menu')
+        self._assert_selector_in_active_rule('.aui-dropdown2')
+        self._assert_selector_in_active_rule('.aui-layer')
+
+    def test_confluence_sidebar_and_pagetree_hidden(self) -> None:
+        """Left-rail sidebar (`<div class="ia-fixed-sidebar"
+        role="complementary">` containing space logo, page tree,
+        quick-links) and the pageTree-macro static config table both
+        leak as visible content when site CSS is stripped. §7d
+        category (b) and (d). Regression guard pinned end-to-end: the
+        selectors must live in the ACTIVE display:none rule, not a
+        commented-out block."""
+        self._assert_selector_in_active_rule('.ia-fixed-sidebar')
+        self._assert_selector_in_active_rule('.plugin_pagetree')
+        self._assert_selector_in_active_rule('.ia-secondary-content')
+
+    def test_main_layout_reset_present(self) -> None:
+        """§4a is load-bearing: without it, `<main style="margin-left:
+        430px">` keeps the sidebar offset and the article body
+        squeezes into a narrow right column with the title inline-
+        wrapping into the version-table area on page 1 (US-Отчет
+        Полнотекстовый поиск, observed 2026-05-04). The chrome strip
+        in §7d alone is insufficient because the inline-styled
+        geometry on `<main>` survives chrome removal.
+
+        The two LOAD-BEARING declarations are:
+          * `margin-left: 0` — overrides `margin-left: 430px` on
+            `<main>` (the actual cause of the squeezed column).
+          * `padding-top: 0` — overrides `padding-top: 55px` on
+            `#main-header-placeholder` (top-banner reservation).
+
+        Both must apply to `main` AND `#main` (Confluence sometimes
+        emits both the semantic tag and the legacy ID together)."""
+        self._assert_selector_in_active_rule(
+            'main', property_decl='margin-left: 0 !important')
+        self._assert_selector_in_active_rule(
+            '#main-header-placeholder',
+            property_decl='padding-top: 0 !important')
+
+    def test_no_horizontal_padding_reset_in_main_rule(self) -> None:
+        """Negative regression guard for VDD-A MED-3 (q-7 fix iteration
+        2): §4a previously included `padding-left: 0 !important;
+        padding-right: 0 !important` on `main, #main, #main-content,
+        #content, …`. `#content` is a generic ID widely used outside
+        Confluence (Sphinx, MkDocs, Hugo, GitHub README pages, …); the
+        horizontal-padding reset made article text touch the page-
+        margin edge on those sites — a typographic regression worse
+        than the bug it intended to fix. The sidebar offset is purely
+        `margin-left` on `<main>`, never padding.
+
+        This test pins the removal: nobody re-adds the over-strip."""
+        import re as _re
+        css = self._strip_css_comments(NORMALIZE_CSS)
+        # Locate the §4a rule (selectors that include `#main-header-placeholder`)
+        # and assert its body does NOT declare horizontal padding.
+        rule_pat = _re.compile(
+            r"(?:^|[\s,])#main-header-placeholder\b[^{}]*\{([^}]*)\}",
+            _re.DOTALL | _re.MULTILINE,
+        )
+        m = rule_pat.search(css)
+        self.assertIsNotNone(
+            m,
+            "Could not locate §4a layout-reset rule (lookup key: "
+            "`#main-header-placeholder`).",
+        )
+        body = m.group(1)
+        for prop in ("padding-left", "padding-right"):
+            self.assertNotRegex(
+                body,
+                rf"\b{prop}\s*:\s*0\b",
+                f"§4a rule re-introduced `{prop}: 0` — this over-strips "
+                f"horizontal padding on `#content` etc. on every "
+                f"non-Confluence page.",
+            )
 
 
 class TestParseLabelBgKeywords(unittest.TestCase):
@@ -908,6 +1020,75 @@ class TestParseLabelBgKeywords(unittest.TestCase):
         self.assertIsNone(_parse_label_bg(
             '<foreignObject><div style="background-color: light-dark(initial, #1d2125);">x</div></foreignObject>'
         ))
+
+
+class TestNoFillInitialLeaksEndToEnd(unittest.TestCase):
+    """Defense-in-depth (q-7 VDD-A2 LOW-4): even when `_parse_label_bg`'s
+    deny list is correct, a future change to `_fo_to_svg_text` (or a
+    new SVG-emission path) could re-introduce `fill="initial"` from a
+    different code path. Run a synthetic drawio-style fixture through
+    the WHOLE `preprocess_html()` pipeline and assert no SVG `fill=`
+    attribute holds a CSS-wide keyword. Cheap insurance — runs
+    sub-millisecond on a tiny synthetic input."""
+
+    # CSS-wide keywords that, if emitted into an SVG `fill=` attribute,
+    # resolve to BLACK (or unspecified) per SVG spec. None of these
+    # should ever leak through preprocessing.
+    BAD_FILL_VALUES = (
+        "initial", "inherit", "unset", "revert",
+        "revert-layer", "auto", "currentcolor",
+    )
+
+    def test_drawio_with_bg_initial_does_not_leak_fill_initial(self) -> None:
+        """Synthetic drawio swimlane: a foreignObject vertex label with
+        `background-color: initial`. The bug it pins (and the deny-
+        list fix prevents): `<rect fill="initial">` emitted in the
+        SVG, which weasyprint resolves to a solid black bar over the
+        text."""
+        synthetic = """
+        <html><body>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 100">
+          <foreignObject x="0" y="0" width="200" height="100">
+            <div xmlns="http://www.w3.org/1999/xhtml"
+                 style="display: flex; align-items: center;
+                        justify-content: center; width: 1px; height: 1px;
+                        padding-top: 50px; margin-left: 100px;">
+              <div style="font-size: 12px; background-color: initial;">
+                POSTevent = outgoing finishtype = Ok
+              </div>
+            </div>
+          </foreignObject>
+        </svg>
+        </body></html>
+        """
+        out = preprocess_html(synthetic)
+        for kw in self.BAD_FILL_VALUES:
+            for quote in ('"', "'"):
+                needle = f'fill={quote}{kw}{quote}'
+                self.assertNotIn(
+                    needle, out,
+                    f"preprocess output contains {needle!r} — a CSS-wide "
+                    f"keyword leaked into an SVG `fill=` attribute. "
+                    f"weasyprint will resolve this to black; the label "
+                    f"backdrop will hide its own text. Check "
+                    f"`_parse_label_bg` and any new SVG-emission paths.",
+                )
+
+    def test_drawio_with_bg_inherit_does_not_leak(self) -> None:
+        """Same guard for `background-color: inherit` — inherit is even
+        less predictable than `initial` because the resolved value
+        depends on parent context, which weasyprint can't always
+        compute correctly during SVG sub-rendering."""
+        synthetic = (
+            '<svg viewBox="0 0 100 50"><foreignObject>'
+            '<div xmlns="http://www.w3.org/1999/xhtml" '
+            'style="background-color: inherit;">label</div>'
+            '</foreignObject></svg>'
+        )
+        out = preprocess_html(synthetic)
+        for kw in self.BAD_FILL_VALUES:
+            self.assertNotIn(f'fill="{kw}"', out)
+            self.assertNotIn(f"fill='{kw}'", out)
 
 
 if __name__ == "__main__":

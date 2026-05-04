@@ -93,13 +93,32 @@ header, nav, .navbar, .topbar, .top-bar,
         the full page width. We target `<main>` / `#main` /
         `#main-content` / `#content` plus the header-placeholder
         explicitly — generic `body > *` would over-strip legitimate
-        layout. */
+        layout.
+
+        Scope of reset (load-bearing only — verified empirically against
+        the ELMA365 Confluence corpus, 2026-05-05):
+          * `margin-left: 0` — overrides `margin-left: 430px` on `<main>`
+            (the actual cause of the squeezed-column rendering).
+          * `padding-top: 0` — overrides `padding-top: 55px` on
+            `#main-header-placeholder` (the top-banner reservation).
+          * `top: 0` — neutralises `top: 55px` from `position: fixed`
+            elements after §4 resets them to `position: static`.
+          * `height/min-height: auto/0` — lifts the inline
+            `height: 100px` cap on `#main-header-placeholder`.
+          * `width/max-width: auto/100%` — lifts the inline
+            `width: 1064px` (sidebar-anchored) on `#main-header`.
+        Deliberately NOT reset:
+          * `padding-left/right` — `#content` is a generic ID widely
+            used outside Confluence (Sphinx, MkDocs, Hugo, GitHub
+            README pages). Stripping horizontal padding made article
+            text touch the page-margin edges, a typographic regression
+            on every non-Confluence page that uses `#content`. The
+            sidebar offset is purely `margin-left`; padding was never
+            the cause. */
 main, #main, #main-content, #content,
 #main-header, #main-header-placeholder {
     margin-left: 0 !important;
     padding-top: 0 !important;
-    padding-left: 0 !important;
-    padding-right: 0 !important;
     top: 0 !important;
     height: auto !important;
     min-height: 0 !important;
@@ -312,7 +331,26 @@ h1 button, h2 button, h3 button, h4 button, h5 button, h6 button {
         Note: do NOT include `#title-heading` here — its `<h1>` is the
         article's actual page title (extracted separately into the docx
         via `extractPageTitle()`; in html2pdf it remains in the article
-        flow because we don't narrow the root the same way). */
+        flow because we don't narrow the root the same way).
+
+        Honest scope (over-strip trade-offs accepted, 2026-05-05):
+          * `[role="banner|complementary|contentinfo|search"]` are
+            stripped GLOBALLY (not scoped to body-level). ARIA spec
+            allows these roles inside article content (e.g. an
+            accessibility tutorial demonstrating `role="search"`, or
+            a `<aside role="complementary">` "Tip" callout that's part
+            of the article body). For our corpus all four roles
+            consistently mark site-level chrome; an article-internal
+            usage would be lost. If a future fixture exercises this
+            edge case, narrow via `:not(article …)` or scope to
+            `body > [role="…"]`.
+          * `#navigation`, `#breadcrumbs`, `#header`, `#footer` are
+            generic IDs that legitimate non-Confluence sites might use.
+            A blog whose only breadcrumb container is `#breadcrumbs`
+            loses navigation context. We accept this — the alternative
+            (per-platform CSS scoping with `[class^="atlassian"]`
+            ancestors) is fragile across Confluence Server versions
+            and useless against other CMSes that emit identical IDs. */
 /* (a) AUI dropdowns + overlay layers + edit toolbar. */
 #action-menu, #share-menu, #share-on-page,
 .aui-dropdown2, .aui-layer, .aui-toolbar2,
