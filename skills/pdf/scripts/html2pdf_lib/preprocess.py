@@ -157,6 +157,12 @@ def _parse_label_bg(fo: str) -> str | None:
       * `var(--name, fallback)` → fallback (single level only; nested
         `var()` falls through to None — defensive)
       * `transparent` / `none` / unparseable → None
+      * **CSS-wide keywords** (`initial`, `inherit`, `unset`, `revert`,
+        `revert-layer`, `auto`) → None. SVG spec resolves
+        `<rect fill="initial">` to BLACK; emitting any of these as a
+        `fill=` value produces a solid black backdrop that hides its
+        own label text (the drawio black-rectangle bug, observed
+        2026-05-04 on the ELMA365 ↔ 3CX swimlane diagram).
       * `!important` suffix is stripped before validation
 
     Scope: ONLY scans `style="…"` and `style='…'` attribute bodies — never

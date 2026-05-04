@@ -397,6 +397,89 @@ If you see a `[md2pdf] WARN: --mermaid-config X does not exist`
 banner, the path was wrong and it fell back to mmdc defaults.
 Pass `--strict-mermaid` to fail loudly instead.
 
+### Confluence Server / DC chrome (sidebar, page-tree, action-menu) leaks into PDF body
+
+**Symptom.** A Confluence Server `.html` / `.webarchive` / `.mhtml`
+input rendered via `html2pdf.py` shows the LEFT sidebar (space logo,
+"Pages / Blog / Calendars / Analytics" links, "Quick Links",
+"Дерево страниц" / "Page Tree") AND/OR the page-action toolbar
+("Сохранить на потом / Наблюдаемое / Поделиться / Page History /
+Export to PDF / …") on top of (or instead of) the article body.
+Often the title text is wrapped into 3 lines that overlap the
+version table on page 1.
+
+**Cause.** Confluence's sidebar is `<div class="ia-fixed-sidebar"
+role="complementary" style="position: fixed; left: 0; …">`,
+the page-actions dropdown is `<div id="action-menu"
+class="aui-dropdown2 aui-layer">`, the page-tree is
+`<div class="plugin_pagetree">`, and the page-metadata banner is
+`<ul class="banner"> <li class="page-metadata-item">…</ul>` —
+all absolutely positioned and kept hidden by site CSS until
+the runtime decides to show them. Once `_strip_external_stylesheets`
+runs, all the absolute positioning is lost and these containers
+stack on top of (or instead of) the article. Additionally,
+`<main id="main" style="margin-left: 430px">` has inline geometry
+that compensates for the (now-hidden) fixed sidebar — without
+overriding it, the article body squeezes into a narrow right
+column.
+
+**Fix.** `NORMALIZE_CSS` rules §7d (Confluence chrome strip) and §4a
+(layout-offset reset on `<main>` / `#main-header-placeholder`) handle
+both classes of regression universally. If a Confluence-Server fixture
+in your corpus still leaks chrome:
+
+1. Identify the leaking container's id/class via
+   `pdftotext -layout out.pdf - | head -50` (text-extract page 1) or
+   by opening the source HTML/.webarchive and grep'ing for the leaked
+   text.
+2. If the container is Confluence-specific (`#some-confluence-id`,
+   `.aui-something`, `.acs-…`), add it to §7d's selector list.
+3. If it's a generic `[role="…"]` or generic ID, weigh the over-strip
+   trade-off (see "Honest scope" comment block in §7d) before adding.
+4. Run `./.venv/bin/python -m unittest tests.test_preprocess` — the
+   selector-presence tests use anchored regex against active CSS
+   rules, so a typo gets flagged immediately.
+
+Pinned by [`TestNormalizeCSS.test_confluence_action_menu_hidden`](../../skills/pdf/scripts/tests/test_preprocess.py)
++ `test_confluence_sidebar_and_pagetree_hidden` +
+`test_main_layout_reset_present`.
+
+### drawio diagram has solid black rectangles over vertex labels
+
+**Symptom.** A drawio swimlane diagram embedded in a Confluence
+page (or any source) renders with solid-black bars covering the text
+of certain vertex labels — most often labels where the user
+explicitly cleared the `labelBackgroundColor` in drawio's style
+picker.
+
+**Cause.** drawio emits `background-color: initial` on the
+foreignObject's inner `<div>` for cleared-bg labels. `_parse_label_bg`
+parses this as a colour value and `_fo_to_svg_text` writes
+`<rect fill="initial">` behind the label. **SVG spec resolves
+`fill="initial"` to BLACK** — the rect renders solid black on top
+of the (also-black) `<text>` glyph, producing the visual artefact.
+
+**Fix.** `_parse_label_bg` denies `initial` (and the other CSS-wide
+keywords `inherit`, `unset`, `revert`, `revert-layer`, `auto`)
+since 2026-05-04. If a NEW label backdrop variant emits an unknown
+keyword:
+
+1. Capture the source HTML and look for `background-color: SOMETHING`
+   inside the affected `<foreignObject>`.
+2. If `SOMETHING` is unparseable (a future CSS function we don't
+   recognise), `_parse_label_bg` already returns `None` defensively;
+   no fix needed.
+3. If `SOMETHING` is a real colour value but the label still renders
+   black, suspect the drawio `fontColor` style — the fix is in
+   `_fo_to_svg_text`'s text-emission, not `_parse_label_bg`.
+
+Pinned by [`TestParseLabelBgKeywords`](../../skills/pdf/scripts/tests/test_preprocess.py)
+(6 deny-list cases) +
+[`TestNoFillInitialLeaksEndToEnd`](../../skills/pdf/scripts/tests/test_preprocess.py)
+(end-to-end synthetic drawio fixture asserting NO `fill="<keyword>"`
+leaks across the full preprocessing pipeline — defence in depth
+against new SVG-emission paths bypassing the deny list).
+
 ### Mermaid PNG looks pixelated in the PDF
 
 **Cause.** PDF rendering scales the PNG to fit the page (`max-width:
