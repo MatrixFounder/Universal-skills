@@ -86,7 +86,7 @@ CSS injected unconditionally to bypass site-CSS quirks weasyprint can't handle:
 4. **`position:fixed/sticky` reset** to `static` — breadcrumb rows / Confluence header rows that aren't actually navigation but use fixed positioning.
 5. **Multi-column collapse** — vc.ru / Habr `<.entry > .content>` flex rows (author card + body) collapse to single-column block flow.
 6. **Image / video safety** — `max-width:100%; height:auto` on `img, video, canvas`.
-7. **Markdown-preview typography** — `<pre>`/`<code>`/`<blockquote>` get GitHub-style typography (light grey background, rounded border, monospace, `pre-wrap` line wrapping for long source lines).
+7. **Markdown-preview typography** — `<pre>`/`<code>`/`<blockquote>` get GitHub-style typography (light grey background, rounded border, monospace, `pre-wrap` line wrapping for long source lines). Also covers Prism / Confluence DC code blocks that ship `<code class="language-…" style="white-space: pre;">` WITHOUT a wrapping `<pre>` (`<div class="codeBlockContainer_HASH">…<code class="language-sql">…</code>…</div>`): a tighter selector `code[class*="language-"]`, `.code.panel code`, `[class*="codeBlockContainer"] code` overrides the inline `pre` with `pre-wrap` + `overflow-wrap: break-word` so long SQL/code lines wrap at the page boundary instead of being silently clipped (PDFs cannot scroll). Three implementation notes worth knowing for maintainers: (a) **`word-break: break-word` is intentionally NOT used** — weasyprint rejects the CSS-WG-deprecated alias as an invalid value (logs `Ignored 'word-break: break-word'`); only the standard `overflow-wrap: break-word` carries wrap behaviour. (b) **Class selector is attribute-substring, not literal** — Confluence DC hashes class names like `codeBlockContainer_yyk2gsoAwjaamghp6yoO-Q==`; `.codeBlockContainer` would NOT match the hashed form (CSS class selectors don't prefix-match), so we use `[class*="codeBlockContainer"]`. (c) **Visual envelope (light-grey rounded box) comes from Confluence's preserved inline `<style>` blocks**, NOT from this rule — our scope is wrap-only, because forcing `display: block` on the inline `<code>` triggers a weasyprint layout regression (`absolute_block: 'NoneType' object has no attribute 'width'`) when the document contains absolutely-positioned chrome whose containing block resolves through these inline ancestors. **Latent failure mode (out of scope)**: stylesheet `!important` beats inline non-`!important`, but inline `!important` beats stylesheet `!important` — if upstream Confluence ever ships `style="white-space: pre !important"` inline, our wrap silently regresses. Today no fixture does this. Pinned by `TestNormalizeCSS` unit tests.
 8. **ARIA-role tables** — `[role="table"]` / `[role="row"]` / `[role="cell"]` etc. render as a real CSS `display:table` (GitBook builds tables out of divs; without this the cells collapse to vertical block flow).
 9. **Anchor / heading-link button hide** — `.copy-heading-link-container`, `.headerlink`, `a.anchor`, `h1 button`, etc. get `display:none`.
 
@@ -229,7 +229,7 @@ workflow for adding new platforms without breaking existing behaviour.
 
 ### Tier 1 — Unit tests (`tests/test_preprocess.py`)
 
-49 deterministic tests that import individual helpers from
+55 deterministic tests that import individual helpers from
 `html2pdf_lib/` and pin down the contracts that survived the
 adversarial-review iterations. Cover: self-closing `<svg/>` handling,
 AND-rule aspect-ratio for icon detection, `text_length` script/style
@@ -242,8 +242,14 @@ text-content-leak guard (label text mentioning `background-color:`),
 `data-*` attr leak guard, single-quoted `style='…'` parsing,
 `!important` strip, modern colour functions (`oklch`/`hsl`/`lab`/`rgba`),
 named CSS colours, `var(--name)` no-fallback returns None, multi-line
-edge-label rect-per-line invariant; watchdog wiring (zero-timeout,
-non-main-thread degrade, install/clear leak guard), offline URL fetcher
+edge-label rect-per-line invariant; `_NORMALIZE_CSS` structural guards
+— Prism `code[class*="language-"]` selector presence, Confluence DC
+attribute-substring `[class*="codeBlockContainer"]` (catches hashed
+class names), `.code.panel code` chained selector, `overflow-wrap:
+break-word` × 2 (the working wrap property), `white-space: pre-wrap`
+× 2, no `word-break: break-word` declaration (weasyprint-rejected
+alias regression guard); watchdog wiring (zero-timeout, non-main-
+thread degrade, install/clear leak guard), offline URL fetcher
 refusal of `http(s)://`. Run time < 1 s.
 
 ### Tier 2 — Synthetic micro-fixtures (`examples/regression/*.html`)

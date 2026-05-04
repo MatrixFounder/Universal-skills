@@ -113,15 +113,15 @@ pre {
     border-radius: 6px !important;
     padding: 12px 16px !important;
     margin: 12px 0 !important;
-    /* white-space: pre-wrap + word-break: break-word makes long source lines
-       wrap to the next line at the page-width boundary instead of being clipped
-       past the right margin. PDFs can't scroll, so `overflow-x: auto` (the
-       browser default) silently drops content past the box. We preserve all
-       leading indentation via `pre-wrap` and break only at word/symbol
-       boundaries — keeps the visual indentation of nested code intact while
-       making sure no line goes past the page edge. */
+    /* `white-space: pre-wrap` preserves leading indentation; `overflow-wrap:
+       break-word` lets long unbreakable tokens (URLs, base64) wrap at the page-
+       width boundary instead of clipping past the right margin. PDFs can't
+       scroll, so `overflow-x: auto` (the browser default) silently drops
+       content past the box. We deliberately do NOT use `word-break: break-word`
+       — weasyprint rejects this CSS-WG-deprecated alias as an invalid value
+       (verified empirically; logs `Ignored 'word-break: break-word'`); only
+       the standard `overflow-wrap: break-word` carries the wrap behaviour. */
     white-space: pre-wrap !important;
-    word-break: break-word !important;
     overflow-wrap: break-word !important;
     font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace !important;
     font-size: 0.85em !important;
@@ -141,6 +141,50 @@ pre code {
     padding: 0.2em 0.4em !important;
     font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace !important;
     font-size: 0.9em !important;
+}
+
+/* ── 7a-bis. Block-level code (Prism / Confluence DC).
+        Newer Confluence editors and many docs sites use a Prism-style code
+        block WITHOUT a wrapping <pre>:
+            <div class="codeBlockContainer_HASH"><code class="language-sql"
+                  style="white-space: pre;">…spans…</code></div>
+        The inline `white-space: pre` overflows long source lines past the
+        right margin (PDFs cannot scroll, so content is silently clipped and
+        un-copyable). Force `pre-wrap` so weasyprint wraps the lines at the
+        page boundary.
+
+        Selector notes:
+          * `code[class*="language-"]` — Prism / shiki / highlight.js
+            convention, present in Mintlify, Docusaurus, MkDocs, the new
+            Confluence DC editor, and many vendors. This is the load-bearing
+            selector — it catches the inner <code> regardless of parent.
+          * `.code.panel code` — Confluence's classic chained-class wrapper
+            (`<div class="code panel pdl conf-macro output-block">…</div>`);
+            narrow on purpose.
+          * `[class*="codeBlockContainer"] code` — Confluence DC ships hashed
+            class names like `codeBlockContainer_yyk2gsoAwjaamghp6yoO-Q==`.
+            CSS class selectors do NOT prefix-match, so a literal
+            `.codeBlockContainer` would be DEAD — we use the attribute-
+            substring selector to catch every hash variant.
+
+        Why no `display: block` / `background` / `padding` here: in non-
+        reader mode the document contains absolute-positioned chrome whose
+        containing-block resolves through these inline `<code>` elements;
+        switching them to block layout triggers a weasyprint regression
+        (`absolute_block: 'NoneType' object has no attribute 'width'`,
+        verified on US-Отчёт regular render). The visual envelope users
+        see (light-grey rounded box around the code) comes from
+        Confluence's preserved inline `<style>` blocks, NOT from us — our
+        scope is wrap-only. `word-break: break-word` is intentionally
+        absent (see §7a comment). Latent-failure mode out of scope: if
+        upstream ever ships `style="white-space: pre !important"` inline,
+        CSS spec says inline `!important` beats stylesheet `!important`
+        and our wrap silently regresses. Today no fixture does this. */
+code[class*="language-"],
+.code.panel code,
+[class*="codeBlockContainer"] code {
+    white-space: pre-wrap !important;
+    overflow-wrap: break-word !important;
 }
 
 /* ── 7b. Blockquote styling (markdown-preview parity). GitHub-style left

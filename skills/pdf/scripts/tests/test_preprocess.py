@@ -48,6 +48,7 @@ from html2pdf_lib.preprocess import (  # noqa: E402
     _strip_interactive_chrome,
     _strip_universal_ads,
 )
+from html2pdf_lib.normalize_css import NORMALIZE_CSS  # noqa: E402
 from html2pdf_lib.reader_mode import reader_mode_html  # noqa: E402
 from html2pdf_lib.render import (  # noqa: E402
     _clear_render_watchdog,
@@ -754,6 +755,89 @@ class TestWatchdog(unittest.TestCase):
             f"watchdog should not raise from worker thread; got {exc}")
         self.assertEqual(result, [None],
             "watchdog should return None from worker thread")
+
+
+# ── NORMALIZE_CSS structural guards ──────────────────────────────────────
+
+
+class TestNormalizeCSS(unittest.TestCase):
+    """Pin the structural invariants of `_NORMALIZE_CSS` that the battery
+    only catches indirectly via page-count tolerance bands. These are
+    sub-millisecond and surface a deletion-by-typo immediately.
+
+    Specifically guards rule §7a-bis (block-level Prism / Confluence DC
+    code wrap), added 2026-05-04 after VDD-adversarial review of the
+    initial wrap fix. See `references/html-conversion.md` rule #7."""
+
+    def test_prism_wrap_selector_present(self) -> None:
+        """`code[class*="language-"]` is the load-bearing selector — it
+        catches Prism / shiki / highlight.js / Confluence DC code blocks
+        regardless of parent. Removing it silently regresses long SQL
+        lines past the right page edge (un-copyable, clipped)."""
+        self.assertIn('code[class*="language-"]', NORMALIZE_CSS,
+            "Prism `code[class*=\"language-\"]` selector deleted — "
+            "long source lines will clip past the right margin")
+
+    def test_confluence_dc_hashed_class_selector(self) -> None:
+        """Confluence DC ships hashed class names like
+        `codeBlockContainer_yyk2gsoAwjaamghp6yoO-Q==`. CSS class
+        selectors do NOT prefix-match (`.codeBlockContainer` would NOT
+        match `codeBlockContainer_HASH`), so we use an attribute-
+        substring selector. Regression guard: a refactor that swaps
+        `[class*="codeBlockContainer"]` for `.codeBlockContainer` would
+        make the selector dead on every Confluence DC export."""
+        self.assertIn('[class*="codeBlockContainer"]', NORMALIZE_CSS,
+            "Confluence DC hashed-class wrap selector regressed to a "
+            "literal `.codeBlockContainer` (which does NOT match "
+            "`codeBlockContainer_HASH=` forms emitted by Confluence DC)")
+
+    def test_confluence_classic_panel_selector(self) -> None:
+        """Confluence's classic chained-class `.code.panel` wrapper."""
+        self.assertIn('.code.panel code', NORMALIZE_CSS,
+            "Confluence classic `.code.panel` wrap selector deleted")
+
+    def test_overflow_wrap_break_word_present(self) -> None:
+        """`overflow-wrap: break-word` is the standard CSS3 property
+        that allows long unbreakable tokens (URLs, base64) to wrap
+        within a `pre-wrap` block. Without it, a single long token
+        clips past the right margin even though `pre-wrap` is set."""
+        self.assertEqual(
+            NORMALIZE_CSS.count("overflow-wrap: break-word !important"), 2,
+            "overflow-wrap: break-word !important must appear twice — "
+            "once in §7a (<pre>) and once in §7a-bis (Prism <code>)")
+
+    def test_no_wordbreak_breakword_alias(self) -> None:
+        """`word-break: break-word` is a CSS-WG-deprecated alias of
+        `overflow-wrap: break-word` that **weasyprint rejects as an
+        invalid value** (verified empirically; logs `Ignored
+        'word-break: break-word'`). Earlier versions of this rule
+        included the alias as 'safety' — it was dead weight that
+        misled maintainers reading the comment. Regression guard:
+        nobody re-adds the dead alias.
+
+        Match a real CSS declaration (line-start whitespace + property +
+        `;` or `!important`), NOT the substring in comments — the
+        comment intentionally explains why the alias is absent."""
+        import re as _re
+        decl_pat = _re.compile(
+            r"^\s*word-break\s*:\s*break-word\s*(?:!important\s*)?;",
+            _re.MULTILINE,
+        )
+        m = decl_pat.search(NORMALIZE_CSS)
+        self.assertIsNone(m,
+            "word-break: break-word DECLARATION re-introduced — "
+            "weasyprint rejects it as invalid; only overflow-wrap: "
+            "break-word actually wraps")
+
+    def test_pre_wrap_in_both_code_blocks(self) -> None:
+        """Both <pre> (§7a) and Prism <code> (§7a-bis) MUST set
+        `white-space: pre-wrap` to preserve indentation while wrapping
+        at the page boundary. `pre-wrap` (not `pre`!) is the load-
+        bearing value."""
+        self.assertEqual(
+            NORMALIZE_CSS.count("white-space: pre-wrap !important"), 2,
+            "white-space: pre-wrap !important must appear twice — "
+            "once in <pre> and once in the Prism <code> rule")
 
 
 if __name__ == "__main__":
