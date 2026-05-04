@@ -266,6 +266,115 @@ small input, that's a real perf regression worth investigating.
 
 ---
 
+## 4a. HTML → PDF / DOCX regression battery (q-6 / q-7)
+
+### Battery fails with `paragraph count N below min M` (or `above max`)
+
+**Cause.** Preprocessing changed the docx structure — a stage was
+edited and now produces fewer (or more) `<w:p>` paragraphs than the
+captured baseline allows. The ±5 % band with floor 2 absorbs trivial
+spacing drift; anything beyond that is a real change.
+
+**Fix.** Decide whether the change is **intentional** or **regression**:
+
+```bash
+# Reproduce locally to inspect the actual delta.
+cd skills/docx/scripts
+node html2docx.js \
+    tests/fixtures/platforms/<fixture>.html /tmp/out.docx
+./.venv/bin/python -c "
+import zipfile, re
+from lxml import etree
+NS = {'w': 'http://schemas.openxmlformats.org/wordprocessingml/2006/main'}
+with zipfile.ZipFile('/tmp/out.docx') as z, z.open('word/document.xml') as f:
+    root = etree.parse(f).getroot()
+print('paragraphs:', len(root.findall('.//w:p', NS)))
+print('drawings:',   len(root.findall('.//w:drawing', NS)))
+"
+```
+
+* Intentional: re-capture the baseline:
+  `./.venv/bin/python tests/capture_signatures.py --fixture <name>`
+  Review `git diff tests/battery_signatures.json`. User-curated
+  `forbidden_needles` and `_*` annotations are preserved across
+  refresh; tolerance bands and auto-sampled `required_needles` are
+  regenerated.
+* Regression: revert the offending preprocessing change. Run
+  `bash tests/canary_check.sh` to confirm the battery picks it up
+  end-to-end (this also helps localise which stage is responsible).
+
+### Battery fails with `image count N above max M`
+
+**Cause.** Image count uses **exact match** (no tolerance) on the
+fixture's `min_images == max_images`. An icon survived a strip rule
+that should have removed it (typically `_isIconSvg` rule 6 — viewBox-
+only fallback for Mintlify info callouts) and round-tripped through
+the SVG rasteriser, adding a `<w:drawing>` to the docx.
+
+**Fix.** Same procedure as above — first `bash canary_check.sh` to
+confirm icon-strip is the broken stage, then either re-baseline
+(intentional layout change adds a real diagram) or revert the
+preprocessing edit. The synthetic
+`regression-icon-svg-mintlify.html` fixture is calibrated as
+"diagram only, 25 viewBox-only icons stripped"; if rule 6 breaks
+the count jumps from 1 to 26 instead of drifting by ±1.
+
+### Battery fails with `forbidden needle 'X' leaked into Y — chrome bypass`
+
+**Cause.** A reader-mode chrome strip stage was edited and now lets
+sentinels through. Most commonly: `stripReaderModeChrome` keyword
+list shrunk, OR the substring matcher was changed to word-boundary
+and missed the BEM-modifier compound (e.g. `.content__reactions`).
+
+**Fix.** Re-read the keyword list in
+[`skills/docx/scripts/_html2docx_preprocess.js`](../../skills/docx/scripts/_html2docx_preprocess.js)
+(`READER_STRIP_KEYWORDS`); the comment block enumerates exactly
+which substrings are deliberately omitted (`sidebar`, `widget`,
+`share`, `meta`, `tags` — they collide with BEM-modifier positions
+on Habr and would strip article body). Restore the keyword and
+re-run the battery.
+
+### Battery skips with `fixture not on disk: foo.webarchive`
+
+**Cause.** The signature references a `tmp/` fixture (gitignored)
+that's not present in the local checkout. CI machines and fresh
+clones won't have it; this is the expected behavior.
+
+**Fix.** Either (a) drop the .webarchive into `tests/tmp/` if you
+have a copy, or (b) ignore — the test SKIPS rather than FAILS, so
+this won't cause a CI red. To remove a stale entry permanently,
+delete it from `battery_signatures.json` by hand.
+
+### `canary_check.sh` reports `0/3 sabotages detected`
+
+**Cause.** The battery is no longer able to detect known-bad
+preprocessing changes — this is a **silent regression of the
+regression battery itself**. Either tolerance bands have widened
+beyond the sabotage delta, or the fixture set has lost the only
+case that exercised the affected rule.
+
+**Fix.** Tighten the relevant tolerance band by hand in
+`battery_signatures.json` (e.g. set `max_images` to the captured
+value when previously a wider band was set), or add a synthetic
+fixture that drives the affected stage to a binary outcome (presence/
+absence of a specific needle / image count). Re-run
+`canary_check.sh` until 3/3 detect.
+
+### `capture_signatures.py` warns `only 1 stable needle(s) sampled`
+
+**Cause.** The fixture's body text after preprocessing is too short
+or too repetitive for the auto-sampler to pick three distinctive
+needles. Most commonly hits synthetic single-paragraph regression
+fixtures.
+
+**Fix.** Hand-curate `required_needles` directly in
+`battery_signatures.json` after capture — auto-sampling is the
+"good enough by default" path; manual entries override and persist
+across `--refresh`. The needle matcher whitespace-normalises on both
+sides, so multi-line strings work fine.
+
+---
+
 ## 5. Output / format issues
 
 ### Cyrillic / CJK text in mermaid diagrams renders as boxes
@@ -576,9 +685,11 @@ runner's `apt install imagemagick` provides v6's standalone
 | Where | What you'll find |
 |---|---|
 | [`office-skills_manual.md`](office-skills_manual.md) §9.5 | Cross-skill safeguards (cross-1 / 4 / 5 / 7) — the big "shared error contracts" surface. |
+| [`office-skills_manual.md`](office-skills_manual.md) §8.6 | Regression battery (q-6 / q-7) — tolerance bands, signature schema, capture / refresh workflow, canary verification. |
 | `skills/<skill>/SKILL.md` | Quick reference for that skill's CLIs and flags — the agent's primary discovery surface. |
 | `skills/<skill>/references/*.md` | Deep dives: docx-js gotchas, openpyxl-vs-pandas, pptxgenjs basics, AcroForm vs XFA, weasyprint setup, financial-modeling conventions. |
 | [`tests/visual/README.md`](../../tests/visual/README.md) | Visual regression tuning, golden-update workflow, cross-platform drift notes. |
 | `bash skills/<skill>/scripts/tests/test_e2e.sh` | Self-contained reproducer for every contract — the assertion text usually pinpoints the failing path. |
+| `bash skills/docx/scripts/tests/canary_check.sh` | Meta-test that the q-7 battery is actually able to detect known-bad preprocessing changes. Run after large refactors of `_html2docx_preprocess.js` or fixture additions. |
 | [`docs/refactoring-office-skills.md`](../refactoring-office-skills.md) | Historical design rationale — why an architecture decision was made (read-only; superseded by `CONTRIBUTING.md`). |
 | [`docs/CONTRIBUTING.md`](../CONTRIBUTING.md) | The contributor protocol — replication rules, quality automation, commit hygiene. |

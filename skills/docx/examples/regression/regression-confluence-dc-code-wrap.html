@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Confluence DC inline-ancestor code regression</title>
+<!--
+  Confluence DC (new Atlassian editor) wraps Prism-highlighted code
+  in `<span data-code-lang="..."><code class="language-...">…</code></span>`
+  WITHOUT a wrapping <pre>. The walker's default branch sees <span>
+  at block level and routes to walkInline, flattening 50+ lines of
+  SQL into one Arial-12pt paragraph (no monospace, no preserved
+  newlines). The fixture exercises:
+
+    * wrapInlineCodeBlocks → wraps the inner <code> in <pre>.
+    * hoistPreFromInlineAncestors → unwraps the surrounding <span>
+      so the new <pre> lands at block level and renders monospace.
+
+  Sentinel "SELECT id, name" + the multi-line indent pattern lets the
+  battery confirm the <pre> survived end-to-end.
+-->
+</head>
+<body>
+<h1>Database query example</h1>
+<p>The following SQL returns the active user roster:</p>
+<span data-code-lang="sql" class="prismjs"><code class="language-sql">SELECT id, name, role
+FROM users
+WHERE active = true
+  AND created_at &gt;= NOW() - INTERVAL 30 DAY
+ORDER BY created_at DESC
+LIMIT 100;</code></span>
+<p>Run the query in any SQL console connected to the production replica.</p>
+</body>
+</html>

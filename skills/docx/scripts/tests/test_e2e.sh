@@ -47,6 +47,27 @@ grep -q "915,000" "$TMP/back.md" \
     && ok "table cell preserved" \
     || nok "table cell" "lost in round-trip"
 
+# --- html2docx preprocess unit tests (q-7) --------------------------------
+# Synthetic-HTML unit cases for every preprocessing stage in
+# `_html2docx_preprocess.js`. Run BEFORE the html2docx E2E so a stage-
+# level regression fails fast instead of getting buried under an
+# end-to-end document mismatch. Output parsing is anchored on the
+# node:test summary lines (`pass N` / `fail N`); the leading info
+# glyph isn't part of the match.
+echo "html2docx preprocess unit tests:"
+pp_rc=0
+pp_out=$(node tests/test_html2docx_preprocess.test.js 2>&1) || pp_rc=$?
+pp_pass=$(echo "$pp_out" | grep -E '(^|[[:space:]])pass [0-9]+$' | grep -oE '[0-9]+' | tail -1)
+pp_fail=$(echo "$pp_out" | grep -E '(^|[[:space:]])fail [0-9]+$' | grep -oE '[0-9]+' | tail -1)
+pp_pass=${pp_pass:-0}
+pp_fail=${pp_fail:-0}
+if [ "$pp_rc" -eq 0 ] && [ "$pp_fail" = "0" ] && [ "$pp_pass" -gt 0 ]; then
+    ok "preprocess unit-tests: $pp_pass passed"
+else
+    nok "preprocess unit-tests" "rc=$pp_rc pass=$pp_pass fail=$pp_fail"
+    echo "$pp_out" | tail -30
+fi
+
 # --- html2docx -------------------------------------------------------------
 echo "html2docx:"
 node html2docx.js ../examples/fixture-simple.html "$TMP/html_out.docx" >/dev/null 2>&1 \
@@ -1705,6 +1726,24 @@ if command -v soffice >/dev/null 2>&1; then
     else
         nok "visual: fixture-simple" "soffice did not produce out.pdf"
     fi
+fi
+
+# --- q-7: html2docx regression battery -----------------------------------
+# Renders every committed fixture (synthetic + platform) plus any
+# user-local files in tests/tmp/ in BOTH regular and reader modes,
+# then asserts: paragraph count within tolerance band, file size
+# within tolerance band, required_needles present, forbidden_needles
+# absent (chrome-leakage detector). Mirrors pdf-5 iter-6.
+echo "q-7 regression battery:"
+bat_rc=0
+bat_out=$("$PY" -m unittest tests.test_battery 2>&1) || bat_rc=$?
+bat_ran=$(echo "$bat_out" | grep -oE 'Ran [0-9]+ tests?' | grep -oE '[0-9]+' | tail -1)
+bat_ran=${bat_ran:-0}
+if [ "$bat_rc" -eq 0 ] && [ "$bat_ran" -gt 0 ]; then
+    ok "battery: $bat_ran tests passed"
+else
+    nok "battery" "rc=$bat_rc ran=$bat_ran"
+    echo "$bat_out" | tail -25
 fi
 
 echo

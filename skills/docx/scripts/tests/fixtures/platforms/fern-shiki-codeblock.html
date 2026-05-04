@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Fern shiki code block (slice from OpenRouter Quickstart Guide)</title>
+<!--
+  Hand-stripped slice from OpenRouter Quickstart Guide - fern.webarchive.
+  Preserves Fern's table-based code-block rendering pattern (each row is
+  a TR with class code-block-line, content cell has class code-block-line-content
+  containing a SPAN class line with the source-code text).
+
+  weasyprint mishandles tables inside PRE when paginating: subsequent block
+  siblings interleave horizontally with mid-table rows. Commit 2354592's
+  _flatten_table_code_blocks collapses these to plain PRE+CODE with
+  newlines.
+
+  NB: in the real Fern HTML the table lives inside PRE+CODE wrappers, but
+  the flatten output then produces nested PRE which weasyprint renders as
+  empty. Real Fern docs work because their outer PRE gets replaced
+  wholesale. This fixture mirrors that: bare table at body level, no outer
+  PRE wrapper. Flatten produces a single top-level PRE+CODE.
+
+  IMPORTANT: this comment must NOT contain literal angle brackets around
+  HTML tag names. The regex in _flatten_table_code_blocks scans for
+  literal &lt;table&gt; everywhere including inside comments — examples in
+  prose would create phantom matches and break sentinel-based assertions.
+  Comment uses descriptive prose without bracket notation.
+
+  Sentinels are REAL strings from the OpenRouter Python sample.
+-->
+</head>
+<body>
+
+<p>The most direct way to use OpenRouter. Send standard HTTP requests to
+   the <code>/api/v1/chat/completions</code> endpoint — compatible with
+   any language or framework.</p>
+
+<table>
+<tr class="code-block-line"><td class="code-block-line-gutter"><span>1</span></td>
+<td class="code-block-line-content"><span class="line">import requests</span></td></tr>
+<tr class="code-block-line"><td class="code-block-line-gutter"><span>2</span></td>
+<td class="code-block-line-content"><span class="line">import json</span></td></tr>
+<tr class="code-block-line"><td class="code-block-line-gutter"><span>3</span></td>
+<td class="code-block-line-content"><span class="line"></span></td></tr>
+<tr class="code-block-line"><td class="code-block-line-gutter"><span>4</span></td>
+<td class="code-block-line-content"><span class="line">response = requests.post(</span></td></tr>
+<tr class="code-block-line"><td class="code-block-line-gutter"><span>5</span></td>
+<td class="code-block-line-content"><span class="line">  url="https://openrouter.ai/api/v1/chat/completions",</span></td></tr>
+<tr class="code-block-line"><td class="code-block-line-gutter"><span>6</span></td>
+<td class="code-block-line-content"><span class="line">  headers={</span></td></tr>
+<tr class="code-block-line"><td class="code-block-line-gutter"><span>7</span></td>
+<td class="code-block-line-content"><span class="line">    "Authorization": "Bearer &lt;OPENROUTER_API_KEY&gt;",</span></td></tr>
+<tr class="code-block-line"><td class="code-block-line-gutter"><span>8</span></td>
+<td class="code-block-line-content"><span class="line">  },</span></td></tr>
+<tr class="code-block-line"><td class="code-block-line-gutter"><span>9</span></td>
+<td class="code-block-line-content"><span class="line">  data=json.dumps({</span></td></tr>
+<tr class="code-block-line"><td class="code-block-line-gutter"><span>10</span></td>
+<td class="code-block-line-content"><span class="line">    "model": "openai/gpt-5.2",</span></td></tr>
+<tr class="code-block-line"><td class="code-block-line-gutter"><span>11</span></td>
+<td class="code-block-line-content"><span class="line">    "messages": [</span></td></tr>
+<tr class="code-block-line"><td class="code-block-line-gutter"><span>12</span></td>
+<td class="code-block-line-content"><span class="line">      {</span></td></tr>
+<tr class="code-block-line"><td class="code-block-line-gutter"><span>13</span></td>
+<td class="code-block-line-content"><span class="line">        "role": "user",</span></td></tr>
+<tr class="code-block-line"><td class="code-block-line-gutter"><span>14</span></td>
+<td class="code-block-line-content"><span class="line">        "content": "What is the meaning of life?"</span></td></tr>
+<tr class="code-block-line"><td class="code-block-line-gutter"><span>15</span></td>
+<td class="code-block-line-content"><span class="line">      }</span></td></tr>
+<tr class="code-block-line"><td class="code-block-line-gutter"><span>16</span></td>
+<td class="code-block-line-content"><span class="line">    ]</span></td></tr>
+<tr class="code-block-line"><td class="code-block-line-gutter"><span>17</span></td>
+<td class="code-block-line-content"><span class="line">  })</span></td></tr>
+<tr class="code-block-line"><td class="code-block-line-gutter"><span>18</span></td>
+<td class="code-block-line-content"><span class="line">)</span></td></tr>
+</table>
+
+<p>The API also supports streaming.</p>
+
+</body>
+</html>

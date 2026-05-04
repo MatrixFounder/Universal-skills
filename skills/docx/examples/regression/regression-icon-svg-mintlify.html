@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Mintlify icon-strip regression (rule 6 viewBox-only fallback)</title>
+<!--
+  Mintlify info / warning callouts ship as
+    <svg viewBox="0 0 20 20" aria-label="Info"><path .../></svg>
+  with NO explicit width/height attributes. Without rule 6
+  (viewBox-only fallback in `_isIconSvg`), these icons render at their
+  container's full width — every paragraph is preceded by a
+  600-pixel-tall decorative glyph.
+
+  q-7 HIGH-1 hardening: the original fixture had ONE such icon next to
+  ONE legitimate diagram. With image-strip working, the docx contains
+  1 image (diagram); broken, 2 images (diagram + icon). The size delta
+  was ~200 bytes — well within the ±10 % size tolerance band — and the
+  paragraph delta was ~1 — within the ±2 paragraph slack. Battery was
+  therefore BLIND to rule-6 regressions (verified by sabotage test).
+
+  Fix: this fixture now ships TWENTY-FIVE viewBox-only icons. With rule
+  6 working, the docx contains exactly 1 image (the architecture
+  diagram). Broken, the count is 26. The new `min_images` / `max_images`
+  fields in `battery_signatures.json` enforce the integer count
+  exactly, with zero tolerance — a single icon leaking past the strip
+  fails the assertion.
+
+  The negative case (large viewBox SVG must NOT be removed) is also
+  preserved: the architecture diagram has viewBox 0 0 800 600 — max-dim
+  800 > 64 — and survives.
+-->
+</head>
+<body>
+<h1>Security guidelines</h1>
+
+<div class="callout-info">
+<svg viewBox="0 0 20 20" aria-label="Info"><path d="M10 1a9 9 0 100 18 9 9 0 000-18z"/></svg>
+<p>Important security note: store API keys in your secret manager, not
+   in source control.</p>
+</div>
+
+<!-- Icon farm: 24 more viewBox-only Mintlify-style decorative icons.
+     Each must be stripped by `_isIconSvg` rule 6 (viewBox max-dim ≤ 64,
+     no explicit width/height, no Tailwind class, no inline style). If
+     ANY icon survives the strip, the docx's image count exceeds 1 and
+     battery fails. -->
+<svg viewBox="0 0 16 16"><path d="M8 0L0 8h16z"/></svg>
+<svg viewBox="0 0 24 24"><path d="M2 12h20"/></svg>
+<svg viewBox="0 0 32 32"><circle cx="16" cy="16" r="14"/></svg>
+<svg viewBox="0 0 48 48"><rect x="4" y="4" width="40" height="40"/></svg>
+<svg viewBox="0 0 20 20"><path d="M5 5l10 10"/></svg>
+<svg viewBox="0 0 20 20"><path d="M15 5l-10 10"/></svg>
+<svg viewBox="0 0 24 24"><path d="M12 2v20"/></svg>
+<svg viewBox="0 0 24 24"><path d="M2 12h20"/></svg>
+<svg viewBox="0 0 16 16"><circle cx="8" cy="8" r="7"/></svg>
+<svg viewBox="0 0 16 16"><rect x="2" y="2" width="12" height="12"/></svg>
+<svg viewBox="0 0 32 32"><polygon points="16,2 30,30 2,30"/></svg>
+<svg viewBox="0 0 24 24"><path d="M3 12 12 3 21 12 12 21z"/></svg>
+<svg viewBox="0 0 20 20"><path d="M2 10 L10 2 L18 10 L10 18 Z"/></svg>
+<svg viewBox="0 0 24 24"><path d="M4 4h16v16H4z"/></svg>
+<svg viewBox="0 0 32 32"><path d="M6 6h20v20H6z"/></svg>
+<svg viewBox="0 0 16 16"><path d="M4 8h8"/></svg>
+<svg viewBox="0 0 16 16"><path d="M8 4v8"/></svg>
+<svg viewBox="0 0 24 24"><path d="M6 6 18 18"/></svg>
+<svg viewBox="0 0 24 24"><path d="M18 6 6 18"/></svg>
+<svg viewBox="0 0 20 20"><path d="M2 2h16v16H2z"/></svg>
+<svg viewBox="0 0 32 32"><path d="M2 16 L16 2 L30 16 L16 30 Z"/></svg>
+<svg viewBox="0 0 48 48"><circle cx="24" cy="24" r="22"/></svg>
+<svg viewBox="0 0 24 24"><path d="M12 2 L22 12 L12 22 L2 12 Z"/></svg>
+<svg viewBox="0 0 16 16"><path d="M8 1 L15 8 L8 15 L1 8 Z"/></svg>
+
+<h2>Architecture diagram</h2>
+<p>The diagram below illustrates the auth flow:</p>
+<svg viewBox="0 0 800 600">
+  <rect x="20" y="20" width="200" height="80" fill="#cce" stroke="#333"/>
+  <text x="120" y="65" text-anchor="middle" font-size="14">Client</text>
+  <rect x="580" y="20" width="200" height="80" fill="#fcc" stroke="#333"/>
+  <text x="680" y="65" text-anchor="middle" font-size="14">Auth Server</text>
+  <line x1="220" y1="60" x2="580" y2="60" stroke="#333" stroke-width="2"/>
+</svg>
+<p>The client requests a token; the server validates and signs it.</p>
+</body>
+</html>

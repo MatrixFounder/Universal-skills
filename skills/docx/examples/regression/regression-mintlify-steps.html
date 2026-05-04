@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Mintlify Steps regression</title>
+<!--
+  Mintlify (also Fern, Docusaurus) Steps component: numbered procedure
+  rendered as `role=list` with `step-title` / `step-content`. The
+  walker's emitList does NOT recurse into block content, so converting
+  to <ol> would flatten the embedded <pre> code into a single inline
+  paragraph. Fixture pins flattenMintlifySteps' output: 3 <h4>
+  headings ("1. Install", "2. Configure", "3. Verify") with each step's
+  block content preserved alongside.
+
+  The titles include inline <code> markup — preprocessing must use
+  .html() (not .text()) to keep the monospace.
+-->
+</head>
+<body>
+<h1>Onboarding</h1>
+<div role="list" class="steps">
+  <div role="listitem" class="step">
+    <div data-component-part="step-line"></div>
+    <div data-component-part="step-number">1</div>
+    <div>
+      <p data-component-part="step-title">Install <code>npm install</code></p>
+      <div data-component-part="step-content">
+        <p>Run this command from the project root.</p>
+        <pre><code>npm install --save-dev @example/cli</code></pre>
+      </div>
+    </div>
+  </div>
+  <div role="listitem" class="step">
+    <div data-component-part="step-line"></div>
+    <div data-component-part="step-number">2</div>
+    <div>
+      <p data-component-part="step-title">Configure <code>config.json</code></p>
+      <div data-component-part="step-content">
+        <p>Add API keys and project identifier:</p>
+        <pre><code>{ "api_key": "PROJ-XXX-YYY-ZZZ", "project": "demo" }</code></pre>
+      </div>
+    </div>
+  </div>
+  <div role="listitem" class="step">
+    <div data-component-part="step-line"></div>
+    <div data-component-part="step-number">3</div>
+    <div>
+      <p data-component-part="step-title">Verify the install</p>
+      <div data-component-part="step-content">
+        <p>Open the project and confirm the example output appears.</p>
+      </div>
+    </div>
+  </div>
+</div>
+</body>
+</html>

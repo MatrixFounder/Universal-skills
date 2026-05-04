@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>Reader-mode chrome strip regression</title>
+<!--
+  Synthetic vc.ru / Habr-style page where `.entry` wraps the article
+  body PLUS sibling chrome (reactions, share buttons, recommended
+  posts, comments, post-meta). Without `--reader-mode`, the default
+  pickContentRoot picks `.entry` and keeps everything; with
+  `--reader-mode`, `stripReaderModeChrome` removes chrome by
+  substring keyword match.
+
+  The two modes therefore produce DIFFERENT outputs — exercising the
+  reader-mode-specific code path that committed fixtures previously
+  could not reach. Sentinels:
+
+    * regular mode: contains "REACTION_WIDGET" and "POST_SHARE_LINKS"
+    * reader mode:  contains "ARTICLE_BODY_SENTINEL" but NOT the chrome
+
+  Honest scope: the substring matcher excludes BEM-modifier collisions
+  (`tm-page__main_has-sidebar`); this fixture deliberately uses
+  matching prefixes/suffixes so the strip fires.
+-->
+</head>
+<body>
+<header>
+  <h1>vc.ru / Habr article</h1>
+</header>
+<div class="entry">
+  <article>
+    <h2>Главный заголовок</h2>
+    <p>ARTICLE_BODY_SENTINEL — основной текст статьи, который должен
+       сохраниться в обоих режимах. Параграф достаточно длинный, чтобы
+       reader-mode picker (минимум 500 символов для `.entry`) согласился
+       и не отверг его как заголовок-превью.</p>
+    <p>Второй параграф увеличивает объём тела статьи, чтобы порог
+       `minText: 500` для `.entry` гарантированно сработал в reader-режиме.
+       Иначе reader-mode мог бы выбрать `<article>` или `<main>` и
+       обойти весь блок reactions/share — мы хотим проверять именно
+       поведение strip-keyword'а после выбора `.entry`.</p>
+    <p>Третий параграф окончательно поднимает счётчик символов до
+       порога. Reactions / share-bar / post-meta сидят siblings'ами
+       внутри `.entry`; default-mode их не трогает, reader-mode стрипает.</p>
+  </article>
+
+  <div class="content__reactions">
+    REACTION_WIDGET — лайки и эмодзи реакции (10 👍, 3 🔥, 1 ❤).
+  </div>
+
+  <div class="post-share">
+    POST_SHARE_LINKS — поделиться: Twitter / Telegram / VK.
+  </div>
+
+  <div class="post-meta">
+    POST_META_TAGS — теги: js, css, frontend, blog. Автор: ivan@example.com
+  </div>
+
+  <div class="related-article-rotator">
+    RELATED_ARTICLES — рекомендуем: «Заголовок похожей статьи 1»,
+    «Заголовок похожей статьи 2», «Заголовок похожей статьи 3».
+  </div>
+
+  <div class="comments-section">
+    COMMENTS_THREAD — обсуждение (20 комментариев).
+  </div>
+</div>
+
+<footer>
+  <p>Статья из тестового корпуса reader-mode regression battery.</p>
+</footer>
+</body>
+</html>

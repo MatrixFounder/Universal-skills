@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Mintlify callout + heading-anchor structure (slice from Anthropic Claude Code Docs)</title>
+<!--
+  Hand-stripped slice from `JetBrains IDEs - Claude Code Docs.webarchive`
+  (Mintlify-built docs page). Preserves the structural patterns that
+  exercise these bug fixes:
+
+    * Mintlify "Info" callout SVG: `<svg class="size-5" aria-label="Info">`
+      → must be stripped (a7fbc9f size-N Tailwind detection)
+    * Heading anchor-link wrapper: `<h2><a><svg/></a><span>Heading</span></h2>`
+      → empty <a> stripped after icon strip (a7fbc9f + LOW empty-anchor)
+    * "Copy heading link" button next to heading
+      → unwrapped via _strip_interactive_chrome
+
+  Sentinels are REAL text from the original docs page (not synthetic).
+-->
+</head>
+<body>
+
+<!-- Mintlify Info callout: size-5 icon + paragraph body -->
+<div class="callout-info border border-blue-500">
+    <svg viewBox="0 0 20 20" class="flex-none size-5 text-neutral-800 dark:text-neutral-300"
+         aria-label="Info">
+        <path fill-rule="evenodd"
+              d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0z"
+              clip-rule="evenodd"/>
+    </svg>
+    <p>After installing the plugin, you may need to restart your IDE
+       completely for it to take effect.</p>
+</div>
+
+<!-- Heading with Mintlify anchor-link wrapper -->
+<h2 id="supported-ides">
+    <a href="#supported-ides">
+        <div class="anchor-icon-wrapper">
+            <svg xmlns="http://www.w3.org/2000/svg" fill="gray" height="12px"
+                 viewBox="0 0 576 512">
+                <path d="M0 256C0 167.6 71.6 96 160 96h72c13.3 0 24 10.7 24 24z"/>
+            </svg>
+        </div>
+    </a>
+    <span class="cursor-pointer">Supported IDEs</span>
+</h2>
+
+<p>The Claude Code plugin works with most JetBrains IDEs, including:</p>
+<ul>
+    <li>IntelliJ IDEA</li>
+    <li>PyCharm</li>
+    <li>Android Studio</li>
+    <li>WebStorm</li>
+    <li>PhpStorm</li>
+    <li>GoLand</li>
+</ul>
+
+<p>Claude Code integrates with JetBrains IDEs through a dedicated plugin,
+   providing features like interactive diff viewing, selection context
+   sharing, and more.</p>
+
+</body>
+</html>

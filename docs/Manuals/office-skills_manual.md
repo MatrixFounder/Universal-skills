@@ -679,17 +679,17 @@ What's covered:
 
 | Skill | Coverage |
 |---|---|
-| docx | `md2docx → docx → docx2md` round-trip, `office.validate` on output, `docx_fill_template` with nested JSON, encryption / legacy-CFB rejection on `docx_fill_template` and `docx_accept_changes`, **cross-7** `office_passwd` (clean→encrypt→decrypt round-trip + zip-namelist parity, wrong-password exit 4, state-mismatch exit 5, stdin password, JSON envelope), **docx-4 + docx-5** `docx2md` sidecar (clean→no sidecar; `docx_add_comment` injection→sidecar v=1 with comment fields populated; `<w:ins>`/`<w:del>` injection→`paragraphIndex`+`runIndex`; pandoc `[^fn-N]`/`[^en-N]` markers + definitions; `--no-metadata` / `--no-footnotes` / `--metadata-json` / `--json-errors` envelopes), **VDD-regression** (same-path `SelfOverwriteRefused` exit 6 + input intact, empty footnote → resolvable `[^fn-N]:` definition, `--metadata-json` rejects flag-as-path, `id=""` serialised null not 0, Cyrillic+emoji footnote text, `<w:rPrChange>` counted in `unsupported`). |
+| docx | `md2docx → docx → docx2md` round-trip, `office.validate` on output, `docx_fill_template` with nested JSON, encryption / legacy-CFB rejection on `docx_fill_template` and `docx_accept_changes`, **cross-7** `office_passwd` (clean→encrypt→decrypt round-trip + zip-namelist parity, wrong-password exit 4, state-mismatch exit 5, stdin password, JSON envelope), **docx-4 + docx-5** `docx2md` sidecar (clean→no sidecar; `docx_add_comment` injection→sidecar v=1 with comment fields populated; `<w:ins>`/`<w:del>` injection→`paragraphIndex`+`runIndex`; pandoc `[^fn-N]`/`[^en-N]` markers + definitions; `--no-metadata` / `--no-footnotes` / `--metadata-json` / `--json-errors` envelopes), **VDD-regression** (same-path `SelfOverwriteRefused` exit 6 + input intact, empty footnote → resolvable `[^fn-N]:` definition, `--metadata-json` rejects flag-as-path, `id=""` serialised null not 0, Cyrillic+emoji footnote text, `<w:rPrChange>` counted in `unsupported`), **q-7** `html2docx` preprocess unit tests (57 sub-assertions, run before E2E so a stage-level regression fails fast) + regression battery (18 sub-assertions, paragraph/size/image-count tolerance bands + needles per fixture × mode, see §8.6). |
 | xlsx | `csv2xlsx` + row count + `office.validate`, `xlsx_validate` (clean + injected `#DIV/0!` via lxml mutation), `xlsx_recalc` formula preservation, `xlsx_add_chart` (bar/line/pie variants + bad-range error), encryption rejection on `xlsx_validate`/`xlsx_add_chart`/`xlsx_recalc`, **cross-7** `office_passwd` (round-trip + openpyxl-readable post-decrypt with row count preserved, wrong-password, state-mismatch, stdin, JSON envelope). |
 | pptx | `md2pptx` + slide-count + `office.validate`, `pptx_thumbnails` (JPEG sanity), `pptx_to_pdf` (`%PDF` magic), `pptx_clean` (orphan slide + media removal, dry-run reports without writing), `outline2pptx` (heading-only MD → 4 slides + validate + heading-less input fails clearly), bundled `mermaid-config.json` (parses, missing path fails clean), encryption rejection on `pptx_clean`/`pptx_thumbnails`/`pptx_to_pdf`, **cross-7** `office_passwd` (round-trip + slide-count preserved post-decrypt, wrong-password, state-mismatch, stdin, JSON envelope). |
 | pdf | `md2pdf` + mermaid PNG render + bundled `mermaid-config.json` (parses, missing path warns, config change invalidates PNG cache), `pdf_merge` (page-count = sum), `pdf_split --each-page`, `pdf_fill_form` (`--check` exit codes, fill round-trip, `--flatten` removes `/AcroForm`, `--extract-fields` stdout, malformed JSON / missing `-o` exit 2, typo'd field warning, int→`/Yes` checkbox coercion), **q-3 mermaid edge-cases** (cyrillic / sequence / gantt / large-mindmap fixtures + `--strict-mermaid` exits non-zero on broken input + lenient mode degrades with warning). pdf has its own AcroForm path and does NOT use `office_passwd.py`. |
 
 Each suite ends with a **q-2 visual-regression** block that compares
 the first page of every produced PDF against a committed golden
-(see §8.3). Total assertion count after q-2/q-3 + docx-1/docx-2 +
-VDD adversarial fixes: **219** (84 docx + 40 xlsx + 48 pptx + 47 pdf).
-The docx delta from previous count (+18) is docx-4/docx-5 base (12) +
-VDD-regression (6).
+(see §8.3). Total bash-level assertion count after q-2/q-3 +
+docx-1/docx-2 + VDD adversarial + **q-7** (which adds 2 aggregate
+assertions to the docx suite that wrap 57 + 18 sub-checks): **221**
+(86 docx + 40 xlsx + 48 pptx + 47 pdf).
 
 The suite is fast (<60 sec total on a warm machine) and is the
 primary pre-commit / pre-release gate. Any failure here points at a
@@ -762,6 +762,84 @@ For when something goes wrong: see
 — a single document with `Symptom → Cause → Fix` recipes for the
 recurring failures (pango/cairo missing, soffice timeout, mmdc fail,
 encrypted-input rejection, golden drift, etc.).
+
+### 8.6 Regression battery for HTML converters (q-6 / q-7)
+
+`html2pdf.py` and `html2docx.js` are the two universal-HTML inputs in
+the suite — each ships ~250 LOC of site-specific preprocessing rules
+that strip chrome (copy buttons, anchor icons, ARIA navigation
+landmarks), reshape DOM (ARIA tables → `<table>`, Mintlify Steps →
+flat headings), and wrap inline code (Confluence DC `<span
+data-code-lang>`). A subtle break in any rule slips past the
+deterministic E2E suite because each fixture's expected output is
+itself derived from the preprocessing pipeline. The regression
+battery closes that gap with **tolerance-band signatures** captured
+at a known-good baseline.
+
+**pdf battery (q-6)**:
+[`skills/pdf/scripts/tests/test_battery.py`](../../skills/pdf/scripts/tests/test_battery.py)
++ [`battery_signatures.json`](../../skills/pdf/scripts/tests/battery_signatures.json)
++ [`capture_signatures.py`](../../skills/pdf/scripts/tests/capture_signatures.py).
+Per fixture × {`regular`, `reader`-mode}: page-count band ±5 %, file-
+size band ±10 %, list of `required_needles` (text fragments that
+must appear in `pdftotext` output), list of `forbidden_needles`
+(chrome strings that MUST NOT leak). Fixture sources: `tmp/` (real
+.webarchive / .mhtml, gitignored), `examples/regression/` (committed
+synthetic edge cases), `tests/fixtures/platforms/` (committed
+hand-stripped real-platform slices).
+
+**docx battery (q-7)**:
+[`skills/docx/scripts/tests/test_battery.py`](../../skills/docx/scripts/tests/test_battery.py)
++ [`battery_signatures.json`](../../skills/docx/scripts/tests/battery_signatures.json)
++ [`capture_signatures.py`](../../skills/docx/scripts/tests/capture_signatures.py).
+Schema parallel to pdf with **paragraph-count** instead of pages
+(±5 % floor 2) and an additional **image-count metric** (`min_images`
+/ `max_images` — exact match, no tolerance) that catches icon-strip
+regressions where size and paragraph bands stay within ±10 % even
+when a 20×20 SVG icon leaks past `_isIconSvg` rule 6. Text extraction
+goes through stdlib `zipfile` + `lxml` directly against
+`word/document.xml` — counts `<w:p>` elements, joins `<w:t>` text,
+counts `<w:drawing>` elements. Fixture sources: same three-tier
+layout (`tests/tmp/` gitignored, `examples/regression/`,
+`tests/fixtures/platforms/`). q-7 also extracts `_html2docx_preprocess.js`
+as a sibling module with 16 named-export stages, covered by
+**57 unit tests** in
+[`tests/test_html2docx_preprocess.test.js`](../../skills/docx/scripts/tests/test_html2docx_preprocess.test.js)
+(synthetic-HTML inputs for every stage + negative cases).
+
+```bash
+# Run battery on its own (per-skill)
+./.venv/bin/python -m unittest tests.test_battery -v
+# (also runs as part of `bash tests/test_e2e.sh`)
+
+# Refresh signatures after an intentional preprocessing change
+./.venv/bin/python tests/capture_signatures.py --refresh
+git diff tests/battery_signatures.json     # review
+
+# Refresh a single fixture (docx — by filename)
+./.venv/bin/python tests/capture_signatures.py --fixture confluence-version-table.html
+```
+
+User-curated fields (`forbidden_needles`, top-level `_*` annotations)
+are PRESERVED across `--refresh`; tolerance bands and
+auto-sampled `required_needles` are regenerated. When `regular` and
+`reader` produce byte-identical entries (synthetic fixtures that
+don't trigger reader-mode chrome strip), capture auto-sets `reader =
+null` so the test_battery loader skips it (q-7 MED-3 dedupe).
+
+**Canary verification (q-7 LOW-3)**:
+[`skills/docx/scripts/tests/canary_check.sh`](../../skills/docx/scripts/tests/canary_check.sh)
+sequentially sabotages three preprocessing rules (icon-strip rule 6,
+Mintlify Steps flatten, reader-mode keyword strip) via `sed -i.bak`,
+runs the battery, and asserts FAIL each time. Restores the file via
+`trap`. Without this meta-test, a green battery is consistent with
+both "no regression" AND "battery permanently broken". Run manually
+when adding new fixtures or after large preprocessing-pipeline edits:
+
+```bash
+bash skills/docx/scripts/tests/canary_check.sh
+# expects: 3/3 sabotages detected — battery is healthy
+```
 
 ---
 

@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Confluence version-history table (slice from ELMA365 wiki)</title>
+<!--
+  Hand-stripped slice from `Интеграция ELMA365 с телефонией 3CX -
+  Ярли - Confluence Wiki.html`. Preserves Confluence's tablesorter
+  pattern that wraps every <th> column title inside a <button>:
+
+      <th class="confluenceTh tablesorter-header sortableHeader">
+        <div class="tablesorter-header-inner">
+          <button class="headerButton">
+            <p><em><strong>Версия</strong></em></p>
+          </button>
+        </div>
+      </th>
+
+  Plus copy-heading-link button next to each <h1>:
+
+      <h1 id="...">
+        <span>1. Ограничения</span>
+        <span class="copy-heading-link-container">
+          <button class="copy-heading-link-button">
+            <span class="aui-icon aui-iconfont-link"></span>
+          </button>
+        </span>
+      </h1>
+
+  After fix:
+    * `<button>` UNWRAPPED — Версия / Дата / Автор column titles preserved
+    * `.copy-heading-link-button` hidden via _NORMALIZE_CSS §7
+    * `<svg>` icons inside the buttons stripped as decorative
+
+  Sentinels are REAL Cyrillic text from the ELMA365 docs page.
+-->
+</head>
+<body>
+
+<h1 id="title-heading">
+    <span>Интеграция ELMA365 с телефонией 3CX</span>
+    <span class="copy-heading-link-container">
+        <button class="copy-heading-link-button" aria-label="Копировать ссылку">
+            <span class="aui-icon aui-iconfont-link"></span>
+        </button>
+    </span>
+</h1>
+
+<h2 id="title-versions">Управление версиями</h2>
+<table class="confluenceTable tablesorter">
+<thead aria-label="Для сортировки используйте кнопки в заголовках столбцов">
+<tr class="tablesorter-headerRow" role="row">
+<th class="confluenceTh tablesorter-header sortableHeader" role="columnheader">
+    <div class="tablesorter-header-inner">
+        <button class="headerButton"><p><em><strong>Версия</strong>&nbsp;</em></p></button>
+    </div>
+</th>
+<th class="confluenceTh tablesorter-header sortableHeader" role="columnheader">
+    <div class="tablesorter-header-inner">
+        <button class="headerButton"><p><em><strong>Дата</strong></em></p></button>
+    </div>
+</th>
+<th class="confluenceTh tablesorter-header sortableHeader" role="columnheader">
+    <div class="tablesorter-header-inner">
+        <button class="headerButton"><p><em><strong>Автор</strong></em></p></button>
+    </div>
+</th>
+</tr>
+</thead>
+<tbody>
+<tr><td>V0.01</td><td>11/10/2024</td><td>Черных Александр</td></tr>
+<tr><td>V0.02</td><td>17/11/2025</td><td>Демидова Татьяна</td></tr>
+</tbody>
+</table>
+
+<h1 id="ogranicheniya">
+    <span class="inline-comment-marker">1. Ограничения</span>
+    <span class="copy-heading-link-container">
+        <button class="copy-heading-link-button" aria-label="Копировать ссылку">
+            <span class="aui-icon aui-iconfont-link"></span>
+        </button>
+    </span>
+</h1>
+<p>Документ содержит описание методов модуля интеграции в рамках стандартной
+   функциональности работы с телефонией ELMA365.</p>
+
+</body>
+</html>

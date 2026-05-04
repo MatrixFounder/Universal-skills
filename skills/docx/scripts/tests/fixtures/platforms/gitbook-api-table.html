@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>GitBook ARIA-role API table (slice from Hyperliquid Docs)</title>
+<!--
+  Hand-stripped slice from `Hyperliquid_Docs_gitbook.webarchive`.
+  Preserves GitBook's signature pattern: data tables built out of
+  ARIA-role <div>s instead of native <table>:
+
+      <div role="table">
+        <div role="rowgroup">
+          <div role="row">
+            <div role="columnheader">Name</div>
+            <div role="columnheader">Type</div>
+            <div role="columnheader">Description</div>
+          </div>
+          <div role="row">
+            <div role="cell">Content-Type</div>
+            <div role="cell">String</div>
+            <div role="cell">"application/json"</div>
+          </div>
+        </div>
+      </div>
+
+  Without _NORMALIZE_CSS §7c (`[role="table"] { display: table }` etc.),
+  these collapse to vertical block flow — every cell on its own line.
+  The rule must render them as a real CSS table.
+
+  Sentinels are REAL strings from the Hyperliquid API docs.
+-->
+</head>
+<body>
+
+<h2>Retrieve mids for all coins</h2>
+<p><code>POST</code> <code>https://api.hyperliquid.xyz/info</code></p>
+<p>Note that if the book is empty, the last trade price will be used as
+   a fallback.</p>
+
+<h3>Headers</h3>
+<div role="table">
+<div role="rowgroup">
+<div role="row">
+<div role="columnheader">Name</div>
+<div role="columnheader">Type</div>
+<div role="columnheader">Description</div>
+</div>
+</div>
+<div role="rowgroup">
+<div role="row">
+<div role="cell">Content-Type*</div>
+<div role="cell">String</div>
+<div role="cell">"application/json"</div>
+</div>
+</div>
+</div>
+
+<h3>Request Body</h3>
+<div role="table">
+<div role="rowgroup">
+<div role="row">
+<div role="columnheader">Name</div>
+<div role="columnheader">Type</div>
+<div role="columnheader">Description</div>
+</div>
+</div>
+<div role="rowgroup">
+<div role="row">
+<div role="cell">type*</div>
+<div role="cell">String</div>
+<div role="cell">"allMids"</div>
+</div>
+<div role="row">
+<div role="cell">dex</div>
+<div role="cell">String</div>
+<div role="cell">Perp dex name. Defaults to the empty string which represents the first perp dex. Spot mids are only included with the first perp dex.</div>
+</div>
+</div>
+</div>
+
+</body>
+</html>

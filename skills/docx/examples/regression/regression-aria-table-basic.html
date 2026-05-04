@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>ARIA-role table regression</title>
+<!--
+  GitBook / Notion-style data table built from <div role="table">
+  instead of native <table>. Without convertAriaTables, the html2docx
+  walker treats each div as block-flow and emits one cell per
+  paragraph, collapsing the 3-column layout into a tall vertical
+  strip. The fixture pins the per-row contract: 4 rows × 3 columns =
+  exactly 4 <tr> + 12 <td> after preprocessing.
+-->
+</head>
+<body>
+<h1>API Reference</h1>
+<div role="table">
+  <div role="rowgroup">
+    <div role="row">
+      <div role="columnheader">Field</div>
+      <div role="columnheader">Type</div>
+      <div role="columnheader">Description</div>
+    </div>
+  </div>
+  <div role="rowgroup">
+    <div role="row">
+      <div role="cell">user_id</div>
+      <div role="cell">string</div>
+      <div role="cell">Identifier of the authenticated user.</div>
+    </div>
+    <div role="row">
+      <div role="cell">created_at</div>
+      <div role="cell">timestamp</div>
+      <div role="cell">RFC 3339 timestamp at registration time.</div>
+    </div>
+    <div role="row">
+      <div role="cell">role</div>
+      <div role="cell">enum</div>
+      <div role="cell">One of admin, member, guest.</div>
+    </div>
+  </div>
+</div>
+</body>
+</html>
