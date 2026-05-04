@@ -340,6 +340,40 @@ class TestFoToSvgText(unittest.TestCase):
         out = _fo_to_svg_text(html)
         self.assertIn("DRAWIO_CAMEL", out)
 
+    def test_align_items_flex_start_top_aligns_text(self) -> None:
+        """drawio `align-items: flex-start` with `padding-top: 46px` means
+        the TEXT TOP is at y=46. Without this fix, _fo_to_svg_text treated
+        padding-top as y-CENTRE; for a 12-px label that placed the visual
+        centre at y=46, leaving the top of the text at y=40 — half a line
+        ABOVE the rectangle (which usually starts at y=38), so the rect's
+        top stroke crossed the text. Confluence US-Отчёт fixture, regression
+        observed 2026-04-30.
+
+        With the fix: y=46 is the TOP of the first line, so its visual
+        centre lands at y = 46 + lh/2 = 46 + 7.5 = 53.5 (well inside the
+        rectangle).
+        """
+        html = (
+            '<svg><foreignObject>'
+            '<div style="display:flex; align-items:unsafe flex-start; '
+            'justify-content:unsafe flex-start; '
+            'padding-top:46px; margin-left:21px; width:328px; '
+            'height:1px; font-size:12px;">FLEX_START_LABEL</div>'
+            '</foreignObject></svg>'
+        )
+        out = _fo_to_svg_text(html)
+        # Label is present, and the y-coordinate of the <text> element
+        # is 46 + 12*1.25/2 = 53.5 (NOT 46 itself, which would be the
+        # buggy y-centre treatment).
+        import re as _re
+        m = _re.search(r'<text x="\d+(?:\.\d+)?" y="([\d.]+)"', out)
+        self.assertIsNotNone(m, f"no <text> emitted: {out!r}")
+        y_value = float(m.group(1))
+        # Expected y for first-line baseline-middle: 46 + (12*1.25)/2 = 53.5
+        self.assertAlmostEqual(y_value, 53.5, delta=0.6,
+            msg=f"flex-start label y={y_value}; expected 53.5 "
+                f"(padding-top=46 + line-height/2)")
+
 
 # ── _fix_svg_viewport ────────────────────────────────────────────────────
 

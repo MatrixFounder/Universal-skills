@@ -100,7 +100,21 @@
       "Bash(.venv/bin/python html2pdf.py ../examples/fixture.html /tmp/h2p_after.pdf)",
       "Bash(bash /tmp/h2p_batch.sh)",
       "Bash(.venv/bin/python html2pdf.py \"../../tmp/Интеграция ELMA365 с телефонией 3CX - Ярли - Confluence Wiki.html\" /tmp/elma_html_fixed.pdf)",
-      "Bash(.venv/bin/python html2pdf.py --reader-mode \"../../tmp/Интеграция ELMA365 с телефонией 3CX - Ярли - Confluence Wiki.html\" /tmp/elma_html_reader_fixed.pdf)"
+      "Bash(.venv/bin/python html2pdf.py --reader-mode \"../../tmp/Интеграция ELMA365 с телефонией 3CX - Ярли - Confluence Wiki.html\" /tmp/elma_html_reader_fixed.pdf)",
+      "Bash(awk '{print $5, $9, $10, $11, $12, $13, $14}')",
+      "Bash(./.venv/bin/python -m unittest tests.test_battery -v)",
+      "Bash(./.venv/bin/python -m unittest tests.test_preprocess -v)",
+      "Bash(./.venv/bin/python -m unittest tests.test_preprocess)",
+      "Bash(./.venv/bin/python -m unittest tests.test_battery)",
+      "Bash(./.venv/bin/python tests/capture_signatures.py)",
+      "Bash(./.venv/bin/python -m unittest tests.test_preprocess.TestStripIconSVGs.test_aspect_ratio_keeps_tall_content)",
+      "Bash(./.venv/bin/python -m unittest \"tests.test_battery.TestBattery_regression_tall_svg_content_html_regular\")",
+      "Bash(PATH=/usr/bin:/bin ./.venv/bin/python -m unittest tests.test_battery.TestBattery_regression_self_closing_svg_html_regular)",
+      "Bash(./.venv/bin/python tests/capture_signatures.py --refresh)",
+      "Bash(cp skills/pdf/scripts/tests/battery_signatures.json /tmp/sig_orig.json)",
+      "Bash(cp /tmp/sig_collision.json skills/pdf/scripts/tests/battery_signatures.json)",
+      "Bash(pdfinfo \"tmp/reader_pdf_out/US-Отчет-Полнотекстовый поиск в приложении - Ярли - Confluence Wiki \\(reader\\).pdf\")",
+      "Bash(\"skills/pdf/scripts/.venv/bin/python\" skills/pdf/scripts/preview.py \"tmp/regular_pdf_out/US-Отчет-Полнотекстовый поиск в приложении - Ярли - Confluence Wiki-2.pdf\" /tmp/us2_grid.jpg --cols 5 --dpi 60)"
     ]
   }
 }

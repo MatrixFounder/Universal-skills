@@ -96,8 +96,19 @@ def _fo_to_svg_text(html: str) -> str:
     weasyprint silently discards <foreignObject> content.  draw.io stores ALL
     node labels inside <foreignObject> divs using a flex-box encoding:
 
-      padding-top  → absolute y-centre of the shape in the current SVG
-                     coordinate space (inside the enclosing <g> transform)
+      padding-top  → SEMANTICS DEPEND ON `align-items`:
+                       * `center`     → padding-top is the y-CENTRE of the
+                         text block (current default; multi-line text is
+                         centred vertically around this y).
+                       * `flex-start` → padding-top is the y-TOP of the
+                         text block (first-line top edge); subsequent lines
+                         grow downward.
+                       * `flex-end`   → padding-top is the y-BOTTOM of the
+                         text block (last-line baseline); rare in drawio.
+                     Without honouring align-items, flex-start labels render
+                     half a line ABOVE the rectangle's top edge — text gets
+                     crossed by the rect's top stroke (Confluence US-Отчёт
+                     Полнотекстовый поиск fixture, observed 2026-04-30).
       margin-left  → LEFT EDGE of the text container div (always); the actual
                      SVG text-anchor x is derived as:
                        center   → margin_left + container_width / 2
@@ -110,7 +121,8 @@ def _fo_to_svg_text(html: str) -> str:
                      carries the actual label size)
 
     Multiple <text> elements are emitted for labels that need word-wrapping
-    (container width > 1 px), each vertically centred as a block around y.
+    (container width > 1 px), each placed according to align-items vertical
+    semantics.
     """
     def _wrap(text: str, max_width: float, font_size: int) -> list[str]:
         if max_width <= 1:
@@ -164,6 +176,17 @@ def _fo_to_svg_text(html: str) -> str:
         else:  # flex-start
             x, anchor = x_left, "start"
 
+        # Vertical alignment: drawio writes `align-items: center | flex-start
+        # | flex-end` and the meaning of `padding-top` depends on it. With
+        # `center`, padding-top is the y-CENTRE of the text block (multi-
+        # line text centres vertically around y). With `flex-start`, it's
+        # the y-TOP of the first line; subsequent lines grow downward.
+        # `flex-end` (rare) makes padding-top the y-BOTTOM of the last line.
+        ai_m = re.search(
+            r"align-items:\s*(?:unsafe\s+)?(flex-start|flex-end|center)", fo,
+        )
+        ai = ai_m.group(1) if ai_m else "center"
+
         # Use the LAST (innermost) font-size; the outer div may carry a smaller
         # layout/spacing size that does not match the visible label.
         all_fs = re.findall(r"font-size:\s*([\d.]+)px", fo)
@@ -174,7 +197,18 @@ def _fo_to_svg_text(html: str) -> str:
 
         lines = _wrap(text, cw, fs)
         lh = fs * 1.25
-        start_y = y - (len(lines) - 1) * lh / 2
+        # Compute the baseline y of the FIRST text line based on
+        # align-items semantics. SVG <text> with dominant-baseline=middle
+        # places the visual centre of the glyph at y, so:
+        #   * center    → first-line centre = y - (n-1)*lh/2
+        #   * flex-start → first-line centre = y + lh/2  (text TOP at y)
+        #   * flex-end   → last-line centre = y - lh/2; first = that - (n-1)*lh
+        if ai == "flex-start":
+            start_y = y + lh / 2
+        elif ai == "flex-end":
+            start_y = y - lh / 2 - (len(lines) - 1) * lh
+        else:  # center
+            start_y = y - (len(lines) - 1) * lh / 2
 
         out = []
         for j, line in enumerate(lines):

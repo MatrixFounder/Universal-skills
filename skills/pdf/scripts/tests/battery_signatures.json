@@ -201,6 +201,60 @@
       "forbidden_needles": []
     }
   },
+  "US-Отчет-Полнотекстовый поиск в приложении - Ярли - Confluence Wiki-2.webarchive": {
+    "platform": "confluence",
+    "regular": {
+      "min_pages": 30,
+      "max_pages": 34,
+      "min_size_kb": 202,
+      "max_size_kb": 246,
+      "required_needles": [
+        "/plugins/pagetree/naturalchildren.action?decorator=none&exce",
+        "7. Первоначальное заполнение таблицыслепка.sql Свернуть исходный",
+        "CREATE INDEX IF NOT EXISTS idx_search_vector_recipients O"
+      ],
+      "forbidden_needles": []
+    },
+    "reader": {
+      "min_pages": 24,
+      "max_pages": 26,
+      "min_size_kb": 183,
+      "max_size_kb": 223,
+      "required_needles": [
+        "CREATE INDEX IF NOT EXISTS idx_search_vector ON search.postman_messages_search",
+        "CREATE INDEX IF NOT EXISTS idx_search_vector_subject ON search.postman_messages_search",
+        "Для отображения результатов поиска используется online библиотека"
+      ],
+      "forbidden_needles": []
+    }
+  },
+  "US-Отчет-Полнотекстовый поиск в приложении - Ярли - Confluence Wiki.webarchive": {
+    "platform": "confluence",
+    "regular": {
+      "min_pages": 30,
+      "max_pages": 34,
+      "min_size_kb": 202,
+      "max_size_kb": 246,
+      "required_needles": [
+        "/plugins/pagetree/naturalchildren.action?decorator=none&exce",
+        "7. Первоначальное заполнение таблицыслепка.sql Развернуть исходный",
+        "CREATE INDEX IF NOT EXISTS idx_search_vector_body ON sear"
+      ],
+      "forbidden_needles": []
+    },
+    "reader": {
+      "min_pages": 24,
+      "max_pages": 26,
+      "min_size_kb": 183,
+      "max_size_kb": 223,
+      "required_needles": [
+        "CREATE INDEX IF NOT EXISTS idx_search_vector ON search.postman_messages_search",
+        "CREATE INDEX IF NOT EXISTS idx_search_vector_subject ON search.postman_messages_search",
+        "Для отображения результатов поиска используется online библиотека"
+      ],
+      "forbidden_needles": []
+    }
+  },
   "What is Intelligence.webarchive": {
     "platform": "unknown",
     "regular": {
