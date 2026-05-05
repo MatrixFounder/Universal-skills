@@ -140,7 +140,10 @@
       "Bash(./skills/pdf/scripts/.venv/bin/python /tmp/_trace_chrome.py)",
       "Bash(./skills/pdf/scripts/.venv/bin/python -c ' *)",
       "Bash(./skills/pdf/scripts/.venv/bin/python /tmp/_inspect_gmail.py)",
-      "Bash(./skills/pdf/scripts/.venv/bin/python skills/pdf/scripts/preview.py \"tmp/chrome_pdf_out/gmail_example.pdf\" /tmp/chrome_gmail_v9.jpg --cols 4 --dpi 80)"
+      "Bash(./skills/pdf/scripts/.venv/bin/python skills/pdf/scripts/preview.py \"tmp/chrome_pdf_out/gmail_example.pdf\" /tmp/chrome_gmail_v9.jpg --cols 4 --dpi 80)",
+      "Bash(./skills/pdf/scripts/.venv/bin/python /tmp/_debug_elma_layout.py)",
+      "Bash(./skills/pdf/scripts/.venv/bin/python /tmp/_debug_eval.py)",
+      "Bash(./.venv/bin/python -m unittest tests.test_preprocess.TestChromeE2ENegativeRegression -v)"
     ],
     "additionalDirectories": [
       "/tmp/vdd_preview",

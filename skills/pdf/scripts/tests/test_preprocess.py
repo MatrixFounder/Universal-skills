@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import os
 import sys
+import tempfile
 import threading
 import time
 import unittest
@@ -1693,22 +1694,118 @@ class TestEngineDispatch(unittest.TestCase):
         self.assertGreaterEqual(_DEFAULT_VIEWPORT["height"], 1024)
 
     def test_layout_normalize_css_releases_html_body_height(self) -> None:
-        """pdf-11 VDD-fix: SPAs ship `html{height:100%}` + `body{height:
-        100vh; overflow:hidden}` so inner scroll containers handle the
-        scrolling. Chrome's `page.pdf()` then only sees the viewport-
-        sized slice and CUTS OFF everything below the fold (Gmail
-        rendered Page 1 only; rest of newsletter lost). The injected
-        normalize CSS must release html/body height clamping AND the
-        universal `overflow: visible` rule to expand inner scroll
-        containers. Both are required — pinning each to catch refactor
-        regressions."""
+        """pdf-11 VDD-fix: html/body release with high specificity so it
+        beats `body.modal-open { overflow: hidden }` class-based rules
+        (ELMA365 sets that class for the full-screen activity panel).
+        The injected normalize CSS must:
+          - release html/body height clamping (auto !important)
+          - release html/body overflow (visible !important)
+          - have specificity high enough for body.<class> rules.
+        """
         from html2pdf_lib.chrome_engine import _LAYOUT_NORMALIZE_CSS
-        # html/body height/overflow release
-        self.assertIn("html, body", _LAYOUT_NORMALIZE_CSS)
+        # body release with multiple class-based selectors for specificity
+        self.assertIn("body.modal-open", _LAYOUT_NORMALIZE_CSS)
+        self.assertIn("body[class]", _LAYOUT_NORMALIZE_CSS)
         self.assertIn("height: auto !important", _LAYOUT_NORMALIZE_CSS)
         self.assertIn("overflow: visible !important", _LAYOUT_NORMALIZE_CSS)
-        # universal inner-container release
+        # universal inner-container release for scroll containers
         self.assertIn("* {", _LAYOUT_NORMALIZE_CSS)
+
+    def test_strip_script_tags_removes_inline_and_external(self) -> None:
+        """pdf-11 VDD-iter-3: chrome path defaults to JS-enabled at the
+        Playwright context level (so page.evaluate works for surgical
+        DOM normalization) BUT strips every `<script>` tag from HTML so
+        the page itself can't run JS. This prevents Gmail self-destruct,
+        Angular half-hydration, etc., while keeping our normalization
+        privileges. Pin the strip to catch a refactor that lets page
+        scripts back in."""
+        from html2pdf_lib.chrome_engine import _strip_script_tags
+        html = (
+            '<html><head>'
+            '<script>document.body.innerHTML = "haxxed"</script>'
+            '<script src="evil.js"></script>'
+            '<SCRIPT>x</SCRIPT>'
+            '<script defer\n  type="module">multi\nline</script>'
+            '</head><body>safe content</body></html>'
+        )
+        out = _strip_script_tags(html)
+        self.assertNotIn("<script", out.lower())
+        self.assertNotIn("haxxed", out)
+        self.assertIn("safe content", out)
+
+    def test_strip_script_tags_fast_path_no_change(self) -> None:
+        """Plain HTML with no `<script>` tag must short-circuit."""
+        from html2pdf_lib.chrome_engine import _strip_script_tags
+        html = "<html><body>plain content</body></html>"
+        self.assertIs(_strip_script_tags(html), html)
+
+    def test_strip_script_tags_negative_dangerous_payloads_removed(self) -> None:
+        """VDD adversarial: explicitly assert that dangerous JS patterns
+        (the kind that cause Gmail self-destruct or Angular half-
+        hydration) are removed by _strip_script_tags. This is the
+        negative regression — instead of asserting "good thing X is
+        there", we assert "bad thing Y is NOT there".
+
+        The kinds of payloads we explicitly check for:
+          * `document.body.innerHTML = ...` (the gmail body-replace pattern)
+          * `document.body.replaceWith(...)` (alternate replace pattern)
+          * `window.location = ...` (offline-redirect pattern)
+          * `fetch(...)` calls (network probes that might trigger
+            fallback when they fail)
+          * Service worker registrations
+          * `addEventListener('error', ...)` patterns
+        """
+        from html2pdf_lib.chrome_engine import _strip_script_tags
+        html = (
+            '<html><body>'
+            'GOOD CONTENT START'
+            '<script>document.body.innerHTML="<h1>OFFLINE ERROR</h1>"</script>'
+            '<script>document.body.replaceWith(document.createElement("div"))</script>'
+            '<script type="module">window.location.href="/error"</script>'
+            '<script async>fetch("/api/check").catch(() => location.reload())</script>'
+            '<script>navigator.serviceWorker.register("sw.js")</script>'
+            '<script defer>'
+            'window.addEventListener("error", () => '
+            'document.body.innerHTML = "<p>Try Again Sign Out</p>")'
+            '</script>'
+            'GOOD CONTENT END'
+            '</body></html>'
+        )
+        out = _strip_script_tags(html)
+        # Positive: legitimate content survives.
+        self.assertIn("GOOD CONTENT START", out)
+        self.assertIn("GOOD CONTENT END", out)
+        # Negative: dangerous patterns gone.
+        for forbidden in (
+            "document.body.innerHTML",
+            "document.body.replaceWith",
+            "window.location",
+            "fetch(",
+            "serviceWorker",
+            'addEventListener("error"',
+            "<script",
+        ):
+            self.assertNotIn(
+                forbidden, out,
+                f"Dangerous pattern survived strip: {forbidden!r}",
+            )
+
+    def test_offline_patch_init_script_no_trailing_semicolon_iife(self) -> None:
+        """VDD adversarial: IIFE with trailing `;` becomes a statement,
+        page.evaluate returns 0 (not the object). We caught this once
+        already — pin it. Both `_OFFLINE_PATCH_INIT_SCRIPT` and the DOM
+        normalize script must end with `})()` (no trailing semicolon)
+        so they evaluate as expressions.
+        """
+        from html2pdf_lib import chrome_engine
+        for name in ("_OFFLINE_PATCH_INIT_SCRIPT",):
+            if hasattr(chrome_engine, name):
+                src = getattr(chrome_engine, name)
+                marker = "})()"
+                self.assertTrue(
+                    src.rstrip().endswith(marker),
+                    f"{name} must end with the IIFE-call marker (no trailing semicolon)",
+                )
 
     def test_compute_pdf_scale_fits_a4(self) -> None:
         """pdf-11 VDD-iter-3: SPA layouts are 1280 CSS px wide (default
@@ -1826,6 +1923,140 @@ class TestEngineDispatch(unittest.TestCase):
             )
 
         self.assertEqual(seen["hit"], 1, "default engine must be weasyprint")
+
+
+try:
+    import playwright.sync_api  # noqa: F401
+    _HAS_PLAYWRIGHT = True
+except ImportError:
+    _HAS_PLAYWRIGHT = False
+
+
+@unittest.skipUnless(
+    _HAS_PLAYWRIGHT, "Playwright not installed (skip chrome E2E tests)",
+)
+class TestChromeE2ENegativeRegression(unittest.TestCase):
+    """VDD adversarial: actually render real webarchive fixtures via the
+    chrome engine and verify NEGATIVE markers — that artifacts from
+    common SPA failure modes (Gmail offline error, Angular half-
+    hydration, broken DOM) do NOT appear in the PDF output. Without
+    these tests, a refactor that re-introduces the gmail self-destruct
+    bug would silently regress until a user complains.
+
+    Skipped when Playwright is not installed (light-install user).
+    Each test runs a full chrome render — ~5-10s per fixture.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.tmpdir = Path(tempfile.mkdtemp(prefix="chrome_e2e_neg_"))
+        cls.fixtures_dir = (
+            Path(__file__).resolve().parent.parent.parent.parent.parent
+            / "tmp"
+        )
+
+    @classmethod
+    def tearDownClass(cls):
+        import shutil
+        shutil.rmtree(cls.tmpdir, ignore_errors=True)
+
+    def _render_chrome(self, fixture_name: str) -> str:
+        """Render `tmp/{fixture_name}` via chrome engine and return
+        extracted text. Returns empty string if fixture missing."""
+        fixture = self.fixtures_dir / fixture_name
+        if not fixture.is_file():
+            self.skipTest(f"fixture not present: {fixture}")
+        from html2pdf_lib import convert
+        from html2pdf_lib.archives import extract_archive
+        out_pdf = self.tmpdir / f"{fixture.stem}.pdf"
+        work = self.tmpdir / f"work_{fixture.stem}"
+        work.mkdir(exist_ok=True)
+        html_text, base_url = extract_archive(
+            fixture, work, frame_spec="auto",
+        )
+        convert(
+            html_text, out_pdf,
+            base_url=base_url, page_size="a4",
+            extra_css_path=None, use_default_css=False,
+            engine="chrome", timeout=120,
+        )
+        import pdfplumber  # type: ignore
+        with pdfplumber.open(str(out_pdf)) as p:
+            return "".join((page.extract_text() or "") for page in p.pages)
+
+    def test_gmail_no_offline_error_fallback(self):
+        """Gmail's offline JS replaces body with "Временная ошибка ..."
+        when fetch fails. Our chrome engine strips scripts to prevent
+        this. If a refactor re-enables page scripts (or our strip
+        misses inline scripts), this fallback would appear in the PDF.
+        Negative regression: assert the fallback strings are NOT in
+        the output.
+        """
+        text = self._render_chrome("gmail_example.webarchive")
+        forbidden = (
+            "Временная ошибка",
+            "Try Again", "Sign Out",
+            "ваш аккаунт временно недоступен",
+        )
+        for f in forbidden:
+            self.assertNotIn(
+                f, text,
+                f"Gmail offline-error fallback leaked into PDF: {f!r} "
+                "— scripts may be running OR strip_scripts is broken.",
+            )
+        # Positive: real email content present.
+        self.assertIn("Sentora", text)
+
+    def test_elma365_full_activity_log_present(self):
+        """ELMA365 wraps activity panel in `position: fixed` modal.
+        Without our DOM normalization, the modal's 6816 px content
+        gets clipped (chrome PDF only paginates body.scrollHeight =
+        4092 px). Negative regression: assert the LAST few activities
+        are present (would be missing if modal stayed fixed).
+        """
+        text = self._render_chrome("elma365_activities_example.webarchive")
+        # These specific entries are at byte 1.6 MB / end-of-DOM and
+        # were the first to drop when truncation regressed.
+        for needle in ("29.01.2025", "04.02.2025", "31.07.2025", "Тест ТД"):
+            self.assertIn(
+                needle, text,
+                f"ELMA365 activity {needle!r} missing — modal-unfurl "
+                "broken (DOM normalize didn't release position:fixed).",
+            )
+
+    def test_ya_browser_no_excessive_empty_pages(self):
+        """ya_browser is a static marketplace product card. After our
+        DOM normalization improvements, it should render in 2-4 pages.
+        A previous refactor produced 35 pages with 23 empty (because
+        `* { position: static !important }` unfurled every backdrop /
+        toast container). Negative regression: assert page count is
+        reasonable (≤ 5 pages for a 190 KB static page).
+        """
+        from html2pdf_lib import convert
+        from html2pdf_lib.archives import extract_archive
+        import pypdf  # type: ignore
+        fixture = self.fixtures_dir / "ya_browser.webarchive"
+        if not fixture.is_file():
+            self.skipTest(f"fixture not present: {fixture}")
+        out = self.tmpdir / "ya_browser.pdf"
+        work = self.tmpdir / "work_ya"
+        work.mkdir(exist_ok=True)
+        html_text, base_url = extract_archive(
+            fixture, work, frame_spec="auto",
+        )
+        convert(
+            html_text, out,
+            base_url=base_url, page_size="a4",
+            extra_css_path=None, use_default_css=False,
+            engine="chrome", timeout=60,
+        )
+        page_count = len(pypdf.PdfReader(str(out)).pages)
+        self.assertLessEqual(
+            page_count, 5,
+            f"ya_browser expanded to {page_count} pages — backdrop/"
+            "overlay unfurl regression (expected ≤5 pages for static "
+            "marketplace card).",
+        )
 
 
 if __name__ == "__main__":

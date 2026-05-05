@@ -107,17 +107,121 @@ from pathlib import Path
 # handles inner scroll containers surgically.
 _LAYOUT_NORMALIZE_CSS = """\
 <style id="__html2pdf_chrome_layout_normalize">
-html, body {
+html, html[class], body, body[class], body.modal-open {
   height: auto !important;
   min-height: 0 !important;
   max-height: none !important;
   overflow: visible !important;
+  position: static !important;
 }
 * {
   overflow: visible !important;
   max-height: none !important;
 }
 </style>
+"""
+
+# Strip every `<script>` tag from HTML before handing it to chrome.
+# This lets us enable JavaScript at the context level (so page.evaluate
+# works for surgical DOM normalization) WITHOUT letting the page's own
+# scripts execute. Result: gmail can't self-destruct the body via its
+# offline detector, Angular can't half-hydrate, and we still get a
+# privileged JS context to walk and fix the DOM.
+#
+# Why not just disable JS at the context level? Because page.evaluate()
+# requires JS-enabled. We need precise DOM normalization (fix scroll
+# containers that ACTUALLY clip content; release position:fixed modals
+# that wrap real content; LEAVE alone position:fixed backdrops and
+# toolbar/sidebar/icon-only nav elements that would corrupt layout if
+# unfurled).
+_SCRIPT_TAG_RE = re.compile(
+    r"<script\b[^>]*>.*?</script\s*>|<script\b[^>]*/>",
+    re.IGNORECASE | re.DOTALL,
+)
+
+
+def _strip_script_tags(html: str) -> str:
+    """Remove every `<script>` tag (with content) and self-closing scripts.
+
+    Defensive: handles upper/lowercase, self-closing variants, and
+    multi-line script bodies. Returns the HTML with scripts removed.
+    Fast path: no `<script` substring → return unchanged.
+    """
+    if "<script" not in html.lower():
+        return html
+    return _SCRIPT_TAG_RE.sub("", html)
+
+
+# DOM normalization script — runs via page.evaluate AFTER navigation.
+# Walks the DOM and surgically fixes layout issues without breaking
+# legitimate fixed-position elements (icon-only sidebars, toolbars,
+# rounded corners). Three classes of fix:
+#
+#   1. Body release with !important (defeats `body.modal-open
+#      { overflow: hidden }` class-based rules).
+#
+#   2. Release `position: fixed` ONLY when the element wraps real
+#      content (offsetHeight > 200 px AND has more than minimal text).
+#      This catches ELMA365's `complex-popup-outer modal-lg` (6816 px
+#      of activity content) but skips empty backdrops, toast-toast
+#      notification containers, and small icon sidebars.
+#
+#   3. Release `overflow: hidden` ONLY when the element actually clips
+#      content (scrollHeight > clientHeight + threshold). Catches
+#      Gmail's `explosion_clipper_div` but skips ya_browser's icon
+#      sidebar (where labels are width-clipped, not vertically
+#      overflowing).
+_DOM_NORMALIZE_SCRIPT = r"""
+(() => {
+  // 1. Outer-frame release (belt-and-suspenders with the CSS rule).
+  document.documentElement.style.setProperty('height', 'auto', 'important');
+  document.documentElement.style.setProperty('overflow', 'visible', 'important');
+  document.body.style.setProperty('height', 'auto', 'important');
+  document.body.style.setProperty('min-height', '0', 'important');
+  document.body.style.setProperty('max-height', 'none', 'important');
+  document.body.style.setProperty('overflow', 'visible', 'important');
+  document.body.style.setProperty('position', 'static', 'important');
+
+  // 2. Walk DOM. For each element, decide whether to release.
+  const all = document.querySelectorAll('*');
+  let releasedFixed = 0, releasedClip = 0;
+  for (let i = 0; i < all.length; i++) {
+    const el = all[i];
+    const cs = window.getComputedStyle(el);
+    // Position: fixed → static, but only for elements with substantial
+    // content. An empty backdrop or a 50px-tall toolbar should keep
+    // its fixed positioning so it doesn't add empty space to the flow.
+    if (cs.position === 'fixed') {
+      const oh = el.offsetHeight;
+      const textLen = (el.textContent || '').trim().length;
+      if (oh > 200 && textLen > 50) {
+        el.style.setProperty('position', 'static', 'important');
+        releasedFixed++;
+      } else {
+        // Probably a backdrop/toolbar/toast — keep fixed but force
+        // display: none so it doesn't render at all (zero PDF impact).
+        el.style.setProperty('display', 'none', 'important');
+      }
+      continue;
+    }
+    // Overflow release: only if content actually clips (scroll > client).
+    const ox = cs.overflowX, oy = cs.overflowY;
+    const clipsY = oy === 'auto' || oy === 'scroll' || oy === 'hidden';
+    const clipsX = ox === 'auto' || ox === 'scroll' || ox === 'hidden';
+    if (clipsY && el.scrollHeight > el.clientHeight + 4) {
+      el.style.setProperty('overflow-y', 'visible', 'important');
+      el.style.setProperty('height', 'auto', 'important');
+      el.style.setProperty('max-height', 'none', 'important');
+      releasedClip++;
+    }
+    if (clipsX && el.scrollWidth > el.clientWidth + 4) {
+      el.style.setProperty('overflow-x', 'visible', 'important');
+      el.style.setProperty('max-width', 'none', 'important');
+      releasedClip++;
+    }
+  }
+  return {releasedFixed: releasedFixed, releasedClip: releasedClip};
+})()
 """
 
 # Init script — injected via `page.add_init_script` BEFORE any page
@@ -159,62 +263,8 @@ _OFFLINE_PATCH_INIT_SCRIPT = r"""
   if (navigator.sendBeacon) {
     navigator.sendBeacon = () => true;
   }
-})();
+})()
 """
-
-# Normalize script — run via `page.evaluate` AFTER load + settle.
-# Walks the DOM and releases overflow only on elements that actually
-# clip content (scrollHeight > clientHeight). Skips elements where
-# overflow:hidden is doing layout work (icon sidebar labels, rounded-
-# corner clipping) since those have clientHeight === scrollHeight.
-_DOM_NORMALIZE_SCRIPT = r"""
-(() => {
-  // Outer-frame release: html and body always need height: auto and
-  // overflow: visible for PDF rendering. (Belt-and-suspenders with
-  // the CSS rule — JS wins because the page's CSS may override the
-  // injected stylesheet.)
-  document.documentElement.style.setProperty('height', 'auto', 'important');
-  document.documentElement.style.setProperty('overflow', 'visible', 'important');
-  document.body.style.setProperty('height', 'auto', 'important');
-  document.body.style.setProperty('min-height', '0', 'important');
-  document.body.style.setProperty('max-height', 'none', 'important');
-  document.body.style.setProperty('overflow', 'visible', 'important');
-
-  // Inner scroll-container release: only target elements that have
-  // overflow set AND content overflows (scrollHeight > clientHeight).
-  // This catches Gmail's explosion_clipper_div and ELMA365 shell
-  // scrollers but leaves ya_browser's icon sidebar alone (its labels
-  // are hidden by width clipping, not vertical overflow — scrollHeight
-  // equals clientHeight for that container).
-  const all = document.querySelectorAll('*');
-  let released = 0;
-  for (let i = 0; i < all.length; i++) {
-    const el = all[i];
-    const cs = window.getComputedStyle(el);
-    const ox = cs.overflowX, oy = cs.overflowY;
-    const clipsX = ox === 'auto' || ox === 'scroll' || ox === 'hidden';
-    const clipsY = oy === 'auto' || oy === 'scroll' || oy === 'hidden';
-    if (!clipsX && !clipsY) continue;
-    // Use offsetWidth/Height (excludes scrollbar; matches reality)
-    // and scrollWidth/Height (full content extent).
-    const overflowsY = el.scrollHeight > el.clientHeight + 4;
-    const overflowsX = el.scrollWidth  > el.clientWidth  + 4;
-    if (clipsY && overflowsY) {
-      el.style.setProperty('overflow-y', 'visible', 'important');
-      el.style.setProperty('height', 'auto', 'important');
-      el.style.setProperty('max-height', 'none', 'important');
-      released++;
-    }
-    if (clipsX && overflowsX) {
-      el.style.setProperty('overflow-x', 'visible', 'important');
-      el.style.setProperty('max-width', 'none', 'important');
-      released++;
-    }
-  }
-  return released;
-})();
-"""
-
 
 # `<base href="...">` matcher. We strip the tag entirely (rather than
 # rewriting its href) because chrome will fall back to the document's
@@ -387,6 +437,7 @@ def render_chrome(
     timeout: int,
     print_background: bool = True,
     javascript: bool = False,
+    strip_scripts: bool = True,
 ) -> None:
     """Render `html_text` to `output_path` via headless Chromium.
 
@@ -434,6 +485,20 @@ def render_chrome(
     # document URL we control. (See _strip_base_href docstring.)
     html_text = _strip_base_href(html_text)
 
+    # Strip `<script>` tags by default. We enable JS at the context
+    # level (so page.evaluate works for surgical DOM normalization)
+    # but disable the page's OWN scripts by removing them from the
+    # HTML. Result: no Gmail self-destruct, no Angular half-hydration,
+    # but we still get a privileged JS context for our normalization
+    # walk. `strip_scripts=False` disables this and runs page scripts
+    # naturally (used when the user passes `--chrome-js` for canvas
+    # charts / pre-hydration HTML).
+    if strip_scripts and not javascript:
+        html_text = _strip_script_tags(html_text)
+    elif javascript:
+        # User explicitly asked for page JS — leave scripts intact.
+        pass
+
     # Inject layout-normalisation CSS (see _LAYOUT_NORMALIZE_CSS docstring
     # at module top). Tears down `100vh`/`overflow:hidden` outer-frame
     # clamping so the document grows with its content and chrome paginates
@@ -463,9 +528,16 @@ def render_chrome(
                 # dimensions come from `format=...` below; Chrome's print
                 # path scales the laid-out content onto the PDF page,
                 # similar to a real browser's print dialog.
+                # JS-enabled at context level so page.evaluate works for
+                # surgical DOM normalization. The page's own scripts have
+                # been stripped from the HTML (see _strip_script_tags
+                # call above); only our injected `page.evaluate` runs.
+                # When the user explicitly passes `javascript=True`, we
+                # also leave page scripts intact (canvas / hydration
+                # cases).
                 context = browser.new_context(
                     viewport=_DEFAULT_VIEWPORT,
-                    java_script_enabled=javascript,
+                    java_script_enabled=True,
                 )
                 context.route("**/*", _block_remote_routes)
                 # Inject the offline-API patch BEFORE any page script
@@ -492,6 +564,15 @@ def render_chrome(
                     # articles (hide nav, collapse sidebars). For archive
                     # rendering we want screen-capture fidelity.
                     page.emulate_media(media="screen")
+                    # Surgical DOM normalization. Walks the DOM and
+                    # releases scroll containers + position:fixed wrappers
+                    # only where they actually clip content. Best-effort:
+                    # if the script throws (rare; e.g. exotic HTML breaks
+                    # the walker), continue to PDF render.
+                    try:
+                        page.evaluate(_DOM_NORMALIZE_SCRIPT)
+                    except Exception:
+                        pass
                     # Surgical DOM normalization: walk the DOM and
                     # release ONLY scroll containers that actually clip
                     # content (scrollHeight > clientHeight). Skips
