@@ -114,7 +114,31 @@
       "Bash(cp skills/pdf/scripts/tests/battery_signatures.json /tmp/sig_orig.json)",
       "Bash(cp /tmp/sig_collision.json skills/pdf/scripts/tests/battery_signatures.json)",
       "Bash(pdfinfo \"tmp/reader_pdf_out/US-Отчет-Полнотекстовый поиск в приложении - Ярли - Confluence Wiki \\(reader\\).pdf\")",
-      "Bash(\"skills/pdf/scripts/.venv/bin/python\" skills/pdf/scripts/preview.py \"tmp/regular_pdf_out/US-Отчет-Полнотекстовый поиск в приложении - Ярли - Confluence Wiki-2.pdf\" /tmp/us2_grid.jpg --cols 5 --dpi 60)"
+      "Bash(\"skills/pdf/scripts/.venv/bin/python\" skills/pdf/scripts/preview.py \"tmp/regular_pdf_out/US-Отчет-Полнотекстовый поиск в приложении - Ярли - Confluence Wiki-2.pdf\" /tmp/us2_grid.jpg --cols 5 --dpi 60)",
+      "Bash(HTML2PDF_TIMEOUT=120 skills/pdf/scripts/.venv/bin/python skills/pdf/scripts/html2pdf.py --archive-frame auto tmp/gmail_example.webarchive tmp/regular_pdf_out/gmail_example.pdf)",
+      "Bash(skills/pdf/scripts/.venv/bin/python -c ' *)",
+      "Bash(cd /Users/sergey/dev-projects/Universal-skills *)",
+      "Bash(skills/pdf/scripts/.venv/bin/python -m unittest discover -s skills/pdf/scripts/tests -p \"test_preprocess.py\")",
+      "Bash(HTML2PDF_TIMEOUT=180 skills/pdf/scripts/.venv/bin/python skills/pdf/scripts/html2pdf.py --reader-mode --archive-frame auto tmp/ya_browser.webarchive tmp/reader_pdf_out/ya_browser.pdf)",
+      "Bash(HTML2PDF_TIMEOUT=180 skills/pdf/scripts/.venv/bin/python skills/pdf/scripts/html2pdf.py --reader-mode --archive-frame auto tmp/elma365_activities_example.webarchive tmp/reader_pdf_out/elma365_activities_example.pdf)",
+      "Bash(awk '{cmd=\"\"; for\\(i=11;i<=NF;i++\\) cmd=cmd\" \"$i; print $2, $3\"%cpu\", int\\($10\\)\"s\", cmd}')",
+      "Bash(awk '{cmd=\"\"; for\\(i=11;i<=NF;i++\\) cmd=cmd\" \"$i; print int\\($10\\)\"s\", cmd}')",
+      "Bash(git ls-remote *)",
+      "Bash(git fetch *)",
+      "Bash(./.venv/bin/python -m unittest tests.test_preprocess.TestEngineDispatch -v)",
+      "Bash(./.venv/bin/python html2pdf.py --help)",
+      "Bash(./.venv/bin/python html2pdf.py /tmp/_test_pdf11.html /tmp/_test_pdf11.pdf --engine chrome)",
+      "Bash(bash install.sh --with-chrome)",
+      "Bash(bash -n install.sh)",
+      "Bash(bash -n /dev/stdin)",
+      "Bash(bash -n /Users/sergey/dev-projects/Universal-skills/skills/pdf/scripts/install.sh)",
+      "Bash(./.venv/bin/python html2pdf.py \"/Users/sergey/dev-projects/Universal-skills/tmp/gmail_example.webarchive\" \"/Users/sergey/dev-projects/Universal-skills/tmp/chrome_pdf_out/gmail_example.pdf\" --engine chrome --archive-frame auto)",
+      "Bash(./.venv/bin/python html2pdf.py \"/Users/sergey/dev-projects/Universal-skills/tmp/elma365_activities_example.webarchive\" \"/Users/sergey/dev-projects/Universal-skills/tmp/chrome_pdf_out/elma365_activities_example.pdf\" --engine chrome --archive-frame auto)",
+      "Bash(./.venv/bin/python html2pdf.py \"/Users/sergey/dev-projects/Universal-skills/tmp/ya_browser.webarchive\" \"/Users/sergey/dev-projects/Universal-skills/tmp/chrome_pdf_out/ya_browser.pdf\" --engine chrome --archive-frame auto)"
+    ],
+    "additionalDirectories": [
+      "/tmp/vdd_preview",
+      "/Users/sergey/dev-projects/Universal-skills/tmp/reader_pdf_out"
     ]
   }
 }

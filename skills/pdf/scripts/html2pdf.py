@@ -66,7 +66,13 @@ from pathlib import Path
 from md2pdf import PAGE_SIZES
 
 from _errors import add_json_errors_argument, report_error
-from html2pdf_lib import RenderTimeout, SUPPORTED_EXTENSIONS, convert
+from html2pdf_lib import (
+    ChromeEngineUnavailable,
+    RenderTimeout,
+    SUPPORTED_ENGINES,
+    SUPPORTED_EXTENSIONS,
+    convert,
+)
 from html2pdf_lib.archives import (
     NoSubstantialFrames,
     extract_archive,
@@ -159,6 +165,22 @@ def main(argv: list[str] | None = None) -> int:
         help="Render watchdog deadline in seconds (default 180; "
              "$HTML2PDF_TIMEOUT overrides; 0 disables). Kills weasyprint "
              "if its layout exceeds the deadline (POSIX only).",
+    )
+    # pdf-11: optional alternative render engine. Default is weasyprint
+    # (pure-Python, no browser runtime, identical to all prior releases).
+    # `chrome` requires Playwright + bundled Chromium (~150 MB, opt-in via
+    # `install.sh --with-chrome`) and renders the HTML through a real
+    # browser — useful when weasyprint chokes on Material-3 calc()/var()
+    # chains, heavy SPA layouts, or proprietary font stacks. Chrome engine
+    # bypasses the weasyprint preprocess pipeline (calc-strip, font-face-
+    # strip, NORMALIZE_CSS) — it doesn't need those workarounds.
+    parser.add_argument(
+        "--engine", choices=list(SUPPORTED_ENGINES), default="weasyprint",
+        help="Render engine: weasyprint (default; pure Python, no browser) "
+             "or chrome (requires Playwright + Chromium; install via "
+             "`install.sh --with-chrome`). Use chrome when weasyprint "
+             "produces broken layout on heavy SPA pages — see "
+             "references/html-conversion.md for the engine comparison.",
     )
     add_json_errors_argument(parser)
     args = parser.parse_args(argv)
@@ -256,11 +278,18 @@ def main(argv: list[str] | None = None) -> int:
             use_default_css=not args.no_default_css,
             reader_mode=args.reader_mode,
             timeout=args.timeout,
+            engine=args.engine,
+        )
+    except ChromeEngineUnavailable as exc:
+        return report_error(
+            str(exc), code=1, error_type="ChromeEngineUnavailable",
+            details={"engine": args.engine}, json_mode=je,
         )
     except RenderTimeout as exc:
         return report_error(
             str(exc), code=1, error_type="RenderTimeout",
-            details={"timeout": args.timeout}, json_mode=je,
+            details={"timeout": args.timeout, "engine": args.engine},
+            json_mode=je,
         )
     except NoSubstantialFrames as exc:
         return report_error(

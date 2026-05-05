@@ -17,6 +17,13 @@ importing this package, or the import will fail at package-load time with
 `ModuleNotFoundError: md2pdf`. Same applies to `_errors` (cross-skill error
 envelope) used by the CLI shim itself.
 """
-from .render import RenderTimeout, SUPPORTED_EXTENSIONS, convert
+from .chrome_engine import ChromeEngineUnavailable
+from .render import RenderTimeout, SUPPORTED_ENGINES, SUPPORTED_EXTENSIONS, convert
 
-__all__ = ["RenderTimeout", "SUPPORTED_EXTENSIONS", "convert"]
+__all__ = [
+    "ChromeEngineUnavailable",
+    "RenderTimeout",
+    "SUPPORTED_ENGINES",
+    "SUPPORTED_EXTENSIONS",
+    "convert",
+]

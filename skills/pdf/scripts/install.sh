@@ -8,11 +8,33 @@
 #   - python3 3.10+
 #   - pango + cairo + gdk-pixbuf (weasyprint runtime; required by md2pdf.py)
 #
+# Optional flag:
+#   --with-chrome   also install Playwright + bundled Chromium (~150 MB) for
+#                   the optional chrome render engine (html2pdf --engine chrome).
+#                   See requirements-chrome.txt for the dependency.
+#
 # Idempotent; safe to re-run.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$SCRIPT_DIR"
+
+WITH_CHROME=0
+for arg in "$@"; do
+    case "$arg" in
+        --with-chrome) WITH_CHROME=1 ;;
+        --help|-h)
+            cat <<EOF
+Usage: bash install.sh [--with-chrome]
+
+Options:
+  --with-chrome   Install Playwright + Chromium for the optional chrome
+                  render engine (html2pdf --engine chrome). Adds ~150 MB.
+EOF
+            exit 0
+            ;;
+    esac
+done
 
 missing_host=0
 
@@ -43,8 +65,8 @@ fi
 say "Installing Python requirements into scripts/.venv/ ..."
 ./.venv/bin/pip install --quiet -r requirements.txt
 
-# --- Optional Node deps: mermaid-cli for ```mermaid blocks ---
-# md2pdf.py preprocesses fenced ```mermaid blocks via mmdc → SVG before
+# --- Optional Node deps: mermaid-cli for fenced mermaid code blocks ---
+# md2pdf.py preprocesses fenced mermaid code blocks via mmdc → SVG before
 # handing the markdown to weasyprint. Without mmdc, those blocks render
 # as code (graceful degradation, not an error).
 if command -v npm >/dev/null 2>&1; then
@@ -58,7 +80,7 @@ if command -v npm >/dev/null 2>&1; then
         fi
     fi
 else
-    warn "npm not found — skipping mermaid-cli. Install Node.js if you want ```mermaid blocks rendered as diagrams."
+    warn 'npm not found — skipping mermaid-cli. Install Node.js if you want fenced mermaid blocks rendered as diagrams.'
 fi
 
 # --- weasyprint native libs probe (pango, cairo, gdk-pixbuf) ---
@@ -76,6 +98,23 @@ else
     say "weasyprint: OK (pango + cairo visible)"
 fi
 
+# --- Optional: Playwright + Chromium for --engine chrome (pdf-11) ---
+# Gated behind --with-chrome because the bundled Chromium is ~150 MB
+# and most users only need the default weasyprint engine. Idempotent:
+# the playwright install command is a no-op when the binary is current.
+if [ "$WITH_CHROME" -eq 1 ]; then
+    say "Installing Playwright (chrome engine) ..."
+    ./.venv/bin/pip install --quiet -r requirements-chrome.txt
+    say "Downloading Chromium (~150 MB; cached after first run) ..."
+    if ./.venv/bin/playwright install chromium; then
+        say "Playwright + Chromium: OK"
+    else
+        warn "Playwright install completed but 'playwright install chromium' failed."
+        warn "The chrome engine will refuse to run until the binary is present."
+        missing_host=1
+    fi
+fi
+
 echo ""
 if [ "$missing_host" -eq 0 ]; then
     say "All dependencies installed and verified."
@@ -87,3 +126,6 @@ say "Usage:"
 say "  ./.venv/bin/python scripts/md2pdf.py INPUT.md OUTPUT.pdf     # needs pango+cairo"
 say "  ./.venv/bin/python scripts/pdf_merge.py OUT.pdf A.pdf B.pdf"
 say "  ./.venv/bin/python scripts/pdf_split.py INPUT.pdf --each-page OUTDIR/"
+if [ "$WITH_CHROME" -eq 1 ]; then
+    say "  ./.venv/bin/python scripts/html2pdf.py IN.webarchive OUT.pdf --engine chrome"
+fi

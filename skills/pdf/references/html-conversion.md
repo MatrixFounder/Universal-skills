@@ -210,6 +210,41 @@ Wraps the **full** `convert()` body — reader extraction, preprocessing, AND re
 
 Non-main-thread (web-server / multiprocessing wrappers): `signal.signal()` raises ValueError. Caught and degraded gracefully — pipeline runs uncapped but doesn't crash.
 
+## Render engine selection (pdf-11, `--engine`)
+
+Two engines, opt-in switching:
+
+| Engine | Default | Install footprint | Strengths | Limitations |
+|---|---|---|---|---|
+| `weasyprint` | yes | base `requirements.txt` (~80 MB with deps) | Pure Python, no browser runtime, fast for typical static HTML, deterministic | Material 3 calc/var bugs (NumberToken crash), pathological flex/grid loops, no JS execution, `<canvas>` rendered empty |
+| `chrome` | no | `requirements-chrome.txt` + bundled Chromium (~150 MB) — install via `bash install.sh --with-chrome` | Real browser layout, modern CSS faithful, JS-hydrated content visible, `<canvas>` charts render | 5-10× slower per page, larger install, opt-in only |
+
+Decision rules (when to use chrome):
+
+- weasyprint exited 1 with `Conversion failed: 'NumberToken' object …` (Material 3 / GM3-prefixed CSS — Gmail, modern Google web apps).
+- weasyprint exited 1 with `tuple index out of range` from `inline.py` (ELMA365 / Angular Material activities-fixture-class pages).
+- weasyprint hangs past `--timeout` and the SIGALRM watchdog reports `RenderTimeout` (Framer-built sites — known infinite layout loop).
+- The page contains `<canvas>` charts that must appear in the PDF (TradingView, Recharts, Chart.js).
+- The page is JS-hydrated and weasyprint shows `(loading…)` placeholder text instead of content.
+
+Pipeline differences:
+
+- The chrome engine **does not run** the weasyprint preprocess pipeline (`preprocess_html` — calc/var stripping, font-face stripping, NORMALIZE_CSS injection). Those are workarounds for weasyprint bugs Chrome doesn't have. Running them would corrupt a faithful browser render.
+- Reader-mode (`--reader-mode`) and `--css EXTRA.css` apply to both engines — they're engine-agnostic content-shaping concerns.
+- Network is blocked in both engines. The chrome path uses Playwright `context.route()` to abort all `http(s)://` requests, mirroring weasyprint's `_offline_url_fetcher`. Sub-resources baked into the archive load fine; CDN fonts and tracking pixels are dropped.
+
+Failure modes:
+
+- `--engine chrome` without Playwright installed → exit 1 with `ChromeEngineUnavailable` envelope, message names the install command (`bash install.sh --with-chrome`).
+- Chrome engine timeout → `RenderTimeout` envelope (same exception type as weasyprint timeouts; details include `engine: "chrome"`).
+
+Honest scope of pdf-11 v1:
+
+- **No `--engine auto`**: pdf-11 v1 ships explicit opt-in only. Auto-fallback (try weasyprint → catch known-pathology → re-render with chrome) and engine-decision cache (`<input>.engine.json`) deferred to pdf-11a.
+- **No structural pre-scan**: pdf-11 v1 does not pre-detect calc-count / canvas-count / virtualizer-markers to recommend chrome. The user picks the engine; we provide diagnostics through error envelopes when weasyprint fails.
+- **Cross-platform**: validated on macOS Apple Silicon. Linux Alpine/RHEL/Arch require manual system-package setup beyond `playwright install-deps` (see Playwright docs). Docker containers need `--cap-add=SYS_ADMIN` or the Chromium `--no-sandbox` flag. AWS Lambda / serverless need `chrome-aws-lambda` or `chromium-min` — bundled Chromium exceeds the 250 MB Lambda layer limit.
+- **html2docx parity**: chrome engine is HTML→PDF only. The `--engine chrome` path for html2docx (Word output via Chromium) is a separate follow-up (pdf-11a).
+
 ## Honest scope (limitations)
 
 - **Code-block syntax highlighting is monochrome** in flattened table-rendered code blocks (Fern / Mintlify / Docusaurus). Trade-off for content completeness: weasyprint's `<table>`-inside-`<pre>` pagination bug means we either flatten and lose colour, or keep colour and risk content cut-off.

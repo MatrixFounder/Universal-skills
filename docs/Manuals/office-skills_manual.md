@@ -549,7 +549,7 @@ fields at all.
     [--page-size letter|a4|legal] [--css EXTRA.css] [--base-url DIR] \
     [--no-default-css] [--reader-mode] \
     [--archive-frame N|main|all|auto] [--list-frames] \
-    [--timeout SECONDS]
+    [--timeout SECONDS] [--engine weasyprint|chrome]
 ```
 
 INPUT may be `.html`/`.htm` (plain HTML), `.mhtml`/`.mht` (Chrome
@@ -643,9 +643,45 @@ Reader-mode strips Framer CSS; rendering completes. <br>
 virtualized `<app-appview-card>` lists) — weasyprint inline-layout
 bug `tuple index out of range` on `inline.py:231`. Reader-mode
 extracts text content cleanly; regular mode crashes. <br>
-For these classes of input, prefer `--reader-mode` or use `--engine
-chrome` (planned, see [pdf-11 backlog
-entry](../office-skills-backlog.md)).
+For these classes of input, prefer `--reader-mode` or use the chrome
+render engine (see below).
+
+**Render engine (`--engine weasyprint|chrome`)** — new in pdf-11
+(2026-05-05). The default `weasyprint` engine is fast and pure-Python
+but has hard limits on modern web SPAs (cases (a)/(b)/(c) above plus
+JS-hydrated content and `<canvas>` charts). The opt-in `chrome`
+engine renders through a real headless Chromium via Playwright,
+producing browser-faithful output where weasyprint fails:
+
+```bash
+# 1. Install Chromium once (~150 MB, cached after):
+bash skills/pdf/scripts/install.sh --with-chrome
+
+# 2. Render through Chrome:
+./.venv/bin/python skills/pdf/scripts/html2pdf.py \
+    page.webarchive out.pdf --engine chrome
+```
+
+When to switch engines:
+
+| Symptom (weasyprint output) | Use |
+|---|---|
+| Exit 1 `'NumberToken' object has no attribute 'unit'` | `--engine chrome` |
+| Exit 1 `tuple index out of range` from `inline.py` | `--engine chrome` |
+| `RenderTimeout` after watchdog fires (Framer-built page) | `--engine chrome` (or first try `--reader-mode`) |
+| `<canvas>` chart appears blank in PDF | `--engine chrome` |
+| Page shows `(loading…)` placeholder text | `--engine chrome` |
+| Output looks fine | leave default `weasyprint` (5-10× faster) |
+
+The chrome path skips weasyprint preprocessing (calc-strip,
+font-face-strip, NORMALIZE_CSS) — those are weasyprint workarounds
+Chrome doesn't need; reader-mode and `--css EXTRA.css` still apply
+because they're engine-agnostic. Network is blocked in both engines:
+chrome uses Playwright `context.route()` to abort `http(s)://`
+requests, mirroring weasyprint's `_offline_url_fetcher`.
+
+Without Playwright installed, `--engine chrome` exits 1 with a
+`ChromeEngineUnavailable` envelope naming the install command.
 
 ---
 

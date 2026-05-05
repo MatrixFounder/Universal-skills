@@ -1,0 +1,16 @@
+# Optional dependency for the chrome render engine (--engine chrome).
+#
+# Install with the bundled Chromium binary via:
+#   bash install.sh --with-chrome
+# or manually:
+#   ./.venv/bin/pip install -r requirements-chrome.txt
+#   ./.venv/bin/playwright install chromium
+#
+# Playwright pulls a self-contained Chromium binary (~150 MB) under
+# ~/.cache/ms-playwright (Linux) or ~/Library/Caches/ms-playwright (macOS).
+# The binary is platform-specific; redistributing the .venv across
+# platforms requires re-running `playwright install chromium` on each.
+#
+# We pin a major version range, not a release tag — Playwright itself is
+# stable and the chromium revision is what changes from release to release.
+playwright>=1.40,<2.0

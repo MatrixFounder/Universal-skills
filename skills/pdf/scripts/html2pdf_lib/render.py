@@ -102,6 +102,9 @@ def _clear_render_watchdog(prev) -> None:
         signal.signal(signal.SIGALRM, prev)
 
 
+SUPPORTED_ENGINES = ("weasyprint", "chrome")
+
+
 def convert(
     html_text: str,
     output_path: Path,
@@ -112,16 +115,80 @@ def convert(
     use_default_css: bool,
     reader_mode: bool = False,
     timeout: int = 0,
+    engine: str = "weasyprint",
 ) -> None:
+    """Render `html_text` to `output_path` via the chosen engine.
+
+    Two engines:
+
+      weasyprint (default) — pure-Python typeset PDF. Fast, no browser
+        runtime, but layout-engine has known pathologies on heavy SPA pages
+        and Material-3 calc()/var() chains. The `preprocess_html` pipeline
+        applies weasyprint-specific compatibility fixes before render.
+
+      chrome (opt-in, requires Playwright) — headless Chromium. Real
+        browser layout. Heavier (~150 MB Chromium binary) and slower
+        per-page, but renders modern CSS faithfully. We do NOT run
+        `preprocess_html` (those are weasyprint workarounds Chrome doesn't
+        need) and do NOT inject NORMALIZE_CSS / DEFAULT_CSS by default —
+        Chrome treats the page like a browser print, including its own
+        CSS. `--reader-mode` and `--css EXTRA.css` still apply because
+        they're engine-agnostic content-shaping concerns.
+
+    Engine choice is exposed via the `--engine` CLI flag and defaults to
+    weasyprint for backwards compatibility — every existing invocation
+    keeps producing identical output.
+    """
+    if engine not in SUPPORTED_ENGINES:
+        raise ValueError(
+            f"unknown engine {engine!r}; supported: {', '.join(SUPPORTED_ENGINES)}"
+        )
+
     # Watchdog wraps the FULL pipeline (reader-mode extraction + preprocessing
     # + weasyprint render). Preprocessing involves ~12 regex passes; on
     # adversarial 4 MB HTML some of them have O(n²) characteristics
     # (`_strip_empty_anchor_links` over thousands of <a> tags) and could
     # exceed the deadline before render even starts. (VDD-iter-5 fix.)
+    #
+    # For the chrome engine SIGALRM is also useful — Playwright operations
+    # honour their own `timeout=` kwarg, but the surrounding Python work
+    # (reader-mode extraction, file IO) does not. We keep the watchdog at
+    # the outer scope for both engines and rely on the chrome engine's
+    # PlaywrightTimeoutError → RenderTimeout mapping inside the render call.
     prev_handler = _install_render_watchdog(timeout)
     try:
         if reader_mode:
             html_text = reader_mode_html(html_text)
+
+        if engine == "chrome":
+            # Lazy import: chrome_engine imports Playwright, which is an
+            # optional dep. Importing it eagerly at module load would
+            # break the default install for everyone who hasn't run
+            # `install.sh --with-chrome`.
+            from .chrome_engine import render_chrome  # noqa: PLC0415
+
+            # Apply --css EXTRA.css for chrome too — it's user-supplied
+            # styling, engine-agnostic. We inject it as a <style> block
+            # since chrome takes the HTML directly, not a stylesheet list.
+            if extra_css_path is not None:
+                extra_css = extra_css_path.read_text(encoding="utf-8")
+                injected = f"<style>\n{extra_css}\n</style>"
+                if "</head>" in html_text:
+                    html_text = html_text.replace(
+                        "</head>", injected + "</head>", 1,
+                    )
+                else:
+                    html_text = injected + html_text
+
+            render_chrome(
+                html_text, output_path,
+                base_url=base_url,
+                page_size=page_size,
+                timeout=timeout,
+            )
+            return
+
+        # weasyprint path (default).
         html_text = preprocess_html(html_text)
         stylesheets = []
         if use_default_css:

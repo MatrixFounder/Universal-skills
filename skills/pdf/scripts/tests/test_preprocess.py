@@ -1521,5 +1521,138 @@ class TestStripHtmlComments(unittest.TestCase):
         self.assertEqual(html, out)
 
 
+class TestEngineDispatch(unittest.TestCase):
+    """pdf-11: `--engine` flag and dispatch behavior in `convert()`.
+
+    These tests do NOT require Playwright to be installed — they verify
+    the routing logic, error envelopes, and that the default path stays
+    on weasyprint for backwards compatibility.
+    """
+
+    def test_supported_engines_includes_both(self) -> None:
+        from html2pdf_lib import SUPPORTED_ENGINES
+        self.assertIn("weasyprint", SUPPORTED_ENGINES)
+        self.assertIn("chrome", SUPPORTED_ENGINES)
+
+    def test_unknown_engine_raises_value_error(self) -> None:
+        """`convert(engine='lynx')` must fail loudly, not silently fall
+        back to a default. The CLI's `argparse(choices=...)` is the
+        primary guard; this is the in-process belt-and-suspenders."""
+        from html2pdf_lib import convert
+        with self.assertRaises(ValueError) as ctx:
+            convert(
+                "<html></html>", Path("/tmp/_unused.pdf"),
+                base_url="file:///tmp", page_size="letter",
+                extra_css_path=None, use_default_css=False,
+                engine="lynx",
+            )
+        self.assertIn("lynx", str(ctx.exception))
+        self.assertIn("supported", str(ctx.exception).lower())
+
+    def test_chrome_engine_unavailable_when_playwright_missing(self) -> None:
+        """If Playwright is not importable, `--engine chrome` must raise
+        `ChromeEngineUnavailable` with a remediation message naming
+        `install.sh --with-chrome`. We force the import failure by
+        mocking `_import_playwright` to raise directly."""
+        from html2pdf_lib import ChromeEngineUnavailable
+        from html2pdf_lib import chrome_engine
+
+        def _raise_unavailable():
+            raise ChromeEngineUnavailable(
+                "Playwright is not installed. To enable the chrome engine, "
+                "run: bash install.sh --with-chrome"
+            )
+
+        with mock.patch.object(
+            chrome_engine, "_import_playwright", side_effect=_raise_unavailable,
+        ):
+            with self.assertRaises(ChromeEngineUnavailable) as ctx:
+                chrome_engine.render_chrome(
+                    "<html></html>", Path("/tmp/_unused.pdf"),
+                    base_url="file:///tmp", page_size="letter", timeout=10,
+                )
+        self.assertIn("install.sh --with-chrome", str(ctx.exception))
+
+    def test_chrome_page_size_mapping(self) -> None:
+        """Engine-specific page-size key mapping: weasyprint uses CSS
+        @page strings (lowercase), chrome uses Playwright's capitalized
+        format names. Pinning the table prevents silent regressions."""
+        from html2pdf_lib.chrome_engine import _CHROME_PAGE_SIZES
+        self.assertEqual(_CHROME_PAGE_SIZES["letter"], "Letter")
+        self.assertEqual(_CHROME_PAGE_SIZES["a4"], "A4")
+        self.assertEqual(_CHROME_PAGE_SIZES["legal"], "Legal")
+
+    def test_chrome_engine_skips_weasyprint_preprocess(self) -> None:
+        """Chrome engine MUST NOT run `preprocess_html` — that pipeline
+        contains weasyprint workarounds (calc-strip, font-face-strip,
+        NORMALIZE_CSS) that would corrupt a faithful browser render.
+
+        We assert this by patching `preprocess_html` to track calls; on
+        the chrome path it must not be invoked. (The chrome render itself
+        is mocked away so the test runs without Playwright.)
+        """
+        from html2pdf_lib import convert
+        from html2pdf_lib import preprocess as preprocess_mod
+        from html2pdf_lib import render as render_mod
+
+        called = {"preprocess": 0, "chrome": 0}
+
+        def _stub_preprocess(html: str) -> str:
+            called["preprocess"] += 1
+            return html
+
+        def _stub_render_chrome(_html, _out, **_kw):
+            called["chrome"] += 1
+
+        with mock.patch.object(
+            preprocess_mod, "preprocess_html", side_effect=_stub_preprocess,
+        ), mock.patch.object(
+            render_mod, "preprocess_html", side_effect=_stub_preprocess,
+        ), mock.patch(
+            "html2pdf_lib.chrome_engine.render_chrome",
+            side_effect=_stub_render_chrome,
+        ):
+            convert(
+                "<html><body>x</body></html>", Path("/tmp/_unused.pdf"),
+                base_url="file:///tmp", page_size="letter",
+                extra_css_path=None, use_default_css=False,
+                engine="chrome", timeout=10,
+            )
+
+        self.assertEqual(
+            called["preprocess"], 0,
+            "chrome engine must NOT invoke preprocess_html",
+        )
+        self.assertEqual(called["chrome"], 1, "chrome render must be called once")
+
+    def test_default_engine_is_weasyprint(self) -> None:
+        """Backwards compatibility: every existing call site that omits
+        `engine=` must still go through the weasyprint path. We verify
+        by patching weasyprint's `HTML(...)` and checking it was hit."""
+        from html2pdf_lib import convert
+        from html2pdf_lib import render as render_mod
+
+        seen = {"hit": 0}
+
+        class _StubHTML:
+            def __init__(self, **kw):
+                seen["hit"] += 1
+                self.kw = kw
+
+            def write_pdf(self, *a, **kw):
+                return None
+
+        with mock.patch.object(render_mod, "HTML", _StubHTML):
+            convert(
+                "<html><body>x</body></html>", Path("/tmp/_unused.pdf"),
+                base_url="file:///tmp", page_size="letter",
+                extra_css_path=None, use_default_css=False,
+                # NOTE: `engine=` deliberately omitted to test default.
+                timeout=10,
+            )
+
+        self.assertEqual(seen["hit"], 1, "default engine must be weasyprint")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
