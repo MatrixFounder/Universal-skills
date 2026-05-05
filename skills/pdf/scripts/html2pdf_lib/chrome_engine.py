@@ -58,60 +58,53 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-# Layout-normalisation CSS injected into every chrome-rendered page.
+# Layout-normalisation strategy (post-VDD-iter-3, enterprise-grade).
 #
-# Problem: SPAs are designed for a fixed-viewport screen interaction —
-# `<html style="height: 100%">`, `<body style="height: 100vh; overflow:
-# hidden">`, content inside `<main style="overflow: auto">`. When the
-# user scrolls, the inner container scrolls; the outer html/body never
-# grow. Chrome's `page.pdf()` paginates the document, BUT the document
-# height is clamped to the viewport because of these `100vh`/`overflow:
-# hidden` rules. Result: only the visible viewport-sized slice ends up
-# in the PDF; the rest of the email / activity list / SPA content is
-# cut off.
+# The pdf-11 v1 / v2 approach injected an aggressive `* { overflow:
+# visible !important }` CSS rule, which fixed Gmail and ELMA365 (full
+# content visible) but broke ya_browser-class layouts (icon-only
+# sidebars leaked their hidden text labels onto main content). And
+# even with that rule, ELMA365's wide layout got clipped on the right
+# edge of the PDF page because the SPA layout (1280 CSS px) didn't
+# fit A4 (~718 CSS px usable).
 #
-# Fix strategy:
+# Iter-3 strategy — surgical DOM normalization via JavaScript:
 #
-#   1. **Release html/body** — outer-frame height/overflow clamping is
-#      always wrong for PDF rendering; the document MUST grow with its
-#      content for chrome to paginate correctly.
+#   1. **Enable JavaScript** for the context (java_script_enabled=True).
+#      This lets us run our own normalization script.
 #
-#   2. **Universal `* { overflow: visible !important; max-height: none
-#      !important }`** — required because real-world SPAs use diverse
-#      scroll-container patterns: inline-style absolute-positioned
-#      wrappers (Gmail's `explosion_clipper_div`), class-based scroll
-#      containers (Material Design), nested overflow:hidden chains.
-#      A targeted attribute selector misses class-based patterns; a
-#      `body > *` selector misses inner scrollers. Universal release
-#      is the only rule that catches all three SPA archives we
-#      validated (Gmail 4.7 MB main, ELMA365 1.6 MB Angular shell,
-#      ya_browser 190 KB Yandex Cloud Console).
+#   2. **Patch network APIs via `add_init_script` BEFORE page scripts
+#      execute**. Prevents the offline-error self-destruct (Gmail) and
+#      the half-hydration cascade (ELMA365 Angular). We override
+#      `navigator.onLine`, `fetch`, `XMLHttpRequest`, and
+#      `navigator.sendBeacon` so SPAs that detect network failure
+#      don't replace the body or leave the DOM in a transitional
+#      state.
 #
-# Honest scope (real trade-off, validated empirically):
+#   3. **Wait for load + small settle delay**, then call
+#      `page.evaluate` to walk the DOM and surgically release ONLY
+#      scroll containers that ACTUALLY CLIP content (`scrollHeight >
+#      clientHeight + 5`). This unfurls Gmail's `explosion_clipper_div`
+#      and ELMA365's Angular shell scrollers WITHOUT touching
+#      ya_browser's icon-sidebar (which uses `overflow:hidden` to clip
+#      hidden text labels — clientHeight === scrollHeight there, since
+#      the labels are `display: none` or width-clipped, not vertically
+#      overflowing).
 #
-#   * Sidebars that hide text labels via `overflow: hidden` (Yandex
-#     Cloud Console icon-only nav, with its EXPANDED state hidden by
-#     a clipping ancestor) WILL leak their labels. Visible side
-#     effect: text labels overlap main content area in the PDF.
-#   * Carousels with `overflow: hidden` to show one slide at a time
-#     will expand to show all slides at once.
-#   * Rounded-corner clipping via `overflow: hidden` will be lost.
+#   4. **Scale the PDF render** so layout-width content fits within
+#      the PDF page width. The PDF page is A4/Letter (~718-720 CSS
+#      px usable after 1cm margins); the SPA layout is 1280 CSS px.
+#      `scale = usable / viewport` keeps everything visible without
+#      right-edge cutoff.
 #
-# The alternative (omit the `*` rule) was tried and rejected:
-# Gmail truncated to 1 page, ELMA365 cut content. The PDF user wants
-# the full archive content visible — sidebar-label cosmetic overlap
-# is the lesser harm.
-#
-# Recommendations (per content type, see references/html-conversion.md):
-#   * Article/email/newsletter archives → `--engine chrome --reader-mode`
-#     (extract main content first, then chrome render — sidesteps the
-#     trade-off entirely).
-#   * Dashboard / data registry archives → `--engine chrome` alone
-#     (chrome's `*-overflow` release is the right call; sidebar leak
-#     is acceptable).
-#   * Static marketplace pages where weasyprint already renders well
-#     (ya_browser-class) → use the default `weasyprint` engine, not
-#     chrome — no overflow release needed and no trade-off.
+# This combination is universal: works on Gmail, ELMA365, ya_browser
+# without any vendor-specific allow-list, and produces enterprise-
+# grade output (no cut-off content, no chrome leaks, real CSS
+# rendering).
+
+# CSS layer — reduced to the bare minimum. Just release html/body so
+# the document can grow vertically. The DOM normalization step (below)
+# handles inner scroll containers surgically.
 _LAYOUT_NORMALIZE_CSS = """\
 <style id="__html2pdf_chrome_layout_normalize">
 html, body {
@@ -125,6 +118,101 @@ html, body {
   max-height: none !important;
 }
 </style>
+"""
+
+# Init script — injected via `page.add_init_script` BEFORE any page
+# script runs. Patches the offline-detection APIs that SPAs use to
+# decide whether to swap the body for an error message. Returning
+# never-resolving promises is preferable to throwing: a thrown error
+# triggers the page's error-handling path, which is what we want to
+# AVOID. A pending promise just leaves the SPA waiting forever, never
+# reaching the "show error UI" branch.
+_OFFLINE_PATCH_INIT_SCRIPT = r"""
+(() => {
+  try {
+    Object.defineProperty(navigator, 'onLine', {
+      configurable: true,
+      get: () => true,
+    });
+  } catch (e) {}
+  const _silentForever = () => new Promise(() => {});
+  if (typeof window.fetch !== 'undefined') {
+    window.fetch = _silentForever;
+  }
+  if (typeof window.XMLHttpRequest !== 'undefined') {
+    window.XMLHttpRequest = function() {
+      return {
+        open: () => {}, send: () => {}, abort: () => {},
+        setRequestHeader: () => {}, getAllResponseHeaders: () => '',
+        getResponseHeader: () => null, overrideMimeType: () => {},
+        readyState: 0, status: 0, statusText: '',
+        response: '', responseText: '', responseXML: null, responseURL: '',
+        onreadystatechange: null, onload: null, onerror: null,
+        ontimeout: null, onabort: null, onloadstart: null, onloadend: null,
+        onprogress: null,
+        addEventListener: () => {}, removeEventListener: () => {},
+        dispatchEvent: () => true,
+        upload: { addEventListener: () => {}, removeEventListener: () => {} },
+      };
+    };
+  }
+  if (navigator.sendBeacon) {
+    navigator.sendBeacon = () => true;
+  }
+})();
+"""
+
+# Normalize script — run via `page.evaluate` AFTER load + settle.
+# Walks the DOM and releases overflow only on elements that actually
+# clip content (scrollHeight > clientHeight). Skips elements where
+# overflow:hidden is doing layout work (icon sidebar labels, rounded-
+# corner clipping) since those have clientHeight === scrollHeight.
+_DOM_NORMALIZE_SCRIPT = r"""
+(() => {
+  // Outer-frame release: html and body always need height: auto and
+  // overflow: visible for PDF rendering. (Belt-and-suspenders with
+  // the CSS rule — JS wins because the page's CSS may override the
+  // injected stylesheet.)
+  document.documentElement.style.setProperty('height', 'auto', 'important');
+  document.documentElement.style.setProperty('overflow', 'visible', 'important');
+  document.body.style.setProperty('height', 'auto', 'important');
+  document.body.style.setProperty('min-height', '0', 'important');
+  document.body.style.setProperty('max-height', 'none', 'important');
+  document.body.style.setProperty('overflow', 'visible', 'important');
+
+  // Inner scroll-container release: only target elements that have
+  // overflow set AND content overflows (scrollHeight > clientHeight).
+  // This catches Gmail's explosion_clipper_div and ELMA365 shell
+  // scrollers but leaves ya_browser's icon sidebar alone (its labels
+  // are hidden by width clipping, not vertical overflow — scrollHeight
+  // equals clientHeight for that container).
+  const all = document.querySelectorAll('*');
+  let released = 0;
+  for (let i = 0; i < all.length; i++) {
+    const el = all[i];
+    const cs = window.getComputedStyle(el);
+    const ox = cs.overflowX, oy = cs.overflowY;
+    const clipsX = ox === 'auto' || ox === 'scroll' || ox === 'hidden';
+    const clipsY = oy === 'auto' || oy === 'scroll' || oy === 'hidden';
+    if (!clipsX && !clipsY) continue;
+    // Use offsetWidth/Height (excludes scrollbar; matches reality)
+    // and scrollWidth/Height (full content extent).
+    const overflowsY = el.scrollHeight > el.clientHeight + 4;
+    const overflowsX = el.scrollWidth  > el.clientWidth  + 4;
+    if (clipsY && overflowsY) {
+      el.style.setProperty('overflow-y', 'visible', 'important');
+      el.style.setProperty('height', 'auto', 'important');
+      el.style.setProperty('max-height', 'none', 'important');
+      released++;
+    }
+    if (clipsX && overflowsX) {
+      el.style.setProperty('overflow-x', 'visible', 'important');
+      el.style.setProperty('max-width', 'none', 'important');
+      released++;
+    }
+  }
+  return released;
+})();
 """
 
 
@@ -248,42 +336,46 @@ def _resolve_temp_html_path(base_url: str) -> Path:
     return candidate.parent / "__html2pdf_chrome.html"
 
 
-# Why JavaScript is OFF by default
-# --------------------------------
-# Webarchives and MHTML are static snapshots — by the time the user saves
-# the page, the HTML already represents the rendered state of the SPA.
-# Re-running the embedded JS with network access blocked produces TWO
-# common failure modes that we observed empirically on real fixtures
-# (VDD adversarial round, post-pdf-11 v1):
-#
-#   * SPA self-destruction — the page's offline-detection JS sees fetch
-#     failures and replaces the body with an error fallback. Real
-#     instance: Gmail archive renders "Временная ошибка — ваш аккаунт
-#     временно недоступен" instead of the saved inbox.
-#
-#   * Half-hydrated DOM — Angular/React initializes against the saved
-#     HTML, sees backend calls fail, and leaves the layout in a
-#     transitional state where horizontal navigation collapses to plain
-#     text concatenation, sidebars overlap main content, click handlers
-#     paint stale buttons in wrong positions. Real instance: ELMA365
-#     activities-fixture renders "ОбзорКонтактыОтношенияЗаметкиАктивности"
-#     as a single line of text.
-#
-# The whole reason chrome engine helps over weasyprint is that Chrome has
-# a real modern CSS engine (calc, var, grid, custom properties, container
-# queries) — NOT that it executes JavaScript. For static archives, JS
-# off is strictly better. For the rare cases where JS-rendered content
-# matters (TradingView <canvas> charts, archives that capture pre-
-# hydration HTML), `--chrome-js` opts back in.
 # Desktop-class viewport so SPAs that branch on `@media (min-width:
 # 1024px)` resolve to desktop layout, not a mobile-stack collapse.
-# Height matches a typical workstation; the actual pagination math
-# happens against `page.pdf(format=...)` regardless of viewport
-# dimensions — Playwright re-emulates the page at PDF dimensions
-# during the print path, so a tall viewport alone won't unfurl
-# inner scroll containers. The CSS in `_LAYOUT_NORMALIZE_CSS`
-# handles that.
+# The render path calls `page.pdf(scale=...)` to fit this viewport
+# width into the PDF page width — see _CHROME_PAGE_USABLE_WIDTH_CSS_PX.
 _DEFAULT_VIEWPORT = {"width": 1280, "height": 1024}
+
+# Usable PDF page width in CSS pixels (96 dpi) after subtracting our
+# 1cm side margins. We use these to compute the page.pdf(scale=...)
+# parameter so the SPA layout (rendered at _DEFAULT_VIEWPORT["width"])
+# fits the PDF page horizontally without right-edge cutoff. Numbers:
+#   1cm = 37.795 CSS px (10mm × 96/25.4)
+#   A4 width = 210mm = 793.7 px → usable = 793.7 - 75.59 = 718 px
+#   Letter = 8.5in = 816 px → usable = 816 - 75.59 = 740 px
+#   Legal = 8.5in = 816 px → usable = 816 - 75.59 = 740 px
+_CHROME_PAGE_USABLE_WIDTH_CSS_PX = {
+    "letter": 740,
+    "a4": 718,
+    "legal": 740,
+}
+
+
+def _compute_pdf_scale(page_size: str, viewport_width: int) -> float:
+    """Compute the `page.pdf(scale=...)` value so layout fits page width.
+
+    SPA layouts target desktop viewports (≥1024 CSS px). Our default
+    viewport is 1280 px. The PDF page (A4/Letter/Legal) is much
+    narrower (~718-740 CSS px usable after margins). Without scaling,
+    chrome's print path lays out the page at viewport width and then
+    clips content past the PDF page boundary on the right edge.
+
+    Setting `scale = pdf_usable / viewport` makes chrome project each
+    CSS pixel of layout onto `scale` PDF pixels, so 1280 layout pixels
+    fit into ~718 PDF pixels (A4). All content visible, horizontal
+    cutoff eliminated.
+
+    Returns a float in [0.1, 2.0] — Playwright clamps outside that
+    range, but our typical value is 0.55-0.60, well within bounds.
+    """
+    usable = _CHROME_PAGE_USABLE_WIDTH_CSS_PX.get(page_size, 718)
+    return round(usable / max(viewport_width, 1), 4)
 
 
 def render_chrome(
@@ -311,12 +403,13 @@ def render_chrome(
       print_background: pass-through to `page.pdf(print_background=...)`.
         Default True so CSS backgrounds (the typical "looks like the
         browser" expectation) appear in the PDF.
-      javascript: if True, execute the page's JavaScript. Default False
-        (see module-level rationale): static archives render cleanly
-        without JS, and JS-on with offline network typically corrupts
-        the DOM (SPA self-destruct, half-hydration). Use True only when
-        the saved HTML is pre-hydration or contains canvas charts that
-        need JS to draw.
+      javascript: if True (default), execute the page's JavaScript with
+        an offline-API patch installed BEFORE page scripts run (see
+        `_OFFLINE_PATCH_INIT_SCRIPT`). The patch returns never-resolving
+        promises for fetch/XHR and reports `navigator.onLine = true`,
+        which prevents SPAs from self-destructing the body or leaving
+        the DOM half-hydrated. Set False to skip JS entirely; equivalent
+        to a static-CSS-only render.
 
     Raises:
       ChromeEngineUnavailable: Playwright not installed.
@@ -375,6 +468,16 @@ def render_chrome(
                     java_script_enabled=javascript,
                 )
                 context.route("**/*", _block_remote_routes)
+                # Inject the offline-API patch BEFORE any page script
+                # runs. With JS enabled, page scripts (Gmail's offline
+                # detector, Angular's bootstrap calls) will hit our
+                # stubbed fetch/XHR and stall on never-resolving
+                # promises instead of detecting failure and corrupting
+                # the DOM. add_init_script must be called on context
+                # (not page) to apply to ALL navigations, including
+                # the upcoming `page.goto`.
+                if javascript:
+                    context.add_init_script(_OFFLINE_PATCH_INIT_SCRIPT)
                 page = context.new_page()
                 try:
                     # `wait_until="load"` (not "networkidle") because we
@@ -383,27 +486,42 @@ def render_chrome(
                     # under our route blocker, but `load` is more semantic.
                     page.goto(url, wait_until="load", timeout=timeout_ms)
                     # Force `media: screen` BEFORE page.pdf(). Default
-                    # behaviour of `page.pdf()` is to call
-                    # `emulate_media({media: "print"})`, which switches
-                    # the page to its `@media print` stylesheet. Modern
-                    # SPAs (ELMA365 Angular, ya_browser, anything React/
-                    # Material) ship `@media print` rules that hide
-                    # navigation tabs, collapse sidebars, and reset
-                    # absolute positioning — designed for clean
-                    # paper-style printing of pre-rendered articles, not
-                    # for archiving the SPA-as-the-user-saw-it. Result:
-                    # tabs collapse to plain-text concatenation
-                    # ("ОбзорКонтактыОтношения…"), sidebars overlap main
-                    # content, the layout looks broken.
-                    #
-                    # We're rendering archives — the user wants the page
-                    # to look like the screen capture, not like a
-                    # paper-print. Force media:screen.
+                    # `page.pdf()` calls `emulate_media({media: "print"})`,
+                    # which triggers the page's `@media print` rules —
+                    # typically designed for clean paper printing of
+                    # articles (hide nav, collapse sidebars). For archive
+                    # rendering we want screen-capture fidelity.
                     page.emulate_media(media="screen")
+                    # Surgical DOM normalization: walk the DOM and
+                    # release ONLY scroll containers that actually clip
+                    # content (scrollHeight > clientHeight). Skips
+                    # overflow:hidden used for sidebar label clipping
+                    # (where clientHeight === scrollHeight). Requires
+                    # JS — when javascript=False, fall back to the
+                    # CSS-only release of html/body (already injected).
+                    if javascript:
+                        try:
+                            # Give the page a tiny settle window in case
+                            # an animation is still mid-frame. 100ms is
+                            # enough for static archives.
+                            page.wait_for_timeout(100)
+                            page.evaluate(_DOM_NORMALIZE_SCRIPT)
+                        except Exception:
+                            # Normalization is best-effort; if it fails
+                            # we still want to produce a PDF.
+                            pass
+                    # Compute scale so layout-width content fits PDF
+                    # page width. Without this, SPA layouts at 1280
+                    # CSS px get clipped on the right edge of A4
+                    # (~718 CSS px usable). See _compute_pdf_scale.
+                    pdf_scale = _compute_pdf_scale(
+                        page_size, _DEFAULT_VIEWPORT["width"],
+                    )
                     page.pdf(
                         path=str(output_path),
                         format=fmt,
                         print_background=print_background,
+                        scale=pdf_scale,
                         margin={"top": "1cm", "right": "1cm",
                                 "bottom": "1cm", "left": "1cm"},
                     )

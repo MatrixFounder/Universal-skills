@@ -182,13 +182,15 @@ def main(argv: list[str] | None = None) -> int:
              "produces broken layout on heavy SPA pages — see "
              "references/html-conversion.md for the engine comparison.",
     )
-    # pdf-11 VDD-fix: JavaScript is OFF by default in the chrome engine.
-    # Static archives (webarchive/MHTML) already capture the rendered
-    # state; re-running JS with the network blocked tends to either
-    # replace the body with an offline-error page (Gmail) or leave the
-    # SPA in a half-hydrated overlapping-layout state (ELMA365 Angular).
-    # Opt-in via `--chrome-js` for the rare cases where JS is needed:
-    # canvas charts (TradingView), pre-hydration HTML snapshots.
+    # pdf-11: JavaScript is OFF by default in chrome engine. Static
+    # archives already capture rendered DOM; running their JS in
+    # offline mode causes Gmail-class self-destruct (body replaced
+    # with offline-error page) and Angular-class half-hydration. Even
+    # with init_script patches for fetch/XHR/onLine, Google's offline
+    # detection uses additional signals we can't reliably intercept,
+    # so the default-off stance is the only universal one. Opt-in
+    # via --chrome-js for the rare cases where JS-rendered content
+    # matters (canvas charts, pre-hydration HTML).
     parser.add_argument(
         "--chrome-js", dest="chrome_javascript", action="store_true",
         help="(chrome engine only) Execute the page's JavaScript. Default "

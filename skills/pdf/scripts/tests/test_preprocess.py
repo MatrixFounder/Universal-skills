@@ -1710,6 +1710,37 @@ class TestEngineDispatch(unittest.TestCase):
         # universal inner-container release
         self.assertIn("* {", _LAYOUT_NORMALIZE_CSS)
 
+    def test_compute_pdf_scale_fits_a4(self) -> None:
+        """pdf-11 VDD-iter-3: SPA layouts are 1280 CSS px wide (default
+        viewport). A4 PDF page is ~793 px (~718 usable after 1cm
+        margins). Without scale, the right edge of the layout gets
+        clipped past the PDF page boundary (user-reported "narrow
+        strip of cut-off data on the right side" of ELMA365).
+
+        compute_pdf_scale must produce a value < 1 that makes 1280 px
+        layout fit ≤ 720 px page. Pin the formula so a refactor that
+        drops the scale call regresses to right-edge cutoff."""
+        from html2pdf_lib.chrome_engine import _compute_pdf_scale
+        for size in ("a4", "letter", "legal"):
+            scale = _compute_pdf_scale(size, 1280)
+            self.assertLess(scale, 0.7, f"{size} scale must be <0.7")
+            self.assertGreater(scale, 0.5, f"{size} scale must be >0.5")
+            # Check that layout actually fits PDF page
+            scaled_width = 1280 * scale
+            self.assertLessEqual(
+                scaled_width, 745,
+                f"{size} scaled layout {scaled_width:.0f} must fit page",
+            )
+
+    def test_compute_pdf_scale_unknown_format_falls_back_to_a4(self) -> None:
+        """Defensive: unknown page_size key falls back to A4 dimensions
+        (the smallest of the three supported formats — most conservative
+        choice). Pinning the fallback prevents silent KeyError later."""
+        from html2pdf_lib.chrome_engine import _compute_pdf_scale
+        scale = _compute_pdf_scale("unknown_format", 1280)
+        # 718 (A4 usable) / 1280 ≈ 0.5609
+        self.assertAlmostEqual(scale, 0.5609, places=2)
+
     def test_chrome_render_injects_layout_normalize(self) -> None:
         """Verify render_chrome inserts the normalize CSS into <head>
         before writing HTML to disk. We mock Playwright away and

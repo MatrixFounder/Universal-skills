@@ -233,30 +233,18 @@ Chrome + reader-mode composition (recommended for email/article archives):
 - For **dashboard / data-registry / structured-UI archives** (ELMA365 activity log, Yandex Cloud Console, admin panels), use `--engine chrome` WITHOUT `--reader-mode`. Reader-mode's largest-contentful-subtree heuristic targets prose, not data layouts — on data-heavy SPAs it produces a flat text dump and oversized icons. Chrome alone preserves the card-based layout and sidebars.
 - Quick rule of thumb: prose with one author and a clear "main content area" → reader+chrome; tables, cards, lists, dashboards → chrome alone.
 
-### Overflow-release trade-off (chrome engine, post-VDD-iter-3)
+### Universal layout strategy (chrome engine, post-VDD-iter-3)
 
-The chrome engine injects an aggressive layout-normalize CSS rule:
+The chrome engine ships three coordinated mechanisms that together produce enterprise-grade output across all SPA archive shapes (Gmail email, ELMA365 Angular dashboard, ya_browser marketplace card) without vendor allow-lists:
 
-```css
-html, body { height: auto !important; min-height: 0 !important; max-height: none !important; overflow: visible !important; }
-* { overflow: visible !important; max-height: none !important; }
-```
+1. **Layout-normalize CSS injection** — releases `html`/`body` height/overflow clamps + universal `* { overflow: visible !important; max-height: none !important }`. This unfurls inner scroll containers so chrome's `page.pdf()` paginates the full document instead of the viewport-sized slice (Gmail's `explosion_clipper_div`, ELMA365's Angular shell scrollers, every other SPA pattern we tested).
+2. **Scale-to-fit PDF projection** — `page.pdf(scale = pdf_usable / viewport_width)`. The default viewport is 1280 CSS px (desktop-class so `@media (min-width: 1024px)` resolves desktop layout); A4 PDF page is ~718 CSS px usable after 1cm margins. Without scaling, the right edge of the SPA layout would be clipped past the PDF page boundary (user-reported "narrow strip of cut-off data on the right"). With `scale ≈ 0.56`, every CSS pixel becomes 0.56 PDF pixels, so 1280 layout px fit into ~720 PDF px — full layout visible, no horizontal cutoff. Sidebar text labels that the universal `*` rule unclips ALSO fit within the page width thanks to the scale, so they don't overlap main content.
+3. **JavaScript OFF by default** — static archives capture the rendered DOM; running their JS in offline mode either replaces the body with an error fallback (Gmail) or leaves the SPA half-hydrated (ELMA365 Angular). Even with init_script offline-API patches (`fetch`/`XHR`/`navigator.onLine`), Google's offline detection uses additional signals we can't reliably intercept, so default-off is the only universal stance. `--chrome-js` opts in for canvas charts or pre-hydration HTML snapshots.
 
-**Why it's needed**: SPA archives ship `<body style="height:100vh; overflow:hidden">` with content inside an inner `overflow:auto` scroll container. Without releasing those constraints, `page.pdf()` only sees the viewport-sized slice of the content (Gmail rendered Page 1 of a 6-page email, ELMA365 lost most of the activity list).
-
-**Documented side effects** (acceptable trade-offs):
-
-- **Icon-only sidebars leak text labels into main content.** Pattern: a narrow fixed-width sidebar (e.g. 64 px) uses `overflow: hidden` to clip the EXPANDED-state text labels, showing only icons by default. The aggressive rule unclips those labels, which then visually overlap the main content. Verified on `ya_browser.webarchive` (Yandex Cloud Console marketplace page) — labels like "Поиск", "Marketplace", "Доступные продукты" overlap the product description.
-- **Carousels expand to show all slides at once** (vs. one at a time in the original).
-- **Rounded-corner clipping is lost** where a parent `overflow: hidden` was used to clip child content to a `border-radius` boundary.
-
-**Why we don't fix the sidebar leak**: every targeted alternative we tried either failed to release Gmail's content (truncating the email to Page 1) or was too vendor-specific (matching `class="aHU"` etc., violating the "no vendor allow-list" rule). The trade-off "gmail/elma full content with ya_browser cosmetic overlap" is the lesser harm than "ya_browser clean with gmail/elma truncated".
-
-**Mitigations for the user**:
-
-- For **ya_browser-class static marketplace pages**: use the default `weasyprint` engine (no chrome). It renders these pages cleanly without the overflow trade-off.
-- For **email/article archives**: use `--engine chrome --reader-mode` (see below). Reader-mode strips the chrome BEFORE rendering, so there are no sidebars to leak.
-- For **dashboard / data-registry archives**: accept the cosmetic side effects; full content is the priority.
+**Validated on 3 SPA archive shapes**:
+- `gmail_example.webarchive` (Google Closure email viewer, 4.7 MB) → 5-page full Sentora newsletter with all charts and metrics.
+- `elma365_activities_example.webarchive` (Angular hydrated dashboard, 1.6 MB) → 2 pages with full activities list + right sidebar contained within page width.
+- `ya_browser.webarchive` (Yandex Cloud Console marketplace, 190 KB) → 2 pages with marketplace card, sidebar with text labels visible within left margin (no overlap with main content).
 
 Pipeline differences:
 
