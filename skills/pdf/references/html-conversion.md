@@ -41,6 +41,8 @@ python3 scripts/html2pdf.py \
     [--base-url DIR] \
     [--no-default-css] \
     [--reader-mode] \
+    [--archive-frame N|main|all|auto] \
+    [--list-frames] \
     [--timeout SECONDS] \
     [--json-errors]
 ```
@@ -52,8 +54,54 @@ Flag semantics:
 - **`--base-url DIR`** — only honoured for plain `.html`/`.htm`; archives override with their extracted temp dir.
 - **`--no-default-css`** — skip the bundled stylesheet (BI dashboards, branded reports that ship full styling). The structural `_NORMALIZE_CSS` is always injected — it fixes weasyprint layout bugs, not visual styling.
 - **`--reader-mode`** — extract only the article body (Safari Reader View parity). See § Reader mode.
+- **`--archive-frame N|main|all|auto`** — pdf-8 (2026-05-05). Selects which inner frame to render in `.webarchive` / `.mhtml` inputs (ignored for plain `.html`). `main` (default) = main resource only; `N` (1-indexed) = a specific inner frame; `all` = concat all "substantial" inner frames; `auto` = deterministic strategy (0 substantial → main, 1 → that frame with main-dominance guard, 2+ → all). See § Subframe-aware extraction.
+- **`--list-frames`** — pdf-8. Print the inner-frame inventory (tab-separated: `index | kind | substantial | bytes | scripts | text-len | url`) and exit without rendering. OUTPUT path may be omitted with this flag. Refused on `.html` inputs (no inner frames).
 - **`--timeout N`** — render-deadline watchdog in seconds (default 180; `$HTML2PDF_TIMEOUT` env overrides; `0` disables). On expiry: exit 1 with `RenderTimeout` envelope.
 - **`--json-errors`** — emit failures as a single-line JSON envelope on stderr (`{v, error, code, type, details?}`) matching the cross-5 schema used by the other office skills.
+
+Exit codes:
+
+- `0` — success
+- `1` — render failure (`RenderTimeout`, weasyprint exception, format error)
+- `2` — usage error (argparse, `NoSubstantialFrames` for `--archive-frame all` on archives with zero substantial frames, `FrameIndexOutOfRange` for `--archive-frame N` past inventory)
+- `6` — `SelfOverwriteRefused` (input == output, including via symlink)
+
+## Subframe-aware extraction (pdf-8, 2026-05-05)
+
+Webarchive (Safari `.webarchive`) and MHTML (Chrome `.mhtml`) sometimes
+package an SPA shell as the main resource and the actual content as
+inner frames — typically when the user opened a sandboxed widget
+(email viewer, embedded document preview). Pre-pdf-8 `extract_archive`
+read only the main resource, so on these inputs the rendered PDF
+showed the SPA-shell skeleton and missed the content.
+
+`--archive-frame` exposes the inner-frame inventory as first-class
+selectable units:
+
+| Mode | Behaviour | Use case |
+|---|---|---|
+| `main` (default) | Main resource only — preserves pre-pdf-8 behaviour. | Single-page captures, plain HTML. |
+| `N` (1-indexed) | Specific inner frame. Exits `2 / FrameIndexOutOfRange` if out of bounds. | Pick one email out of a thread. |
+| `all` | Concat all "substantial" inner frames with `<hr><h2>Frame N</h2>` separators. Per-frame namespace (`frame_N/` subdir) + sha1 image-dedup so shared signature logos write once. Exits `2 / NoSubstantialFrames` if zero substantial. | Print entire email thread / multi-document panel. |
+| `auto` | Deterministic: count substantial subframes. 0 → `main`. 1 → that frame, BUT with main-dominance guard (if subframe text < 10 % of main text → `main`, defensive against tiny system overlays misclassified substantial). 2+ → `all`. | Default for unknown inputs. |
+
+**Substantial-frame heuristic** (purely structural, vendor-agnostic — zero allow-list of class names):
+
+- `bytes ≥ 1024` (excludes empty/tiny placeholder iframes)
+- `<script>` count `== 0` (excludes auth widgets, hovercards — Gmail/HubSpot/Yandex use these for system chrome)
+- plain-text length `≥ 30` chars (excludes tracking-pixel iframes)
+- NOT a single-`<img>`-only body (defensive: long signed-URL trackers can pass byte threshold)
+
+Validated on 9 real-world fixtures: 3 ELMA365 webarchives (single email iframe / 7-iframe thread / 0-iframe activities), Gmail (5 system-widget subframes all rejected), Sentora ×2 (Framer dev-widget rejected), Yandex Cloud Console (auth-widget rejected), HubSpot Marketplace (6 chrome widgets rejected), HubSpot for WordPress (1 substantial subframe `connections-embed/navigation-modal` correctly REJECTED by main-dominance guard since real content is in main HTML).
+
+**Encoding parity**: subframes honour their own `WebResourceTextEncodingName` (webarchive) or per-part `Content-Transfer-Encoding` + `charset=` (MHTML). Falls back to `utf-8` with `errors='replace'`.
+
+**Per-frame namespace + image dedup**: in `all`-mode, each substantial frame writes its sub-resources to `tempdir/frame_N/`. Identical image bytes (sha1) map to a single physical file even across frames — mail.ru newsletter signature logos shared between 7 emails write once.
+
+**Honest scope (v1)**:
+- No metadata-pulling: section headers are flat `<h2>Frame N</h2>` (no Subject/From/Date extraction). Universal-algorithm for subject detection deferred to follow-up.
+- Top-level frames only — nested webarchive/MHTML subframes (forwarded email containing tracking iframe) are not recursed.
+- `--archive-frame main` keeps `<iframe src="…">` placeholders in the DOM (rendered as empty rectangles by weasyprint). Not auto-stripped — user explicitly chose `main`.
 
 Same-path I/O (input and output resolve to the same file, including via symlink) → exit 6 / `SelfOverwriteRefused`.
 

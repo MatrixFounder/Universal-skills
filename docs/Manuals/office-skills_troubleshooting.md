@@ -530,6 +530,108 @@ practical fix without Adobe Acrobat Pro.
 The `pdf_fill_form` exit-code table is in
 [`skills/pdf/references/forms.md`](../../skills/pdf/references/forms.md).
 
+### `html2pdf.py: Conversion failed: 'NumberToken' object has no attribute 'unit'`
+
+**Cause.** Upstream weasyprint bug in
+[`weasyprint/css/units.py:51`](https://github.com/Kozea/WeasyPrint/blob/main/weasyprint/css/units.py)
+— `to_pixels()` calls `value.unit.lower()` but `value` may be a
+`NumberToken` (unitless) when the input contains `calc()`
+expressions with bare-number arguments. Triggered by Material 3 /
+GM3-prefixed CSS with patterns like `calc(2 * var(--gm3-slider-
+active-handle-padding, 6px))`. Real-world hit on Gmail, Google
+Workspace, sites using `@material/web` components.
+
+**Fix.** Pdf-10 ships a `_strip_problematic_calc` workaround that
+replaces `calc(...)` and `var(...)` expressions in `<style>`
+blocks with `auto`. **Layout precision is lost** (calc-based
+spacings/dimensions degrade to browser defaults), but the file
+renders. If the workaround output is unusable, pass `--reader-mode`
+to strip site CSS entirely; if even reader-mode is wrong, the
+input requires Chrome-headless rendering (planned via
+[pdf-11 backlog entry](../office-skills-backlog.md#L97)).
+
+### `html2pdf.py` exits 1 with `RenderTimeout` (180s exceeded)
+
+**Cause.** weasyprint's box-layout engine entered a multi-minute
+loop on pathological CSS. Three known offenders:
+
+1. **Framer-built sites** (sentora.com customer sites,
+   framer.io exports) — Framer generates deeply-nested flex/grid
+   with `clamp()` and `min()` / `max()` math expressions that
+   trigger weasyprint layout backtracking.
+2. **vc.ru / SPA blogs with float-hell typography** — already
+   bisected and worked around in `_strip_external_stylesheets`,
+   but corner cases remain.
+3. **Hydrated SPA with virtualized lists** (ELMA365 activities-
+   class registries — 18 800 fields × 135 cards). weasyprint hits
+   `inline.py:231 tuple index out of range` (different bug class
+   from above but same user-facing symptom — render fails or
+   stalls).
+
+**Fix.** Always try `--reader-mode` first. It strips ALL site CSS
+including the pathological rules, leaving only the bundled
+`DEFAULT_CSS` + `NORMALIZE_CSS`. ~99 % of pathological inputs
+render under reader-mode in <30 s. If reader-mode also stalls,
+extend the watchdog: `HTML2PDF_TIMEOUT=600 python3 html2pdf.py …`.
+If still failing, the input is "enterprise-fidelity" only via
+Chrome-headless rendering — see [pdf-11 backlog entry](../office-
+skills-backlog.md#L97) for the planned `--engine chrome` opt-in.
+
+### `html2pdf.py --archive-frame all` exits 2 with `NoSubstantialFrames`
+
+**Cause.** The webarchive/MHTML has zero inner frames that pass
+the structural "substantial" heuristic (≥ 1 KB, 0 `<script>`,
+≥ 30 chars text, not single-`<img>`-only body). `--archive-frame
+all` is a fail-loud mode by design — silently falling back to
+`main` would surprise the user (they explicitly asked for an
+all-frames concat).
+
+**Fix.** Either (a) use `--archive-frame main` to render the main
+resource only, (b) use `--archive-frame auto` for deterministic
+fallback (`auto` resolves 0 substantial → main automatically),
+or (c) pass `--list-frames` to inspect the inventory and pick a
+specific frame that's NOT classified substantial (the heuristic
+is intentionally conservative).
+
+### `html2pdf.py --list-frames` not applicable to plain HTML (`.html`)
+
+**Cause.** Plain HTML files have no inner-frame archive structure
+to enumerate; the flag is webarchive/MHTML-only.
+
+**Fix.** Skip `--list-frames` for `.html`/`.htm` inputs — there
+are no frames to list. The flag works only on `.webarchive` /
+`.mhtml` / `.mht` archives where `WebSubframeArchives` (Safari)
+or multipart `text/html` parts (Chrome MHTML) carry inner
+frames.
+
+### `html2pdf.py` rendered PDF has 0 embedded images on a webarchive that has them
+
+**Cause.** Pre-pdf-8 bug (fixed 2026-05-05): `<img src=>` URLs
+containing HTML-encoded `&amp;` (signed S3, SAS-token, GitHub
+raw content URLs) failed to match url_map keys (which used the
+unescaped `&` form), so images were extracted to disk but the
+HTML still referenced the remote URL. weasyprint's offline-
+fetcher then refused the remote, producing 0 embedded images.
+
+**Fix.** Update to pdf-skill ≥ 2026-05-05 — `_rewrite_urls` now
+runs the replace pass twice (raw + html-escaped form). Verified:
+HubSpot Marketplace recovers 2400+ icons, ELMA365 email-list
+JPEG attachments visible in PDFs again.
+
+### `html2pdf.py` reader-mode picked wrong article on multi-article feed
+
+**Cause.** Pre-pdf-9 bug (fixed 2026-05-05): on TradingView
+"Ideas" feed pages with 24+ `<article>` tags, `_READER_CANDIDATES`
+picked the longest by byte count — which on feed pages is a
+recommended/recent post, not the actual focus article (whose
+title matches the page `<title>`).
+
+**Fix.** Pdf-9 ships a title-match LCS bonus (4× multiplier when
+candidate's first ≤ 200 chars share ≥ 8 consecutive chars with
+the page `<title>` text). Verified: TradingView "XAUUSD –
+Bearish Rejection Setup" page now extracts the correct article
+out of 24 candidates.
+
 ---
 
 ## 5a. `docx2md.js` sidecar & footnote conversion

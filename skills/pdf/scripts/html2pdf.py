@@ -67,7 +67,28 @@ from md2pdf import PAGE_SIZES
 
 from _errors import add_json_errors_argument, report_error
 from html2pdf_lib import RenderTimeout, SUPPORTED_EXTENSIONS, convert
-from html2pdf_lib.archives import extract_mhtml, extract_webarchive
+from html2pdf_lib.archives import (
+    NoSubstantialFrames,
+    extract_archive,
+    list_archive_frames,
+)
+
+
+def _print_frames(frames, dest=sys.stdout) -> None:
+    """Render `--list-frames` output: one row per frame.
+
+    Tab-separated columns: index / kind / substantial / bytes / scripts /
+    text-len / url. Designed for both human eyeballing and grep/awk
+    parsing — a downstream tool that wants e.g. "the first substantial
+    subframe" can `awk -F'\\t' '$3=="yes" && $2=="subframe"'`.
+    """
+    print(f"index\tkind\tsubstantial\tbytes\tscripts\ttext\turl", file=dest)
+    for f in frames:
+        print(
+            f"{f.index}\t{f.kind}\t{'yes' if f.substantial else 'no'}\t"
+            f"{f.bytes}\t{f.scripts}\t{f.text_len}\t{f.url}",
+            file=dest,
+        )
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -76,7 +97,9 @@ def main(argv: list[str] | None = None) -> int:
         "input", type=Path,
         help="Source file: .html/.htm, .mhtml/.mht, or .webarchive",
     )
-    parser.add_argument("output", type=Path, help="Destination .pdf file")
+    parser.add_argument("output", type=Path, nargs="?",
+                        help="Destination .pdf file (omit when using "
+                             "--list-frames).")
     parser.add_argument("--page-size", choices=list(PAGE_SIZES.keys()), default="letter")
     parser.add_argument("--css", type=Path, default=None,
                         help="Extra CSS file appended after defaults.")
@@ -98,6 +121,32 @@ def main(argv: list[str] | None = None) -> int:
                              "first <article>, <main>, or known content "
                              "container. Implies --no-default-css is NOT set "
                              "— the bundled clean stylesheet is always used.")
+    # pdf-8: subframe-aware extraction for .webarchive / .mhtml inputs.
+    # Vendor-agnostic — the "substantial" classifier is purely structural
+    # (size + script-count + plain-text + not-only-img), no allow-list of
+    # vendor classes. Values:
+    #   "main" (default) — main resource only
+    #   "1".."N"          — 1-indexed inner frame
+    #   "all"             — concat all substantial subframes with flat
+    #                       "<h2>Frame N</h2>" separators
+    #   "auto"            — 0 substantial→main, 1→that frame, 2+→all
+    parser.add_argument(
+        "--archive-frame", dest="archive_frame", default="main",
+        help="For .webarchive / .mhtml inputs: which frame to render. "
+             "main (default) | N (1-indexed inner frame) | all (concat all "
+             "substantial subframes) | auto (0 substantial→main, 1→that "
+             "frame, 2+→all). Ignored for plain .html. The 'substantial' "
+             "rule is purely structural (≥1KB + no <script> + ≥100 chars "
+             "text + not single-<img>) — see --list-frames to inspect.",
+    )
+    parser.add_argument(
+        "--list-frames", dest="list_frames", action="store_true",
+        help="Print the inner-frame inventory (index, kind, substantial-flag, "
+             "size, script count, text length, URL) for the given archive "
+             "and exit. OUTPUT argument may be omitted when this flag is "
+             "set. Ignored for plain .html inputs (which have no inner "
+             "frames).",
+    )
     # Watchdog default: 180s. SPA pages with pathological CSS (vc.ru-style
     # nested flex/grid layouts) can hang weasyprint's box-layout engine for
     # tens of minutes on otherwise-modest HTML — without a timeout the whole
@@ -131,6 +180,37 @@ def main(argv: list[str] | None = None) -> int:
             details={"path": str(args.input), "ext": ext}, json_mode=je,
         )
 
+    # pdf-8: --list-frames is a query-only mode; bypasses render pipeline.
+    # Plain .html has no inner frames — fail-loud rather than silently
+    # printing an empty list (would suggest the input had frames when it
+    # didn't).
+    if args.list_frames:
+        if ext in (".html", ".htm"):
+            return report_error(
+                f"--list-frames not applicable to plain HTML ({ext}); "
+                f"use a .webarchive or .mhtml input.",
+                code=1, error_type="ListFramesNotApplicable",
+                details={"ext": ext}, json_mode=je,
+            )
+        try:
+            frames = list_archive_frames(args.input)
+        except Exception as exc:
+            return report_error(
+                f"Failed to list frames: {exc}",
+                code=1, error_type=type(exc).__name__, json_mode=je,
+            )
+        _print_frames(frames)
+        return 0
+
+    # --archive-frame requires an output path (it's a render mode, not query).
+    if args.output is None:
+        return report_error(
+            "OUTPUT path required for render. (Pass --list-frames to inspect "
+            "frames without rendering.)",
+            code=2, error_type="UsageError",
+            details={"missing": "output"}, json_mode=je,
+        )
+
     if args.css is not None and not args.css.is_file():
         return report_error(
             f"CSS file not found: {args.css}",
@@ -159,10 +239,14 @@ def main(argv: list[str] | None = None) -> int:
             base_url  = args.base_url or str(args.input.parent.resolve())
         elif ext in (".mhtml", ".mht"):
             tmp_dir   = tempfile.mkdtemp(prefix="html2pdf_mhtml_")
-            html_text, base_url = extract_mhtml(args.input, Path(tmp_dir))
+            html_text, base_url = extract_archive(
+                args.input, Path(tmp_dir), frame_spec=args.archive_frame,
+            )
         else:  # .webarchive
             tmp_dir   = tempfile.mkdtemp(prefix="html2pdf_webarchive_")
-            html_text, base_url = extract_webarchive(args.input, Path(tmp_dir))
+            html_text, base_url = extract_archive(
+                args.input, Path(tmp_dir), frame_spec=args.archive_frame,
+            )
 
         convert(
             html_text, args.output,
@@ -177,6 +261,16 @@ def main(argv: list[str] | None = None) -> int:
         return report_error(
             str(exc), code=1, error_type="RenderTimeout",
             details={"timeout": args.timeout}, json_mode=je,
+        )
+    except NoSubstantialFrames as exc:
+        return report_error(
+            str(exc), code=2, error_type="NoSubstantialFrames",
+            details={"archive_frame": args.archive_frame}, json_mode=je,
+        )
+    except IndexError as exc:
+        return report_error(
+            str(exc), code=2, error_type="FrameIndexOutOfRange",
+            details={"archive_frame": args.archive_frame}, json_mode=je,
         )
     except Exception as exc:
         return report_error(

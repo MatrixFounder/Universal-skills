@@ -802,11 +802,18 @@ class TestNormalizeCSS(unittest.TestCase):
         """`overflow-wrap: break-word` is the standard CSS3 property
         that allows long unbreakable tokens (URLs, base64) to wrap
         within a `pre-wrap` block. Without it, a single long token
-        clips past the right margin even though `pre-wrap` is set."""
-        self.assertEqual(
-            NORMALIZE_CSS.count("overflow-wrap: break-word !important"), 2,
-            "overflow-wrap: break-word !important must appear twice — "
-            "once in §7a (<pre>) and once in §7a-bis (Prism <code>)")
+        clips past the right margin even though `pre-wrap` is set.
+
+        pdf-10 added a third occurrence in §7e (body text — `p, li,
+        td, dd`). Three is the new minimum; future additions are fine
+        as long as the rule is present in all three load-bearing
+        contexts (<pre>, Prism <code>, body prose).
+        """
+        self.assertGreaterEqual(
+            NORMALIZE_CSS.count("overflow-wrap: break-word !important"), 3,
+            "overflow-wrap: break-word !important must appear at least "
+            "three times — §7a (<pre>), §7a-bis (Prism <code>), "
+            "§7e (body text)")
 
     def test_no_wordbreak_breakword_alias(self) -> None:
         """`word-break: break-word` is a CSS-WG-deprecated alias of
@@ -1089,6 +1096,429 @@ class TestNoFillInitialLeaksEndToEnd(unittest.TestCase):
         for kw in self.BAD_FILL_VALUES:
             self.assertNotIn(f'fill="{kw}"', out)
             self.assertNotIn(f"fill='{kw}'", out)
+
+
+# ────────────────────────── pdf-8 / pdf-9 / pdf-10 ───────────────────────────
+
+class TestSubstantialFrameHeuristic(unittest.TestCase):
+    """pdf-8: substantial-frame heuristic must be purely structural — no
+    vendor allow-list. Each rule has its own dedicated test."""
+
+    def test_substantial_real_email_iframe(self) -> None:
+        """Real email-body iframe (HTML ≥ 1KB, 0 scripts, prose ≥ 30 chars,
+        not single-img). Must classify as substantial."""
+        from html2pdf_lib.archives import _is_substantial_frame
+        body = "<p>Hello, this is a real email body with prose content " * 20
+        html = f"<html><body>{body}</body></html>".encode()
+        self.assertTrue(_is_substantial_frame(html))
+
+    def test_rejects_under_1kb_payload(self) -> None:
+        from html2pdf_lib.archives import _is_substantial_frame
+        html = b"<html><body>Tiny placeholder content here.</body></html>"
+        self.assertFalse(_is_substantial_frame(html))
+
+    def test_rejects_with_script(self) -> None:
+        """Any `<script>` tag → non-substantial. Catches Gmail's chrome
+        widgets (One sidebar, contacts hovercard) regardless of size."""
+        from html2pdf_lib.archives import _is_substantial_frame
+        body = "<p>Substantial prose " * 20  # ≥ 1KB, ≥ 30 chars text
+        html = f"<html><body>{body}<script>x()</script></body></html>".encode()
+        self.assertFalse(_is_substantial_frame(html))
+        # Also: even uppercased <SCRIPT> rejected (case-insensitive)
+        html2 = f"<html><body>{body}<SCRIPT>y()</SCRIPT></body></html>".encode()
+        self.assertFalse(_is_substantial_frame(html2))
+
+    def test_rejects_short_text(self) -> None:
+        """≥ 1KB but < 30 chars text — likely empty placeholder iframe."""
+        from html2pdf_lib.archives import _is_substantial_frame
+        # ≥ 1KB through whitespace padding; only 5 chars text content
+        html = (b"<html><body>" + b" " * 1100 + b"<p>hi.</p></body></html>")
+        self.assertFalse(_is_substantial_frame(html))
+
+    def test_rejects_single_img_body(self) -> None:
+        """Single-<img>-only body — tracking-pixel iframe with verbose URL."""
+        from html2pdf_lib.archives import _is_substantial_frame
+        # Body is ONLY an img tag — the tracking-pixel pattern. No prose.
+        url = "https://mailer.mail.ru/pixel/" + "a" * 800
+        html = (
+            f'<html><body><img src="{url}" width="0" height="0" alt="."></body>'
+            f'</html>'
+        ).encode()
+        self.assertFalse(_is_substantial_frame(html))
+
+    def test_no_vendor_classes_in_decision(self) -> None:
+        """Same decision regardless of vendor-specific class names — proves
+        the heuristic doesn't peek at class= attributes. Content padded
+        well above the 1024-byte size threshold."""
+        from html2pdf_lib.archives import _is_substantial_frame
+        prose = "<p>real email content here with enough text. " * 50
+        for cls in (
+            "elma365-message-body", "gmail_quote", "outlook-body",
+            "yandex-mail-body", "proton-mail-body", "wholly-unknown-vendor",
+        ):
+            html = f"<html><body><div class='{cls}'>{prose}</div></body></html>"
+            self.assertTrue(
+                _is_substantial_frame(html.encode()),
+                f"vendor class {cls!r} should not change the decision",
+            )
+
+
+class TestArchiveAutoMode(unittest.TestCase):
+    """pdf-8 auto-mode resolution: 0 substantial→main, 1→that frame, 2+→all.
+    Pure logic test on FrameInfo lists — no fixture I/O required."""
+
+    def _make(self, kinds_subs):
+        """Helper: build a FrameInfo list from (kind, substantial) tuples."""
+        from html2pdf_lib.archives import FrameInfo
+        out = []
+        for i, (kind, sub) in enumerate(kinds_subs):
+            out.append(FrameInfo(
+                index=i, kind=kind, url="about:blank",
+                bytes=2000, scripts=0, text_len=200, substantial=sub,
+            ))
+        return out
+
+    def test_zero_substantial_auto_main(self) -> None:
+        from html2pdf_lib.archives import _resolve_auto_mode
+        frames = self._make([("main", False), ("subframe", False), ("subframe", False)])
+        self.assertEqual(_resolve_auto_mode(frames), "main")
+
+    def test_one_substantial_auto_picks_index(self) -> None:
+        from html2pdf_lib.archives import _resolve_auto_mode
+        frames = self._make([("main", False), ("subframe", False), ("subframe", True)])
+        self.assertEqual(_resolve_auto_mode(frames), "2")  # 1-indexed
+
+    def test_multiple_substantial_auto_all(self) -> None:
+        from html2pdf_lib.archives import _resolve_auto_mode
+        frames = self._make([
+            ("main", False), ("subframe", True), ("subframe", True),
+            ("subframe", False), ("subframe", True),
+        ])
+        self.assertEqual(_resolve_auto_mode(frames), "all")
+
+    def test_dominant_main_overrides_lone_tiny_substantial(self) -> None:
+        """VDD-adversarial fix: HubSpot for WordPress case — the only
+        substantial subframe is a 180-char navigation-modal error page;
+        main HTML carries 5960 chars of actual content. Auto-mode must
+        return "main", not the small overlay subframe."""
+        from html2pdf_lib.archives import FrameInfo, _resolve_auto_mode
+        frames = [
+            FrameInfo(0, "main", "x", bytes=200000, scripts=43,
+                      text_len=5960, substantial=False),
+            FrameInfo(1, "subframe", "x", bytes=14000, scripts=0,
+                      text_len=180, substantial=True),
+        ]
+        self.assertEqual(
+            _resolve_auto_mode(frames), "main",
+            "Tiny substantial subframe should NOT win when main has 33× "
+            "more text — that's a system overlay, not user content.")
+
+    def test_substantial_subframe_dominant_over_chrome_main(self) -> None:
+        """Email-iframe case: ELMA365 main is SPA shell (2085 chars), the
+        substantial subframe is the email body (6792 chars). Auto-mode
+        must pick the subframe — it dwarfs main."""
+        from html2pdf_lib.archives import FrameInfo, _resolve_auto_mode
+        frames = [
+            FrameInfo(0, "main", "x", bytes=156000, scripts=7,
+                      text_len=2085, substantial=False),
+            FrameInfo(1, "subframe", "x", bytes=49000, scripts=0,
+                      text_len=6792, substantial=True),
+        ]
+        self.assertEqual(_resolve_auto_mode(frames), "1")
+
+
+class TestSafeBasename(unittest.TestCase):
+    """pdf-8: filename cap. Triggered by mail.ru tracking-pixel URLs whose
+    basename is a 250+ char JWT, exceeding the OS 255-byte filename limit."""
+
+    def test_short_name_unchanged(self) -> None:
+        from html2pdf_lib.archives import _safe_basename
+        self.assertEqual(_safe_basename("logo.png", "x"), "logo.png")
+
+    def test_overlong_name_capped(self) -> None:
+        from html2pdf_lib.archives import _safe_basename, _MAX_BASENAME
+        long_name = "a" * 300 + ".png"
+        result = _safe_basename(long_name, fallback_key=long_name)
+        self.assertLessEqual(len(result.encode("utf-8")), _MAX_BASENAME)
+        self.assertTrue(result.endswith(".png"), "extension preserved")
+
+    def test_overlong_name_stable(self) -> None:
+        """Same input → same output: dedup key must be stable across runs."""
+        from html2pdf_lib.archives import _safe_basename
+        long_name = "a" * 300 + ".png"
+        a = _safe_basename(long_name, fallback_key=long_name)
+        b = _safe_basename(long_name, fallback_key=long_name)
+        self.assertEqual(a, b)
+
+    def test_no_extension_overlong(self) -> None:
+        """Overlong name without extension still gets capped."""
+        from html2pdf_lib.archives import _safe_basename, _MAX_BASENAME
+        long_name = "x" * 400
+        result = _safe_basename(long_name, fallback_key=long_name)
+        self.assertLessEqual(len(result.encode("utf-8")), _MAX_BASENAME)
+
+
+class TestSPADetection(unittest.TestCase):
+    """pdf-9: SPA-detection must trigger on hydrated SPAs (any framework)
+    and NOT trigger on plain blog/article HTML."""
+
+    def test_plain_article_not_spa(self) -> None:
+        from html2pdf_lib.reader_mode import _is_spa
+        html = "<html><body>" + "<p>Lorem ipsum.</p>" * 100 + "</body></html>"
+        self.assertFalse(_is_spa(html))
+
+    def test_heavy_body_triggers_spa(self) -> None:
+        """Body ≥ 50 KB → SPA. Catches hydrated Angular/React DOMs."""
+        from html2pdf_lib.reader_mode import _is_spa
+        html = "<html><body>" + ("<div>x</div>" * 10000) + "</body></html>"
+        self.assertTrue(_is_spa(html))
+
+    def test_script_bundle_triggers_spa(self) -> None:
+        """≥ 5 <script src=> → SPA. Catches semantic-light Framer blogs."""
+        from html2pdf_lib.reader_mode import _is_spa
+        scripts = "".join(
+            f'<script src="/bundle{i}.js"></script>' for i in range(6)
+        )
+        html = f"<html><head>{scripts}</head><body><p>x</p></body></html>"
+        self.assertTrue(_is_spa(html))
+
+    def test_landmarks_trigger_spa(self) -> None:
+        """≥ 3 ARIA landmarks → SPA. Catches Gmail (4 landmarks)."""
+        from html2pdf_lib.reader_mode import _is_spa
+        html = (
+            '<html><body>'
+            '<div role="navigation">nav</div>'
+            '<div role="main">main</div>'
+            '<div role="complementary">side</div>'
+            '<div role="banner">banner</div>'
+            '</body></html>'
+        )
+        self.assertTrue(_is_spa(html))
+
+    def test_no_framework_strings_in_decision(self) -> None:
+        """SPA-detection must work without seeing `ng-version=` /
+        `data-reactroot` / `data-v-app` / similar framework markers."""
+        from html2pdf_lib.reader_mode import _is_spa
+        # 6 scripts + zero framework markers anywhere
+        scripts = "".join(
+            f'<script src="/b{i}.js"></script>' for i in range(6)
+        )
+        html = f"<html><head>{scripts}</head><body><p>x</p></body></html>"
+        self.assertTrue(_is_spa(html), "Detection must work via structure alone")
+
+
+class TestSPAChromeStrip(unittest.TestCase):
+    """pdf-9: chrome-strip rules must use ARIA roles / semantic landmarks,
+    NOT vendor-specific tags or class names."""
+
+    def test_strips_role_navigation(self) -> None:
+        from html2pdf_lib.reader_mode import _strip_spa_aria_chrome
+        html = (
+            '<body>'
+            '<div role="navigation">NAV-CONTENT</div>'
+            '<div role="main">MAIN-CONTENT</div>'
+            '</body>'
+        )
+        out = _strip_spa_aria_chrome(html)
+        self.assertNotIn("NAV-CONTENT", out)
+        self.assertIn("MAIN-CONTENT", out, "role=main must be preserved")
+
+    def test_strips_complementary_banner_contentinfo(self) -> None:
+        from html2pdf_lib.reader_mode import _strip_spa_aria_chrome
+        for role in ("complementary", "banner", "contentinfo"):
+            html = (
+                f'<body><div role="{role}">CHROME</div>'
+                f'<div role="main">CONTENT</div></body>'
+            )
+            out = _strip_spa_aria_chrome(html)
+            self.assertNotIn("CHROME", out, f"role={role} not stripped")
+            self.assertIn("CONTENT", out)
+
+    def test_strips_aside_nav_footer(self) -> None:
+        from html2pdf_lib.reader_mode import _strip_spa_chrome_tags
+        html = (
+            '<body>'
+            '<aside>aside-content</aside>'
+            '<nav>nav-content</nav>'
+            '<main>main-content</main>'
+            '<footer>footer-content</footer>'
+            '</body>'
+        )
+        out = _strip_spa_chrome_tags(html)
+        self.assertNotIn("aside-content", out)
+        self.assertNotIn("nav-content", out)
+        self.assertNotIn("footer-content", out)
+        self.assertIn("main-content", out)
+
+    def test_strips_position_fixed_overlay(self) -> None:
+        from html2pdf_lib.reader_mode import _strip_spa_fixed_overlays
+        html = (
+            '<body>'
+            '<div style="position: fixed; top: 0">Close × banner short</div>'
+            '<div>'
+            + ('<p>real article content paragraph. ' * 100) + '</p>'
+            '</div>'
+            '</body>'
+        )
+        out = _strip_spa_fixed_overlays(html)
+        self.assertNotIn("Close ×", out)
+        self.assertIn("real article content", out)
+
+    def test_no_vendor_class_names_referenced(self) -> None:
+        """Audit: the SPA chrome-strip module must not name-drop ELMA365 /
+        Gmail / Yandex / Framer specifics. Catches future regressions
+        where an implementer adds `app-sidebar-part` etc. to the
+        strip-list."""
+        from pathlib import Path
+        path = Path(__file__).parent.parent / "html2pdf_lib" / "reader_mode.py"
+        src = path.read_text(encoding="utf-8")
+        # Tokens that would indicate vendor allow-list contamination.
+        # Permitted in COMMENTS as fixture references; forbidden in
+        # actual code paths (strip lists, regex match strings).
+        # Heuristic: scan non-comment, non-string-literal lines.
+        forbidden = (
+            "app-sidebar-part", "app-toast-notifications",
+            "app-desktop-banner", "app-main-part-before",
+            "app-appview-card", "elma365-message-body",
+            "gmail_quote", "data-message-id",
+            "data-framer-name", "side-nav",
+        )
+        # Allow only in commentary (lines starting with `#` or inside
+        # docstrings) — coarse but correct: if a vendor class appears in
+        # an `if` condition or a list literal, the test fails.
+        offenders = []
+        for token in forbidden:
+            if token in src:
+                # Find each occurrence and check it's in a comment block.
+                for line_no, line in enumerate(src.splitlines(), 1):
+                    if token in line and not line.strip().startswith("#") \
+                            and "'''" not in line and '"""' not in line:
+                        # Check if surrounded by docstring quotes earlier.
+                        # Simple: count triple-quotes before this line.
+                        prior = "\n".join(src.splitlines()[:line_no - 1])
+                        if (prior.count('"""') % 2 == 1) or (prior.count("'''") % 2 == 1):
+                            continue  # inside a docstring
+                        offenders.append((line_no, token, line.strip()[:80]))
+        self.assertFalse(
+            offenders,
+            f"Vendor allow-list contamination detected (pdf-9 must be "
+            f"vendor-agnostic): {offenders}",
+        )
+
+
+class TestRewriteUrlsHtmlEscape(unittest.TestCase):
+    """pdf-8 VDD-adversarial fix: `<img src=>` URL rewriting must handle
+    HTML-encoded `&` (signed S3 / SAS-token URLs in webarchive subframes).
+
+    Discovered via review of `email_list_client.webarchive` frame_1: the
+    JPEG attachment had a signed-S3 URL with `&X-Amz-…` in the query
+    string; HTML escaped it as `&amp;X-Amz-…`. Naive str.replace failed
+    to match → image bytes extracted to disk but HTML still pointed at
+    remote URL → offline-fetcher refused → silent image loss in PDF.
+    """
+
+    def test_rewrites_unescaped_url(self) -> None:
+        from html2pdf_lib.archives import _rewrite_urls
+        url_map = {"https://x/img.jpg": "frame_1/img.jpg"}
+        text = '<img src="https://x/img.jpg">'
+        out = _rewrite_urls(text, url_map)
+        self.assertIn("frame_1/img.jpg", out)
+        self.assertNotIn("https://x/img.jpg", out)
+
+    def test_rewrites_html_encoded_amp_in_url(self) -> None:
+        """The actual VDD-adversarial regression case."""
+        from html2pdf_lib.archives import _rewrite_urls
+        url_map = {"https://x/img.jpg?a=1&b=2": "frame_1/img.jpg"}
+        text = '<img src="https://x/img.jpg?a=1&amp;b=2">'
+        out = _rewrite_urls(text, url_map)
+        self.assertIn("frame_1/img.jpg", out)
+        # The original encoded form must be gone (not just visually
+        # similar — actually replaced).
+        self.assertNotIn("&amp;b=2", out)
+
+    def test_url_without_amp_not_double_replaced(self) -> None:
+        """Cheap-no-op guard: URLs without `&` do not trigger the
+        secondary html-encoded replace pass."""
+        from html2pdf_lib.archives import _rewrite_urls
+        url_map = {"https://x/img.jpg": "local.jpg"}
+        text = '<img src="https://x/img.jpg"> some &amp; text'
+        out = _rewrite_urls(text, url_map)
+        # `&amp;` in unrelated text must survive untouched.
+        self.assertIn("some &amp; text", out)
+
+
+class TestSubstantialFrameDefensive(unittest.TestCase):
+    """pdf-8 VDD-adversarial defensive guard: _is_substantial_frame must
+    return False on None / non-bytes input, not crash."""
+
+    def test_none_input(self) -> None:
+        from html2pdf_lib.archives import _is_substantial_frame
+        # Must not crash with TypeError on len(None).
+        self.assertFalse(_is_substantial_frame(None))
+
+    def test_string_input(self) -> None:
+        from html2pdf_lib.archives import _is_substantial_frame
+        self.assertFalse(_is_substantial_frame("not bytes"))
+
+    def test_int_input(self) -> None:
+        from html2pdf_lib.archives import _is_substantial_frame
+        self.assertFalse(_is_substantial_frame(42))
+
+
+class TestNormalizeCSSTableContainment(unittest.TestCase):
+    """pdf-10 VDD-adversarial fix: wide tables must fit page width.
+    Without `max-width: 100%` paired with `body overflow-x: hidden`,
+    wide data tables silently clip at right margin (PDFs cannot scroll
+    → right-side data permanently lost)."""
+
+    def test_table_max_width_present(self) -> None:
+        from html2pdf_lib.normalize_css import NORMALIZE_CSS
+        # The exact rule from §7e (vii) — must contain max-width on table.
+        self.assertIn(
+            "table { max-width: 100% !important; }",
+            NORMALIZE_CSS,
+            "Wide tables silently clip without max-width:100% — discovered "
+            "via VDD-adversarial review of pdf-10. This rule must pair with "
+            "the `body { overflow-x: hidden }` rule to prevent silent data "
+            "loss on wide data tables.",
+        )
+
+
+class TestStripHtmlComments(unittest.TestCase):
+    """pdf-10: HTML comment strip removes Angular/React skeleton
+    placeholders so the `:empty` CSS rule can collapse cells."""
+
+    def test_strips_empty_angular_comments(self) -> None:
+        from html2pdf_lib.preprocess import _strip_html_comments
+        html = "<div><!----></div><div>real</div>"
+        out = _strip_html_comments(html)
+        self.assertNotIn("<!---->", out)
+        self.assertIn("real", out)
+
+    def test_strips_normal_comments(self) -> None:
+        from html2pdf_lib.preprocess import _strip_html_comments
+        html = "<p>before<!-- this comment --> after</p>"
+        out = _strip_html_comments(html)
+        self.assertNotIn("<!--", out)
+        self.assertIn("before", out)
+        self.assertIn("after", out)
+
+    def test_preserves_conditional_ie_comments(self) -> None:
+        """Conditional IE comments (`<!--[if IE]>`) shouldn't be stripped —
+        the closing `<![endif]>` matters for legacy markup roundtrip.
+        (We don't see them in modern fixtures but defensiveness is cheap.)"""
+        from html2pdf_lib.preprocess import _strip_html_comments
+        html = "<!--[if IE]>legacy<![endif]-->"
+        out = _strip_html_comments(html)
+        self.assertIn("[if IE]", out)
+
+    def test_short_circuit_when_no_comments(self) -> None:
+        """Fast path: input without `<!--` returns unchanged (avoids
+        an O(n) regex pass on millions of chars of comment-free HTML)."""
+        from html2pdf_lib.preprocess import _strip_html_comments
+        html = "<html><body><p>" + "x" * 100000 + "</p></body></html>"
+        out = _strip_html_comments(html)
+        self.assertEqual(html, out)
 
 
 if __name__ == "__main__":

@@ -542,6 +542,111 @@ XFA forms are detected and refused — pypdf cannot fill them. See
 for the visual-overlay fallback when the document has no fillable
 fields at all.
 
+### 6.4 HTML / web-archive → PDF
+
+```bash
+./.venv/bin/python skills/pdf/scripts/html2pdf.py INPUT OUTPUT.pdf \
+    [--page-size letter|a4|legal] [--css EXTRA.css] [--base-url DIR] \
+    [--no-default-css] [--reader-mode] \
+    [--archive-frame N|main|all|auto] [--list-frames] \
+    [--timeout SECONDS]
+```
+
+INPUT may be `.html`/`.htm` (plain HTML), `.mhtml`/`.mht` (Chrome
+"Save as → Single File"), or `.webarchive` (Safari "Save as → Web
+Archive"). Sub-resources in archive formats are extracted to a
+temporary directory automatically; URL references are rewritten to
+local filenames before weasyprint sees them.
+
+**Reader-mode vs regular** (defaults to regular — site CSS preserved):
+
+- **Regular** (default) — keeps `<style>` blocks + inline styles;
+  strips external `<link rel=stylesheet>` (because some real-world
+  CSS hangs weasyprint or drops paragraphs — Хабр, vc.ru). Site
+  layout largely preserved. Use for: invoices, reports with brand
+  styling, BI dashboards, Confluence pages where the page styles
+  matter for legibility.
+- **`--reader-mode`** — Safari Reader View parity. Strips ALL site
+  CSS + finds the article-body root via tiered candidate list
+  (Confluence `#main-content` / `.wiki-content` first, then
+  `.entry`/`.post-content`, then bare `<article>` / `[role=main]`,
+  then bare `<main>` with body-ratio guard, then for hydrated SPAs
+  with no semantic anchors — largest contentful subtree). Strips
+  recommendation widgets, share bars, comment threads, ARIA
+  navigation/banner/complementary landmarks. Use for: news/blog
+  archives, GitBook docs, Discord docs, vc.ru/Хабр articles where
+  site chrome matters less than typography consistency.
+
+**Archive-frame selection (`--archive-frame N|main|all|auto`)** —
+new in pdf-8 (2026-05-05). Webarchive/MHTML inputs may contain
+multiple inner frames (e.g. ELMA365 email viewer renders each email
+in its own iframe; HubSpot Marketplace has 6 chrome subframes around
+the main page; Gmail has 5 system-widget subframes around the inbox
+DOM). The flag selects which frame's content to render:
+
+| Value | Behaviour |
+|---|---|
+| `main` (default) | Main resource only. Compatible with previous behaviour. |
+| `N` (1-indexed) | Inner frame N — pick a specific email/document. |
+| `all` | Concat all "substantial" inner frames with `<hr><h2>Frame N</h2>` separators. Useful for printing entire email threads. |
+| `auto` | Deterministic: 0 substantial → `main`; 1 substantial → that frame; 2+ → `all`. With dominance guard: if 1 substantial subframe has < 10 % of main's text, falls back to `main` (HubSpot for WordPress case where the only substantial subframe is a system error overlay, not user content). |
+
+"Substantial" is purely structural (zero vendor allow-list): inner
+frame is substantial iff `bytes ≥ 1024` AND `<script>` count = 0
+AND plain text ≥ 30 chars AND not a single-`<img>` body. Validated
+on 9 real fixtures across 4 SPA stacks (Angular ELMA365, Closure
+Gmail, Framer Sentora, bare Yandex Cloud Console) without a single
+vendor name in the heuristic.
+
+**Frame inventory (`--list-frames`)** — new in pdf-8. Prints a
+tab-separated table (`index | kind | substantial | bytes | scripts |
+text-len | url`) and exits, without rendering. Use to pick `N`
+deterministically:
+
+```bash
+./.venv/bin/python skills/pdf/scripts/html2pdf.py \
+    --list-frames email-thread.webarchive
+# index  kind      substantial  bytes  scripts  text  url
+# 0      main      no           1163772  10     25985 https://crm-dev.npkyarli.ru/index.html
+# 1      subframe  yes          5388     0      686   about:blank
+# 2      subframe  yes          1604     0      47    about:blank
+# ...
+./.venv/bin/python skills/pdf/scripts/html2pdf.py \
+    --archive-frame 1 email-thread.webarchive first-email.pdf
+```
+
+**Render watchdog**: `--timeout SECONDS` (default 180,
+`$HTML2PDF_TIMEOUT` env override, `0` disables) caps weasyprint via
+`signal.SIGALRM`. Pathological CSS (Framer-built sites — Sentora,
+some marketing pages) can put weasyprint into a multi-minute layout
+loop; the watchdog kills it and exits 1 with a `RenderTimeout`
+envelope. Reader-mode strips CSS so it usually completes under any
+deadline; if regular mode times out, fall back to reader-mode.
+
+**Exit codes**:
+- `0` — render success
+- `1` — render failure (weasyprint exception, timeout, format error)
+- `2` — usage error (bad args, `NoSubstantialFrames` for
+  `--archive-frame all` on archives with zero substantial frames,
+  `FrameIndexOutOfRange` for `--archive-frame N` past the count)
+- `6` — same-path I/O guard (input == output, including via symlink)
+
+**Known weasyprint pathology — when reader-mode is mandatory**: <br>
+(a) **Material 3 / GM3 CSS with `calc(...)` + bare-number args** —
+weasyprint upstream bug `'NumberToken' object has no attribute 'unit'`.
+Pdf-10 ships a `_strip_problematic_calc` workaround (replaces calc()
+with `auto`), so Gmail no longer crashes; precision lost. <br>
+(b) **Framer-built sites** (sentora.com, framer.io customer sites) —
+infinite layout loop on weasyprint, watchdog fires after 180s.
+Reader-mode strips Framer CSS; rendering completes. <br>
+(c) **ELMA365 hydrated Angular DOM** (>1 MB main HTML with
+virtualized `<app-appview-card>` lists) — weasyprint inline-layout
+bug `tuple index out of range` on `inline.py:231`. Reader-mode
+extracts text content cleanly; regular mode crashes. <br>
+For these classes of input, prefer `--reader-mode` or use `--engine
+chrome` (planned, see [pdf-11 backlog
+entry](../office-skills-backlog.md)).
+
 ---
 
 ## 7. Sandboxed deployment notes (LD_PRELOAD shim)

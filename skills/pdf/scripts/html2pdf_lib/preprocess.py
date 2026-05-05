@@ -841,6 +841,175 @@ def _flatten_table_code_blocks(html: str) -> str:
     return table_re.sub(_replace_table, html)
 
 
+def _strip_problematic_calc(html: str) -> str:
+    """VDD-adversarial workaround for weasyprint `calc()` NumberToken bug.
+
+    weasyprint <= 65.x has a bug in `css/units.py:to_pixels` where
+    `calc(2 * 16px)`-style expressions with bare numbers as args trigger
+    `AttributeError: 'NumberToken' object has no attribute 'unit'` (the
+    code assumes every token has a unit, but math args can be unitless).
+    Affected sites: Gmail, Google Material 3 components, sites using
+    GM3-prefixed CSS variables.
+
+    Workaround: replace `calc(...)` expressions in `<style>` blocks
+    with `auto` (a valid CSS keyword for most dimension properties).
+    Lossy — layouts that depend on precise calc() arithmetic (e.g.
+    `calc(100% - 80px)` for content area minus header) lose their
+    intended dimensions and use `auto` (browser-default) instead. But
+    rendering completes vs failing entirely.
+
+    Inline `style="..."` attributes are NOT touched — those are usually
+    legitimate per-element layout hints with explicit units. The bug-
+    triggering pattern is overwhelmingly in `<style>` blocks (verified
+    on Gmail: 556 calc() in 2 style blocks vs 1 in inline attrs).
+
+    Honest scope: this is a defensive workaround. Track upstream
+    weasyprint fix; remove this strip when fixed.
+    """
+    if "calc(" not in html:
+        return html
+    # Iteratively replace innermost calc(...) and var(...) parens-balanced
+    # expressions in <style> blocks. Order matters: var() is typically
+    # inside calc() in Material/GM3 CSS, so we strip the innermost paren
+    # group first regardless of name.
+    def _replace_in_style_block(m: re.Match) -> str:
+        block = m.group(0)
+        prev = None
+        # Replace innermost calc() first
+        while prev != block:
+            prev = block
+            block = re.sub(r"calc\(\s*[^()]*\s*\)", "auto", block)
+        # Replace innermost var() — falls back to literal "auto"
+        # (var(--x, 6px) → auto). Iterates until none left.
+        prev = None
+        while prev != block:
+            prev = block
+            block = re.sub(r"var\(\s*[^()]*\s*\)", "auto", block)
+        # Re-pass calc() in case var-removal exposed new outer calc
+        prev = None
+        while prev != block:
+            prev = block
+            block = re.sub(r"calc\(\s*[^()]*\s*\)", "auto", block)
+        return block
+    return re.sub(
+        r"<style\b[^>]*>.*?</style>",
+        _replace_in_style_block,
+        html,
+        flags=re.DOTALL | re.IGNORECASE,
+    )
+
+
+def _strip_universal_chrome(html: str) -> str:
+    """pdf-10 polish: strip semantic chrome that's universally non-content.
+
+    Runs unconditionally in `preprocess_html` (so even non-reader-mode
+    rendering benefits). Semantically:
+
+      * `<nav>` — site navigation. HTML5 spec: "a section of a page
+        whose purpose is to provide navigation links." Never article
+        content. Already stripped in reader-mode SPA-chrome path; this
+        extends to no-reader-mode where sidebars overlap article body
+        when site CSS is absent (e.g. Yandex Cloud Console marketplace
+        page where left nav rail collapses on top of product details).
+      * `<aside>` — by HTML5 spec, "a section of a page whose content
+        is tangentially related." Always non-load-bearing.
+      * Carousel/recommendation cards via class-substring match. The
+        keyword list is narrow and pattern-based — no vendor names —
+        but covers the universal "Similar products / You may also
+        like / Related articles" tail. Without strip, these load N
+        identically-shaped cards which inflate page count and bring
+        in giant icons (each card has its own SVG logo).
+
+    Honest scope: a page using `<nav>` legitimately for in-article
+    breadcrumb links (rare — breadcrumbs are usually `<ol>` with a
+    role="navigation" parent) loses those. Trade-off accepted: the
+    semantic-chrome strip is the simplest universal fix for SPA
+    layout collapse.
+
+    Note: these strips are also applied in reader-mode (idempotent).
+    `_strip_spa_chrome_tags` in reader_mode.py runs the same logic
+    PLUS `<header>` / `<footer>` shallow-only — kept there because
+    full-rendering pages (no-reader) sometimes have legit shallow
+    `<header>` (article headline wrapper) we don't want to lose.
+    """
+    from .dom_utils import find_all_elements
+
+    matches: list[tuple[int, int]] = []
+    for tag in ("nav", "aside"):
+        matches.extend(find_all_elements(html, tag=tag))
+    # Carousel / similar-products blocks. Class-substring keywords
+    # MUST be narrow enough not to over-strip — we deliberately skip
+    # generic `side-nav`/`sidenav` here because those substrings collide
+    # with content-bearing component names in real fixtures (Yandex
+    # Cloud's `cc-marketplace-detail-side-nav__subnav` wraps the
+    # product details column, not the navigation rail). Strip happens
+    # ONLY on compound class tokens that are unambiguously
+    # non-content-bearing across platforms.
+    _STRIP_KEYWORDS = (
+        "similar-products", "related-products",
+        "recommended-products", "you-may-like",
+        "also-viewed", "see-also-products",
+        # Hyphenless variants seen on legacy / Bootstrap-based sites
+        "similarproducts", "relatedposts",
+        # VDD-adversarial fix: ticker-tape / symbol-strip patterns
+        # (TradingView, financial dashboards). These auto-scroll
+        # horizontally with `transform: translate3d` per item — without
+        # site CSS clipping the container, children stack at origin.
+        # Patterns are universal-ish (not vendor names but feature
+        # nicknames common in financial UI libraries).
+        "ticker-tape", "ticker-strip", "tickertape",
+        "symbol-list", "symbol-strip", "scrolling-ticker",
+    )
+    matches.extend(find_all_elements(
+        html, class_substring_any=list(_STRIP_KEYWORDS),
+    ))
+    if not matches:
+        return html
+    # Outermost-only splice (mirror of reader-mode strip helpers).
+    matches.sort(key=lambda se: (se[0], -se[1]))
+    outer: list[tuple[int, int]] = []
+    last_end = -1
+    for s, e in matches:
+        if s >= last_end:
+            outer.append((s, e))
+            last_end = e
+    out = html
+    for s, e in reversed(outer):
+        out = out[:s] + out[e:]
+    return out
+
+
+def _strip_html_comments(html: str) -> str:
+    """pdf-10: drop HTML comments (`<!---->`, `<!-- … -->`).
+
+    Hydrated SPA frameworks (Angular `_ngcontent-` markers, React/Vue
+    placeholder slots) emit thousands of empty `<!---->` comments — one
+    per ng-template / Vue v-if / React Fragment skeleton cell. CSS
+    `:empty` does NOT consider comments as whitespace, so a card-cell
+    `<div><!----></div>` survives §7f's `:empty` rule and still claims
+    a row of vertical space.
+
+    Stripping comments BEFORE the CSS pass converts those skeletons to
+    truly-empty `<div></div>` which `:empty` then collapses. Universal
+    pass — applied to every input regardless of source.
+
+    Conservative: leaves conditional comments (`<!--[if IE]>`) alone
+    because their `<![endif]>` close-tag matters for some legacy IE-
+    targeted markup. We don't see them in modern fixtures but the
+    cost of preserving them is negligible.
+    """
+    # Standard HTML comments. Conditional-IE comments start with `<!--[`;
+    # exclude them to be safe. Note: `re.sub` with non-greedy `.*?` is
+    # quadratic in pathological inputs; HTML comments are short and few
+    # in real-world docs (≪ 10K), so this is fine.
+    if "<!--" not in html:
+        return html
+    # Match `<!--…-->` excluding conditional-IE comments which start with
+    # `<!--[`. The negative lookahead `(?!\[)` is the discriminator; the
+    # body is `.*?` (non-greedy, matches zero chars for `<!---->`).
+    return re.sub(r"<!--(?!\[).*?-->", "", html, flags=re.DOTALL)
+
+
 def _strip_empty_anchor_links(html: str) -> str:
     """Remove `<a href="#...">…</a>` whose visible content is empty after icon strip.
 
@@ -951,6 +1120,9 @@ def preprocess_html(html: str) -> str:
     html = _fix_light_dark(html)
     html = _strip_external_stylesheets(html)
     html = _strip_all_fontfaces_in_styles(html)
+    html = _strip_problematic_calc(html)
+    html = _strip_html_comments(html)
+    html = _strip_universal_chrome(html)
     html = _strip_interactive_chrome(html)
     html = _strip_icon_svgs(html)
     html = _strip_empty_anchor_links(html)

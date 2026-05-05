@@ -70,14 +70,77 @@ header, nav, .navbar, .topbar, .top-bar,
     display: none !important;
 }
 
-/* ── 4. Some elements use position:fixed/sticky but are NOT navigation
-        (e.g. breadcrumb rows, Confluence page header rows). Reset
-        position so they sit in normal document flow instead of
-        overlapping content. */
+/* ── 3a. VDD-adversarial fix: list-item / menu-item with inline fixed height
+        causes content overflow + visual overlap when site CSS is stripped.
+        Yandex Cloud Console side-nav: `<div role="listitem"
+        style="height: 40px;">` — content like "Установленные продукты"
+        wraps onto 2 lines, overflowing the 40px box and overlapping the
+        next nav item. Force `min-height` semantics via `height: auto` so
+        multi-line content reflows without clipping. Universal — uses
+        ARIA `role="listitem"` and common `*menu-item*`/`*nav-item*`
+        class patterns. */
+[role="listitem"][style*="height"],
+[class*="menu-item"][style*="height"],
+[class*="nav-item"][style*="height"],
+[class*="list__item"][style*="height"],
+[class*="list__items"][style*="height"],
+[class*="virtualizer"][style*="height"],
+[class*="virtual-list"][style*="height"],
+[class*="virtual-scroll"][style*="height"] {
+    height: auto !important;
+    min-height: 0 !important;
+}
+/* Force list items to stack vertically. Without site CSS, ARIA
+   `role="list"` containers may default to flex-row or inline-block,
+   placing items side-by-side and overlapping when text wraps. ARIA
+   spec says listitem is always rendered top-to-bottom; honor that. */
+[role="list"] {
+    display: block !important;
+    width: 100% !important;
+}
+[role="listitem"] {
+    display: block !important;
+    width: 100% !important;
+    float: none !important;
+}
+
+/* ── 3b. VDD-adversarial fix: inline `transform: translate3d(...)` on
+        scrolling-ticker children stacks elements at origin without site
+        CSS controlling the parent's overflow. TradingView ticker tape
+        (`<div class="symbol-RsFlttSS" style="transform: translate3d(...)">`
+        × 27) collapses into a single overlapping pile. Reset all inline
+        transforms in print context — animations don't translate to PDF
+        anyway. Honest scope: legitimate transforms in static diagrams
+        lose their placement. */
+[style*="transform:"] {
+    transform: none !important;
+}
+
+/* ── 4. Reset positioned elements to normal document flow.
+        Three position values clobber print layout:
+          * `fixed` / `sticky` — pinned to viewport, never reflow on
+            page-break (Confluence breadcrumb rows, GitHub sticky-
+            header).
+          * `absolute` — removes element from flow, overlaps content
+            below. Yandex Cloud Console side-nav uses inline
+            `position:absolute; top:Npx` per nav item; without
+            site CSS to compute container offsets, all absolute
+            children stack at top-left of their containing block,
+            producing visible text-overlap (multiple nav links
+            rendering on top of each other).
+        We reset all three to `static` and clear `top` / `left` /
+        `right` / `bottom` offsets so siblings flow vertically.
+        Honest scope: a legitimate absolutely-positioned image
+        overlay (article infographic) loses its placement — accept
+        this trade-off for print. */
 [style*="position:fixed"], [style*="position: fixed"],
-[style*="position:sticky"], [style*="position: sticky"] {
+[style*="position:sticky"], [style*="position: sticky"],
+[style*="position:absolute"], [style*="position: absolute"] {
     position: static !important;
     top: auto !important;
+    left: auto !important;
+    right: auto !important;
+    bottom: auto !important;
 }
 
 /* ── 4a. Confluence Server's `<main id="main" style="margin-left:430px">`
@@ -141,11 +204,28 @@ main, #main, #main-content, #content,
     width: 100% !important;
 }
 
-/* ── 6. Prevent images and root SVGs from bleeding past the page margin. */
-img, video, canvas {
-    max-width: 100% !important;
-    height: auto !important;
-}
+/* ── 6. Prevent images and root SVGs from bleeding past the page margin.
+        Two-tier rule (pdf-10 polish):
+          (a) Without explicit width AND height attributes: cap to
+              container width and let height auto-compute (preserves
+              aspect ratio of large content images).
+          (b) WITH explicit width AND height attributes (HTML icon
+              pattern: `<img width="32" height="32">`): cap to
+              container width but DO NOT override the declared
+              height — the author intent is "this is a 32-pixel icon".
+              Without this distinction, our `height: auto !important`
+              ignores the icon size hint and weasyprint computes
+              height from intrinsic SVG aspect at width 100% of
+              container, producing huge icons (Yandex Cloud
+              marketplace product cards rendered Joomla logos at
+              full container width — ~600 pixels — instead of 32px).
+              Discovered via VDD review of pdf-10 ya_browser fixture.
+        */
+video, canvas { max-width: 100% !important; height: auto !important; }
+img:not([width]):not([height]) { max-width: 100% !important; height: auto !important; }
+img[width]:not([height]),
+img:not([width])[height] { max-width: 100% !important; height: auto !important; }
+img[width][height] { max-width: 100% !important; }
 
 /* ── 7a. Code block styling (markdown-preview parity).
         Modern docs sites (Mintlify, MkDocs, Docusaurus) wrap code blocks in
@@ -283,6 +363,86 @@ blockquote {
 .headerlink, .anchor-link, a.anchor, .octicon-link,
 .heading-anchor, button.anchorjs-link,
 h1 button, h2 button, h3 button, h4 button, h5 button, h6 button {
+    display: none !important;
+}
+
+/* ── 7e. pdf-10: Universal beauty rules.
+        Apply uniformly regardless of source. Address the three classes of
+        ugly-PDF observed empirically: (i) horizontal overflow on long
+        tokens / wide tables (silently clipped, un-copyable); (ii) `<tr>`
+        split mid-row across page-break (cell content torn between two
+        pages); (iii) tiny fonts (Tailwind/Material `text-xs` → 0.75rem ≈
+        9pt by default but cascading rems can sink to 6pt-7pt on 4-rem
+        baselines). Plus orphan/widow control to avoid 1-line trailing
+        page-breaks. */
+/* (i) No horizontal overflow — body and child block-flow elements clip
+       their right edge at the page width. Avoids the "right margin
+       eats the last column" failure mode on data-heavy SPA pages
+       where Angular Material grids overflow the print viewport. */
+body { overflow-x: hidden !important; }
+/* (ii) Row integrity — never split a table row across pages. */
+tr { page-break-inside: avoid !important; }
+/* (iii) Min font 9pt — scoped: skip elements with explicit zero-size or
+        zero-line-height inline styles (HTML newsletter preheader pattern:
+        `<div class="preheader" style="font-size:0px;color:#F0F1F3;
+        line-height:0px;">…</div>` deliberately hides the email-client
+        preview text; bumping font-size to 9pt makes it visible and adds
+        a page of zero-width-joiner whitespace garbage to the rendered
+        PDF). The `:not([style*=…])` chain catches the common spelling
+        variants. CSS attribute substring is conservative — works for
+        any inline style declaration that contains the literal
+        substring (e.g. ` font-size:0;` or `;font-size: 0;`).
+
+        Targeted to block-level prose containers (`p, td, li`) plus
+        `div` and `span`; skip on `script/style/noscript` (those are
+        non-visual). Honest scope: a designer's intentional 8pt
+        footnote will round to 9pt — acceptable for PDF readability,
+        and this is preferable to leaving Tailwind/Material `text-xs`
+        registries unreadably cramped. */
+body p,  body td, body li,
+body div:not([style*="font-size:0"]):not([style*="font-size: 0"])
+        :not([style*="line-height:0"]):not([style*="line-height: 0"]),
+body span:not([style*="font-size:0"]):not([style*="font-size: 0"])
+         :not([style*="line-height:0"]):not([style*="line-height: 0"]) {
+    font-size: max(9pt, 1em) !important;
+}
+/* (iv) Image / SVG fit. Already covered by §6 for img/canvas; expand
+        to root <svg> so SVG-rendered diagrams with intrinsic sizes
+        wider than page width get scaled down rather than clipped. */
+svg:not([viewBox]) { max-width: 100% !important; height: auto !important; }
+/* (v) Orphan/widow control — never leave 1-line "Lorem." page-tail or
+       1-line top-of-page leftover. */
+p, li, h1, h2, h3, h4, h5, h6 {
+    orphans: 2 !important;
+    widows: 2 !important;
+}
+/* (vi) Long-token break — URLs, hashes, base64 strings break at word
+        boundary so they don't overflow. (`code/pre` already handles
+        this in §7a; here for body text.) */
+p, li, td, dd { overflow-wrap: break-word !important; }
+/* (vii) Wide table containment — pair with `body { overflow-x: hidden }`.
+        Without `max-width: 100%`, wide data tables (12-column financial
+        spreadsheets, signal-export reports) silently clip at the right
+        edge. PDFs can't scroll, so right-side data is permanently lost.
+        Force tables to fit page width and reflow cell contents.
+        Discovered via VDD-adversarial review of pdf-10. */
+table { max-width: 100% !important; }
+
+/* ── 7f. pdf-10: Empty/skeleton-cell suppression.
+        Hydrated SPA registries (Angular Material card grids, ELMA365
+        реестр) emit large nested cell trees where most cells contain
+        only Angular comment placeholders `<!---->` or zero text.
+        Without this rule, every empty cell still claims a row's worth
+        of vertical space (label + value layout reserved). Universal
+        rule via `:empty` + heuristic `:has` (CSS Selectors L4). Note:
+        `:has` is supported by weasyprint 60+; fallback ok if
+        unsupported (older weasyprint silently ignores).
+
+        Out of scope: sibling-repetition card-flatten (would compress
+        ELMA365's 18 K-field реестр into a real table). Logged as
+        pdf-10 follow-up — heuristic too aggressive for v1 without a
+        wider regression battery. */
+*:empty:not(img):not(svg):not(input):not(br):not(hr) {
     display: none !important;
 }
 
