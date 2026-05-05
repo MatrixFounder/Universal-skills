@@ -227,6 +227,27 @@ img[width]:not([height]),
 img:not([width])[height] { max-width: 100% !important; height: auto !important; }
 img[width][height] { max-width: 100% !important; }
 
+/* ── 6a. VDD-adversarial fix (round 2): avatar / user-photo image cap.
+        Inline base64-PNG avatars in `<app-user-photo>`/`<elma-user-photo>`/
+        `*avatar*`/`*user-icon*` containers ship without width/height
+        attributes (sites use class-based CSS to size them). Without site
+        CSS, the `img:not([width]):not([height])` rule sets max-width:
+        100% — but "100%" of container = page width = ~600 px → avatar
+        renders giant (observed: ELMA365 activities reader-mode showed
+        a 600 × 600 px purple "TT" initials avatar instead of 32 × 32).
+        Cap class-named avatar images to a sane upper bound. Universal
+        — class-substring patterns are common naming across frameworks;
+        no vendor names. */
+[class*="avatar"] img,
+[class*="user-photo"] img,
+[class*="user-icon"] img,
+[class*="user-pic"] img,
+[class*="profile-pic"] img,
+[class*="profile-image"] img {
+    max-width: 48px !important;
+    max-height: 48px !important;
+}
+
 /* ── 7a. Code block styling (markdown-preview parity).
         Modern docs sites (Mintlify, MkDocs, Docusaurus) wrap code blocks in
         nested div trees with shiki/prism inline styles. After our preprocessing

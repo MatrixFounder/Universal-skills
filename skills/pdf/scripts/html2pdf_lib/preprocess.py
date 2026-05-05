@@ -959,6 +959,23 @@ def _strip_universal_chrome(html: str) -> str:
         # nicknames common in financial UI libraries).
         "ticker-tape", "ticker-strip", "tickertape",
         "symbol-list", "symbol-strip", "scrolling-ticker",
+        # VDD-adversarial fix (2026-05-05 round 2): nav / breadcrumb /
+        # header chrome via compound class-substring. Universal naming
+        # conventions across web frameworks (Yandex Cloud, Bootstrap,
+        # Material UI, Bulma, Tailwind admin templates). Keyword list
+        # uses ONLY compound forms — bare "nav" is too broad (matches
+        # "innovation", "navigate" prose words). Catches Yandex Cloud
+        # `<div class="aside-navigation">`, `<div class="g-breadcrumbs">`,
+        # `<div class="page-header-next">` which were not stripped by
+        # tag-based `<nav>`/`<aside>` rules (Yandex uses class-based
+        # layout, not semantic HTML5 tags). Risk: a legitimate article
+        # element with class containing "navigation-menu" or
+        # "page-header-actions" would be lost — accept for reader-mode
+        # contexts where chrome strip is preferred over false-keep.
+        "aside-navigation", "navigation-menu", "navigation-bar",
+        "page-header", "page-actions", "header-actions",
+        "breadcrumb",  # bare "breadcrumb" is universally a navigation
+                       # widget; not a prose word.
     )
     matches.extend(find_all_elements(
         html, class_substring_any=list(_STRIP_KEYWORDS),
