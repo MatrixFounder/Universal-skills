@@ -116,6 +116,7 @@ def convert(
     reader_mode: bool = False,
     timeout: int = 0,
     engine: str = "weasyprint",
+    chrome_javascript: bool = False,
 ) -> None:
     """Render `html_text` to `output_path` via the chosen engine.
 
@@ -185,6 +186,7 @@ def convert(
                 base_url=base_url,
                 page_size=page_size,
                 timeout=timeout,
+                javascript=chrome_javascript,
             )
             return
 

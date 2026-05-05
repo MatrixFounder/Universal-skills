@@ -1,5 +1,20 @@
 """Chrome-engine HTML→PDF renderer (Playwright + bundled Chromium).
 
+VDD-fix note (post-pdf-11 v1): the naive implementation broke on real
+webarchives because Chrome's URL resolution differs from weasyprint's.
+weasyprint takes a `base_url` parameter and uses it for relative-URL
+resolution, ignoring any `<base>` tag in the HTML. Chrome (correctly
+per HTML spec) honours the `<base href>` tag — and webarchives almost
+always have `<base href="https://original-site.com/">` because that's
+what the browser saw when the archive was made. Result: every relative
+`<link rel="stylesheet" href="styles.css">` resolves to `https://
+original-site.com/styles.css`, which our offline route handler blocks
+→ page renders without CSS → layout collapses (tabs become inline
+text, sidebars overlap). Fix: strip the `<base>` tag before handing
+HTML to Chrome (`_strip_base_href`). Chrome then falls back to the
+document's URL (our `file:///tmp/__html2pdf_chrome.html`) as the base,
+and relative refs resolve to local extracted assets.
+
 Opt-in alternative to weasyprint for cases where weasyprint's layout engine
 fails or produces poor output:
 
@@ -40,8 +55,107 @@ Layout (where this fits in the pipeline):
 """
 from __future__ import annotations
 
-import tempfile
+import re
 from pathlib import Path
+
+# Layout-normalisation CSS injected into every chrome-rendered page.
+#
+# Problem: SPAs are designed for a fixed-viewport screen interaction —
+# `<html style="height: 100%">`, `<body style="height: 100vh; overflow:
+# hidden">`, content inside `<main style="overflow: auto">`. When the
+# user scrolls, the inner container scrolls; the outer html/body never
+# grow. Chrome's `page.pdf()` paginates the document, BUT the document
+# height is clamped to the viewport because of these `100vh`/`overflow:
+# hidden` rules. Result: only the visible viewport-sized slice ends up
+# in the PDF; the rest of the email / activity list / SPA content is
+# cut off.
+#
+# Fix strategy:
+#
+#   1. **Release html/body** — outer-frame height/overflow clamping is
+#      always wrong for PDF rendering; the document MUST grow with its
+#      content for chrome to paginate correctly.
+#
+#   2. **Universal `* { overflow: visible !important; max-height: none
+#      !important }`** — required because real-world SPAs use diverse
+#      scroll-container patterns: inline-style absolute-positioned
+#      wrappers (Gmail's `explosion_clipper_div`), class-based scroll
+#      containers (Material Design), nested overflow:hidden chains.
+#      A targeted attribute selector misses class-based patterns; a
+#      `body > *` selector misses inner scrollers. Universal release
+#      is the only rule that catches all three SPA archives we
+#      validated (Gmail 4.7 MB main, ELMA365 1.6 MB Angular shell,
+#      ya_browser 190 KB Yandex Cloud Console).
+#
+# Honest scope (real trade-off, validated empirically):
+#
+#   * Sidebars that hide text labels via `overflow: hidden` (Yandex
+#     Cloud Console icon-only nav, with its EXPANDED state hidden by
+#     a clipping ancestor) WILL leak their labels. Visible side
+#     effect: text labels overlap main content area in the PDF.
+#   * Carousels with `overflow: hidden` to show one slide at a time
+#     will expand to show all slides at once.
+#   * Rounded-corner clipping via `overflow: hidden` will be lost.
+#
+# The alternative (omit the `*` rule) was tried and rejected:
+# Gmail truncated to 1 page, ELMA365 cut content. The PDF user wants
+# the full archive content visible — sidebar-label cosmetic overlap
+# is the lesser harm.
+#
+# Recommendations (per content type, see references/html-conversion.md):
+#   * Article/email/newsletter archives → `--engine chrome --reader-mode`
+#     (extract main content first, then chrome render — sidesteps the
+#     trade-off entirely).
+#   * Dashboard / data registry archives → `--engine chrome` alone
+#     (chrome's `*-overflow` release is the right call; sidebar leak
+#     is acceptable).
+#   * Static marketplace pages where weasyprint already renders well
+#     (ya_browser-class) → use the default `weasyprint` engine, not
+#     chrome — no overflow release needed and no trade-off.
+_LAYOUT_NORMALIZE_CSS = """\
+<style id="__html2pdf_chrome_layout_normalize">
+html, body {
+  height: auto !important;
+  min-height: 0 !important;
+  max-height: none !important;
+  overflow: visible !important;
+}
+* {
+  overflow: visible !important;
+  max-height: none !important;
+}
+</style>
+"""
+
+
+# `<base href="...">` matcher. We strip the tag entirely (rather than
+# rewriting its href) because chrome will fall back to the document's
+# URL — which is the file:// URL we control — for relative resolution.
+# Pattern is intentionally lax: HTML5 allows `<base>` to be self-closing
+# or unclosed, with arbitrary attribute order, single or double quotes.
+_BASE_TAG_RE = re.compile(r"<base\b[^>]*>", re.IGNORECASE)
+
+
+def _strip_base_href(html: str) -> str:
+    """Remove every `<base>` tag from the HTML.
+
+    Webarchives saved by Safari/Chrome typically embed `<base href="https
+    ://original-site.com/">` so that the saved DOM still resolves
+    relative URLs against the live site. When we open the archive locally
+    via `file://`, we want relative URLs to resolve against the local
+    extraction tempdir (where archives.py wrote the sub-resources) — the
+    `<base>` tag would override that and route every CSS/script reference
+    to the original https:// origin, which our offline route handler
+    blocks.
+
+    Multiple `<base>` tags are technically illegal per HTML spec but we
+    handle them anyway (defensive). Returns html unchanged if no `<base>`
+    tag is present (fast path — most plain .html inputs).
+    """
+    if "<base" not in html.lower():
+        return html
+    return _BASE_TAG_RE.sub("", html)
+
 
 # Page sizes follow the Playwright `page.pdf(format=...)` convention
 # (capitalized). weasyprint uses CSS @page strings (lowercase + units);
@@ -134,6 +248,44 @@ def _resolve_temp_html_path(base_url: str) -> Path:
     return candidate.parent / "__html2pdf_chrome.html"
 
 
+# Why JavaScript is OFF by default
+# --------------------------------
+# Webarchives and MHTML are static snapshots — by the time the user saves
+# the page, the HTML already represents the rendered state of the SPA.
+# Re-running the embedded JS with network access blocked produces TWO
+# common failure modes that we observed empirically on real fixtures
+# (VDD adversarial round, post-pdf-11 v1):
+#
+#   * SPA self-destruction — the page's offline-detection JS sees fetch
+#     failures and replaces the body with an error fallback. Real
+#     instance: Gmail archive renders "Временная ошибка — ваш аккаунт
+#     временно недоступен" instead of the saved inbox.
+#
+#   * Half-hydrated DOM — Angular/React initializes against the saved
+#     HTML, sees backend calls fail, and leaves the layout in a
+#     transitional state where horizontal navigation collapses to plain
+#     text concatenation, sidebars overlap main content, click handlers
+#     paint stale buttons in wrong positions. Real instance: ELMA365
+#     activities-fixture renders "ОбзорКонтактыОтношенияЗаметкиАктивности"
+#     as a single line of text.
+#
+# The whole reason chrome engine helps over weasyprint is that Chrome has
+# a real modern CSS engine (calc, var, grid, custom properties, container
+# queries) — NOT that it executes JavaScript. For static archives, JS
+# off is strictly better. For the rare cases where JS-rendered content
+# matters (TradingView <canvas> charts, archives that capture pre-
+# hydration HTML), `--chrome-js` opts back in.
+# Desktop-class viewport so SPAs that branch on `@media (min-width:
+# 1024px)` resolve to desktop layout, not a mobile-stack collapse.
+# Height matches a typical workstation; the actual pagination math
+# happens against `page.pdf(format=...)` regardless of viewport
+# dimensions — Playwright re-emulates the page at PDF dimensions
+# during the print path, so a tall viewport alone won't unfurl
+# inner scroll containers. The CSS in `_LAYOUT_NORMALIZE_CSS`
+# handles that.
+_DEFAULT_VIEWPORT = {"width": 1280, "height": 1024}
+
+
 def render_chrome(
     html_text: str,
     output_path: Path,
@@ -142,6 +294,7 @@ def render_chrome(
     page_size: str,
     timeout: int,
     print_background: bool = True,
+    javascript: bool = False,
 ) -> None:
     """Render `html_text` to `output_path` via headless Chromium.
 
@@ -158,6 +311,12 @@ def render_chrome(
       print_background: pass-through to `page.pdf(print_background=...)`.
         Default True so CSS backgrounds (the typical "looks like the
         browser" expectation) appear in the PDF.
+      javascript: if True, execute the page's JavaScript. Default False
+        (see module-level rationale): static archives render cleanly
+        without JS, and JS-on with offline network typically corrupts
+        the DOM (SPA self-destruct, half-hydration). Use True only when
+        the saved HTML is pre-hydration or contains canvas charts that
+        need JS to draw.
 
     Raises:
       ChromeEngineUnavailable: Playwright not installed.
@@ -176,6 +335,24 @@ def render_chrome(
     fmt = _CHROME_PAGE_SIZES.get(page_size, "Letter")
     timeout_ms = max(0, timeout * 1000)  # 0 disables in Playwright too
 
+    # Webarchive HTML usually carries `<base href="https://orig.site/">`
+    # which would override our file:// base and send every relative URL
+    # to the offline-blocked origin. Strip it so chrome falls back to the
+    # document URL we control. (See _strip_base_href docstring.)
+    html_text = _strip_base_href(html_text)
+
+    # Inject layout-normalisation CSS (see _LAYOUT_NORMALIZE_CSS docstring
+    # at module top). Tears down `100vh`/`overflow:hidden` outer-frame
+    # clamping so the document grows with its content and chrome paginates
+    # the full archive instead of the viewport-sized slice. Inject at end
+    # of <head> so we win specificity ties; if no <head>, prepend.
+    if "</head>" in html_text:
+        html_text = html_text.replace(
+            "</head>", _LAYOUT_NORMALIZE_CSS + "</head>", 1,
+        )
+    else:
+        html_text = _LAYOUT_NORMALIZE_CSS + html_text
+
     tmp_html = _resolve_temp_html_path(base_url)
     try:
         tmp_html.write_text(html_text, encoding="utf-8")
@@ -185,11 +362,18 @@ def render_chrome(
         with sync_playwright() as p:
             browser = p.chromium.launch(headless=True)
             try:
-                # `device_scale_factor` defaults to 1; viewport defaults to
-                # 1280x720. PDF rendering uses CSS `@page` size, not
-                # viewport, so the viewport mostly affects JS-driven layout.
-                # Default is fine for static archive content.
-                context = browser.new_context()
+                # Explicit desktop-class viewport (1280×1024). Default
+                # Playwright viewport is 1280×720, but we set it
+                # deliberately so SPAs that branch on viewport-width media
+                # queries (`@media (min-width: 1024px)`) resolve to the
+                # desktop layout, not a mobile-stack collapse. PDF page
+                # dimensions come from `format=...` below; Chrome's print
+                # path scales the laid-out content onto the PDF page,
+                # similar to a real browser's print dialog.
+                context = browser.new_context(
+                    viewport=_DEFAULT_VIEWPORT,
+                    java_script_enabled=javascript,
+                )
                 context.route("**/*", _block_remote_routes)
                 page = context.new_page()
                 try:
@@ -198,6 +382,24 @@ def render_chrome(
                     # in-flight requests, which always fires immediately
                     # under our route blocker, but `load` is more semantic.
                     page.goto(url, wait_until="load", timeout=timeout_ms)
+                    # Force `media: screen` BEFORE page.pdf(). Default
+                    # behaviour of `page.pdf()` is to call
+                    # `emulate_media({media: "print"})`, which switches
+                    # the page to its `@media print` stylesheet. Modern
+                    # SPAs (ELMA365 Angular, ya_browser, anything React/
+                    # Material) ship `@media print` rules that hide
+                    # navigation tabs, collapse sidebars, and reset
+                    # absolute positioning — designed for clean
+                    # paper-style printing of pre-rendered articles, not
+                    # for archiving the SPA-as-the-user-saw-it. Result:
+                    # tabs collapse to plain-text concatenation
+                    # ("ОбзорКонтактыОтношения…"), sidebars overlap main
+                    # content, the layout looks broken.
+                    #
+                    # We're rendering archives — the user wants the page
+                    # to look like the screen capture, not like a
+                    # paper-print. Force media:screen.
+                    page.emulate_media(media="screen")
                     page.pdf(
                         path=str(output_path),
                         format=fmt,

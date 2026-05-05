@@ -1625,6 +1625,149 @@ class TestEngineDispatch(unittest.TestCase):
         )
         self.assertEqual(called["chrome"], 1, "chrome render must be called once")
 
+    def test_strip_base_href_removes_tag(self) -> None:
+        """pdf-11 VDD-fix: webarchives carry `<base href="https://orig.
+        site/">` so saved DOM resolves relative URLs against the live
+        site. Chrome honours this tag — every relative `<link>` would
+        route to the offline-blocked origin. Stripping the tag forces
+        chrome to fall back to our file:// document URL.
+
+        Pinning this is critical: a refactor that drops `_strip_base_href`
+        from the chrome render path silently breaks every webarchive
+        with non-empty CSS (≥ 95 % of real fixtures)."""
+        from html2pdf_lib.chrome_engine import _strip_base_href
+        html = (
+            '<html><head>'
+            '<base href="https://crm-dev.example.com/">'
+            '<link rel="stylesheet" href="styles.css">'
+            '</head><body>x</body></html>'
+        )
+        out = _strip_base_href(html)
+        self.assertNotIn("<base", out.lower())
+        # Relative <link> must survive — it's the asset reference we
+        # want to resolve to the local file:// extraction tempdir.
+        self.assertIn('<link rel="stylesheet" href="styles.css">', out)
+
+    def test_strip_base_href_handles_multiple_and_quotes(self) -> None:
+        """Defensive: HTML5 disallows multiple <base>, but malformed
+        webarchives might still ship them. Single quotes, no quotes,
+        attribute-order variations — all must be stripped."""
+        from html2pdf_lib.chrome_engine import _strip_base_href
+        html = (
+            "<base href='http://a.com/'>"
+            '<base target="_top" href="http://b.com/" />'
+            '<base href=http://c.com/>'
+        )
+        out = _strip_base_href(html)
+        self.assertNotIn("<base", out.lower())
+
+    def test_strip_base_href_fast_path_no_change(self) -> None:
+        """Plain HTML without any `<base>` tag must short-circuit and
+        return the input unchanged (avoids one unnecessary regex pass
+        per chrome render)."""
+        from html2pdf_lib.chrome_engine import _strip_base_href
+        html = "<html><head><title>t</title></head><body>x</body></html>"
+        self.assertIs(_strip_base_href(html), html)
+
+    def test_chrome_engine_default_javascript_off(self) -> None:
+        """pdf-11 VDD-fix: JavaScript is OFF by default in the chrome
+        engine. Static archives already capture the rendered DOM; running
+        their JS with offline network either replaces the body with an
+        error fallback (Gmail) or leaves the SPA in a half-hydrated
+        overlapping state (ELMA365). Pinning the default keeps this
+        baseline regression-protected."""
+        import inspect
+        from html2pdf_lib.chrome_engine import render_chrome
+        sig = inspect.signature(render_chrome)
+        self.assertFalse(
+            sig.parameters["javascript"].default,
+            "render_chrome must default to javascript=False",
+        )
+
+    def test_chrome_engine_desktop_viewport(self) -> None:
+        """Pin the desktop-class viewport (1280×1024) so SPAs that
+        branch on `@media (min-width: 1024px)` resolve to the desktop
+        layout instead of mobile-stack collapse."""
+        from html2pdf_lib.chrome_engine import _DEFAULT_VIEWPORT
+        self.assertGreaterEqual(_DEFAULT_VIEWPORT["width"], 1280)
+        self.assertGreaterEqual(_DEFAULT_VIEWPORT["height"], 1024)
+
+    def test_layout_normalize_css_releases_html_body_height(self) -> None:
+        """pdf-11 VDD-fix: SPAs ship `html{height:100%}` + `body{height:
+        100vh; overflow:hidden}` so inner scroll containers handle the
+        scrolling. Chrome's `page.pdf()` then only sees the viewport-
+        sized slice and CUTS OFF everything below the fold (Gmail
+        rendered Page 1 only; rest of newsletter lost). The injected
+        normalize CSS must release html/body height clamping AND the
+        universal `overflow: visible` rule to expand inner scroll
+        containers. Both are required — pinning each to catch refactor
+        regressions."""
+        from html2pdf_lib.chrome_engine import _LAYOUT_NORMALIZE_CSS
+        # html/body height/overflow release
+        self.assertIn("html, body", _LAYOUT_NORMALIZE_CSS)
+        self.assertIn("height: auto !important", _LAYOUT_NORMALIZE_CSS)
+        self.assertIn("overflow: visible !important", _LAYOUT_NORMALIZE_CSS)
+        # universal inner-container release
+        self.assertIn("* {", _LAYOUT_NORMALIZE_CSS)
+
+    def test_chrome_render_injects_layout_normalize(self) -> None:
+        """Verify render_chrome inserts the normalize CSS into <head>
+        before writing HTML to disk. We mock Playwright away and
+        capture the html_text written to the temp file. (This catches
+        a refactor that defines _LAYOUT_NORMALIZE_CSS but forgets to
+        wire it into the render path.)"""
+        from html2pdf_lib import chrome_engine as ce
+        captured = {"html": None}
+
+        original_write = Path.write_text
+
+        def _capture_write(self, content, **kw):
+            if str(self).endswith("__html2pdf_chrome.html"):
+                captured["html"] = content
+            return original_write(self, content, **kw)
+
+        # Stub Playwright entirely — we only care about what HTML gets
+        # written before the browser would have opened it.
+        class _StubBrowser:
+            def new_context(self, **kw): return _StubCtx()
+            def close(self): pass
+        class _StubCtx:
+            def route(self, *a, **k): pass
+            def new_page(self): return _StubPage()
+            def close(self): pass
+        class _StubPage:
+            def goto(self, *a, **k): pass
+            def emulate_media(self, **k): pass
+            def pdf(self, **k):
+                Path(k["path"]).write_bytes(b"%PDF-1.4 stub\n")
+            def close(self): pass
+        class _StubPW:
+            def __enter__(self): return self
+            def __exit__(self, *a): pass
+            @property
+            def chromium(self):
+                class _C:
+                    def launch(self, **k): return _StubBrowser()
+                return _C()
+        def _stub_imports():
+            return (lambda: _StubPW(), Exception, Exception)
+
+        import tempfile
+        with tempfile.TemporaryDirectory() as td, \
+             mock.patch.object(ce, "_import_playwright", _stub_imports), \
+             mock.patch.object(Path, "write_text", _capture_write):
+            ce.render_chrome(
+                "<html><head></head><body>x</body></html>",
+                Path(td) / "out.pdf",
+                base_url=td, page_size="letter", timeout=10,
+            )
+
+        self.assertIsNotNone(captured["html"], "render_chrome did not write HTML")
+        self.assertIn(
+            "__html2pdf_chrome_layout_normalize", captured["html"],
+            "layout-normalize <style> must be injected into <head>",
+        )
+
     def test_default_engine_is_weasyprint(self) -> None:
         """Backwards compatibility: every existing call site that omits
         `engine=` must still go through the weasyprint path. We verify

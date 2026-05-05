@@ -182,6 +182,20 @@ def main(argv: list[str] | None = None) -> int:
              "produces broken layout on heavy SPA pages — see "
              "references/html-conversion.md for the engine comparison.",
     )
+    # pdf-11 VDD-fix: JavaScript is OFF by default in the chrome engine.
+    # Static archives (webarchive/MHTML) already capture the rendered
+    # state; re-running JS with the network blocked tends to either
+    # replace the body with an offline-error page (Gmail) or leave the
+    # SPA in a half-hydrated overlapping-layout state (ELMA365 Angular).
+    # Opt-in via `--chrome-js` for the rare cases where JS is needed:
+    # canvas charts (TradingView), pre-hydration HTML snapshots.
+    parser.add_argument(
+        "--chrome-js", dest="chrome_javascript", action="store_true",
+        help="(chrome engine only) Execute the page's JavaScript. Default "
+             "is OFF — static archives render cleanly without JS, and "
+             "JS-on with offline network typically corrupts the DOM. "
+             "Use only for canvas charts or pre-hydration HTML snapshots.",
+    )
     add_json_errors_argument(parser)
     args = parser.parse_args(argv)
     je = args.json_errors
@@ -279,6 +293,7 @@ def main(argv: list[str] | None = None) -> int:
             reader_mode=args.reader_mode,
             timeout=args.timeout,
             engine=args.engine,
+            chrome_javascript=args.chrome_javascript,
         )
     except ChromeEngineUnavailable as exc:
         return report_error(

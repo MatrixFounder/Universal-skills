@@ -227,11 +227,46 @@ Decision rules (when to use chrome):
 - The page contains `<canvas>` charts that must appear in the PDF (TradingView, Recharts, Chart.js).
 - The page is JS-hydrated and weasyprint shows `(loading…)` placeholder text instead of content.
 
+Chrome + reader-mode composition (recommended for email/article archives):
+
+- For **email/newsletter/article-style content** captured from SPAs (Gmail email body, Outlook conversation, blog post inside a CMS shell), `--engine chrome --reader-mode` produces the cleanest output. Reader-mode strips the SPA chrome (sender list, navigation rail, toolbar) and extracts the article body; chrome then renders the clean linear HTML with real CSS engine. Validated on `gmail_example.webarchive` → 10-page beautifully-formatted Sentora newsletter without the Gmail UI.
+- For **dashboard / data-registry / structured-UI archives** (ELMA365 activity log, Yandex Cloud Console, admin panels), use `--engine chrome` WITHOUT `--reader-mode`. Reader-mode's largest-contentful-subtree heuristic targets prose, not data layouts — on data-heavy SPAs it produces a flat text dump and oversized icons. Chrome alone preserves the card-based layout and sidebars.
+- Quick rule of thumb: prose with one author and a clear "main content area" → reader+chrome; tables, cards, lists, dashboards → chrome alone.
+
+### Overflow-release trade-off (chrome engine, post-VDD-iter-3)
+
+The chrome engine injects an aggressive layout-normalize CSS rule:
+
+```css
+html, body { height: auto !important; min-height: 0 !important; max-height: none !important; overflow: visible !important; }
+* { overflow: visible !important; max-height: none !important; }
+```
+
+**Why it's needed**: SPA archives ship `<body style="height:100vh; overflow:hidden">` with content inside an inner `overflow:auto` scroll container. Without releasing those constraints, `page.pdf()` only sees the viewport-sized slice of the content (Gmail rendered Page 1 of a 6-page email, ELMA365 lost most of the activity list).
+
+**Documented side effects** (acceptable trade-offs):
+
+- **Icon-only sidebars leak text labels into main content.** Pattern: a narrow fixed-width sidebar (e.g. 64 px) uses `overflow: hidden` to clip the EXPANDED-state text labels, showing only icons by default. The aggressive rule unclips those labels, which then visually overlap the main content. Verified on `ya_browser.webarchive` (Yandex Cloud Console marketplace page) — labels like "Поиск", "Marketplace", "Доступные продукты" overlap the product description.
+- **Carousels expand to show all slides at once** (vs. one at a time in the original).
+- **Rounded-corner clipping is lost** where a parent `overflow: hidden` was used to clip child content to a `border-radius` boundary.
+
+**Why we don't fix the sidebar leak**: every targeted alternative we tried either failed to release Gmail's content (truncating the email to Page 1) or was too vendor-specific (matching `class="aHU"` etc., violating the "no vendor allow-list" rule). The trade-off "gmail/elma full content with ya_browser cosmetic overlap" is the lesser harm than "ya_browser clean with gmail/elma truncated".
+
+**Mitigations for the user**:
+
+- For **ya_browser-class static marketplace pages**: use the default `weasyprint` engine (no chrome). It renders these pages cleanly without the overflow trade-off.
+- For **email/article archives**: use `--engine chrome --reader-mode` (see below). Reader-mode strips the chrome BEFORE rendering, so there are no sidebars to leak.
+- For **dashboard / data-registry archives**: accept the cosmetic side effects; full content is the priority.
+
 Pipeline differences:
 
 - The chrome engine **does not run** the weasyprint preprocess pipeline (`preprocess_html` — calc/var stripping, font-face stripping, NORMALIZE_CSS injection). Those are workarounds for weasyprint bugs Chrome doesn't have. Running them would corrupt a faithful browser render.
 - Reader-mode (`--reader-mode`) and `--css EXTRA.css` apply to both engines — they're engine-agnostic content-shaping concerns.
 - Network is blocked in both engines. The chrome path uses Playwright `context.route()` to abort all `http(s)://` requests, mirroring weasyprint's `_offline_url_fetcher`. Sub-resources baked into the archive load fine; CDN fonts and tracking pixels are dropped.
+- **`<base href>` is stripped** before Chrome opens the HTML. Webarchives almost always embed `<base href="https://orig-site.com/">` — Chrome (correctly per HTML spec) uses this for relative-URL resolution, sending every CSS/script reference to the offline-blocked origin. weasyprint ignores `<base>` and uses its `base_url=` parameter, so it never hit this issue. The chrome engine strips the tag so relative refs resolve against the local extraction tempdir (where archives.py wrote the assets).
+- **JavaScript is OFF by default** in the chrome engine. Static archives already capture the post-render DOM; re-running JS with offline network typically corrupts the page (Gmail self-replaces the body with an error fallback, ELMA365 Angular leaves the SPA in a half-hydrated overlapping state). Opt back in via `--chrome-js` for canvas charts or pre-hydration HTML snapshots.
+- **Media is forced to `screen`** before `page.pdf()`. Default Playwright behaviour is `media: print`, which triggers the page's `@media print` stylesheet — typically designed to hide nav, sidebars, and SPA chrome for clean paper-style printing of articles. For archive rendering the user wants a screen-capture fidelity, not paper print.
+- **Viewport is set explicitly to 1280×1024** (desktop class). SPAs that branch on `@media (min-width: 1024px)` resolve to their desktop layout instead of collapsing into mobile-stack mode.
 
 Failure modes:
 
