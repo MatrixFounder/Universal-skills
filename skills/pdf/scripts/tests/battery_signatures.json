@@ -2,26 +2,80 @@
   "API Reference - Documentation - Discord.webarchive": {
     "platform": "discord",
     "regular": {
-      "min_pages": 25,
-      "max_pages": 27,
-      "min_size_kb": 265,
-      "max_size_kb": 325,
+      "min_pages": 27,
+      "max_pages": 29,
+      "min_size_kb": 266,
+      "max_size_kb": 326,
       "required_needles": [
-        "to 64 bits in size (e.g. a uint64), they are always returned",
-        "serialized back to JSON by Discord, it is not transformed in",
-        "персонализировать рекламные объявления и другие материалы, о"
+        "The file upload size limit applies to each file in a request.",
+        "parent’s ID. Because Snowflake IDs are up to 64 bits in size",
+        "Discord’s Gateway API is used for maintaining persistent, stateful"
       ],
       "forbidden_needles": []
     },
     "reader": {
-      "min_pages": 18,
-      "max_pages": 20,
-      "min_size_kb": 223,
-      "max_size_kb": 273,
+      "min_pages": 19,
+      "max_pages": 21,
+      "min_size_kb": 229,
+      "max_size_kb": 279,
       "required_needles": [
-        "The file upload size limit applies to each file in a request",
-        "with RFC 6585. API users that regularly hit and ignore rate",
-        "various API requests, like Get User. Below are the formats,"
+        "The file upload size limit applies to each file in a request.",
+        "with RFC 6585. API users that regularly hit and ignore rate limits",
+        "various API requests, like Get User. Below are the formats, size"
+      ],
+      "forbidden_needles": []
+    }
+  },
+  "HubSpot Marketplace.webarchive": {
+    "platform": "unknown",
+    "regular": {
+      "min_pages": 48,
+      "max_pages": 52,
+      "min_size_kb": 8524,
+      "max_size_kb": 10418,
+      "required_needles": [
+        "Give your teams and agents the context they need to take meaningful",
+        "requests manually or from workflows and sync exemption certificate",
+        "Connect HubSpot with Xero or QuickBooks to manage contracts,"
+      ],
+      "forbidden_needles": []
+    },
+    "reader": {
+      "min_pages": 48,
+      "max_pages": 54,
+      "min_size_kb": 3290,
+      "max_size_kb": 4022,
+      "required_needles": [
+        "Access your HubSpot context in Claude to get personalized insights,",
+        "Assists with domain-related queries, domain setup processes,",
+        "Create, manage, optimize, and report on Facebook and Instagram"
+      ],
+      "forbidden_needles": []
+    }
+  },
+  "HubSpot for WordPress.webarchive": {
+    "platform": "unknown",
+    "regular": {
+      "min_pages": 11,
+      "max_pages": 13,
+      "min_size_kb": 1151,
+      "max_size_kb": 1407,
+      "required_needles": [
+        "* The pricing here is for display purposes only. All prices do",
+        "date and correct pricing information. HubSpot does not take any",
+        "See which pages and traffic sources drive the most conversions"
+      ],
+      "forbidden_needles": []
+    },
+    "reader": {
+      "min_pages": 11,
+      "max_pages": 13,
+      "min_size_kb": 1151,
+      "max_size_kb": 1407,
+      "required_needles": [
+        "the plugin's ability to easily integrate WordPress forms and",
+        "Easily build forms and popups using the drag-and-drop builder",
+        "CRM. The tool provides a helpful way to automate contact management"
       ],
       "forbidden_needles": []
     }
@@ -29,26 +83,26 @@
   "Hyperliquid_Docs_gitbook.webarchive": {
     "platform": "gitbook",
     "regular": {
-      "min_pages": 37,
-      "max_pages": 41,
-      "min_size_kb": 108,
-      "max_size_kb": 132,
+      "min_pages": 41,
+      "max_pages": 45,
+      "min_size_kb": 110,
+      "max_size_kb": 134,
       "required_needles": [
-        "Responses that take a time range will only return 500 elemen",
-        "The endpoints in this section as well as websocket subscript",
-        "tokens [150, 0] . Note that some assets may be remapped on u"
+        "Responses that take a time range will only return 500 elements",
+        "index of the spot pair in the universe field of the spotMeta",
+        "@107 has tokens [150, 0] . Note that some assets may be remapped"
       ],
       "forbidden_needles": []
     },
     "reader": {
-      "min_pages": 37,
-      "max_pages": 41,
-      "min_size_kb": 108,
-      "max_size_kb": 132,
+      "min_pages": 41,
+      "max_pages": 45,
+      "min_size_kb": 109,
+      "max_size_kb": 133,
       "required_needles": [
-        "Responses that take a time range will only return 500 elemen",
-        "The endpoints in this section as well as websocket subscript",
-        "tokens [150, 0] . Note that some assets may be remapped on u"
+        "Responses that take a time range will only return 500 elements",
+        "index of the spot pair in the universe field of the spotMeta",
+        "@107 has tokens [150, 0] . Note that some assets may be remapped"
       ],
       "forbidden_needles": [
         "Powered by GitBook",
@@ -61,12 +115,12 @@
     "regular": {
       "min_pages": 7,
       "max_pages": 9,
-      "min_size_kb": 87,
-      "max_size_kb": 107,
+      "min_size_kb": 336,
+      "max_size_kb": 410,
       "required_needles": [
         "A portion of protocol incentives is automatically redirected",
-        "Reward Vault can have up to two unique Incentive Tokens whit",
-        "A validator can change their commission percentage by first"
+        "A Reward Vault can offer up to two Incentive Tokens simultaneously.",
+        "emissions towards those Reward Vaults, defined by a validator’s"
       ],
       "forbidden_needles": []
     },
@@ -77,8 +131,8 @@
       "max_size_kb": 62,
       "required_needles": [
         "A portion of protocol incentives is automatically redirected",
-        "Reward Vault can have up to two unique Incentive Tokens whit",
-        "A validator can change their commission percentage by first"
+        "A Reward Vault can offer up to two Incentive Tokens simultaneously.",
+        "emissions towards those Reward Vaults, defined by a validator’s"
       ],
       "forbidden_needles": [
         "Skip to main content",
@@ -89,13 +143,13 @@
   "JetBrains IDEs - Claude Code Docs.webarchive": {
     "platform": "anthropic-mintlify",
     "regular": {
-      "min_pages": 7,
-      "max_pages": 9,
-      "min_size_kb": 113,
-      "max_size_kb": 137,
+      "min_pages": 6,
+      "max_pages": 8,
+      "min_size_kb": 117,
+      "max_size_kb": 143,
       "required_needles": [
-        "Find and install the Claude Code plugin from the JetBrains m",
-        "modify IDE configuration files that can be automatically exe",
+        "Find and install the Claude Code plugin from the JetBrains marketplace",
+        "modify IDE configuration files that can be automatically executed",
         "If you’re using Claude Code on WSL2 with a JetBrains IDE and"
       ],
       "forbidden_needles": []
@@ -103,12 +157,12 @@
     "reader": {
       "min_pages": 4,
       "max_pages": 6,
-      "min_size_kb": 47,
-      "max_size_kb": 57,
+      "min_size_kb": 46,
+      "max_size_kb": 56,
       "required_needles": [
-        "Find and install the Claude Code plugin from the JetBrains m",
-        "modify IDE configuration files that can be automatically exe",
-        "the cause is usually WSL2’s NAT networking or Windows Firewa"
+        "Find and install the Claude Code plugin from the JetBrains marketplace",
+        "modify IDE configuration files that can be automatically executed",
+        "the cause is usually WSL2’s NAT networking or Windows Firewall"
       ],
       "forbidden_needles": [
         "Skip to main content",
@@ -121,12 +175,12 @@
     "regular": {
       "min_pages": 5,
       "max_pages": 7,
-      "min_size_kb": 77,
-      "max_size_kb": 93,
+      "min_size_kb": 75,
+      "max_size_kb": 91,
       "required_needles": [
-        "персонализировать рекламные объявления и другие материалы, о",
-        "персонализировать рекламные объявления и другие материалы, о",
-        "социальных сетей и анализировать сетевой трафик. Мы также пр"
+        "the OAuth2 authorization flow and must be declared in the Developer",
+        "Use this file to discover all available pages before exploring",
+        "Scopes define what your app is allowed to do. They are requested"
       ],
       "forbidden_needles": []
     },
@@ -137,8 +191,8 @@
       "max_size_kb": 40,
       "required_needles": [
         "uses this token to authenticate as the bot user, a dedicated",
-        "Discord uses OAuth2 as the standard authorization framework",
-        "• Let your app read or write data on behalf of the user as a"
+        "Discord uses OAuth2 as the standard authorization framework for",
+        "• Let your app read or write data on behalf of the user as authorized"
       ],
       "forbidden_needles": []
     }
@@ -146,25 +200,25 @@
   "OpenRouter Quickstart Guide - fern.webarchive": {
     "platform": "fern",
     "regular": {
-      "min_pages": 6,
-      "max_pages": 8,
-      "min_size_kb": 81,
-      "max_size_kb": 99,
+      "min_pages": 5,
+      "max_pages": 7,
+      "min_size_kb": 76,
+      "max_size_kb": 92,
       "required_needles": [
-        "For AI agents: a documentation index is available at the roo",
+        "For AI agents: a documentation index is available at the root",
         "OpenAPI spec, and zero boilerplate. It is intentionally lean",
-        "The Client SDKs wrap the OpenRouter API with full type safet"
+        "The Client SDKs wrap the OpenRouter API with full type safety,"
       ],
       "forbidden_needles": []
     },
     "reader": {
       "min_pages": 4,
       "max_pages": 6,
-      "min_size_kb": 41,
-      "max_size_kb": 51,
+      "min_size_kb": 40,
+      "max_size_kb": 50,
       "required_needles": [
-        "handles multi-turn conversation loops, tool execution, and s",
-        "single endpoint, while automatically handling fallbacks and",
+        "handles multi-turn conversation loops, tool execution, and state",
+        "single endpoint, while automatically handling fallbacks and selecting",
         "The API also supports streaming. You can also use the OpenAI"
       ],
       "forbidden_needles": [
@@ -179,24 +233,24 @@
     "regular": {
       "min_pages": 17,
       "max_pages": 19,
-      "min_size_kb": 2360,
-      "max_size_kb": 2884,
+      "min_size_kb": 2348,
+      "max_size_kb": 2870,
       "required_needles": [
-        "Генеративный AI в BIOCAD, hh.ru, Северстали, Яндекс Лавке и",
-        "PwC Global Consumer Insights Survey (2023) показал: 73% потр",
-        "Как вы относитесь к брендам, которые открыто показывают проц"
+        "Генеративный AI в BIOCAD, hh.ru, Северстали, Яндекс Лавке и не",
+        "PwC Global Consumer Insights Survey (2023) показал: 73% потребителей",
+        "Как вы относитесь к брендам, которые открыто показывают процесс"
       ],
       "forbidden_needles": []
     },
     "reader": {
       "min_pages": 2,
       "max_pages": 4,
-      "min_size_kb": 214,
-      "max_size_kb": 262,
+      "min_size_kb": 212,
+      "max_size_kb": 260,
       "required_needles": [
-        "которые особенно чувствительны к перегреву. И это только лаб",
-        "Считается, что потребителю это неинтересно. Но данные говоря",
-        "доверяют брендам больше, если те открыто рассказывают о проц"
+        "которые особенно чувствительны к перегреву. И это только лабораторная",
+        "Считается, что потребителю это неинтересно. Но данные говорят",
+        "доверяют брендам больше, если те открыто рассказывают о процессе"
       ],
       "forbidden_needles": []
     }
@@ -204,26 +258,26 @@
   "US-Отчет-Полнотекстовый поиск в приложении - Ярли - Confluence Wiki-2.webarchive": {
     "platform": "confluence",
     "regular": {
-      "min_pages": 37,
-      "max_pages": 41,
-      "min_size_kb": 209,
-      "max_size_kb": 255,
+      "min_pages": 28,
+      "max_pages": 32,
+      "min_size_kb": 370,
+      "max_size_kb": 452,
       "required_needles": [
-        "/plugins/pagetree/naturalchildren.action?decorator=none&exce",
-        "7. Первоначальное заполнение таблицыслепка.sql Свернуть исходный",
-        "Раньше всех оставьте отзыв или задайте вопрос. Для эт"
+        "функции websearch_to_tsquery , поддерживающей стандартный синтаксис",
+        "• Снижение времени выполнения поискового запроса с более чем",
+        "• Отсутствие индекса — поисковый предикат не использует GIN-индекс"
       ],
       "forbidden_needles": []
     },
     "reader": {
-      "min_pages": 25,
-      "max_pages": 27,
-      "min_size_kb": 185,
-      "max_size_kb": 225,
+      "min_pages": 28,
+      "max_pages": 32,
+      "min_size_kb": 369,
+      "max_size_kb": 451,
       "required_needles": [
-        "GIN (Generalized Inverted Index) – оптимальный тип индекса для",
+        "функции websearch_to_tsquery , поддерживающей стандартный синтаксис",
         "• Снижение времени выполнения поискового запроса с более чем",
-        "• Отсутствие поддержки стандартного синтаксиса полнотекстового"
+        "• Отсутствие индекса — поисковый предикат не использует GIN-индекс"
       ],
       "forbidden_needles": []
     }
@@ -231,26 +285,26 @@
   "US-Отчет-Полнотекстовый поиск в приложении - Ярли - Confluence Wiki.webarchive": {
     "platform": "confluence",
     "regular": {
-      "min_pages": 37,
-      "max_pages": 41,
-      "min_size_kb": 209,
-      "max_size_kb": 255,
+      "min_pages": 28,
+      "max_pages": 32,
+      "min_size_kb": 370,
+      "max_size_kb": 452,
       "required_needles": [
-        "/plugins/pagetree/naturalchildren.action?decorator=none&exce",
-        "7. Первоначальное заполнение таблицыслепка.sql Развернуть исходный",
-        "-- Индексы для ссылок (ускорят JOIN с CRMтаблицами)"
+        "функции websearch_to_tsquery , поддерживающей стандартный синтаксис",
+        "• Снижение времени выполнения поискового запроса с более чем",
+        "• Отсутствие индекса — поисковый предикат не использует GIN-индекс"
       ],
       "forbidden_needles": []
     },
     "reader": {
-      "min_pages": 25,
-      "max_pages": 27,
-      "min_size_kb": 185,
-      "max_size_kb": 225,
+      "min_pages": 28,
+      "max_pages": 32,
+      "min_size_kb": 369,
+      "max_size_kb": 451,
       "required_needles": [
-        "GIN (Generalized Inverted Index) – оптимальный тип индекса для",
+        "функции websearch_to_tsquery , поддерживающей стандартный синтаксис",
         "• Снижение времени выполнения поискового запроса с более чем",
-        "• Отсутствие поддержки стандартного синтаксиса полнотекстового"
+        "• Отсутствие индекса — поисковый предикат не использует GIN-индекс"
       ],
       "forbidden_needles": []
     }
@@ -258,26 +312,53 @@
   "What is Intelligence.webarchive": {
     "platform": "unknown",
     "regular": {
-      "min_pages": 96,
-      "max_pages": 106,
-      "min_size_kb": 27388,
-      "max_size_kb": 33474,
+      "min_pages": 64,
+      "max_pages": 70,
+      "min_size_kb": 27381,
+      "max_size_kb": 33465,
       "required_needles": [
-        "of seawater, which likely contained about a billion virus pa",
+        "of seawater, which likely contained about a billion virus particles!",
         "threats and opportunities, should they arise—and assuming we",
-        "Then, the really clever part: if the program itself is writt"
+        "matter of where on the symbiotic trajectory it falls. When brand"
       ],
       "forbidden_needles": []
     },
     "reader": {
-      "min_pages": 100,
-      "max_pages": 110,
-      "min_size_kb": 27397,
-      "max_size_kb": 33485,
+      "min_pages": 66,
+      "max_pages": 74,
+      "min_size_kb": 27388,
+      "max_size_kb": 33474,
       "required_needles": [
-        "apparent impossibility of order arising spontaneously out of",
-        "his colleagues figured out what was really going on. Their c",
-        "The “Candelabra” black smoker in the Logatchev hydrothermal"
+        "computational life forms (and therefore does a lot of computation",
+        "which are, in Euclidean terms, one-dimensional—have to repeatedly",
+        "have even figured out how to compute with a single instruction"
+      ],
+      "forbidden_needles": []
+    }
+  },
+  "XAUUSD – Bearish Rejection Setup for OANDA_XAUUSD by SHAY_ANALYTICS.html": {
+    "platform": "unknown",
+    "regular": {
+      "min_pages": 33,
+      "max_pages": 37,
+      "min_size_kb": 5065,
+      "max_size_kb": 6191,
+      "required_needles": [
+        "Continuation SetupPrice is forming a shortterm bullish structure",
+        "preparing for further growth... Bitcoin is in a",
+        "Structure: Gold is currently trapped in a large"
+      ],
+      "forbidden_needles": []
+    },
+    "reader": {
+      "min_pages": 1,
+      "max_pages": 3,
+      "min_size_kb": 829,
+      "max_size_kb": 1013,
+      "required_needles": [
+        "Gold is currently facing strong selling pressure after failing",
+        "resistance + trendline * Structure shift with higher high confirmation",
+        "valid after breakout and retest above resistance. 🎯 Upside Target"
       ],
       "forbidden_needles": []
     }
@@ -320,6 +401,38 @@
       "forbidden_needles": [
         "Копировать ссылку"
       ]
+    }
+  },
+  "elma365_activities_example.webarchive": {
+    "platform": "unknown",
+    "regular": null,
+    "reader": {
+      "min_pages": 18,
+      "max_pages": 20,
+      "min_size_kb": 44,
+      "max_size_kb": 54,
+      "required_needles": [
+        "Сокращенное наименованиеГорьковская дирекция моторвагонного подвижного",
+        "Сокращенное наименованиеООО \"КОСТРОМСКОЕ НАУЧНО",
+        "НазваниеТестовый клиент для переприсваивания сотрудников"
+      ],
+      "forbidden_needles": []
+    }
+  },
+  "email_list_client.webarchive": {
+    "platform": "unknown",
+    "regular": null,
+    "reader": {
+      "min_pages": 12,
+      "max_pages": 14,
+      "min_size_kb": 34,
+      "max_size_kb": 44,
+      "required_needles": [
+        "Сокращенное наименованиеГорьковская дирекция моторвагонного подвижного",
+        "НазваниеТестовый клиент для переприсваивания сотрудников",
+        "НазваниеГорьковская дирекция МВПС, г. Новгород"
+      ],
+      "forbidden_needles": []
     }
   },
   "fern-shiki-codeblock.html": {
@@ -377,6 +490,32 @@
         "Retrieve mids for all coins",
         "Content-Type",
         "application/json"
+      ],
+      "forbidden_needles": []
+    }
+  },
+  "gmail_example.webarchive": {
+    "platform": "unknown",
+    "regular": {
+      "min_pages": 1,
+      "max_pages": 2,
+      "min_size_kb": 54,
+      "max_size_kb": 66,
+      "required_needles": [
+        "Circle introduces cirBTC to expand BTC's DeFi role",
+        "Разрешите уведомления Gmail на рабочем столе."
+      ],
+      "forbidden_needles": []
+    },
+    "reader": {
+      "min_pages": 9,
+      "max_pages": 11,
+      "min_size_kb": 106,
+      "max_size_kb": 130,
+      "required_needles": [
+        "Open bad debt provides transparency needed to evaluate protocol",
+        "real post-launch traction in minted supply, pool depth, lending",
+        "to trade, realize gains, or post collateral, creating a near-term"
       ],
       "forbidden_needles": []
     }
@@ -617,6 +756,32 @@
       "forbidden_needles": []
     }
   },
+  "test_email_elma365.webarchive": {
+    "platform": "unknown",
+    "regular": {
+      "min_pages": 2,
+      "max_pages": 4,
+      "min_size_kb": 40,
+      "max_size_kb": 50,
+      "required_needles": [
+        "replyОтветитьlong_arrow_rightПереслатьenvelope Не прочитано trashУдалитьplusСвязать",
+        "браузера, скачайте приложение для",
+        "Почта Mail info@e.mail.ru"
+      ],
+      "forbidden_needles": []
+    },
+    "reader": {
+      "min_pages": 2,
+      "max_pages": 4,
+      "min_size_kb": 30,
+      "max_size_kb": 40,
+      "required_needles": [
+        "replyОтветитьlong_arrow_rightПереслатьenvelope Не прочитано trashУдалитьplusСвязать",
+        "arrow_leftпред.след.arrow_right"
+      ],
+      "forbidden_needles": []
+    }
+  },
   "vcru-entry-tail.html": {
     "platform": "vcru",
     "source": "platform",
@@ -651,29 +816,52 @@
       ]
     }
   },
+  "ya_browser.webarchive": {
+    "platform": "unknown",
+    "regular": {
+      "min_pages": 1,
+      "max_pages": 2,
+      "min_size_kb": 3,
+      "max_size_kb": 13,
+      "required_needles": [],
+      "forbidden_needles": []
+    },
+    "reader": {
+      "min_pages": 3,
+      "max_pages": 5,
+      "min_size_kb": 36,
+      "max_size_kb": 46,
+      "required_needles": [
+        "сервисов, которые оптимизированы под Internet Explorer, а также",
+        "в Справке. Время работы технической поддержки с 7:00 до 19:00",
+        "Расширенная версия Яндекс Браузера для организаций поддерживает"
+      ],
+      "forbidden_needles": []
+    }
+  },
   "В Claude добавили интеграции с Blender, Adobe и другими приложениями для дизайна и 3D-моделирования .webarchive": {
     "platform": "unknown",
     "regular": {
       "min_pages": 13,
       "max_pages": 15,
-      "min_size_kb": 1324,
-      "max_size_kb": 1618,
+      "min_size_kb": 1301,
+      "max_size_kb": 1589,
       "required_needles": [
-        "платеж мобильного или см. п.2 ниже) телефон вообще не будет",
-        "Если у вас его нет (как в случае с покупкой в аэропорту, ког",
-        "уже к банку привязали) можно только очно, только в течение 3"
+        "платеж мобильного или см. п.2 ниже) телефон вообще не будет работать,",
+        "Если у вас его нет (как в случае с покупкой в аэропорту, когда",
+        "уже к банку привязали) можно только очно, только в течение 30"
       ],
       "forbidden_needles": []
     },
     "reader": {
       "min_pages": 1,
       "max_pages": 3,
-      "min_size_kb": 98,
-      "max_size_kb": 120,
+      "min_size_kb": 95,
+      "max_size_kb": 117,
       "required_needles": [
-        "• Для работы с Adobe нужна подписка Creative Cloud. Возможно",
-        "дизайнеров интерьеров и мебели, а также Splice — для поиска",
-        "• Теперь доступны программа для 3D-графики и анимации Blende"
+        "• Для работы с Adobe нужна подписка Creative Cloud. Возможности",
+        "Пользователь прислал Claude фотографию пончика и попросил сделать",
+        "Сами коннекторы бесплатные, но для работы с Photoshop и Premiere"
       ],
       "forbidden_needles": []
     }
@@ -681,26 +869,26 @@
   "Интеграция ELMA365 с телефонией 3CX - Ярли - Confluence Wiki-2.mhtml": {
     "platform": "confluence",
     "regular": {
-      "min_pages": 32,
-      "max_pages": 36,
-      "min_size_kb": 395,
-      "max_size_kb": 483,
+      "min_pages": 31,
+      "max_pages": 35,
+      "min_size_kb": 563,
+      "max_size_kb": 687,
       "required_needles": [
-        "https://crm-dev.npkyarli.ru/api/integrations/webhook/voip/e",
-        "pickupincoming, callerid = номер абонента, user =",
-        "// Вызывать автоматически при изменении ссылки на"
+        "10. 3CX отправляет POST запрос в ELMA365: event = ringing, callerid",
+        "10. 3CX отправляет POST запрос в ELMA365 event = incoming, callerid",
+        "20. 3CX отправляет POST запрос в ELMA365 event = incoming, callerid"
       ],
       "forbidden_needles": []
     },
     "reader": {
-      "min_pages": 26,
-      "max_pages": 28,
-      "min_size_kb": 376,
-      "max_size_kb": 460,
+      "min_pages": 31,
+      "max_pages": 35,
+      "min_size_kb": 561,
+      "max_size_kb": 685,
       "required_needles": [
-        "10. 3CX отправляет POST запрос в ELMA365: event = ringing, c",
-        "10. 3CX отправляет POST запрос в ELMA365 event = incoming, c",
-        "20. 3CX отправляет POST запрос в ELMA365 event = incoming, c"
+        "10. 3CX отправляет POST запрос в ELMA365: event = ringing, callerid",
+        "10. 3CX отправляет POST запрос в ELMA365 event = incoming, callerid",
+        "20. 3CX отправляет POST запрос в ELMA365 event = incoming, callerid"
       ],
       "forbidden_needles": [
         "Копировать ссылку",
@@ -711,26 +899,26 @@
   "Интеграция ELMA365 с телефонией 3CX - Ярли - Confluence Wiki-3.html": {
     "platform": "confluence",
     "regular": {
-      "min_pages": 24,
-      "max_pages": 26,
-      "min_size_kb": 100,
-      "max_size_kb": 122,
+      "min_pages": 18,
+      "max_pages": 20,
+      "min_size_kb": 91,
+      "max_size_kb": 111,
       "required_needles": [
-        "▪ telephony-8 — запустить бизнеспроцесс: Создать задачу, Уда",
-        "10. 3CX отправляет POST запрос в ELMA365: event =",
-        "10. 3CX отправляет POST запрос в ELMA365 event ="
+        "10. 3CX отправляет POST запрос в ELMA365: event = ringing, callerid",
+        "10. 3CX отправляет POST запрос в ELMA365 event = incoming, callerid",
+        "20. 3CX отправляет POST запрос в ELMA365 event = incoming, callerid"
       ],
       "forbidden_needles": []
     },
     "reader": {
-      "min_pages": 17,
-      "max_pages": 19,
-      "min_size_kb": 88,
-      "max_size_kb": 108,
+      "min_pages": 18,
+      "max_pages": 20,
+      "min_size_kb": 89,
+      "max_size_kb": 109,
       "required_needles": [
-        "10. 3CX отправляет POST запрос в ELMA365: event = ringing, c",
-        "10. 3CX отправляет POST запрос в ELMA365 event = incoming, c",
-        "20. 3CX отправляет POST запрос в ELMA365 event = incoming, c"
+        "10. 3CX отправляет POST запрос в ELMA365: event = ringing, callerid",
+        "10. 3CX отправляет POST запрос в ELMA365 event = incoming, callerid",
+        "20. 3CX отправляет POST запрос в ELMA365 event = incoming, callerid"
       ],
       "forbidden_needles": [
         "Копировать ссылку",
@@ -741,26 +929,26 @@
   "Интеграция ELMA365 с телефонией 3CX - Ярли - Confluence Wiki.html": {
     "platform": "confluence",
     "regular": {
-      "min_pages": 35,
-      "max_pages": 39,
-      "min_size_kb": 585,
-      "max_size_kb": 715,
+      "min_pages": 31,
+      "max_pages": 35,
+      "min_size_kb": 563,
+      "max_size_kb": 687,
       "required_needles": [
-        "/plugins/pagetree/naturalchildren.action?decorator=none&exce",
-        "Входящий звонок принят (Пользователь не работает в ELMA365)",
-        "pickupincoming, callerid = номер абонента, user ="
+        "10. 3CX отправляет POST запрос в ELMA365: event = ringing, callerid",
+        "10. 3CX отправляет POST запрос в ELMA365 event = incoming, callerid",
+        "20. 3CX отправляет POST запрос в ELMA365 event = incoming, callerid"
       ],
       "forbidden_needles": []
     },
     "reader": {
-      "min_pages": 27,
-      "max_pages": 29,
-      "min_size_kb": 558,
-      "max_size_kb": 682,
+      "min_pages": 31,
+      "max_pages": 35,
+      "min_size_kb": 561,
+      "max_size_kb": 685,
       "required_needles": [
-        "10. 3CX отправляет POST запрос в ELMA365: event = ringing, c",
-        "10. 3CX отправляет POST запрос в ELMA365 event = incoming, c",
-        "20. 3CX отправляет POST запрос в ELMA365 event = incoming, c"
+        "10. 3CX отправляет POST запрос в ELMA365: event = ringing, callerid",
+        "10. 3CX отправляет POST запрос в ELMA365 event = incoming, callerid",
+        "20. 3CX отправляет POST запрос в ELMA365 event = incoming, callerid"
       ],
       "forbidden_needles": [
         "Копировать ссылку",
@@ -773,24 +961,24 @@
     "regular": {
       "min_pages": 31,
       "max_pages": 35,
-      "min_size_kb": 397,
-      "max_size_kb": 485,
+      "min_size_kb": 564,
+      "max_size_kb": 690,
       "required_needles": [
-        "/plugins/pagetree/naturalchildren.action?decorator=none&exce",
-        "https://crm-dev.npkyarli.ru/api/integrations/webhook/voip/e",
-        "Здесь Вы можете добавлять ссылки быстрого доступа к"
+        "10. 3CX отправляет POST запрос в ELMA365: event = ringing, callerid",
+        "10. 3CX отправляет POST запрос в ELMA365 event = incoming, callerid",
+        "20. 3CX отправляет POST запрос в ELMA365 event = incoming, callerid"
       ],
       "forbidden_needles": []
     },
     "reader": {
-      "min_pages": 26,
-      "max_pages": 28,
-      "min_size_kb": 377,
-      "max_size_kb": 461,
+      "min_pages": 31,
+      "max_pages": 35,
+      "min_size_kb": 562,
+      "max_size_kb": 686,
       "required_needles": [
-        "10. 3CX отправляет POST запрос в ELMA365: event = ringing, c",
-        "10. 3CX отправляет POST запрос в ELMA365 event = incoming, c",
-        "20. 3CX отправляет POST запрос в ELMA365 event = incoming, c"
+        "10. 3CX отправляет POST запрос в ELMA365: event = ringing, callerid",
+        "10. 3CX отправляет POST запрос в ELMA365 event = incoming, callerid",
+        "20. 3CX отправляет POST запрос в ELMA365 event = incoming, callerid"
       ],
       "forbidden_needles": [
         "Копировать ссылку",
@@ -801,26 +989,26 @@
   "Обзор-2.webarchive": {
     "platform": "mobile-review",
     "regular": {
-      "min_pages": 42,
-      "max_pages": 46,
-      "min_size_kb": 10427,
-      "max_size_kb": 12743,
+      "min_pages": 43,
+      "max_pages": 47,
+      "min_size_kb": 9681,
+      "max_size_kb": 11833,
       "required_needles": [
-        "Молодежный смартфон, флагман линейки nova. Качественные фото",
-        "Модель доступна в четырех вариантах по памяти 8/256, 12/256",
-        "Получилось адекватное соотношение цена/качество, аппарат не"
+        "Молодежный смартфон, флагман линейки nova. Качественные фотографии",
+        "Модель доступна в четырех вариантах по памяти 8/256, 12/256 ГБ",
+        "Получилось адекватное соотношение цена/качество, аппарат не хватает"
       ],
       "forbidden_needles": []
     },
     "reader": {
       "min_pages": 72,
       "max_pages": 80,
-      "min_size_kb": 11044,
-      "max_size_kb": 13498,
+      "min_size_kb": 10542,
+      "max_size_kb": 12884,
       "required_needles": [
-        "Wi-Fi a/b/g/n/ac, WiFi 6, двухдиапазонный, Bluetooth 5.4, NF",
-        "рынке, то мы увидим, что его цена за версию 8/256 ГБ около 2",
-        "У нас модель зеленого цвета, ее можно назвать изумрудной, цв"
+        "Wi-Fi a/b/g/n/ac, WiFi 6, двухдиапазонный, Bluetooth 5.4, NFC,",
+        "рынке, то мы увидим, что его цена за версию 8/256 ГБ около 21",
+        "У нас модель зеленого цвета, ее можно назвать изумрудной, цвет"
       ],
       "forbidden_needles": []
     }
@@ -828,26 +1016,26 @@
   "Обзор.webarchive": {
     "platform": "mobile-review",
     "regular": {
-      "min_pages": 16,
-      "max_pages": 18,
-      "min_size_kb": 1129,
-      "max_size_kb": 1379,
+      "min_pages": 17,
+      "max_pages": 19,
+      "min_size_kb": 383,
+      "max_size_kb": 469,
       "required_needles": [
-        "Молодежный смартфон, флагман линейки nova. Качественные фото",
-        "Модель доступна в четырех вариантах по памяти 8/256, 12/256",
-        "Получилось адекватное соотношение цена/качество, аппарат не"
+        "Молодежный смартфон, флагман линейки nova. Качественные фотографии",
+        "Модель доступна в четырех вариантах по памяти 8/256, 12/256 ГБ",
+        "Получилось адекватное соотношение цена/качество, аппарат не хватает"
       ],
       "forbidden_needles": []
     },
     "reader": {
       "min_pages": 22,
       "max_pages": 24,
-      "min_size_kb": 2203,
-      "max_size_kb": 2693,
+      "min_size_kb": 1700,
+      "max_size_kb": 2078,
       "required_needles": [
-        "Wi-Fi a/b/g/n/ac, WiFi 6, двухдиапазонный, Bluetooth 5.4, NF",
-        "рынке, то мы увидим, что его цена за версию 8/256 ГБ около 2",
-        "У нас модель зеленого цвета, ее можно назвать изумрудной, цв"
+        "Wi-Fi a/b/g/n/ac, WiFi 6, двухдиапазонный, Bluetooth 5.4, NFC,",
+        "рынке, то мы увидим, что его цена за версию 8/256 ГБ около 21",
+        "У нас модель зеленого цвета, ее можно назвать изумрудной, цвет"
       ],
       "forbidden_needles": []
     }
@@ -857,24 +1045,24 @@
     "regular": {
       "min_pages": 19,
       "max_pages": 21,
-      "min_size_kb": 2330,
-      "max_size_kb": 2848,
+      "min_size_kb": 2309,
+      "max_size_kb": 2821,
       "required_needles": [
-        "то-ли из-за того, что не умеют пользоваться программой регис",
-        "ботов, ради хулиганства, положил его сервак. Сын подумал, по",
-        "У вас пропущено несколько очень важных моментов, которые сил"
+        "то-ли из-за того, что не умеют пользоваться программой регистрации,",
+        "ботов, ради хулиганства, положил его сервак. Сын подумал, поколдовал",
+        "У вас пропущено несколько очень важных моментов, которые сильно"
       ],
       "forbidden_needles": []
     },
     "reader": {
-      "min_pages": 6,
-      "max_pages": 8,
-      "min_size_kb": 798,
-      "max_size_kb": 976,
+      "min_pages": 5,
+      "max_pages": 7,
+      "min_size_kb": 797,
+      "max_size_kb": 973,
       "required_needles": [
-        "то-ли из-за того, что не умеют пользоваться программой регис",
-        "KapitalBank выпускает карту в центральном офисе (ул. Сайилго",
-        "организации в Узбекистане, работают только в будни с 9 до 18"
+        "то-ли из-за того, что не умеют пользоваться программой регистрации,",
+        "KapitalBank выпускает карту в центральном офисе (ул. Сайилгох,",
+        "организации в Узбекистане, работают только в будни с 9 до 18,"
       ],
       "forbidden_needles": []
     }
@@ -882,18 +1070,17 @@
   "Представлен трекер Claude Code для умных часов Garmin : Хабр.webarchive": {
     "platform": "habr",
     "regular": {
-      "min_pages": 8,
-      "max_pages": 10,
-      "min_size_kb": 465,
-      "max_size_kb": 569,
-      "_canary": "Демон запускается локально — paragraph-4 drop bug from commit 3857d6d",
+      "min_pages": 7,
+      "max_pages": 9,
+      "min_size_kb": 464,
+      "max_size_kb": 568,
       "required_needles": [
-        "Демон запускается локально",
         "— средняя зарплата во всех IT-специализациях по данным из 33",
-        "Claude Code, он не использует API‑интерфейс прокси. Если что",
-        "Разработчик Йенс Ларссон представил открытый проект фитнес-т"
+        "Claude Code, он не использует API‑интерфейс прокси. Если что‑то",
+        "Разработчик Йенс Ларссон представил открытый проект фитнес-трекер"
       ],
-      "forbidden_needles": []
+      "forbidden_needles": [],
+      "_canary": "Демон запускается локально — paragraph-4 drop bug from commit 3857d6d"
     },
     "reader": {
       "min_pages": 2,
@@ -901,9 +1088,9 @@
       "min_size_kb": 399,
       "max_size_kb": 487,
       "required_needles": [
-        "на запястье, а также настраиваемых графиков: количество токе",
-        "«Записывает ваши сеансы работы с Claude Code как реальные де",
-        "IMPLEMENTATION_PLAN.md проекта, где описана вся его полная а"
+        "на запястье, а также настраиваемых графиков: количество токенов",
+        "«Записывает ваши сеансы работы с Claude Code как реальные действия",
+        "IMPLEMENTATION_PLAN.md проекта, где описана вся его полная архитектура,"
       ],
       "forbidden_needles": [
         "erid:2VSb5yvZvKk",
