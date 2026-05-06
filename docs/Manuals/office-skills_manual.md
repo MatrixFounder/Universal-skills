@@ -680,6 +680,33 @@ because they're engine-agnostic. Network is blocked in both engines:
 chrome uses Playwright `context.route()` to abort `http(s)://`
 requests, mirroring weasyprint's `_offline_url_fetcher`.
 
+Chrome render hardenings (8-iter VDD-adversarial result, summary —
+see `skills/pdf/references/html-conversion.md` for details):
+
+- `<base href>` strip (webarchives use live-site origin → blocked).
+- `<script>` strip + JS-enabled at context level (page can't run own
+  JS → no Gmail self-destruct, no Angular half-hydration; `page.
+  evaluate` still works for our DOM normalization). `--chrome-js`
+  opts page-JS back in.
+- `media: screen` forced (default `print` triggers SPA print-stylesheets
+  that hide nav/sidebars).
+- 1280×1024 viewport + scale-to-fit `page.pdf(scale ≈ 0.561)` — no
+  right-edge cutoff on A4.
+- Layout-normalize CSS: high-specificity body release, icon-font
+  ligature suppression with `:not(:has(*))` leaf-only guard,
+  `[class~="..."]` exact-word match for spinner/loader/skeleton (not
+  substring), image cap, avatar `... img` 48×48.
+- JS-based DOM normalize: width-gate `offsetWidth ≥ 200` for overflow
+  release, substantial-modal release, modal-portal hide.
+
+**Recommended composition** (per content type):
+
+| Archive type | Engine | Result on validated fixtures |
+|---|---|---|
+| Email/newsletter/article (gmail_example) | `chrome --reader-mode` | 5p clean newsletter without Gmail UI |
+| Dashboard/data-registry (elma365 activities) | `chrome` (no reader) | 4p with full activity log + sidebar |
+| Marketplace/static page (ya_browser) | `chrome` (no reader) | 2p marketplace card, sidebar contained |
+
 Without Playwright installed, `--engine chrome` exits 1 with a
 `ChromeEngineUnavailable` envelope naming the install command.
 

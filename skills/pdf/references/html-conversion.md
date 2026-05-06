@@ -233,40 +233,49 @@ Chrome + reader-mode composition (recommended for email/article archives):
 - For **dashboard / data-registry / structured-UI archives** (ELMA365 activity log, Yandex Cloud Console, admin panels), use `--engine chrome` WITHOUT `--reader-mode`. Reader-mode's largest-contentful-subtree heuristic targets prose, not data layouts — on data-heavy SPAs it produces a flat text dump and oversized icons. Chrome alone preserves the card-based layout and sidebars.
 - Quick rule of thumb: prose with one author and a clear "main content area" → reader+chrome; tables, cards, lists, dashboards → chrome alone.
 
-### Universal layout strategy (chrome engine, post-VDD-iter-3)
+### Universal layout strategy (chrome engine, post-VDD-iter-8)
 
-The chrome engine ships three coordinated mechanisms that together produce enterprise-grade output across all SPA archive shapes (Gmail email, ELMA365 Angular dashboard, ya_browser marketplace card) without vendor allow-lists:
+The chrome engine ships through 8 VDD-adversarial iterations a coordinated mechanism stack that produces enterprise-grade output across all SPA archive shapes without vendor allow-lists. Each layer addresses a specific failure mode caught by adversarial review.
 
-1. **Layout-normalize CSS injection** — releases `html`/`body` height/overflow clamps + universal `* { overflow: visible !important; max-height: none !important }`. This unfurls inner scroll containers so chrome's `page.pdf()` paginates the full document instead of the viewport-sized slice (Gmail's `explosion_clipper_div`, ELMA365's Angular shell scrollers, every other SPA pattern we tested).
-2. **Scale-to-fit PDF projection** — `page.pdf(scale = pdf_usable / viewport_width)`. The default viewport is 1280 CSS px (desktop-class so `@media (min-width: 1024px)` resolves desktop layout); A4 PDF page is ~718 CSS px usable after 1cm margins. Without scaling, the right edge of the SPA layout would be clipped past the PDF page boundary (user-reported "narrow strip of cut-off data on the right"). With `scale ≈ 0.56`, every CSS pixel becomes 0.56 PDF pixels, so 1280 layout px fit into ~720 PDF px — full layout visible, no horizontal cutoff. Sidebar text labels that the universal `*` rule unclips ALSO fit within the page width thanks to the scale, so they don't overlap main content.
-3. **JavaScript OFF by default** — static archives capture the rendered DOM; running their JS in offline mode either replaces the body with an error fallback (Gmail) or leaves the SPA half-hydrated (ELMA365 Angular). Even with init_script offline-API patches (`fetch`/`XHR`/`navigator.onLine`), Google's offline detection uses additional signals we can't reliably intercept, so default-off is the only universal stance. `--chrome-js` opts in for canvas charts or pre-hydration HTML snapshots.
+**1. URL/scripting hardening:**
+- **`<base href>` strip** — webarchives embed `<base href="https://orig-site.com/">`; Chrome honours it (per HTML spec) and routes every relative URL to the offline-blocked origin → no CSS, no images. weasyprint sidesteps this by using its `base_url=` parameter and ignoring `<base>` tags. Strip the tag → relative refs resolve against the local extraction tempdir.
+- **`<script>` strip + JS-enabled at context level** — page can't run its own JS (no Gmail self-destruct, no Angular half-hydration), but `page.evaluate` works for surgical DOM normalization. Tried JS-on with `add_init_script` offline-patches first (override `fetch`/`XHR`/`navigator.onLine`); Gmail uses additional signals (probably synchronous XHR or document state checks) and self-destructed anyway.
+- Network blocked via `context.route()` (parity with weasyprint's `_offline_url_fetcher`).
+
+**2. Layout-normalize CSS** (`_LAYOUT_NORMALIZE_CSS`):
+- High-specificity body release (`html, html[class], body, body[class], body.modal-open`) — defeats Bootstrap-style `body.modal-open { overflow: hidden !important }` clamps.
+- Icon-font ligature suppression with `:not(:has(*))` leaf-only guard — `<i class="elma-icons">arrow_down</i>` gets `font-size: 0`; `<div class="navigation-icons">` with text children is untouched. Iter-7 used substring `[class*="-icons"]` which CASCADED through CSS inheritance (font-size IS inherited) and zeroed every descendant; iter-8 caught this in adversarial review with synthetic regression test.
+- `[class~="spinner"]` exact-word match (not substring) — iter-7's `[class*="spinner"]` was hiding `class="spinner-class-banner"`, `class="product-loader-info"`, etc. Same adversarial fix.
+- Image cap `max-height: 200px`; avatar `... img` cap 48×48 (not bare `[class*="avatar"]` — that shrunk `<div class="avatar-grid">Team members</div>` to 48 px width and broke text into illegible vertical chaos, iter-8 fix).
+
+**3. Surgical DOM normalization** (`_DOM_NORMALIZE_SCRIPT` via `page.evaluate`):
+- **Width-gate overflow release** — only release `overflow: hidden/auto/scroll` on elements with `offsetWidth ≥ 200 px`. Distinguishes real content scrollers (Gmail email body) from narrow icon-only sidebars (ya_browser composite-bar at 64 px wide where overflow:hidden hides the EXPANDED-state text labels).
+- **Substantial-modal release** — `position: fixed` → `static` only for elements with width > 50% viewport AND offsetHeight > 200 AND textLen > 50. Catches ELMA365's `complex-popup-outer modal-lg` (modal that contains the activity panel) but skips empty backdrops, toast notifications, and icon sidebars (which would unfurl into empty pages).
+- **Modal-portal hide** — when a substantial modal is released, walk to its body-level ancestor (the "modal portal") and `display: none` every other body direct child. ELMA365's underlying CRM contractor list (18,804 entries) is the page BEHIND the modal; without this hide, those rows precede the modal in document order and pollute the first 2 PDF pages with irrelevant content.
+
+**4. Render projection:**
+- **`media: screen`** before `page.pdf()` — default Playwright behaviour is `media: print`, which triggers the page's `@media print` stylesheet (typically designed to hide nav and SPA chrome for clean paper-style article printing). For archive rendering we want screen-capture fidelity, not paper print.
+- **Viewport 1280×1024** (desktop class) — SPAs that branch on `@media (min-width: 1024px)` resolve to desktop layout instead of mobile-stack collapse.
+- **Scale-to-fit** — `page.pdf(scale = pdf_usable / viewport_width)` ≈ 0.561 for A4. SPA layouts at 1280 CSS px fit into ~718 CSS px usable A4 width without right-edge cutoff.
 
 **Validated on 3 SPA archive shapes**:
-- `gmail_example.webarchive` (Google Closure email viewer, 4.7 MB) → 5-page full Sentora newsletter with all charts and metrics.
-- `elma365_activities_example.webarchive` (Angular hydrated dashboard, 1.6 MB) → 2 pages with full activities list + right sidebar contained within page width.
-- `ya_browser.webarchive` (Yandex Cloud Console marketplace, 190 KB) → 2 pages with marketplace card, sidebar with text labels visible within left margin (no overlap with main content).
+- `gmail_example.webarchive` (Google Closure email viewer, 4.7 MB) — regular: 4p clean Sentora newsletter (no "Временная ошибка" fallback, JS self-destruct prevented); reader: 5p article-only render.
+- `elma365_activities_example.webarchive` (Angular hydrated dashboard, 1.6 MB) — regular: 4p with all 25 activities including the user-cited 29.01.2025 / 04.02.2025 / "Тест ТД", no CRM contractor list noise (modal-portal-hide), no icon-font ligatures ("arrow_down" / "fullscreen_enter" / "system_close" all suppressed); reader: 15p flat text-dump (reader-mode for data-heavy SPAs is fundamentally less useful than chrome alone — reader picks `<main>` which doesn't contain the structured activity data).
+- `ya_browser.webarchive` (Yandex Cloud Console marketplace, 190 KB) — regular: 2p marketplace card with sidebar contained (width-gate prevents narrow-sidebar label leak); reader: 3p article-mode equivalent.
 
-Pipeline differences:
-
-- The chrome engine **does not run** the weasyprint preprocess pipeline (`preprocess_html` — calc/var stripping, font-face stripping, NORMALIZE_CSS injection). Those are workarounds for weasyprint bugs Chrome doesn't have. Running them would corrupt a faithful browser render.
-- Reader-mode (`--reader-mode`) and `--css EXTRA.css` apply to both engines — they're engine-agnostic content-shaping concerns.
-- Network is blocked in both engines. The chrome path uses Playwright `context.route()` to abort all `http(s)://` requests, mirroring weasyprint's `_offline_url_fetcher`. Sub-resources baked into the archive load fine; CDN fonts and tracking pixels are dropped.
-- **`<base href>` is stripped** before Chrome opens the HTML. Webarchives almost always embed `<base href="https://orig-site.com/">` — Chrome (correctly per HTML spec) uses this for relative-URL resolution, sending every CSS/script reference to the offline-blocked origin. weasyprint ignores `<base>` and uses its `base_url=` parameter, so it never hit this issue. The chrome engine strips the tag so relative refs resolve against the local extraction tempdir (where archives.py wrote the assets).
-- **JavaScript is OFF by default** in the chrome engine. Static archives already capture the post-render DOM; re-running JS with offline network typically corrupts the page (Gmail self-replaces the body with an error fallback, ELMA365 Angular leaves the SPA in a half-hydrated overlapping state). Opt back in via `--chrome-js` for canvas charts or pre-hydration HTML snapshots.
-- **Media is forced to `screen`** before `page.pdf()`. Default Playwright behaviour is `media: print`, which triggers the page's `@media print` stylesheet — typically designed to hide nav, sidebars, and SPA chrome for clean paper-style printing of articles. For archive rendering the user wants a screen-capture fidelity, not paper print.
-- **Viewport is set explicitly to 1280×1024** (desktop class). SPAs that branch on `@media (min-width: 1024px)` resolve to their desktop layout instead of collapsing into mobile-stack mode.
+**Tests**: 131 unit + 7 E2E negative regression — `test_gmail_no_offline_error_fallback`, `test_elma365_full_activity_log_present`, `test_elma365_no_underlying_page_noise`, `test_elma365_no_icon_font_ligature_artifacts`, `test_ya_browser_no_sidebar_label_leak`, `test_ya_browser_no_excessive_empty_pages`, `test_chrome_css_no_false_positive_class_substring_bleed` (synthetic-HTML regression catching the iter-7 substring-bleed bugs).
 
 Failure modes:
 
 - `--engine chrome` without Playwright installed → exit 1 with `ChromeEngineUnavailable` envelope, message names the install command (`bash install.sh --with-chrome`).
 - Chrome engine timeout → `RenderTimeout` envelope (same exception type as weasyprint timeouts; details include `engine: "chrome"`).
 
-Honest scope of pdf-11 v1:
+Honest scope (deferred to pdf-11a):
 
-- **No `--engine auto`**: pdf-11 v1 ships explicit opt-in only. Auto-fallback (try weasyprint → catch known-pathology → re-render with chrome) and engine-decision cache (`<input>.engine.json`) deferred to pdf-11a.
-- **No structural pre-scan**: pdf-11 v1 does not pre-detect calc-count / canvas-count / virtualizer-markers to recommend chrome. The user picks the engine; we provide diagnostics through error envelopes when weasyprint fails.
-- **Cross-platform**: validated on macOS Apple Silicon. Linux Alpine/RHEL/Arch require manual system-package setup beyond `playwright install-deps` (see Playwright docs). Docker containers need `--cap-add=SYS_ADMIN` or the Chromium `--no-sandbox` flag. AWS Lambda / serverless need `chrome-aws-lambda` or `chromium-min` — bundled Chromium exceeds the 250 MB Lambda layer limit.
-- **html2docx parity**: chrome engine is HTML→PDF only. The `--engine chrome` path for html2docx (Word output via Chromium) is a separate follow-up (pdf-11a).
+- **No `--engine auto`**: explicit opt-in only. Auto-fallback (try weasyprint → catch known-pathology → re-render with chrome) and engine-decision cache (`<input>.engine.json`) deferred.
+- **No structural pre-scan** of HTML for calc-count / canvas-count / virtualizer-markers — user picks the engine; we provide diagnostics through error envelopes when weasyprint fails.
+- **Cross-platform**: validated on macOS Apple Silicon and Ubuntu 22.04 (CI). Linux Alpine/RHEL/Arch require manual system-package setup beyond `playwright install-deps`. Docker containers need `--cap-add=SYS_ADMIN` or the Chromium `--no-sandbox` flag. AWS Lambda / serverless need `chrome-aws-lambda` or `chromium-min` (bundled Chromium exceeds 250 MB Lambda layer limit).
+- **html2docx parity**: chrome engine is HTML→PDF only. The `--engine chrome` path for html2docx (Word output via Chromium) is a separate follow-up.
 
 ## Honest scope (limitations)
 
