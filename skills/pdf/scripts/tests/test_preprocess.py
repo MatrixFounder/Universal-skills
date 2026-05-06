@@ -1799,6 +1799,83 @@ class TestEngineDispatch(unittest.TestCase):
                 f"Dangerous pattern survived strip: {forbidden!r}",
             )
 
+    def test_chrome_css_no_false_positive_class_substring_bleed(self) -> None:
+        try:
+            import playwright.sync_api  # noqa: F401
+        except ImportError:
+            self.skipTest("Playwright not installed")
+        """VDD-iter-8 adversarial finding: the `[class*="..."]` selectors
+        in `_LAYOUT_NORMALIZE_CSS` had catastrophic false-positive
+        cascades. Concrete cases that broke:
+
+          1. `[class*="-icon"]` (singular) hides text in `info-icon-card`,
+             `submit-icon-action`, `primary-icon-btn`.
+          2. `font-size:0` on `[class*="-icons"]` (plural) inherits into
+             ALL children, zeroing every descendant in a
+             `<div class="navigation-icons">…</div>`.
+          3. `[class*="spinner"], [class*="loader"], [class*="skeleton"]`
+             with `display:none` matches `spinner-class-banner`,
+             `product-loader-info`, `skeleton-key-icon`.
+          4. Bare `[class*="avatar"]` shrinks `<div class="avatar-grid">
+             Team members</div>` to 48×48 px.
+
+        This test runs synthetic HTML through the chrome engine and
+        asserts that legitimate content with these class-name patterns
+        SURVIVES intact. It's a permanent guard against the substring-
+        bleed regression.
+        """
+        from html2pdf_lib import convert
+        import pdfplumber  # type: ignore
+        import tempfile
+
+        html = """<html><head></head><body>
+<button class="primary-icon-btn">Click me</button>
+<button class="submit-icon-action">Submit important data</button>
+<div class="info-icon-card">Critical card info</div>
+<div class="navigation-icons"><span>Follow us on social media</span></div>
+<nav class="main-icons-toolbar"><a>Home</a> <a>About</a> <a>Contact</a></nav>
+<div class="spinner-class-banner">Critical announcement</div>
+<div class="product-loader-info">Important product info</div>
+<div class="skeleton-key-icon">User profile data</div>
+<div class="avatar-grid">Team members</div>
+<div class="user-photo-wrapper">User Profile Information</div>
+</body></html>"""
+
+        tmp = Path(tempfile.mkdtemp(prefix="vdd_csbleed_"))
+        out = tmp / "out.pdf"
+        convert(
+            html, out,
+            base_url=str(tmp), page_size="a4",
+            extra_css_path=None, use_default_css=False,
+            engine="chrome", timeout=30,
+        )
+        with pdfplumber.open(str(out)) as p:
+            text = "".join((page.extract_text() or "") for page in p.pages)
+
+        # Every one of these strings MUST be present — they're legitimate
+        # content that survived adversarial class-name patterns.
+        for needle in (
+            "Click me",
+            "Submit important data",
+            "Critical card info",
+            "Follow us on social media",
+            "Home",
+            "About",
+            "Contact",
+            "Critical announcement",
+            "Important product info",
+            "User profile data",
+            "Team members",
+            "User Profile Information",
+        ):
+            self.assertIn(
+                needle, text,
+                f"VDD-iter-8 regression: legitimate content {needle!r} "
+                "was hidden by an over-broad CSS selector in "
+                "_LAYOUT_NORMALIZE_CSS. The class-substring matcher is "
+                "leaking again — this is a SHIP-BLOCKER bug.",
+            )
+
     def test_offline_patch_init_script_no_trailing_semicolon_iife(self) -> None:
         """VDD adversarial: IIFE with trailing `;` becomes a statement,
         page.evaluate returns 0 (not the object). We caught this once

@@ -116,47 +116,65 @@ html, html[class], body, body[class], body.modal-open {
   overflow: visible !important;
   position: static !important;
 }
-/* Hide text inside font-icon containers. When the icon font fails to
-   load (offline mode), the icon LIGATURE name renders as plain text
-   like "fullscreen_enter", "system_close", "subscribe", "arrow_down".
-   Pattern: `[class*="-icons"]` catches every custom icon library
-   (elma-icons, material-icons, material-symbols-outlined, primeicons,
-   ng-icon, fa-icons, lucide-icons, etc.) without enumerating each
-   vendor's class name. `font-size: 0` collapses the text without
-   changing the box, so surrounding layout doesn't shift. */
-[class*="-icons"], [class*="-icon"], [class*="material-symbols"],
-[class*="primeicons"], [class*="ng-icon"], [class~="icon-only"],
-i.material-icons, i.material-symbols-outlined {
+/* Hide text inside font-icon CONTAINERS only — `:not(:has(*))` requires
+   the element have no element children (i.e. text-only "leaf" element).
+   Without that guard, the rule's `font-size: 0` would inherit into all
+   descendants of any `<div class="navigation-icons">…</div>` wrapper
+   (CSS font-size IS inherited), zeroing out unrelated child text. Plus
+   we restrict `[class*="..."]` substring matches to specific tag
+   patterns that are actually used as icon containers — `<i>`, `<span>`,
+   icon-class buttons. Adversarial review (VDD-iter-8) caught the
+   over-broad `[class*="-icon"]` (singular) and bare `[class*="-icons"]`
+   selectors silently hiding text in containers like `info-icon-card`,
+   `submit-icon-action`, `navigation-icons`, `social-icons-bar`. */
+i[class*="-icons"]:not(:has(*)),
+i[class*="material-symbols"]:not(:has(*)),
+i[class~="icon"]:not(:has(*)),
+span[class*="-icons"]:not(:has(*)),
+span[class*="material-symbols"]:not(:has(*)),
+[class*="primeicons"]:not(:has(*)),
+[class*="ng-icon"]:not(:has(*)),
+[class~="icon-only"]:not(:has(*)),
+button[class*="btn-style-icon"]:not(:has(*)),
+button[class*="-icons"]:not(:has(*)) {
   font-size: 0 !important;
   line-height: 0 !important;
 }
 /* Image size constraints. Webarchives sometimes embed avatars as
    inline base64 with no dimensions (ELMA365 user-photo "TT" purple
    square renders at 600+ px in the PDF without this rule). Cap at
-   200px height so a single image doesn't claim a full page. Avatar-
-   class images get a tighter cap (48px) — they're meant to be small. */
+   200px height so a single image doesn't claim a full page. */
 img {
   max-width: 100% !important;
   max-height: 200px !important;
   height: auto !important;
   width: auto !important;
 }
+/* Avatar/profile IMAGES (NOT containers — bare `[class*="avatar"]`
+   would shrink the whole container to 48px and turn its child text
+   into illegible vertical chaos. Adversarial review caught this:
+   `<div class="avatar-grid">Team members</div>` rendered with
+   "Team\nmembers" wrapped at 48px). Apply only to <img> children. */
 [class*="avatar"] img, [class*="user-photo"] img,
-[class*="profile-pic"] img, [class*="user-avatar"] img,
-[class*="avatar"], [class*="user-photo"] {
+[class*="profile-pic"] img, [class*="user-avatar"] img {
   max-width: 48px !important;
   max-height: 48px !important;
 }
-/* SVG constraints. Loading spinners and skeleton SVGs without explicit
-   dimensions render at their parent's full size, claiming whole pages.
-   Cap height to 200px and hide spinner-class SVGs entirely. */
+/* SVG cap (max 200px tall — prevents full-page loader spinners). */
 svg {
   max-width: 100% !important;
   max-height: 200px !important;
 }
-svg[class*="spinner"], svg[class*="loader"], svg[class*="loading"],
-[class*="spinner"] svg, [class*="loader"] svg, [class*="loading"] svg,
-[class*="spinner"], [class*="loader"], [class*="skeleton"] {
+/* Hide spinner/loader/skeleton elements by EXACT WORD class match
+   (`[class~="word"]` requires whitespace-delimited word). The naïve
+   `[class*="spinner"]` substring matched legitimate content like
+   `spinner-class-banner`, `product-loader-info`, `skeleton-key-icon`,
+   silently hiding the entire element. Exact-word match catches the
+   conventional pattern (`class="spinner"`, `class="loader"`,
+   `class="skeleton"`, `class="loading"`) without false positives. */
+[class~="spinner"], [class~="loader"], [class~="skeleton"],
+[class~="loading"], [class~="lds-ring"],
+svg[class*="spinner"], svg[class*="loader"], svg[class*="loading"] {
   display: none !important;
 }
 </style>
