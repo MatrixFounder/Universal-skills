@@ -172,10 +172,16 @@ echo "$out" | tail -1 | grep -q '^OK$' \
 
 # SVG renderer tier detection: with HTML2DOCX_BROWSER set to a non-existent
 # path, Tier 1 (Chrome) must be skipped and Tier 2 (resvg-js) must take
-# over. Use a tiny inline-SVG fixture so the test runs fast and works on
+# over. Use a small inline-SVG fixture so the test runs fast and works on
 # any host (no actual Chrome required).
+#
+# IMPORTANT: dimensions must be > _ICON_MAX_PX (64 px) on BOTH axes so
+# `_isIconSvg` doesn't strip the SVG during preprocessing. A 60×40 SVG
+# was treated as a UI icon and never reached the rasterizer, so the
+# Tier-2 announce log ("resvg-js") was never emitted and this test
+# silently regressed. (200×100 ≫ 64 → preprocessing keeps it.)
 cat > "$TMP/svg.html" <<'HTML'
-<!doctype html><html><body><svg xmlns="http://www.w3.org/2000/svg" width="60" height="40" viewBox="0 0 60 40"><rect x="2" y="2" width="56" height="36" fill="#cce" stroke="#333"/><text x="30" y="24" text-anchor="middle" font-size="12">tier</text></svg></body></html>
+<!doctype html><html><body><svg xmlns="http://www.w3.org/2000/svg" width="200" height="100" viewBox="0 0 200 100"><rect x="4" y="4" width="192" height="92" fill="#cce" stroke="#333"/><text x="100" y="56" text-anchor="middle" font-size="20">tier 2 fallback</text></svg></body></html>
 HTML
 out=$(HTML2DOCX_BROWSER=/no/such/browser-binary node html2docx.js \
         "$TMP/svg.html" "$TMP/svg_resvg.docx" 2>&1)
