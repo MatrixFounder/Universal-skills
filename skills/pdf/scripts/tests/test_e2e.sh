@@ -533,7 +533,9 @@ else
     # `_parse_unittest_failure` shows only the first test name, which
     # doesn't help with cross-platform drift debugging.
     echo "  --- FULL unittest FAIL output (battery debug) ---"
-    echo "$out" | sed -n '/^FAIL:/,/^----------/p' | head -120
+    # awk grabs everything from first FAIL: to the closing 'Ran N tests'
+    # line; this includes Tracebacks + AssertionError messages.
+    echo "$out" | awk '/^FAIL:/{p=1} p; /^Ran [0-9]+ tests/{p=0}' | head -200
     echo "  --- END ---"
     nok "battery" "$(_parse_unittest_failure "$out")"
 fi
