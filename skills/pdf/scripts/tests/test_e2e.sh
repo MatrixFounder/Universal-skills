@@ -530,11 +530,15 @@ if [ "$rc" -eq 0 ]; then
 else
     # On failure, dump the full unittest FAIL blocks (with AssertionError
     # messages) so CI logs surface the actual mismatch.
-    # `_parse_unittest_failure` shows only the first test name, which
-    # doesn't help with cross-platform drift debugging.
+    # `_parse_unittest_failure` shows only the first test name; full
+    # tracebacks are essential for diagnosing cross-platform drift
+    # (macOS vs Ubuntu freetype/fontconfig produce different page
+    # counts/sizes for the same HTML — added during a 12-commit CI fix
+    # cycle when battery_signatures drift took multiple iterations to
+    # diagnose). Kept as a permanent debugging aid because the same
+    # class of cross-platform drift will recur every time signatures
+    # are refreshed on one platform but tested on another.
     echo "  --- FULL unittest FAIL output (battery debug) ---"
-    # awk grabs everything from first FAIL: to the closing 'Ran N tests'
-    # line; this includes Tracebacks + AssertionError messages.
     echo "$out" | awk '/^FAIL:/{p=1} p; /^Ran [0-9]+ tests/{p=0}' | head -200
     echo "  --- END ---"
     nok "battery" "$(_parse_unittest_failure "$out")"

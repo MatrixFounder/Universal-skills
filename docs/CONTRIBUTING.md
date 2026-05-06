@@ -292,6 +292,36 @@ CI for everyone after the merge):
 ./skills/pdf/scripts/.venv/bin/python -m unittest skills.pdf.scripts.tests.test_battery  # verify 0 failures
 ```
 
+`capture_signatures.py` iterates THREE source directories
+(post-iter-8 fix): `tmp/` (gitignored real archives), `skills/pdf/
+examples/regression/` (committed synthetic micro-fixtures), and
+`skills/pdf/scripts/tests/fixtures/platforms/` (committed per-platform
+HTML samples). All three need refresh in lockstep — earlier the script
+only iterated `tmp/`, leaving in-repo fixtures with stale macOS-baked
+signatures that broke CI on Ubuntu.
+
+### Cross-platform signature drift (macOS local vs Ubuntu CI)
+
+freetype/fontconfig (Linux) and CoreText (macOS) produce SIGNIFICANTLY
+different output sizes for the same minimal HTML — observed 3-5×
+factor (e.g., a synthetic regression-empty-anchor-perf fixture renders
+at ~10 kB on macOS but ~3 kB on Ubuntu). Page counts also drift on
+prose fixtures with high-frequency text (~5-10% delta).
+
+Mitigation strategies in current code:
+1. `min_size_kb` floor for synthetic + platform fixtures hard-set to 1
+   in `battery_signatures.json`. Trade-off: a truly broken render
+   producing 1 kB output (e.g., an empty PDF with just a header) would
+   PASS the test. We accept this for cross-platform compat — the
+   `required_needles` checks remain platform-stable and catch real
+   content loss. **Do not raise this floor without thinking through
+   the cross-platform consequences.**
+2. `min_pages`/`max_pages` use ±5% tolerance with hard ±1 page floor
+   (set in `capture_signatures.py PAGE_TOLERANCE_PCT/PAGE_SLACK`).
+3. Goldens (PNG comparison) also drift; `update_goldens=true` workflow
+   dispatch regenerates on Ubuntu and uploads as artifacts for the
+   maintainer to download + commit.
+
 Audit step before committing — verify no banner/cookie text crept
 into `required_needles` (calibration mistake — chrome-stripped
 content shouldn't be required):

@@ -282,6 +282,20 @@ def main(argv: list[str] | None = None) -> int:
         f for f in tmp.iterdir()
         if f.is_file() and f.suffix.lower() in INPUT_EXTS
     )
+    # ALSO iterate synthetic + platform fixtures (committed to repo,
+    # unlike tmp/* which is gitignored). Without this, `--refresh`
+    # only updates the 27 tmp/ baselines and the 12 in-repo fixtures
+    # keep their stale macOS-baked signatures forever — caught by VDD-
+    # adversarial review post-iter-8 (CI failed on Ubuntu because
+    # synthetic min_size_kb was 5 from macOS while Ubuntu produced 3).
+    SYNTHETIC_DIR = REPO_ROOT / "skills" / "pdf" / "examples" / "regression"
+    PLATFORM_DIR = REPO_ROOT / "skills" / "pdf" / "scripts" / "tests" / "fixtures" / "platforms"
+    for extra_dir in (SYNTHETIC_DIR, PLATFORM_DIR):
+        if extra_dir.is_dir():
+            fixtures.extend(sorted(
+                f for f in extra_dir.iterdir()
+                if f.is_file() and f.suffix.lower() in INPUT_EXTS
+            ))
     if not fixtures:
         print(f"No fixtures with extensions {INPUT_EXTS} in {tmp}", file=sys.stderr)
         return 1
