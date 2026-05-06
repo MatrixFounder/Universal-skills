@@ -29,11 +29,12 @@ jobs:
     env:
       STRICT_VISUAL: "1"
       # @mermaid-js/mermaid-cli@11.x uses puppeteer-core which does NOT
-      # bundle Chromium. Without an explicit browser path, the CLI fails
-      # with "could not compute launch arguments". Point it at the
-      # apt-installed chromium-browser binary so mermaid renders fenced
-      # ```mermaid blocks to PNG (md2pdf, md2pptx mermaid tests).
-      PUPPETEER_EXECUTABLE_PATH: /usr/bin/chromium-browser
+      # bundle Chromium. Point it at the GitHub Actions runner's pre-
+      # installed google-chrome-stable binary. (The Ubuntu apt
+      # `chromium-browser` package is now a snap wrapper, which is slow
+      # and unreliable in CI environments — google-chrome-stable is
+      # already available on actions/runner-images.)
+      PUPPETEER_EXECUTABLE_PATH: /usr/bin/google-chrome-stable
     steps:
       - uses: actions/checkout@v4
 
@@ -54,8 +55,7 @@ jobs:
             libpango-1.0-0 libpangoft2-1.0-0 libcairo2 libgdk-pixbuf-2.0-0 \
             libfontconfig1 libffi-dev \
             fonts-dejavu fonts-noto-core fonts-liberation \
-            imagemagick \
-            chromium-browser
+            imagemagick
 
       - name: Cache per-skill venv + node_modules
         uses: actions/cache@v4

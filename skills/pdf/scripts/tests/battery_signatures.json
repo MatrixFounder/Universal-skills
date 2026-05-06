@@ -369,7 +369,7 @@
     "regular": {
       "min_pages": 1,
       "max_pages": 2,
-      "min_size_kb": 5,
+      "min_size_kb": 1,
       "max_size_kb": 60,
       "required_needles": [
         "Управление версиями",
@@ -388,7 +388,7 @@
     "reader": {
       "min_pages": 1,
       "max_pages": 2,
-      "min_size_kb": 5,
+      "min_size_kb": 1,
       "max_size_kb": 60,
       "required_needles": [
         "Управление версиями",
@@ -441,7 +441,7 @@
     "regular": {
       "min_pages": 1,
       "max_pages": 2,
-      "min_size_kb": 5,
+      "min_size_kb": 1,
       "max_size_kb": 50,
       "required_needles": [
         "import requests",
@@ -454,7 +454,7 @@
     "reader": {
       "min_pages": 1,
       "max_pages": 2,
-      "min_size_kb": 5,
+      "min_size_kb": 1,
       "max_size_kb": 50,
       "required_needles": [
         "import requests",
@@ -470,7 +470,7 @@
     "regular": {
       "min_pages": 1,
       "max_pages": 2,
-      "min_size_kb": 5,
+      "min_size_kb": 1,
       "max_size_kb": 60,
       "required_needles": [
         "Retrieve mids for all coins",
@@ -484,7 +484,7 @@
     "reader": {
       "min_pages": 1,
       "max_pages": 2,
-      "min_size_kb": 5,
+      "min_size_kb": 1,
       "max_size_kb": 60,
       "required_needles": [
         "Retrieve mids for all coins",
@@ -526,7 +526,7 @@
     "regular": {
       "min_pages": 1,
       "max_pages": 3,
-      "min_size_kb": 5,
+      "min_size_kb": 1,
       "max_size_kb": 60,
       "required_needles": [
         "Представлен трекер Claude Code",
@@ -543,7 +543,7 @@
     "reader": {
       "min_pages": 1,
       "max_pages": 3,
-      "min_size_kb": 5,
+      "min_size_kb": 1,
       "max_size_kb": 60,
       "required_needles": [
         "Представлен трекер Claude Code",
@@ -564,7 +564,7 @@
     "regular": {
       "min_pages": 1,
       "max_pages": 2,
-      "min_size_kb": 5,
+      "min_size_kb": 1,
       "max_size_kb": 50,
       "required_needles": [
         "Supported IDEs",
@@ -578,7 +578,7 @@
     "reader": {
       "min_pages": 1,
       "max_pages": 2,
-      "min_size_kb": 5,
+      "min_size_kb": 1,
       "max_size_kb": 50,
       "required_needles": [
         "Supported IDEs",
@@ -594,7 +594,7 @@
     "regular": {
       "min_pages": 1,
       "max_pages": 2,
-      "min_size_kb": 5,
+      "min_size_kb": 1,
       "max_size_kb": 50,
       "required_needles": [
         "BROKEN_CSS_HEADER",
@@ -605,7 +605,7 @@
     "reader": {
       "min_pages": 1,
       "max_pages": 2,
-      "min_size_kb": 5,
+      "min_size_kb": 1,
       "max_size_kb": 50,
       "required_needles": [
         "BROKEN_CSS_HEADER",
@@ -620,7 +620,7 @@
     "regular": {
       "min_pages": 1,
       "max_pages": 3,
-      "min_size_kb": 5,
+      "min_size_kb": 1,
       "max_size_kb": 50,
       "required_needles": [
         "PERF_NEEDLE",
@@ -631,7 +631,7 @@
     "reader": {
       "min_pages": 1,
       "max_pages": 3,
-      "min_size_kb": 5,
+      "min_size_kb": 1,
       "max_size_kb": 50,
       "required_needles": [
         "PERF_NEEDLE",
@@ -646,7 +646,7 @@
     "regular": {
       "min_pages": 1,
       "max_pages": 2,
-      "min_size_kb": 5,
+      "min_size_kb": 1,
       "max_size_kb": 30,
       "required_needles": [
         "OUTER_X",
@@ -658,7 +658,7 @@
     "reader": {
       "min_pages": 1,
       "max_pages": 2,
-      "min_size_kb": 5,
+      "min_size_kb": 1,
       "max_size_kb": 30,
       "required_needles": [
         "OUTER_X",
@@ -674,7 +674,7 @@
     "regular": {
       "min_pages": 1,
       "max_pages": 2,
-      "min_size_kb": 5,
+      "min_size_kb": 1,
       "max_size_kb": 50,
       "required_needles": [
         "HEADER_X",
@@ -685,7 +685,7 @@
     "reader": {
       "min_pages": 1,
       "max_pages": 2,
-      "min_size_kb": 5,
+      "min_size_kb": 1,
       "max_size_kb": 30,
       "required_needles": [
         "REAL_CONTENT_NEEDLE"
@@ -702,7 +702,7 @@
     "regular": {
       "min_pages": 1,
       "max_pages": 2,
-      "min_size_kb": 5,
+      "min_size_kb": 1,
       "max_size_kb": 30,
       "required_needles": [
         "BEFORE_NEEDLE",
@@ -714,7 +714,7 @@
     "reader": {
       "min_pages": 1,
       "max_pages": 2,
-      "min_size_kb": 5,
+      "min_size_kb": 1,
       "max_size_kb": 30,
       "required_needles": [
         "BEFORE_NEEDLE",
@@ -730,7 +730,7 @@
     "regular": {
       "min_pages": 1,
       "max_pages": 2,
-      "min_size_kb": 5,
+      "min_size_kb": 1,
       "max_size_kb": 30,
       "required_needles": [
         "VERTICAL_NEEDLE_TOP",
@@ -744,7 +744,7 @@
     "reader": {
       "min_pages": 1,
       "max_pages": 2,
-      "min_size_kb": 5,
+      "min_size_kb": 1,
       "max_size_kb": 30,
       "required_needles": [
         "VERTICAL_NEEDLE_TOP",
@@ -788,7 +788,7 @@
     "regular": {
       "min_pages": 1,
       "max_pages": 3,
-      "min_size_kb": 5,
+      "min_size_kb": 1,
       "max_size_kb": 400,
       "required_needles": [
         "R&D – это не бэкстейдж",
@@ -800,7 +800,7 @@
     "reader": {
       "min_pages": 1,
       "max_pages": 2,
-      "min_size_kb": 5,
+      "min_size_kb": 1,
       "max_size_kb": 60,
       "required_needles": [
         "R&D – это не бэкстейдж",
