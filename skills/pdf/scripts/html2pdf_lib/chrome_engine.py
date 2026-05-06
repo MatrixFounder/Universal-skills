@@ -182,29 +182,37 @@ _DOM_NORMALIZE_SCRIPT = r"""
   document.body.style.setProperty('overflow', 'visible', 'important');
   document.body.style.setProperty('position', 'static', 'important');
 
-  // 2. Walk DOM. For each element, decide whether to release.
+  // 2. Walk DOM. Classify each element and apply targeted fixes.
   const all = document.querySelectorAll('*');
-  let releasedFixed = 0, releasedClip = 0;
+  const VIEW_W = window.innerWidth || 1280;
+  // "Substantial modal" = position:fixed AND wide AND tall AND text-rich.
+  // Width criterion (>50% viewport) is what distinguishes a modal
+  // (covers most of viewport, contains content) from an icon-only
+  // sidebar (narrow strip with hidden labels) — we DON'T want to
+  // unfurl sidebars.
+  const modals = [];
+  let releasedFixed = 0, releasedClip = 0, hiddenFixed = 0;
   for (let i = 0; i < all.length; i++) {
     const el = all[i];
     const cs = window.getComputedStyle(el);
-    // Position: fixed → static, but only for elements with substantial
-    // content. An empty backdrop or a 50px-tall toolbar should keep
-    // its fixed positioning so it doesn't add empty space to the flow.
     if (cs.position === 'fixed') {
+      const ow = el.offsetWidth;
       const oh = el.offsetHeight;
       const textLen = (el.textContent || '').trim().length;
-      if (oh > 200 && textLen > 50) {
+      if (ow > VIEW_W * 0.5 && oh > 200 && textLen > 50) {
+        // Substantial modal — release to flow.
         el.style.setProperty('position', 'static', 'important');
         releasedFixed++;
+        modals.push(el);
       } else {
-        // Probably a backdrop/toolbar/toast — keep fixed but force
-        // display: none so it doesn't render at all (zero PDF impact).
+        // Backdrop / toolbar / toast / icon sidebar — keep fixed
+        // but display:none so it doesn't add empty pages to the PDF.
         el.style.setProperty('display', 'none', 'important');
+        hiddenFixed++;
       }
       continue;
     }
-    // Overflow release: only if content actually clips (scroll > client).
+    // Overflow release: only if content actually clips.
     const ox = cs.overflowX, oy = cs.overflowY;
     const clipsY = oy === 'auto' || oy === 'scroll' || oy === 'hidden';
     const clipsX = ox === 'auto' || ox === 'scroll' || ox === 'hidden';
@@ -220,7 +228,45 @@ _DOM_NORMALIZE_SCRIPT = r"""
       releasedClip++;
     }
   }
-  return {releasedFixed: releasedFixed, releasedClip: releasedClip};
+
+  // 3. If we released modals, hide the underlying page (other body
+  // direct-children that are NOT ancestors of any modal). The user
+  // saved an archive of an OPEN-MODAL state — what they want is the
+  // modal content, not the page that was visible BEHIND the modal.
+  // ELMA365 case: the underlying page is a CRM contractor list (18k
+  // rows) — when the modal becomes static and flows inline, that
+  // CRM list precedes the activity panel in document order, polluting
+  // the first ~2 PDF pages with irrelevant content.
+  let hiddenSiblings = 0;
+  if (modals.length > 0) {
+    // For each modal, compute its body-level ancestor (modal portal).
+    const portals = new Set();
+    for (const m of modals) {
+      let node = m;
+      while (node.parentElement && node.parentElement !== document.body) {
+        node = node.parentElement;
+      }
+      if (node.parentElement === document.body) {
+        portals.add(node);
+      }
+    }
+    // Hide every direct body child that ISN'T a portal.
+    const children = Array.from(document.body.children);
+    for (const child of children) {
+      if (!portals.has(child)) {
+        child.style.setProperty('display', 'none', 'important');
+        hiddenSiblings++;
+      }
+    }
+  }
+
+  return {
+    releasedFixed: releasedFixed,
+    releasedClip: releasedClip,
+    hiddenFixed: hiddenFixed,
+    modalsFound: modals.length,
+    hiddenSiblings: hiddenSiblings,
+  };
 })()
 """
 

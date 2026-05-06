@@ -2024,6 +2024,39 @@ class TestChromeE2ENegativeRegression(unittest.TestCase):
                 "broken (DOM normalize didn't release position:fixed).",
             )
 
+    def test_elma365_no_underlying_page_noise(self):
+        """ELMA365 webarchive captures an OPEN-MODAL state — the modal
+        contains the activity panel (what the user wants), and behind
+        it is the CRM contractor list (just background context the
+        user wasn't looking at).
+
+        Once we release position:fixed → static so the modal flows
+        inline, the underlying CRM page also becomes part of the
+        document and pollutes the first PDF pages with thousands of
+        contractor rows.
+
+        Negative regression: assert that the CRM page markers are NOT
+        in the PDF. Pinning these specific strings catches the failure
+        mode where the modal-portal-hide logic regresses (e.g. width
+        criterion is dropped, sibling-hide is bypassed).
+        """
+        text = self._render_chrome("elma365_activities_example.webarchive")
+        # CRM contractor list markers (what's BEHIND the modal).
+        forbidden = (
+            "Контрагенты",
+            "Велрыбпром",
+            "Поиск по полям",
+            "Элементов: 18804",
+            "ГК \"Пионер\"",
+        )
+        for f in forbidden:
+            self.assertNotIn(
+                f, text,
+                f"ELMA365 PDF contains underlying-page noise: {f!r} — "
+                "modal-portal-hide regressed (the page BEHIND the modal "
+                "is leaking into the PDF before the activity panel).",
+            )
+
     def test_ya_browser_no_excessive_empty_pages(self):
         """ya_browser is a static marketplace product card. After our
         DOM normalization improvements, it should render in 2-4 pages.
