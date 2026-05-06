@@ -1709,11 +1709,16 @@ class TestEngineDispatch(unittest.TestCase):
         self.assertIn("height: auto !important", _LAYOUT_NORMALIZE_CSS)
         self.assertIn("overflow: visible !important", _LAYOUT_NORMALIZE_CSS)
         self.assertIn("position: static !important", _LAYOUT_NORMALIZE_CSS)
-        # Icon-font container suppression (post-iter-6) — hides ligature
-        # names like "fullscreen_enter" / "system_close" when the icon
-        # font fails to load.
-        self.assertIn("btn-style-icon", _LAYOUT_NORMALIZE_CSS)
+        # Icon-font container suppression (post-iter-7) — broad selector
+        # `[class*="-icons"]` catches every custom icon library
+        # (elma-icons, material-icons, primeicons, ng-icon, etc.).
+        self.assertIn('[class*="-icons"]', _LAYOUT_NORMALIZE_CSS)
         self.assertIn("font-size: 0 !important", _LAYOUT_NORMALIZE_CSS)
+        # Image/SVG size constraints (post-iter-7) — prevent base64
+        # avatars from claiming full pages, hide loader spinners.
+        self.assertIn("max-height: 200px !important", _LAYOUT_NORMALIZE_CSS)
+        self.assertIn("avatar", _LAYOUT_NORMALIZE_CSS)
+        self.assertIn("spinner", _LAYOUT_NORMALIZE_CSS)
 
     def test_strip_script_tags_removes_inline_and_external(self) -> None:
         """pdf-11 VDD-iter-3: chrome path defaults to JS-enabled at the
@@ -2110,6 +2115,90 @@ class TestChromeE2ENegativeRegression(unittest.TestCase):
                 "modal-portal-hide regressed (the page BEHIND the modal "
                 "is leaking into the PDF before the activity panel).",
             )
+
+    def _render_chrome_reader(self, fixture_name: str) -> str:
+        """Render `tmp/{fixture_name}` via chrome+reader-mode and return
+        extracted text."""
+        fixture = self.fixtures_dir / fixture_name
+        if not fixture.is_file():
+            self.skipTest(f"fixture not present: {fixture}")
+        from html2pdf_lib import convert
+        from html2pdf_lib.archives import extract_archive
+        out_pdf = self.tmpdir / f"reader_{fixture.stem}.pdf"
+        work = self.tmpdir / f"work_reader_{fixture.stem}"
+        work.mkdir(exist_ok=True)
+        html_text, base_url = extract_archive(
+            fixture, work, frame_spec="auto",
+        )
+        convert(
+            html_text, out_pdf,
+            base_url=base_url, page_size="a4",
+            extra_css_path=None, use_default_css=False,
+            engine="chrome", reader_mode=True, timeout=120,
+        )
+        import pdfplumber  # type: ignore
+        with pdfplumber.open(str(out_pdf)) as p:
+            return "".join((page.extract_text() or "") for page in p.pages)
+
+    def test_reader_chrome_elma365_no_icon_font_artifacts(self):
+        """ELMA365's `<i class="elma-icons">arrow_down</i>` containers
+        weren't matched by the original `[class*="btn-style-icon"]`
+        selector, so reader+chrome had 183 instances of "arrow_down"
+        text leaking into the PDF. Broadened the selector to
+        `[class*="-icons"]` to catch every custom icon library.
+        Negative regression: pin both the broad pattern and the
+        specific arrow_down/arrow_up names."""
+        text = self._render_chrome_reader(
+            "elma365_activities_example.webarchive",
+        )
+        for forbidden in ("arrow_down", "arrow_up", "menu_vertical"):
+            self.assertNotIn(
+                forbidden, text,
+                f"reader+chrome elma365: icon-font ligature {forbidden!r} "
+                "leaked. The broad `[class*=\"-icons\"]` CSS selector "
+                "regressed.",
+            )
+
+    def test_reader_chrome_no_oversized_avatar_or_spinner(self):
+        """Reader-mode extraction can include avatars and loader SVGs.
+        Without size constraints, a base64-inline avatar (ELMA365 "TT"
+        purple square) renders at full image size and a spinner SVG
+        with no width/height claims a whole PDF page. The CSS rules
+        `img { max-height: 200px }` + `[class*=avatar] img { max-width:
+        48px }` + `svg[class*=spinner] { display: none }` constrain
+        these. We can't easily verify image dimensions in extracted
+        text, but we CAN verify the PDF didn't blow up to dozens of
+        pages from spinner-as-fullpage. ELMA365 reader+chrome was 18p
+        before the fix, ≤ 20p with normal data after. Pin a generous
+        upper bound."""
+        from html2pdf_lib import convert
+        from html2pdf_lib.archives import extract_archive
+        import pypdf  # type: ignore
+        fixture = self.fixtures_dir / "elma365_activities_example.webarchive"
+        if not fixture.is_file():
+            self.skipTest(f"fixture not present")
+        out = self.tmpdir / "reader_elma_size.pdf"
+        work = self.tmpdir / "work_reader_size"
+        work.mkdir(exist_ok=True)
+        html_text, base_url = extract_archive(
+            fixture, work, frame_spec="auto",
+        )
+        convert(
+            html_text, out,
+            base_url=base_url, page_size="a4",
+            extra_css_path=None, use_default_css=False,
+            engine="chrome", reader_mode=True, timeout=120,
+        )
+        page_count = len(pypdf.PdfReader(str(out)).pages)
+        # Was 18 pages with spinner-as-fullpage circles (3 of them
+        # consumed 3 full pages each). With size caps, we expect ≤ 20p
+        # for the normal text-dump output of activity log.
+        self.assertLessEqual(
+            page_count, 25,
+            f"reader+chrome elma365 expanded to {page_count} pages — "
+            "image/SVG size constraints regressed (loader SVG or "
+            "avatar consuming full pages).",
+        )
 
     def test_ya_browser_no_excessive_empty_pages(self):
         """ya_browser is a static marketplace product card. After our

@@ -117,18 +117,47 @@ html, html[class], body, body[class], body.modal-open {
   position: static !important;
 }
 /* Hide text inside font-icon containers. When the icon font fails to
-   load (offline mode), the icon LIGATURE name renders as plain text:
-   ELMA365 buttons with class "btn-style-icon" show "fullscreen_enter",
-   "system_close", "subscribe", "lock", etc. instead of glyphs.
-   Material Icons / Material Symbols / PrimeIcons have similar issues.
-   `font-size: 0` collapses the text without changing the box, so the
-   surrounding layout doesn't shift. */
-[class*="btn-style-icon"], [class*="material-icons"],
-[class*="material-symbols"], [class*="primeicons"],
-[class*="ng-icon"], [class~="icon-only"],
+   load (offline mode), the icon LIGATURE name renders as plain text
+   like "fullscreen_enter", "system_close", "subscribe", "arrow_down".
+   Pattern: `[class*="-icons"]` catches every custom icon library
+   (elma-icons, material-icons, material-symbols-outlined, primeicons,
+   ng-icon, fa-icons, lucide-icons, etc.) without enumerating each
+   vendor's class name. `font-size: 0` collapses the text without
+   changing the box, so surrounding layout doesn't shift. */
+[class*="-icons"], [class*="-icon"], [class*="material-symbols"],
+[class*="primeicons"], [class*="ng-icon"], [class~="icon-only"],
 i.material-icons, i.material-symbols-outlined {
   font-size: 0 !important;
   line-height: 0 !important;
+}
+/* Image size constraints. Webarchives sometimes embed avatars as
+   inline base64 with no dimensions (ELMA365 user-photo "TT" purple
+   square renders at 600+ px in the PDF without this rule). Cap at
+   200px height so a single image doesn't claim a full page. Avatar-
+   class images get a tighter cap (48px) — they're meant to be small. */
+img {
+  max-width: 100% !important;
+  max-height: 200px !important;
+  height: auto !important;
+  width: auto !important;
+}
+[class*="avatar"] img, [class*="user-photo"] img,
+[class*="profile-pic"] img, [class*="user-avatar"] img,
+[class*="avatar"], [class*="user-photo"] {
+  max-width: 48px !important;
+  max-height: 48px !important;
+}
+/* SVG constraints. Loading spinners and skeleton SVGs without explicit
+   dimensions render at their parent's full size, claiming whole pages.
+   Cap height to 200px and hide spinner-class SVGs entirely. */
+svg {
+  max-width: 100% !important;
+  max-height: 200px !important;
+}
+svg[class*="spinner"], svg[class*="loader"], svg[class*="loading"],
+[class*="spinner"] svg, [class*="loader"] svg, [class*="loading"] svg,
+[class*="spinner"], [class*="loader"], [class*="skeleton"] {
+  display: none !important;
 }
 </style>
 """
