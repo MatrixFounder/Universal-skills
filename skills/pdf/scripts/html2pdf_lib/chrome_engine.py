@@ -107,6 +107,8 @@ from pathlib import Path
 # handles inner scroll containers surgically.
 _LAYOUT_NORMALIZE_CSS = """\
 <style id="__html2pdf_chrome_layout_normalize">
+/* Outer-frame release with high specificity (defeats body.modal-open
+   etc. class-based clamps). */
 html, html[class], body, body[class], body.modal-open {
   height: auto !important;
   min-height: 0 !important;
@@ -114,9 +116,19 @@ html, html[class], body, body[class], body.modal-open {
   overflow: visible !important;
   position: static !important;
 }
-* {
-  overflow: visible !important;
-  max-height: none !important;
+/* Hide text inside font-icon containers. When the icon font fails to
+   load (offline mode), the icon LIGATURE name renders as plain text:
+   ELMA365 buttons with class "btn-style-icon" show "fullscreen_enter",
+   "system_close", "subscribe", "lock", etc. instead of glyphs.
+   Material Icons / Material Symbols / PrimeIcons have similar issues.
+   `font-size: 0` collapses the text without changing the box, so the
+   surrounding layout doesn't shift. */
+[class*="btn-style-icon"], [class*="material-icons"],
+[class*="material-symbols"], [class*="primeicons"],
+[class*="ng-icon"], [class~="icon-only"],
+i.material-icons, i.material-symbols-outlined {
+  font-size: 0 !important;
+  line-height: 0 !important;
 }
 </style>
 """
@@ -212,17 +224,28 @@ _DOM_NORMALIZE_SCRIPT = r"""
       }
       continue;
     }
-    // Overflow release: only if content actually clips.
+    // Overflow release: only on WIDE elements (≥200 CSS px) where
+    // content actually clips. The width gate distinguishes real
+    // content scrollers (Gmail email body, ELMA365 activity panel)
+    // from narrow icon-only sidebars (ya_browser composite-bar at
+    // ~64px wide — its `overflow: hidden` is hiding the text labels
+    // associated with each icon, which we MUST keep clipped or they
+    // overlap the main content). Without this gate, the universal
+    // overflow release leaked sidebar labels (verified on
+    // ya_browser.webarchive — labels "Все сервисы", "Поиск",
+    // "Marketplace" rendered overlapping the marketplace product
+    // description).
     const ox = cs.overflowX, oy = cs.overflowY;
     const clipsY = oy === 'auto' || oy === 'scroll' || oy === 'hidden';
     const clipsX = ox === 'auto' || ox === 'scroll' || ox === 'hidden';
-    if (clipsY && el.scrollHeight > el.clientHeight + 4) {
+    const wideEnough = el.offsetWidth >= 200;
+    if (clipsY && wideEnough && el.scrollHeight > el.clientHeight + 4) {
       el.style.setProperty('overflow-y', 'visible', 'important');
       el.style.setProperty('height', 'auto', 'important');
       el.style.setProperty('max-height', 'none', 'important');
       releasedClip++;
     }
-    if (clipsX && el.scrollWidth > el.clientWidth + 4) {
+    if (clipsX && wideEnough && el.scrollWidth > el.clientWidth + 4) {
       el.style.setProperty('overflow-x', 'visible', 'important');
       el.style.setProperty('max-width', 'none', 'important');
       releasedClip++;

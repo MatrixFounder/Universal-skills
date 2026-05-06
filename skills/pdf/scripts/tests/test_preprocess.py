@@ -1708,8 +1708,12 @@ class TestEngineDispatch(unittest.TestCase):
         self.assertIn("body[class]", _LAYOUT_NORMALIZE_CSS)
         self.assertIn("height: auto !important", _LAYOUT_NORMALIZE_CSS)
         self.assertIn("overflow: visible !important", _LAYOUT_NORMALIZE_CSS)
-        # universal inner-container release for scroll containers
-        self.assertIn("* {", _LAYOUT_NORMALIZE_CSS)
+        self.assertIn("position: static !important", _LAYOUT_NORMALIZE_CSS)
+        # Icon-font container suppression (post-iter-6) — hides ligature
+        # names like "fullscreen_enter" / "system_close" when the icon
+        # font fails to load.
+        self.assertIn("btn-style-icon", _LAYOUT_NORMALIZE_CSS)
+        self.assertIn("font-size: 0 !important", _LAYOUT_NORMALIZE_CSS)
 
     def test_strip_script_tags_removes_inline_and_external(self) -> None:
         """pdf-11 VDD-iter-3: chrome path defaults to JS-enabled at the
@@ -2023,6 +2027,56 @@ class TestChromeE2ENegativeRegression(unittest.TestCase):
                 f"ELMA365 activity {needle!r} missing — modal-unfurl "
                 "broken (DOM normalize didn't release position:fixed).",
             )
+
+    def test_elma365_no_icon_font_ligature_artifacts(self):
+        """When the icon font fails to load (we block all remote URLs),
+        Material/icon-button containers render their LIGATURE NAME as
+        plain text instead of the glyph. ELMA365 toolbar buttons show
+        "subscribe", "lock", "exchange", "fullscreen_enter",
+        "system_close", "arrow_up", "arrow_down" as text artifacts at
+        the top of the modal. Negative regression: these substrings
+        must NOT appear in the PDF — `_LAYOUT_NORMALIZE_CSS` font-size:0
+        rule on `[class*="btn-style-icon"]` and similar selectors must
+        suppress them.
+        """
+        text = self._render_chrome("elma365_activities_example.webarchive")
+        for forbidden in (
+            "fullscreen_enter", "system_close", "arrow_up", "arrow_down",
+        ):
+            self.assertNotIn(
+                forbidden, text,
+                f"Icon-font ligature {forbidden!r} leaked into PDF — "
+                "the CSS rule that hides text inside icon-button "
+                "containers regressed.",
+            )
+
+    def test_ya_browser_no_sidebar_label_leak(self):
+        """ya_browser uses an icon-only Yandex Cloud Console sidebar:
+        narrow column with hidden text labels (revealed on hover).
+        A previous iteration's universal `* { overflow: visible
+        !important }` rule unclipped these labels, causing them to
+        overlap the main content. The fix uses a width gate
+        (offsetWidth ≥ 200 px) in the JS overflow-release walk —
+        narrow sidebars don't qualify, labels stay clipped.
+
+        Negative regression: pin the sidebar label strings as
+        forbidden. If a refactor drops the width gate or universal CSS
+        rule comes back, these labels would leak and the test fails.
+        """
+        text = self._render_chrome("ya_browser.webarchive")
+        for forbidden in (
+            "Все сервисы",
+            "Установленные продукты",
+            "Заявки на доступ",
+            "Центр поддержки",
+        ):
+            self.assertNotIn(
+                forbidden, text,
+                f"Sidebar label {forbidden!r} leaked into PDF — "
+                "the width-gate on overflow release regressed.",
+            )
+        # Positive: actual marketplace content present.
+        self.assertIn("Яндекс Браузер для организаций", text)
 
     def test_elma365_no_underlying_page_noise(self):
         """ELMA365 webarchive captures an OPEN-MODAL state — the modal
