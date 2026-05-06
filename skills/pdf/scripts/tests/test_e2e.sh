@@ -528,6 +528,13 @@ if [ "$rc" -eq 0 ]; then
     ran=$((total - skipped))
     ok "battery: ${ran} fixtures × modes ($skipped skipped — tmp/ absent or mode null)"
 else
+    # On failure, dump the full unittest FAIL blocks (with AssertionError
+    # messages) so CI logs surface the actual mismatch.
+    # `_parse_unittest_failure` shows only the first test name, which
+    # doesn't help with cross-platform drift debugging.
+    echo "  --- FULL unittest FAIL output (battery debug) ---"
+    echo "$out" | sed -n '/^FAIL:/,/^----------/p' | head -120
+    echo "  --- END ---"
     nok "battery" "$(_parse_unittest_failure "$out")"
 fi
 
