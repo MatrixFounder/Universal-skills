@@ -71,6 +71,16 @@ jobs:
           STRICT_VISUAL: "0"
         run: bash skills/${{ matrix.skill }}/scripts/tests/test_e2e.sh
 
+      - name: Regenerate pdf battery_signatures (workflow_dispatch only)
+        # Synthetic + platform fixtures live in the repo, so they CAN be
+        # rendered on Ubuntu CI without tmp/ — the platform-specific
+        # baseline (Linux freetype/fontconfig vs macOS CoreText) drifts
+        # the same way visual goldens do. Refresh in lockstep.
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.update_goldens == 'true' && matrix.skill == 'pdf' }}
+        run: |
+          ./skills/pdf/scripts/.venv/bin/python \
+            skills/pdf/scripts/tests/capture_signatures.py --refresh
+
       - name: E2E
         run: bash skills/${{ matrix.skill }}/scripts/tests/test_e2e.sh
 
@@ -80,6 +90,14 @@ jobs:
         with:
           name: goldens-${{ matrix.skill }}
           path: tests/visual/goldens/${{ matrix.skill }}/
+          if-no-files-found: warn
+
+      - name: Upload regenerated battery_signatures (pdf only)
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.update_goldens == 'true' && matrix.skill == 'pdf' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: battery_signatures-pdf
+          path: skills/pdf/scripts/tests/battery_signatures.json
           if-no-files-found: warn
 
   property:
