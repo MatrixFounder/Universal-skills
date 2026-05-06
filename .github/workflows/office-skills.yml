@@ -65,7 +65,13 @@ jobs:
         run: python3 skills/skill-creator/scripts/validate_skill.py skills/${{ matrix.skill }}
 
       - name: Regenerate goldens (workflow_dispatch only)
+        # `continue-on-error: true` so unrelated test failures (e.g. docx
+        # tier-2 fallback, pdf battery on stale Ubuntu signatures) don't
+        # abort the artifact upload. Goldens are written in-place by the
+        # script BEFORE those failing tests run; we want them out as
+        # artifacts regardless.
         if: ${{ github.event_name == 'workflow_dispatch' && inputs.update_goldens == 'true' }}
+        continue-on-error: true
         env:
           UPDATE_GOLDENS: "1"
           STRICT_VISUAL: "0"
@@ -77,15 +83,17 @@ jobs:
         # baseline (Linux freetype/fontconfig vs macOS CoreText) drifts
         # the same way visual goldens do. Refresh in lockstep.
         if: ${{ github.event_name == 'workflow_dispatch' && inputs.update_goldens == 'true' && matrix.skill == 'pdf' }}
+        continue-on-error: true
         run: |
           ./skills/pdf/scripts/.venv/bin/python \
             skills/pdf/scripts/tests/capture_signatures.py --refresh
 
-      - name: E2E
-        run: bash skills/${{ matrix.skill }}/scripts/tests/test_e2e.sh
-
       - name: Upload regenerated goldens
-        if: ${{ github.event_name == 'workflow_dispatch' && inputs.update_goldens == 'true' }}
+        # Always attempt upload when dispatched — `if: always()` plus the
+        # outer dispatch guard. continue-on-error on the regen step alone
+        # isn't enough because GitHub Actions skips subsequent steps on
+        # earlier failures by default.
+        if: ${{ always() && github.event_name == 'workflow_dispatch' && inputs.update_goldens == 'true' }}
         uses: actions/upload-artifact@v4
         with:
           name: goldens-${{ matrix.skill }}
@@ -93,12 +101,19 @@ jobs:
           if-no-files-found: warn
 
       - name: Upload regenerated battery_signatures (pdf only)
-        if: ${{ github.event_name == 'workflow_dispatch' && inputs.update_goldens == 'true' && matrix.skill == 'pdf' }}
+        if: ${{ always() && github.event_name == 'workflow_dispatch' && inputs.update_goldens == 'true' && matrix.skill == 'pdf' }}
         uses: actions/upload-artifact@v4
         with:
           name: battery_signatures-pdf
           path: skills/pdf/scripts/tests/battery_signatures.json
           if-no-files-found: warn
+
+      - name: E2E
+        # Final verification step — runs only on regular push/PR (not on
+        # update_goldens dispatch, where the regen step already ran the
+        # full battery and we just want the artifacts).
+        if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.update_goldens == 'true') }}
+        run: bash skills/${{ matrix.skill }}/scripts/tests/test_e2e.sh
 
   property:
     name: property fuzz
