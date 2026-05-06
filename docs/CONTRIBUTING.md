@@ -272,6 +272,48 @@ git diff tests/visual/goldens/   # review the new/updated PNGs
 ImageMagick a hard failure; without it, both warn-and-skip so a
 fresh local checkout doesn't break.
 
+### Battery signatures — `skills/pdf/scripts/tests/battery_signatures.json`
+
+Cross-fixture page-count + size + needle-presence baselines for the
+`html2pdf.py` regression battery in `tests/test_battery.py`. Covers
+27+ real-world webarchive/MHTML/HTML fixtures × {regular, reader}
+modes. Each baseline records `min_pages` / `max_pages`,
+`min_size_kb` / `max_size_kb`, plus `required_needles` / `forbidden_needles`
+(text presence/absence assertions).
+
+**Hard rule** — any change to `skills/pdf/scripts/html2pdf_lib/preprocess.py`,
+`skills/pdf/scripts/html2pdf_lib/normalize_css.py`, or
+`skills/pdf/scripts/html2pdf_lib/reader_mode.py` is REQUIRED to refresh
+the signatures in the same commit (otherwise `test_battery` fails on
+CI for everyone after the merge):
+
+```bash
+./skills/pdf/scripts/.venv/bin/python skills/pdf/scripts/tests/capture_signatures.py --refresh
+./skills/pdf/scripts/.venv/bin/python -m unittest skills.pdf.scripts.tests.test_battery  # verify 0 failures
+```
+
+Audit step before committing — verify no banner/cookie text crept
+into `required_needles` (calibration mistake — chrome-stripped
+content shouldn't be required):
+
+```bash
+python3 -c "
+import json, re
+sigs = json.load(open('skills/pdf/scripts/tests/battery_signatures.json'))
+suspicious = re.compile(r'cookie|banner|consent|onetrust|gdpr|политик|реклам', re.IGNORECASE)
+for fixture, modes in sigs.items():
+    for mode, data in modes.items():
+        if isinstance(data, dict):
+            for n in data.get('required_needles', []):
+                if suspicious.search(n):
+                    print(f'{fixture} [{mode}]: {n!r}')"
+```
+
+Historical incident: `d6d3f4c` (pdf-8/9/10 + beauty CSS) and
+`c41535c` (round 3 chrome strip) both shipped without refreshing
+signatures. CI's `test_battery` was red for 16 days before anyone
+caught it. Refresh-on-merge is non-negotiable.
+
 ### Property-based fuzz — `tests/property/`
 
 Hypothesis-driven black-box fuzz for `md2pdf.py`, `md2docx.js`,
