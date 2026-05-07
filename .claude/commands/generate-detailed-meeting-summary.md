@@ -1,0 +1,1 @@
+../../commands/generate-detailed-meeting-summary.md

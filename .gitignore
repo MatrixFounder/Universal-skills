@@ -49,6 +49,7 @@ npm-debug.log*
 archieve
 test-posts
 tmp*
+System
 
 # Test runner caches
 .pytest_cache/
@@ -57,3 +58,35 @@ tmp*
 # Claude Code runtime state
 .claude/scheduled_tasks.lock
 .claude/*.lock
+
+# Auxiliary cross-project symlinks (e.g. agentic-development) — local only.
+# Track only local skill/command symlinks; everything else under these dirs
+# (incl. agentic-development cross-links) stays untracked.
+/.claude/skills/*
+!/.claude/skills/brainstorming
+!/.claude/skills/docx
+!/.claude/skills/hooks-creator
+!/.claude/skills/marp-slide
+!/.claude/skills/mcp-builder
+!/.claude/skills/pdf
+!/.claude/skills/post-writing
+!/.claude/skills/pptx
+!/.claude/skills/skill-creator
+!/.claude/skills/skill-enhancer
+!/.claude/skills/skill-validator
+!/.claude/skills/summarizing-meetings
+!/.claude/skills/text-humanizer
+!/.claude/skills/transcript-fetcher
+!/.claude/skills/vdd-adversarial
+!/.claude/skills/vdd-sarcastic
+!/.claude/skills/xlsx
+
+/.claude/commands/*
+!/.claude/commands/auto-heal-external-skill.md
+!/.claude/commands/generate-detailed-meeting-summary.md
+
+/.claude/agents/
+
+# Local-only Claude Code config + agentic-development CLAUDE.md import
+/CLAUDE.local.md
+/CLAUDE.agentic.md

@@ -1,0 +1,1 @@
+../../commands/auto-heal-external-skill.md
