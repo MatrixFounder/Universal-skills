@@ -1,154 +1,198 @@
-# Development Plan: xlsx-6 — `xlsx_add_comment.py`
+# Development Plan: Task 002 — `xlsx_add_comment.py` Module Split
 
-> **TASK:** [`docs/TASK.md`](TASK.md) — Task ID 001, slug `xlsx-add-comment`.
-> **ARCHITECTURE:** [`docs/ARCHITECTURE.md`](ARCHITECTURE.md).
-> **Reviews:** [`docs/reviews/task-001-review.md`](reviews/task-001-review.md) (round-2 APPROVED) + [`docs/reviews/architecture-001-review.md`](reviews/architecture-001-review.md) (APPROVED WITH COMMENTS) + [`docs/reviews/plan-001-review.md`](reviews/plan-001-review.md) (APPROVED WITH COMMENTS — J-1..J-4 folded into PLAN + task files).
-> **Strategy:** Stub-First (per `tdd-stub-first` skill). Phase 1 lays the surface + green-on-stubs E2E (input-copy stub) + skipped unit tests; Phase 2 replaces stubs with real logic, RTM-tagged.
+> **Source documents:**
+> - [`docs/TASK.md`](TASK.md) — Task 002, draft v2 APPROVED.
+> - [`docs/ARCHITECTURE.md`](ARCHITECTURE.md) — §3.2 (9-file package), §8 (Q1=A / Q2=A / Q3=helpers).
+> - [`docs/reviews/task-002-review.md`](reviews/task-002-review.md) — task + architecture review trail.
+>
+> **Stub-First adaptation for refactor:** This is a structural-only
+> change with TASK R8 locking "no behaviour change". The classical
+> Stub-First "Red→Green" cycle does not apply because the
+> implementation already exists. The adapted cycle is **Green→Green**:
+> each task moves code byte-equivalent, re-runs the existing
+> 75 unit + 112 E2E suite, and confirms the green state is
+> preserved. The Stage-0 baseline capture (Task 002.1) is the
+> regression-anchor; every later task's verification is "delta vs
+> Stage-0 baseline = 0".
+>
+> **Predecessor PLAN.md** (Task 001 / xlsx-6) is preserved in the git
+> history of this file; it is superseded in full by this document.
+> Per-step task files for Task 001 remain at
+> `docs/tasks/task-001-NN-*.md` for historical reference.
 
-> **ID-space key (m-D plan-review):** `m-N` (with hyphen) = architecture-review minor-N (e.g. `m-1` = spid 1024-stride vs max+1). `mN` (no hyphen) = TASK round-1 minor-N (e.g. `m1` = casefold STRAẞE). Both ID spaces are independent.
+## Task Execution Sequence
 
-## RTM ↔ Task mapping
+### Stage 0: Pre-refactor evidence capture (regression anchor)
 
-| RTM | Tasks |
-|---|---|
-| R1 — Legacy comment insertion | 1.01, 2.03, 2.04 |
-| R2 — Cell-syntax (cross-sheet, quoted) | 1.01, 2.02 |
-| R3 — Threaded mode + personList | 1.01, 2.05 |
-| R4 — Batch mode + xlsx-7 envelope | 1.01, 2.06 |
-| R5 — Duplicate-cell semantics | 2.07 |
-| R6 — Merged-cell policy | 2.07 |
-| R7 — Cross-3/4/5/7-H1 hardening | 1.01, 2.01 |
-| R8 — Output integrity + determinism | 2.08 |
-| R9 — Honest scope locks | 1.04, 2.09 |
-| R10 — Tests + docs | 1.02, 1.03, 1.05, 2.10 |
-
-## Stage 1 — Structure & Stubs (Red → Green on hardcoded stubs)
-
-- **Task 1.01** — Create `xlsx_add_comment.py` skeleton with all CLI flags + helper stubs
-  - Use Cases: I1.1, I1.2, I1.3, I1.4, I1.5, I2.1, I2.2, I2.3, I3.1
-  - Description File: [`docs/tasks/task-001-01-skeleton.md`](tasks/task-001-01-skeleton.md)
+- **Task 002.1** — Capture baseline: E2E count, unit count, `--help` output, golden hashes, canonical 35-symbol grep
+  - RTM coverage: **R3.a, R3.b, R3.d, R7.b, R7.c, NFR perf**
+  - Description File: [`docs/tasks/task-002-01-baseline.md`](tasks/task-002-01-baseline.md)
   - Priority: Critical
   - Dependencies: none
 
-- **Task 1.02** — Add E2E test scaffolding to `tests/test_e2e.sh` (16 test cases, red on stubs)
-  - Use Cases: ALL E2E ACs from TASK §3
-  - Description File: [`docs/tasks/task-001-02-e2e-scaffolding.md`](tasks/task-001-02-e2e-scaffolding.md)
-  - Priority: Critical
-  - Dependencies: 1.01
+### Stage 1: Package skeleton + leaf modules (zero internal deps)
 
-- **Task 1.03** — Create `tests/test_xlsx_add_comment.py` unit-test scaffolding
-  - Use Cases: I1.1, I1.2, I1.3, I1.4, I1.5, I2.1, I2.3, I4.1
-  - Description File: [`docs/tasks/task-001-03-unit-scaffolding.md`](tasks/task-001-03-unit-scaffolding.md)
+- **Task 002.2** — Create `xlsx_comment/` package skeleton (empty stubs for all 9 modules + `__init__.py`)
+  - RTM coverage: **R1.a**
+  - Description File: [`docs/tasks/task-002-02-skeleton.md`](tasks/task-002-02-skeleton.md)
+  - Priority: Critical
+  - Dependencies: Task 002.1
+
+- **Task 002.3** — Migrate `constants.py` and `exceptions.py` (the two zero-dep leaves) + first shim re-exports
+  - RTM coverage: **R1.b, R1.c, R4.a, R4.c, R7.c**
+  - Description File: [`docs/tasks/task-002-03-leaf-moves.md`](tasks/task-002-03-leaf-moves.md)
+  - Priority: Critical
+  - Dependencies: Task 002.2
+
+### Stage 2: Independent feature modules (depend on leaves only)
+
+- **Task 002.4** — Migrate `cell_parser.py` (F2)
+  - RTM coverage: **R1.d, R4.b**
+  - Description File: [`docs/tasks/task-002-04-cell-parser.md`](tasks/task-002-04-cell-parser.md)
   - Priority: High
-  - Dependencies: 1.01
+  - Dependencies: Task 002.3
 
-- **Task 1.04** — Create `tests/golden/` directory + `README.md` + baseline input fixtures
-  - Use Cases: R9.d (honest scope — agent-only goldens), I4.1
-  - Description File: [`docs/tasks/task-001-04-fixtures.md`](tasks/task-001-04-fixtures.md)
+- **Task 002.5** — Migrate `batch.py` (F3)
+  - RTM coverage: **R1.e, R4.b**
+  - Description File: [`docs/tasks/task-002-05-batch.md`](tasks/task-002-05-batch.md)
   - Priority: High
-  - Dependencies: none (parallel with 1.01)
+  - Dependencies: Task 002.3
 
-- **Task 1.05** — SKILL.md updates + `references/comments-and-threads.md` + `examples/comments-batch.json` (doc stubs)
-  - Use Cases: I4.2
-  - Description File: [`docs/tasks/task-001-05-doc-stubs.md`](tasks/task-001-05-doc-stubs.md)
-  - Priority: Medium
-  - Dependencies: 1.01
+### Stage 3: The heavy module — OOXML editor (largest single move)
 
-## Stage 2 — Logic Implementation (RTM-tagged, replaces stubs with real code)
-
-- **Task 2.01 [R7]** — Cross-3/4/5/7-H1 hardening (`assert_not_encrypted`, `warn_if_macros_will_be_dropped`, same-path guard, json-errors envelope routing)
-  - Use Cases: I3.1
-  - Description File: [`docs/tasks/task-001-06-cross-cutting.md`](tasks/task-001-06-cross-cutting.md)
-  - Priority: Critical
-  - Dependencies: 1.01, 1.02, 1.03
-
-- **Task 2.02 [R2]** — Cell-syntax parser + sheet resolver (first-visible default, case-sensitive lookup, M2/M3)
-  - Use Cases: I1.1
-  - Description File: [`docs/tasks/task-001-07-cell-parser.md`](tasks/task-001-07-cell-parser.md)
-  - Priority: Critical
-  - Dependencies: 1.01, 1.03
-
-- **Task 2.03 [R1.h + M-1]** — `<o:idmap data>` (list-aware) + `o:spid` workbook-wide scanners + `next_part_counter`
-  - Use Cases: I1.2
-  - Description File: [`docs/tasks/task-001-08-scanners.md`](tasks/task-001-08-scanners.md)
-  - Priority: Critical
-  - Dependencies: 1.01, 1.03
-
-- **Task 2.04 [R1]** — Legacy comment write path (commentsN.xml + vmlDrawingK.xml + sheet rels + Content_Types overrides + `Default Extension="vml"` idempotency m-3)
-  - Use Cases: I1.3
-  - Description File: [`docs/tasks/task-001-09-legacy-write.md`](tasks/task-001-09-legacy-write.md)
-  - Priority: Critical
-  - Dependencies: 2.03
-
-- **Task 2.05 [R3]** — Threaded write path (threadedComments<M>.xml + personList.xml on workbook-rels M6 + casefold userId m1 + Q7 fidelity dual-write)
-  - Use Cases: I1.4
-  - Description File: [`docs/tasks/task-001-10-threaded-write.md`](tasks/task-001-10-threaded-write.md)
-  - Priority: Critical
-  - Dependencies: 2.04
-
-- **Task 2.06 [R4]** — Batch mode (flat-array + xlsx-7 envelope auto-detect + 8 MiB cap m2 + group-finding skip + batch dedup)
-  - Use Cases: I2.1, I2.2, I2.3
-  - Description File: [`docs/tasks/task-001-11-batch.md`](tasks/task-001-11-batch.md)
+- **Task 002.6** — Migrate `ooxml_editor.py` (F4, ~776 LOC, single-file per Q1=A)
+  - RTM coverage: **R1.f, R4.b, R7.c (verbatim move incl. `_VML_PARSER` security boundary)**
+  - Description File: [`docs/tasks/task-002-06-ooxml-editor.md`](tasks/task-002-06-ooxml-editor.md)
   - Priority: High
-  - Dependencies: 2.04, 2.05
+  - Dependencies: Task 002.3
 
-- **Task 2.07 [R5][R6]** — Duplicate-cell matrix (ARCHITECTURE §6.1 + new `DuplicateThreadedComment` envelope) + merged-cell resolver
-  - Use Cases: I1.5, R5 corollary
-  - Description File: [`docs/tasks/task-001-12-dup-and-merge.md`](tasks/task-001-12-dup-and-merge.md)
+### Stage 4: Logic modules that depend on F4
+
+- **Task 002.7** — Migrate `merge_dup.py` (F5)
+  - RTM coverage: **R1.g, R4.b**
+  - Description File: [`docs/tasks/task-002-07-merge-dup.md`](tasks/task-002-07-merge-dup.md)
   - Priority: High
-  - Dependencies: 2.04, 2.05
+  - Dependencies: Task 002.6
 
-- **Task 2.08 [R8]** — Output integrity hooks (post-pack `office/validate.py` + `xlsx_validate.py --fail-empty`; `.xlsm` macro preservation verification)
-  - Use Cases: I3.2
-  - Description File: [`docs/tasks/task-001-13-integrity.md`](tasks/task-001-13-integrity.md)
+### Stage 5: CLI surface — orchestrator merges + shim reduction
+
+- **Task 002.8** — Migrate `cli_helpers.py` (F-Helpers + Q3=helpers move of `_post_pack_validate`/`_post_validate_enabled`)
+  - RTM coverage: **R1.h, R4.b**
+  - Description File: [`docs/tasks/task-002-08-cli-helpers.md`](tasks/task-002-08-cli-helpers.md)
   - Priority: High
-  - Dependencies: 2.04, 2.05, 2.06
+  - Dependencies: Task 002.7
 
-- **Task 2.09 [R9]** — Honest-scope regression tests (parentId absent, plain-text body, default VML anchor, UUIDv4 non-determinism, --unpacked-dir absent, --default-initials absent)
-  - Use Cases: I4.1
-  - Description File: [`docs/tasks/task-001-14-honest-scope.md`](tasks/task-001-14-honest-scope.md)
-  - Priority: Medium
-  - Dependencies: 2.05, 2.06
+- **Task 002.9** — Migrate `cli.py` (F1+F6 merged per Q2=A) AND reduce `xlsx_add_comment.py` to ≤200 LOC shim with full 35-symbol re-export contract
+  - RTM coverage: **R1.i, R1.j, R2.a, R2.b, R2.c, R2.d, R4.b**
+  - Description File: [`docs/tasks/task-002-09-cli-and-shim.md`](tasks/task-002-09-cli-and-shim.md)
+  - Priority: Critical
+  - Dependencies: Task 002.8
 
-- **Task 2.10 [R10]** — Doc polish (SKILL.md final, references/comments-and-threads.md final with C1+M-1 pitfalls, examples/comments-batch.json) + `skill-creator/scripts/validate_skill.py skills/xlsx` exit-0 + golden-diff strategy (`c14n` per m-5)
-  - Use Cases: I4.2
-  - Description File: [`docs/tasks/task-001-15-final-docs.md`](tasks/task-001-15-final-docs.md)
-  - Priority: Medium
-  - Dependencies: 2.06, 2.07, 2.08, 2.09
+### Stage 6: Verification, locks, and documentation
+
+- **Task 002.10** — Add honest-scope regression test + import-graph smoke test + delta-vs-baseline verification
+  - RTM coverage: **R3.a, R3.b, R3.c, R3.d, R7.a, R7.d, R8.a, NFR perf**
+  - Description File: [`docs/tasks/task-002-10-honest-scope-tests.md`](tasks/task-002-10-honest-scope-tests.md)
+  - Priority: Critical
+  - Dependencies: Task 002.9
+
+- **Task 002.11** — Update `.AGENTS.md`, `references/comments-and-threads.md` §6, run `validate_skill.py`, `office/` byte-identity gate
+  - RTM coverage: **R5.a, R5.b, R5.c, R5.d, R6.a, R6.b, R6.c, R6.d, R6.e, R8.b, R8.c, R8.d, R8.e**
+  - Description File: [`docs/tasks/task-002-11-docs-and-validation.md`](tasks/task-002-11-docs-and-validation.md)
+  - Priority: Critical
+  - Dependencies: Task 002.10
+
+## RTM Coverage Map
+
+> **Per planner-prompt §4 Step 2 RTM Linking:** every TASK.md RTM
+> sub-feature is mapped to **exactly one** planning task that delivers
+> it (or to a small set of tasks where the sub-feature is genuinely
+> distributed — e.g. R5.a "each new module gets a docstring" lives in
+> every migration task and the final polish pass). Multiple sub-features
+> under a single task are listed individually below; no feature-grouping.
+
+| RTM ID | Sub-feature | PLAN Task |
+|---|---|---|
+| R1.a | Create `xlsx_comment/` package directory + `__init__.py` | 002.2 |
+| R1.b | Migrate F-Constants → `constants.py` | 002.3 |
+| R1.c | Migrate F-Errors → `exceptions.py` | 002.3 |
+| R1.d | Migrate F2 → `cell_parser.py` | 002.4 |
+| R1.e | Migrate F3 → `batch.py` | 002.5 |
+| R1.f | Migrate F4 → `ooxml_editor.py` (single-file per Q1=A) | 002.6 |
+| R1.g | Migrate F5 → `merge_dup.py` | 002.7 |
+| R1.h | Migrate F-Helpers → `cli_helpers.py` (incl. Q3 move) | 002.8 |
+| R1.i | Migrate F1 → `cli.py` (build_parser) | 002.9 |
+| R1.j | Migrate F6 → `cli.py` (main / single_cell_main / batch_main, merged per Q2=A) | 002.9 |
+| R2.a | Reduce shim to ≤200 LOC | 002.9 |
+| R2.b | Shim re-exports 35-symbol test-compat surface | 002.9 |
+| R2.c | Migrate shim docstring to `xlsx_comment/__init__.py` (or near-empty) | 002.9 |
+| R2.d | Shim retains shebang + executable bit | 002.9 |
+| R3.a | 75 unit tests pass with zero edits | 002.1 (baseline), 002.10 (delta=0 lock) |
+| R3.b | 112 E2E checks pass | 002.1 (baseline), 002.10 (delta=0 lock) |
+| R3.c | E2E with `XLSX_ADD_COMMENT_POST_VALIDATE=1` passes | 002.10 |
+| R3.d | Goldens bit-equal OR `_golden_diff.py` zero structural delta | 002.1 (hash baseline), 002.10 (delta=0 lock) |
+| R4.a | Each module declares `__all__` | 002.3 (constants/exceptions), 002.4..002.9 (per module) |
+| R4.b | Cross-module imports use sibling-relative form, NOT shim | 002.3..002.9 (per migration) |
+| R4.c | `_AppError` + 14 typed errors live in `exceptions.py` | 002.3 |
+| R4.d | Module-private helpers keep `_` prefix; not in `__all__` | 002.3..002.9 (per module) |
+| R5.a | Each new module gets a top-of-file docstring (≤30 LOC) | 002.3..002.9 (per module) + final pass 002.11 |
+| R5.b | Update `skills/xlsx/scripts/.AGENTS.md` | 002.11 |
+| R5.c | `skills/xlsx/SKILL.md` does NOT change (verification only) | 002.11 |
+| R5.d | Append §6 "Internal module map" to `references/comments-and-threads.md` | 002.11 |
+| R6.a | `validate_skill.py skills/xlsx` exits 0 | 002.11 |
+| R6.b | `git status` shows only expected file moves + new package | 002.11 |
+| R6.c | No new dependencies in `requirements.txt` | 002.11 |
+| R6.d | `__pycache__` cleaned before commit | 002.11 |
+| R6.e | `office/` byte-identical across all 4 office skills (`diff -qr`) | 002.11 |
+| R7.a | Single self-contained PR / chain — no half-states on `main` | 002.10 |
+| R7.b | `git diff main..HEAD --stat` shows clean file moves only | 002.1 (capture pre-state), 002.10 (verify delta) |
+| R7.c | Migrated code is byte-equivalent (no re-indent / re-flow / re-name) | 002.3..002.9 (per migration with verbatim-move discipline) |
+| R7.d | Each module move has a unit-level smoke test for import | 002.10 (`tests/test_xlsx_comment_imports.py`) |
+| R8.a | No behaviour change; logic-bugs reproduced verbatim with `# XXX(task-002):` | 002.3..002.9 (per migration) + 002.10 (lock) |
+| R8.b | `office/` is untouched | 002.11 (`diff -qr` gate) |
+| R8.c | `_errors.py` / `preview.py` / `office_passwd.py` untouched | 002.11 (`diff -q` gate) |
+| R8.d | `docx_add_comment.py` and `pptx_*` untouched | 002.11 (git status review) |
+| R8.e | v2 follow-ups (R9.f, R9.g, parentId, rich text) explicitly out of scope | 002.10 (honest-scope test) |
+
+## Stub-First Phasing Note (Adapted for Refactor)
+
+| Classical Stub-First | This refactor's adaptation |
+|---|---|
+| **Phase 1: Stubs + E2E (Red→Green)** — write failing E2E, then stub the API, then make E2E pass against stubbed values. | **Phase 1 (Tasks 002.1–002.2): Skeleton + baseline capture.** Empty package stubs are created (Task 002.2) and pre-refactor green state is captured (Task 002.1). Tests still pass against the **unchanged** `xlsx_add_comment.py` because the new package is unused. This is the analog of "stubs do not change observable behaviour". |
+| **Phase 2: Logic Implementation (Mock replacement)** — replace stubs with real logic, update E2E. | **Phase 2 (Tasks 002.3–002.9): Code migration.** Each task moves one F-region from `xlsx_add_comment.py` to its target module byte-equivalent and updates the shim re-exports. The "logic" doesn't change — what changes is **where the logic lives**. After every task, the test suite must remain green. |
+| **Phase 3: Verification + Documentation.** | **Phase 3 (Tasks 002.10–002.11): Honest-scope locks + docs.** New regression tests lock in the post-refactor structure (shim ≤200 LOC, importable surface, `office/` non-touch). `.AGENTS.md` and `references/comments-and-threads.md` updated. |
+
+The adapted phasing is **stricter** than classical Stub-First because every intermediate task (002.3–002.9) must keep all existing tests green — there is no "tests fail until logic ships" intermediate state.
+
+## Execution discipline (per migration task)
+
+Tasks 002.3–002.9 follow this micro-cycle. Each `task-002-NN-*.md` references this section instead of repeating it.
+
+1. **Read** the source region in `xlsx_add_comment.py` (using `# region — F<N>` markers as boundaries). **n1 from plan-review:** the per-task line-number ranges (e.g. "lines 140–178") are correct as of the Task 001 final state but may drift if any earlier task in the chain edits the file. The canonical boundary is the `# region —` / `# endregion` marker pair, NOT the line numbers. If line numbers and markers disagree, **trust the markers**.
+2. **Move** the code byte-equivalent into the target module:
+   - Preserve indentation, comments, blank lines.
+   - Convert `# region — …` opener into a module docstring.
+   - Drop the `# endregion` marker.
+   - Do NOT auto-format with black/ruff/isort during the move.
+3. **Replace** the deleted region in `xlsx_add_comment.py` with a re-import (`from xlsx_comment.<module> import …`) covering the test-compat surface for that module.
+4. **Update** internal cross-references inside the package: replace any `from <symbol>` style intra-module references that broke with sibling-relative imports (`from .exceptions import _AppError`).
+5. **Run** `cd skills/xlsx/scripts && ./.venv/bin/python -m unittest discover -s tests`.
+6. **Run** `bash skills/xlsx/scripts/tests/test_e2e.sh`.
+7. **If both green → commit; if any red → revert and investigate**. Do NOT advance to the next task with red tests.
 
 ## Use Case Coverage
 
 | Use Case | Tasks |
 |---|---|
-| I1.1 (Cell-syntax parser) | 1.01, 1.03, 2.02 |
-| I1.2 (Part-counter resolution) | 1.01, 1.03, 2.03 |
-| I1.3 (Legacy write path) | 1.01, 1.02, 2.04 |
-| I1.4 (Threaded write path) | 1.01, 1.02, 2.05 |
-| I1.5 (Merged-cell resolver) | 1.01, 1.02, 2.07 |
-| I2.1 (Batch shape auto-detect) | 1.01, 1.03, 2.06 |
-| I2.2 (Envelope-mode field mapping) | 1.01, 1.03, 2.06 |
-| I2.3 (Batch dedup & no-collision) | 1.02, 1.03, 2.06 |
-| I3.1 (Cross-cutting gates) | 1.01, 1.02, 2.01 |
-| I3.2 (Output validates clean) | 1.02, 2.08 |
-| I4.1 (Honest-scope regressions) | 1.04, 2.09 |
-| I4.2 (Skill docs + reference) | 1.05, 2.10 |
-
-## Phase boundaries / verification gates
-
-- **End of Stage 1 (post-1.05):** all stubs in place; `bash skills/xlsx/scripts/tests/test_e2e.sh` runs and **passes** on the input-copy stub from 1.01 (E2E green-on-stubs); `cd skills/xlsx/scripts && ./.venv/bin/python -m unittest discover -s tests` runs and reports `OK (skipped=N)` — unit tests are SKIPPED at this point (J-3 plan-review clarification: skipTest, not red, per `tdd-stub-first` §1 which permits both). Both flip to real assertions one-by-one inside their owning Stage-2 task.
-
-- **End of each Logic task (2.01..2.10):** the task's owned ACs flip from "asserts hardcoded value" to "asserts real value"; full E2E + unit + regression suites stay green; `office/validate.py` exits 0 on every output produced by the task's ACs.
-
-- **End of Stage 2 (post-2.10):**
-  - `bash skills/xlsx/scripts/tests/test_e2e.sh` → all 16 ACs green.
-  - `cd skills/xlsx/scripts && ./.venv/bin/python -m unittest discover -s tests` → green.
-  - `python3 .claude/skills/skill-creator/scripts/validate_skill.py skills/xlsx` → exit 0.
-  - `cd skills/xlsx/scripts && diff -qr office ../../docx/scripts/office` → empty (no accidental edits to shared `office/` module per CLAUDE.md §2).
-  - All TASK Acceptance Criteria checked off.
-
-## Risks & decisions deferred to development
-
-- **A-Q3 (PLAN-internal, m-5):** golden-diff strategy = `lxml.etree.tostring(..., method='c14n')` (NOT `c14n2`); ephemeral attributes (`<threadedComment id>` UUIDv4, unpinned `dT`) masked via XPath replace before comparison. **Locked in this PLAN.** Implementation in 2.10.
-- **m-1:** `o:spid` allocator = workbook-wide max+1 (NOT Excel's 1024-stride convention). Documented in `references/comments-and-threads.md`. **Locked in this PLAN.** Implementation in 2.03.
-- **m-3:** if input has `Default Extension="vml"`, do NOT emit redundant per-part `<Override>` (idempotency refinement). **Locked in this PLAN.** Implementation in 2.04.
-- **m-4:** 8 MiB stdin cap: `read(8 * 1024 * 1024 + 1)` then `if len > 8 * 1024 * 1024`. **Locked in this PLAN.** Implementation in 2.06.
+| I1 (package skeleton) | 002.2 |
+| I2 (constants + exceptions) | 002.3 |
+| I3 (cell_parser) | 002.4 |
+| I4 (batch) | 002.5 |
+| I5 (ooxml_editor — largest move) | 002.6 |
+| I6 (merge_dup) | 002.7 |
+| I7 (cli_helpers) | 002.8 |
+| I8 (cli + shim reduction) | 002.9 |
+| I9 (test-suite full-pass evidence) | 002.1 (baseline), 002.10 (delta) |
+| I10 (validator + clean-tree gate) | 002.11 |
+| I11 (`.AGENTS.md` update) | 002.11 |
+| I12 (locked non-goals as regression tests) | 002.10 |

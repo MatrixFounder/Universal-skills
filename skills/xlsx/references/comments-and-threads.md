@@ -248,3 +248,29 @@ The diff harness covers the five named goldens. Other E2E tests rely
 on exit-code + lxml-assertion checks only — canonical diff is for
 stable-shape outputs, NOT for exit-code-error tests (m-C plan-review
 clarification).
+
+## 6. Internal module map (Task 002 — module split)
+
+The `xlsx_add_comment.py` script is a **thin shim** (≤ 200 LOC) that
+delegates to the `xlsx_comment/` package next to it. Public CLI
+behaviour is unchanged from xlsx-6 v1 (Task 001); the split exists to
+make further development of the script tractable. See
+`docs/ARCHITECTURE.md` §3 / §8 for the design and Q1/Q2/Q3 closure.
+
+| Module | Responsibility |
+|---|---|
+| `xlsx_comment/constants.py` | OOXML namespaces, content-types, anchor + cap constants |
+| `xlsx_comment/exceptions.py` | `_AppError` + 14 typed leaves |
+| `xlsx_comment/cell_parser.py` | `--cell` syntax parser + sheet resolver |
+| `xlsx_comment/batch.py` | `--batch` JSON loader (flat-array vs envelope) |
+| `xlsx_comment/ooxml_editor.py` | OOXML mutations (largest module — scanners, part-counter, rels, legacy + threaded writers, `_VML_PARSER` security boundary) |
+| `xlsx_comment/merge_dup.py` | Merged-cell resolver + duplicate-cell matrix |
+| `xlsx_comment/cli_helpers.py` | Validation + date + post-pack validate utilities |
+| `xlsx_comment/cli.py` | argparse + `main` + `single_cell_main` + `batch_main` |
+
+Future contributors: when adding a v2 feature (R9.f
+`--default-initials`, R9.g `--unpacked-dir`, parentId reply-threads,
+rich text), land it in the **single** appropriate module above —
+DO NOT spread changes across files. If a v2 feature pushes
+`ooxml_editor.py` past ~1200 LOC, reconsider the Q1=A "single-file"
+decision (see ARCHITECTURE §8 override clause).

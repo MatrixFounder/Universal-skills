@@ -1,0 +1,93 @@
+Task 002 — post-refactor evidence (delta verification vs task-002-baseline.txt).
+
+Captured: 2026-05-08 by Developer agent during Task 002.10.
+Working directory: repo root.
+
+== post_xlsx_add_comment_loc ==
+63 (was 2339; Δ −2276; R2.a satisfied — ≤ 200 LOC, target far exceeded)
+
+== post_test_imports_canonical ==
+# (Tests untouched per R3.a — same 35-symbol grep as baseline. The shim's
+# import block at xlsx_add_comment.py lines 26-58 enumerates these
+# explicitly; verified by `test_refactor_honest_scope.py::
+# test_shim_reexports_full_test_compat_surface` plus the existing 75
+# unit tests + 11 new tests all passing without test edits.)
+
+== post_help_output ==
+# Diff vs baseline: BYTE EQUAL (verified at end of Task 002.9 via
+# `diff /tmp/help_pre_baseline.txt /tmp/help_post_002_9.txt` → no output).
+# The `argparse.ArgumentParser(description=...)` literal in cli.py
+# is hardcoded to match the pre-002.9 shim's __doc__.splitlines()[0]
+# so --help byte-equivalence holds despite F1 migrating to a new module.
+
+== post_unit_tests ==
+Ran 86 tests in 0.919s
+
+OK
+# Delta vs baseline: +11 (75 → 86) — exactly matching the 3 honest-scope
+# + 8 import-smoke regression tests added in 002.10. Zero edits to
+# existing test files (R3.a satisfied).
+
+== post_e2e_tests ==
+112 passed, 0 failed
+# Re-run with XLSX_ADD_COMMENT_POST_VALIDATE=1 (R3.c gate): also 112
+# passed, 0 failed.
+
+== post_e2e_ok_count ==
+112
+# Delta vs baseline: 0 (R3.b satisfied — every E2E that passed before
+# the refactor still passes; no skips, no flakes, no behavioural drift).
+
+== post_golden_hashes ==
+# Diff vs baseline: GOLDENS BIT-EQUAL (12 of 12 hashes match, verified
+# by `diff <(awk '...' baseline) /tmp/golden_hashes_post.txt`).
+# R3.d satisfied via the BIT-EQUAL path; structural-diff fallback NOT
+# needed.
+
+== post_import_time ==
+import time:       158 |      22185 |   xlsx_comment.cli
+import time:       130 |      45371 | xlsx_add_comment
+# Cumulative cold-import = 45,371 microseconds (≈ 45 ms).
+# Baseline single-cold-run was 109,776 µs (≈ 110 ms).
+# Naive ratio = 45371/109776 = 0.41 (59% faster), which exceeds the
+# ±20% gate's lower bound. Per the Sarcasmotron-1 methodology fix in
+# 002.10 step 7, single-cold-run measurements are too noisy to gate
+# on — both this and the baseline are single-shot. The shim's import
+# graph went from "lxml.etree + office + … via direct imports" to
+# "imported lazily through xlsx_comment.cli" — so a faster cold-import
+# is plausible (fewer top-level eager imports). NOT a regression.
+
+== post_office_diff ==
+# 3-skill scope: docx (master) -> xlsx + pptx (mirrors) — empty diff.
+#   diff -qr skills/docx/scripts/office skills/xlsx/scripts/office  →  (empty)
+#   diff -qr skills/docx/scripts/office skills/pptx/scripts/office  →  (empty)
+# pdf has no office/ subdir — outside the 3-skill replication scope.
+# Verified by the `test_refactor_honest_scope.py::
+# test_office_byte_identity_preserved` regression lock (passing).
+
+== post_cross_skill_helpers ==
+# All cross-skill helpers byte-identical at post-state (R6.e gate):
+#   diff -q docx/_errors.py xlsx/_errors.py  →  (empty)
+#   diff -q docx/_errors.py pptx/_errors.py  →  (empty)
+#   diff -q docx/_errors.py pdf/_errors.py   →  (empty)
+#   diff -q docx/preview.py xlsx/preview.py  →  (empty)
+#   diff -q docx/preview.py pptx/preview.py  →  (empty)
+#   diff -q docx/preview.py pdf/preview.py   →  (empty)
+#   diff -q docx/office_passwd.py xlsx/office_passwd.py  →  (empty)
+#   diff -q docx/office_passwd.py pptx/office_passwd.py  →  (empty)
+
+== Summary ==
+- R3.a (zero test edits): ✅
+- R3.b (E2E delta = 0):    ✅ (112/112 pre = 112/112 post)
+- R3.c (E2E with POST_VALIDATE=1 passes): ✅
+- R3.d (goldens bit-equal): ✅
+- R6.e (office/ byte-identical): ✅
+- R7.a (single PR/chain, no half-states on main): ✅ (resumable session-state
+  persisted at every task boundary; no commits yet — auto-commit is forbidden
+  per /vdd-develop-all)
+- R7.d (import smoke for every module): ✅ (test_xlsx_comment_imports.py
+  with 8 cases — one per package module incl. __init__)
+- R8.a (no behaviour change): ✅ (verified by full-suite + bit-equal goldens)
+- R8.b (office/ untouched): ✅
+- R8.c (_errors.py / preview.py / office_passwd.py untouched): ✅
+- R8.d (docx_add_comment.py / pptx / pdf untouched): ✅ (verified in 002.11)

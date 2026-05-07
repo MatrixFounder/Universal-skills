@@ -1,0 +1,196 @@
+Task 002 — pre-refactor baseline (regression anchor for delta-vs-baseline lock in Task 002.10).
+
+Captured: 2026-05-07 by Developer agent during Task 002.1 execution.
+Working directory: repo root (/Users/sergey/dev-projects/Universal-skills).
+Venv:               skills/xlsx/scripts/.venv/ (Python 3.13).
+Source SHA (HEAD):  $(git rev-parse HEAD) — record before commit.
+
+== pre_xlsx_add_comment_loc ==
+2339 skills/xlsx/scripts/xlsx_add_comment.py
+
+== pre_test_imports_canonical ==
+# Raw `from xlsx_add_comment import …` lines in tests/test_xlsx_add_comment.py,
+# de-duplicated (`sort -u`). Sets the contract for the shim re-export surface.
+from xlsx_add_comment import CT_NS
+from xlsx_add_comment import SS_NS
+from xlsx_add_comment import THREADED_NS
+from xlsx_add_comment import THREADED_NS, SS_NS
+from xlsx_add_comment import X_NS, DEFAULT_VML_ANCHOR
+from xlsx_add_comment import _allocate_rid, PR_NS
+from xlsx_add_comment import _enforce_duplicate_matrix
+from xlsx_add_comment import _make_relative_target
+from xlsx_add_comment import _patch_content_types, CT_NS
+from xlsx_add_comment import _patch_content_types, VML_CT, CT_NS
+from xlsx_add_comment import _post_pack_validate
+from xlsx_add_comment import _post_pack_validate, OutputIntegrityFailure
+from xlsx_add_comment import add_legacy_comment, SS_NS
+from xlsx_add_comment import add_person, THREADED_NS
+from xlsx_add_comment import add_vml_shape, V_NS, O_NS
+from xlsx_add_comment import add_vml_shape, V_NS, X_NS
+from xlsx_add_comment import load_batch
+from xlsx_add_comment import load_batch, BatchTooLarge
+from xlsx_add_comment import load_batch, InvalidBatchInput
+from xlsx_add_comment import main
+from xlsx_add_comment import next_part_counter
+from xlsx_add_comment import parse_cell_syntax
+from xlsx_add_comment import parse_cell_syntax, InvalidCellRef
+from xlsx_add_comment import resolve_merged_target
+from xlsx_add_comment import resolve_merged_target, MergedCellTarget
+from xlsx_add_comment import resolve_sheet
+from xlsx_add_comment import resolve_sheet, NoVisibleSheet
+from xlsx_add_comment import resolve_sheet, SheetNotFound
+from xlsx_add_comment import scan_idmap_used
+from xlsx_add_comment import scan_idmap_used, MalformedVml
+from xlsx_add_comment import scan_idmap_used, scan_spid_used, MalformedVml
+from xlsx_add_comment import scan_spid_used
+# (also one parenthesised multi-line import block — see pre_test_imports_symbols
+# for the full set of names extracted across both forms.)
+
+== pre_test_imports_symbols ==
+# 35 distinct names — matches TASK §2.5 "Re-export contract — AUTHORITATIVE".
+# Partition: 9 constants + 10 exceptions + 16 functions/helpers.
+BatchTooLarge
+CT_NS
+DEFAULT_VML_ANCHOR
+DuplicateLegacyComment
+DuplicateThreadedComment
+InvalidBatchInput
+InvalidCellRef
+MalformedVml
+MergedCellTarget
+NoVisibleSheet
+O_NS
+OutputIntegrityFailure
+PR_NS
+SS_NS
+SheetNotFound
+THREADED_NS
+VML_CT
+V_NS
+X_NS
+_allocate_rid
+_enforce_duplicate_matrix
+_make_relative_target
+_patch_content_types
+_post_pack_validate
+add_legacy_comment
+add_person
+add_vml_shape
+load_batch
+main
+next_part_counter
+parse_cell_syntax
+resolve_merged_target
+resolve_sheet
+scan_idmap_used
+scan_spid_used
+
+== pre_help_output ==
+usage: xlsx_add_comment.py [-h] [--cell REF] [--text MSG] [--author NAME]
+                           [--initials INI] [--batch FILE]
+                           [--default-author NAME] [--default-threaded]
+                           [--threaded] [--no-threaded]
+                           [--allow-merged-target] [--date ISO]
+                           [--json-errors]
+                           input output
+
+Insert a Microsoft Excel comment into a target cell of a .xlsx workbook.
+
+positional arguments:
+  input                 Source .xlsx/.xlsm.
+  output                Destination .xlsx/.xlsm (must differ from input).
+
+options:
+  -h, --help            show this help message and exit
+  --cell REF            Target cell. Forms: A5, Sheet2!B5, 'Q1 2026'!A1,
+                        'Bob''s Sheet'!A1.
+  --text MSG            Comment body (plain text). Empty or whitespace-only →
+                        exit 2 EmptyCommentBody.
+  --author NAME         Display name. Required when --cell.
+  --initials INI        Override initials (default: first letter of each
+                        whitespace-token in --author).
+  --batch FILE          JSON file (or - for stdin). Auto-detects flat-array vs
+                        xlsx-7 envelope. 8 MiB cap.
+  --default-author NAME
+                        Required when --batch is xlsx-7 envelope shape;
+                        ignored otherwise.
+  --default-threaded    Default `threaded` for envelope-shape rows.
+  --threaded            Force threaded write (writes BOTH legacy stub +
+                        threadedComment + personList per Q7).
+  --no-threaded         Force legacy-only write (no threaded part, no
+                        personList).
+  --allow-merged-target
+                        Redirect comment to anchor of merged range instead of
+                        failing fast (R6.b).
+  --date ISO            Override timestamp on <threadedComment dT>. Default:
+                        datetime.now(UTC).
+  --json-errors         Emit failures as a single line of JSON on stderr
+                        (machine-readable: {error, code, type?, details?}).
+
+== pre_unit_tests ==
+Ran 75 tests in 0.912s
+
+OK
+
+== pre_e2e_tests ==
+112 passed, 0 failed
+
+== pre_e2e_ok_count ==
+112
+
+== pre_golden_hashes ==
+0470480aa8c54e089fbd2d9dd3345feda68b0f5f61be46ba098518134c3cb943  skills/xlsx/scripts/tests/golden/outputs/existing-legacy-preserve.golden.xlsx
+096131af5dc0219ec4c78e3fded13f1fccfe24802ad6c064f11d4f4ad1984d69  skills/xlsx/scripts/tests/golden/outputs/idmap-conflict.golden.xlsx
+1f3f1b66f900416883a35264d120deeec60c8bb95793484772117ba847239fa6  skills/xlsx/scripts/tests/golden/outputs/clean-no-comments.golden.xlsx
+2f4984ff75368ce57be7d6c5193d0338a3175a7c08b26d21ee5cd14659c1da7b  skills/xlsx/scripts/tests/golden/inputs/hidden_first.xlsx
+4b5c9bd4413e559a24cfb7cda734710d966169d90589641618b7334fed6f4c5e  skills/xlsx/scripts/tests/golden/inputs/encrypted.xlsx
+59cc9ddbed28c656877e92f7b6d99b5a1ef3f006f4e35c8670c5e5bcdd3f4438  skills/xlsx/scripts/tests/golden/outputs/threaded.golden.xlsx
+5f60c618f3cce9c88f81b7538469909b2fdb964b306964d2578f0d63ae4e56b1  skills/xlsx/scripts/tests/golden/inputs/with_legacy.xlsx
+a0056a4668670438d4d0a22f3467c3944a9235698a5bfa1ff7f51e91064acbbb  skills/xlsx/scripts/tests/golden/outputs/multi-sheet.golden.xlsx
+ba034ec6890540ad89a1c90f9f5d64f346835f1d2b6224bdc31a56a2d4557218  skills/xlsx/scripts/tests/golden/inputs/multi_sheet.xlsx
+c17873918c440f8cdf615d7aa227b97280ea9d1e05e733371ea2e8ed729d5f51  skills/xlsx/scripts/tests/golden/inputs/macro.xlsm
+d2f0a12805c5a631c56547ac192a9956dd30d34ab2883a998b50e90ec4f6a66b  skills/xlsx/scripts/tests/golden/inputs/clean.xlsx
+d5a63fdb56c1abeb50d8aa155dffafed6c1243ba637f844dd02a799689371d11  skills/xlsx/scripts/tests/golden/inputs/merged.xlsx
+
+== pre_import_time ==
+# Last cumulative line of `python3 -X importtime -c "import xlsx_add_comment"`.
+# The "cumulative" column for `xlsx_add_comment` is the cold-import budget.
+# 002.10 NFR perf gate: post-refactor cumulative must be within ±20 % of this number.
+import time:     10387 |     109776 | xlsx_add_comment
+# Cumulative cold-import = 109776 microseconds (≈ 110 ms).
+# Acceptable range for 002.10: 87,820 ≤ post ≤ 131,731 microseconds.
+
+== pre_office_diff ==
+# Scope-corrected (002.1 spec drift fix): pdf has no skills/pdf/scripts/office/
+# directory — it is OUTSIDE the 3-skill office-replication scope per CLAUDE.md §2.
+# Office/ replication: docx (master) → xlsx + pptx (mirrors).
+#
+# After cleaning __pycache__ across the tree, the byte-identity diff is empty:
+#   diff -qr skills/docx/scripts/office skills/xlsx/scripts/office  →  (empty)
+#   diff -qr skills/docx/scripts/office skills/pptx/scripts/office  →  (empty)
+# pdf check is skipped (no office/ dir to compare).
+
+== pre_cross_skill_helpers ==
+# 4-skill helpers (_errors.py, preview.py): docx → xlsx + pptx + pdf.
+#   diff -q docx/_errors.py xlsx/_errors.py  →  (empty)
+#   diff -q docx/_errors.py pptx/_errors.py  →  (empty)
+#   diff -q docx/_errors.py pdf/_errors.py   →  (empty)
+#   diff -q docx/preview.py xlsx/preview.py  →  (empty)
+#   diff -q docx/preview.py pptx/preview.py  →  (empty)
+#   diff -q docx/preview.py pdf/preview.py   →  (empty)
+# 3-skill helper (office_passwd.py): docx → xlsx + pptx (NOT pdf).
+#   diff -q docx/office_passwd.py xlsx/office_passwd.py  →  (empty)
+#   diff -q docx/office_passwd.py pptx/office_passwd.py  →  (empty)
+# All cross-skill helpers byte-identical at baseline.
+
+== Notes for Task 002.10 (delta verification) ==
+- Re-run every section above with `post_` prefix; the file
+  `docs/reviews/task-002-postcheck.txt` mirrors this layout.
+- 002.1 task spec contained a minor scope drift (referenced
+  `skills/pdf/scripts/office/`) — corrected here and in the spec; pdf
+  is in the cross-skill-helpers scope only, NOT in the office/ scope.
+- Goldens are agent-output-only (R9.d / m4 from Task 001). The 12
+  hashes above include both inputs (7 fixtures) and outputs (5 goldens).
+- Module reset reminder: any `_AppError` constructor change is a
+  behaviour change; `_VML_PARSER` lxml hardening kwargs must remain
+  byte-equivalent.

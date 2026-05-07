@@ -1,14 +1,21 @@
-# ARCHITECTURE: xlsx-6 — `xlsx_add_comment.py`
+# ARCHITECTURE: xlsx-6 — `xlsx_add_comment.py` (with Task-002 module-split)
 
-> **Template:** `architecture-format-core` — this work adds ONE new
-> component to an existing skill (`skills/xlsx/`). Not a new system,
-> not a >3-component refactor. Extended template not loaded per
-> `architecture-format-core` Loading Conditions.
+> **Template:** `architecture-format-core`. This document covers TWO
+> phases of the same script: Task 001 (xlsx-6, MERGED) added the
+> single-file CLI; Task 002 (xlsx-add-comment-modular, MERGED
+> 2026-05-08) split the as-delivered 2339-LOC monolith into a
+> `xlsx_comment/` package while preserving the public CLI surface
+> byte-for-byte. Sections §2.1 / §3.1 / §3.2 / §3.3 reflect the
+> Task-002 decomposition; §4 (Data Model) and §5 (Security) remain
+> unchanged because the OOXML mutations and the trust boundary are
+> identical pre/post-refactor — Task 002 moved code, not behaviour.
+> Section §8 closes Task-002 architecture-blocker Q1, Q2, Q3.
 
 ## 1. Task Description
 
-- **TASK:** [`docs/TASK.md`](TASK.md) — xlsx-6 `xlsx_add_comment.py`.
-- **Round-2 task review:** [`docs/reviews/task-001-review.md`](reviews/task-001-review.md) — APPROVED WITH COMMENTS, three Open Questions (Q2, Q5, Q7) handed off for the Architect to close.
+- **TASK (Task 001 — xlsx-6 v1):** [`docs/tasks/task-001-xlsx-add-comment-master.md`](tasks/task-001-xlsx-add-comment-master.md) — archived after merge.
+- **TASK (Task 002 — module split):** [`docs/tasks/task-002-xlsx-add-comment-modular.md`](tasks/task-002-xlsx-add-comment-modular.md) — archived after merge (chain of 11 atomic tasks: `task-002-{01..11}-*.md`).
+- **Reviews trail:** [`docs/reviews/task-001-review.md`](reviews/task-001-review.md) (Task 001 round-2 APPROVED) + [`docs/reviews/task-002-review.md`](reviews/task-002-review.md) (Task 002 task/architecture/plan rounds + 7 Sarcasmotron approvals across the chain).
 - **Brief summary of requirements:** Ship a CLI under `skills/xlsx/scripts/` that inserts an Excel comment (legacy `<comment>`, optionally with the threaded-comment + personList Excel-365 modern layer) into a target cell, with cross-skill cross-3/4/5/7-H1 hardening, an `--batch` mode that auto-detects the xlsx-7 findings envelope, and a v1 honest-scope locked by regression tests. Mirrors `skills/docx/scripts/docx_add_comment.py` in CLI conventions.
 - **Decisions this document closes (handoff from Analyst):**
   - **Q2 — Empty-text policy:** REJECT — empty/whitespace-only `--text` exits 2 `EmptyCommentBody`. Mirrors `docx_add_comment.py --comment` non-empty check.
@@ -19,11 +26,17 @@
 
 ### 2.1. Functional Components
 
-> Convention: each functional component below maps 1:1 to a Python module
-> or a clearly-bounded section of `xlsx_add_comment.py`. We deliberately
-> keep the script monolithic (single-file CLI like `docx_add_comment.py`)
-> but with named internal sections delimited by `# region` markers so the
-> 1100-LOC file stays navigable. NOT a multi-module package — YAGNI.
+> **Convention (post Task-002):** each functional component F1–F6
+> below maps 1:1 to a Python module inside the
+> `skills/xlsx/scripts/xlsx_comment/` package. The previous
+> "monolithic single-file CLI" convention from Task 001 is
+> **superseded for the xlsx skill only** because the as-delivered
+> file size (2339 LOC) crossed the navigability threshold that the
+> YAGNI argument was conditional on. The single-file convention
+> remains in force for `docx_add_comment.py` (1101 LOC),
+> `xlsx_add_chart.py`, `xlsx_recalc.py`, `xlsx_validate.py`,
+> `csv2xlsx.py`, and the pptx/pdf scripts — all of which sit comfortably
+> below the threshold. See §8 for the Task-002 closure of Q1/Q2/Q3.
 
 **Component F1 — CLI / Argument Parser**
 
@@ -113,46 +126,100 @@ flowchart TB
 
 ### 3.1. Architectural Style
 
-**Style:** Single-file Python CLI with internal regions, mirroring
-`docx_add_comment.py` (1101 LOC; the xlsx variant should land in the
-same order of magnitude — ~1000–1300 LOC including docstrings).
+**Style:** Python CLI with a thin **shim script** (`xlsx_add_comment.py`,
+≤ 200 LOC) that delegates to a co-located **`xlsx_comment/` package**
+(9 files = 8 implementation modules + a near-empty `__init__.py`, see
+§3.2). Adopted in Task 002 to replace the Task-001 single-file layout
+that grew to 2339 LOC.
 
-**Justification:**
-- Project convention for the office skills is single-file scripts (see
-  `xlsx_add_chart.py`, `xlsx_recalc.py`, `xlsx_validate.py`,
-  `csv2xlsx.py`, all under 300 LOC; `docx_add_comment.py` is the long
-  precedent at 1101 LOC). Fragmenting into a sub-package would break
-  this convention without payoff.
-- The `office/` shared module already provides the only abstraction
-  worth extracting (unpack/pack/validate/encryption/macros). xlsx-6
-  introduces NO new abstraction worth promoting.
-- A multi-module package would also force a Python `__init__.py`-driven
-  install layout that does not match the rest of `skills/xlsx/scripts/`
-  (flat directory + `_errors.py` + `_soffice.py` co-located).
-- **YAGNI:** A second xlsx-comment-related script is hypothetical (the
-  closest is xlsx-7 which is a separate file); there's no pull for
-  shared internals today.
+**Justification (Task-002 update):**
+- The Task-001 YAGNI argument was conditional on the file landing at
+  ~1100 LOC like `docx_add_comment.py`. The as-delivered file is 2339
+  LOC because the xlsx variant implements three feature supersets that
+  docx does not have: threaded comments, batch mode, and VML drawing
+  with workbook-wide `<o:idmap data>` invariants. With the premise
+  falsified, the YAGNI conclusion is too.
+- Each new module sits under ~500 LOC (shim ≤ 200, exceptions ≤ 220,
+  cell_parser ≤ 200, batch ≤ 160, ooxml_editor ≤ 850 single-file or
+  4 × ~200 if Q1 picks the sub-package — see §8 closure: **single-file
+  wins**), giving navigability comparable to other office scripts.
+- The `office/` shared module remains the trust boundary
+  (unpack/pack/validate/encryption/macros). Task 002 adds **NO new
+  shared abstraction** — the package is xlsx-private, lives next to
+  the shim, and does not propagate to docx/pptx/pdf. CLAUDE.md §2
+  4-skill replication does NOT activate.
+- The shim re-exports the 35-symbol test-compat surface (TASK §2.5),
+  so existing tests pass without edits. `xlsx_add_comment.py` remains
+  the **single documented entry point**.
 
-**Anti-pattern explicitly avoided:** Promoting OOXML helpers
-(`scan_idmap_used`, `next_part_counter`) to `office/` would cause the
-**4-skill replication burden** documented in CLAUDE.md §2 (any change
-to `office/` MUST be byte-identical-replicated to xlsx, pptx, pdf).
-Since these helpers are xlsx-specific (commentsN / threadedComments /
-personList / vmlDrawing don't exist in docx or pptx), they STAY in
-`xlsx_add_comment.py`. **This is a constraint, not a choice.**
+**Anti-pattern explicitly avoided (unchanged from Task 001):** Promoting
+OOXML helpers (`scan_idmap_used`, `next_part_counter`) to `office/`
+would cause the **4-skill replication burden** documented in CLAUDE.md §2.
+These helpers are xlsx-specific (commentsN / threadedComments /
+personList / vmlDrawing don't exist in docx or pptx), so they STAY
+inside `xlsx_comment/ooxml_editor.py`. **This is a constraint, not a
+choice.**
+
+**Convention scope (clarified post-Task-002):** The single-file
+convention is in force per script *until* the script crosses the
+navigability threshold (~1500 LOC of executable code, excluding
+docstrings/comments). At that point, the script is split into a
+co-located `<script>_/` package and the original file becomes a
+≤ 200-LOC shim. This rule applies skill-wide; today only
+`xlsx_add_comment.py` triggers it.
 
 ### 3.2. System Components
 
-**Component S1 — `skills/xlsx/scripts/xlsx_add_comment.py`** (NEW)
+**Component S1 — `skills/xlsx/scripts/xlsx_add_comment.py`** (REDUCED to shim in Task 002)
 
-- **Type:** Single-file Python 3.10+ CLI script.
-- **Purpose:** Implements F1–F6 above.
-- **Implemented Functions:** All of F1–F6.
-- **Technologies:** Python 3.10+, `lxml`, `defusedxml` (already in `requirements.txt`); stdlib `json`, `argparse`, `pathlib`, `uuid`, `datetime`.
+- **Type:** Python 3.10+ CLI shim, ≤ 200 LOC.
+- **Purpose:** Single user-facing entry point. Delegates to
+  `xlsx_comment.cli:main()`. Re-exports the 35-symbol test-compat
+  surface (TASK §2.5) so the existing test suite passes without edits.
+- **Implemented Functions:** None of its own; `if __name__ == "__main__":
+  sys.exit(main())`. Re-imports the symbols imported by
+  `tests/test_xlsx_add_comment.py`.
+- **Technologies:** Python 3.10+ stdlib only.
 - **Interfaces:**
-  - **Inbound:** `python3 scripts/xlsx_add_comment.py ...` (CLI, see TASK §2.5); future xlsx-7 pipe via `--batch -`.
-  - **Outbound:** filesystem I/O on input/output `.xlsx`/`.xlsm` paths; stderr for warnings + JSON envelopes.
-- **Dependencies:** `office.unpack`, `office.pack`, `office._encryption`, `office._macros`, `_errors` — all existing.
+  - **Inbound:** `python3 scripts/xlsx_add_comment.py …` (CLI, see TASK §2.5).
+  - **Outbound:** delegates to `xlsx_comment.cli.main(argv)` and returns its exit code.
+- **Dependencies:** `xlsx_comment.*` package (next sibling).
+
+**Component S1.pkg — `skills/xlsx/scripts/xlsx_comment/`** (NEW package, 9 files)
+
+- **Type:** Python 3.10+ package private to the xlsx skill.
+- **Purpose:** Houses the F1–F6 implementation.
+- **Modules** (1:1 with TASK §2.5 file table):
+
+  | Module | Maps to F | Public API (selected) | LOC budget |
+  |---|---|---|---|
+  | `__init__.py` | — | (near-empty per Q4=A) | ≤ 10 |
+  | `constants.py` | (F-Constants) | `SS_NS`, `R_NS`, `PR_NS`, `CT_NS`, `V_NS`, `O_NS`, `X_NS`, `THREADED_NS`, `VML_CT`, `DEFAULT_VML_ANCHOR`, `BATCH_MAX_BYTES` | ≤ 60 |
+  | `exceptions.py` | (F-Errors) | `_AppError` + 14 typed errors | ≤ 220 |
+  | `cell_parser.py` | F2 | `parse_cell_syntax`, `_load_sheets_from_workbook`, `resolve_sheet` | ≤ 200 |
+  | `batch.py` | F3 | `BatchRow`, `load_batch` | ≤ 160 |
+  | `ooxml_editor.py` | F4 | scanners (`scan_idmap_used`, `scan_spid_used`, `_vml_part_paths`, `_parse_vml`), part-counter (`next_part_counter`, `_allocate_new_parts`), cell-ref helpers, target/path resolution, rels/Content-Types, legacy comment writers, threaded comment writers, `add_person`. | ≤ 850 (single-file per Q1=A) |
+  | `merge_dup.py` | F5 | `resolve_merged_target`, `detect_existing_comment_state`, `_enforce_duplicate_matrix` | ≤ 200 |
+  | `cli_helpers.py` | (F-Helpers + Q3) | `_initials_from_author`, `_resolve_date`, `_validate_args`, `_assert_distinct_paths`, `_content_types_path`, `_post_validate_enabled`, `_post_pack_validate` | ≤ 150 |
+  | `cli.py` | F1 + F6 (Q2=merged) | `build_parser`, `main`, `single_cell_main`, `batch_main` | ≤ 700 |
+
+- **Internal API rules:**
+  - Each module declares an `__all__` list. Cross-module imports use sibling-relative `from .exceptions import _AppError`. Imports through the shim (`from xlsx_add_comment import …`) are **forbidden inside the package** to prevent re-import cycles (TASK R4.b).
+  - `_VML_PARSER` (lxml hardened: `resolve_entities=False`, `no_network=True`, `load_dtd=False`, `huge_tree=False`) lives in `ooxml_editor.py` and is preserved verbatim from Task 001 — it is the security boundary against billion-laughs / XXE on tampered VML.
+- **Technologies:** Same as S1 pre-split (Python 3.10+, `lxml`, `defusedxml`, stdlib).
+- **Dependencies:** Same as Task 001 — `office.unpack`, `office.pack`, `office._encryption`, `office._macros`, `_errors`. **No new deps.**
+
+**Component S1.shim re-export contract**
+
+- The shim re-exports the **exact 35-symbol set** documented in
+  TASK §2.5 "Re-export contract — AUTHORITATIVE". The set is
+  partitioned: 9 from `constants`, 10 from `exceptions`, 2 from
+  `cell_parser`, 1 from `batch`, 9 from `ooxml_editor` (incl. 3
+  `_`-prefixed helpers tested directly), 2 from `merge_dup` (incl.
+  `_enforce_duplicate_matrix`), 1 from `cli_helpers`
+  (`_post_pack_validate`), 1 from `cli` (`main`).
+- This is the **only** policy under which TASK R3.a ("zero edits to
+  test files") is satisfiable.
 
 **Component S2 — `skills/xlsx/references/comments-and-threads.md`** (NEW)
 
@@ -192,27 +259,57 @@ personList / vmlDrawing don't exist in docx or pptx), they STAY in
 - **Purpose:** Anchor regression tests. Files are agent-output-only — `tests/golden/README.md` documents "DO NOT open in Excel" (m4 + R9.d).
 - **CI:** `test_e2e.sh` regenerates and diffs goldens (`zipdiff`-style, comparing per-part XML semantically since byte-equality is impossible due to UUIDv4 non-determinism on `<threadedComment id>` — R9.e). Comparison strategy: use `lxml` + `xml.etree.ElementTree` canonicalisation, ignore ephemeral `<threadedComment id>` and `dT` attributes when `--date` is not pinned.
 
-### 3.3. Components Diagram
+### 3.3. Components Diagram (post-Task-002)
 
 ```mermaid
 flowchart LR
-    subgraph "skills/xlsx/ (existing)"
-        SKILL[SKILL.md - MODIFIED]
+    subgraph "skills/xlsx/ (existing, unchanged by Task 002)"
+        SKILL[SKILL.md - unchanged]
         Office[scripts/office/<br/>unpack pack validate]
         Errors[scripts/_errors.py]
         Existing[csv2xlsx<br/>xlsx_recalc<br/>xlsx_validate<br/>xlsx_add_chart]
     end
-    subgraph "NEW for xlsx-6"
-        Script[xlsx_add_comment.py]
-        Ref[references/<br/>comments-and-threads.md]
+    subgraph "Task-001 (xlsx-6) — MERGED"
+        Ref[references/<br/>comments-and-threads.md<br/>+ §6 module map]
         Example[examples/<br/>comments-batch.json]
-        Tests[tests/<br/>test_xlsx_add_comment.py +<br/>test_e2e.sh additions +<br/>golden/]
+        Tests[tests/<br/>test_xlsx_add_comment.py +<br/>test_e2e.sh +<br/>golden/]
     end
-    Script -->|imports| Office
-    Script -->|imports| Errors
-    SKILL -->|links| Script
+    subgraph "Task-002 — module split"
+        Shim["xlsx_add_comment.py<br/>(shim ≤200 LOC<br/>+ 35-symbol re-exports)"]
+        Pkg["xlsx_comment/<br/>(9 modules)"]
+        Init["__init__.py"]
+        Const["constants.py"]
+        Exc["exceptions.py"]
+        Cell["cell_parser.py"]
+        Batch["batch.py"]
+        OOXML["ooxml_editor.py"]
+        Merge["merge_dup.py"]
+        CliH["cli_helpers.py"]
+        Cli["cli.py"]
+        Pkg --> Init
+        Pkg --> Const
+        Pkg --> Exc
+        Pkg --> Cell
+        Pkg --> Batch
+        Pkg --> OOXML
+        Pkg --> Merge
+        Pkg --> CliH
+        Pkg --> Cli
+    end
+    Shim -->|delegates to| Cli
+    Shim -.re-exports.- Const
+    Shim -.re-exports.- Exc
+    Shim -.re-exports.- Cell
+    Shim -.re-exports.- Batch
+    Shim -.re-exports.- OOXML
+    Shim -.re-exports.- Merge
+    Shim -.re-exports.- CliH
+    Shim -.re-exports main.- Cli
+    OOXML -->|imports| Office
+    Cli -->|imports| Errors
+    Tests -->|exercise via shim| Shim
+    SKILL -->|links| Shim
     SKILL -->|links| Ref
-    Tests -->|exercises| Script
 ```
 
 ## 4. Data Model (Conceptual)
@@ -416,11 +513,48 @@ note so the developer does not miss it.
 
 - **A-Q3 (PLAN-internal) — Goldens diff strategy.** Use `lxml.etree.tostring(..., method='c14n')` (NOT `c14n2` — `c14n2` does NOT canonicalise attribute order; m-5 review note) for canonical comparison; mask volatile attributes (`<threadedComment id>`, unpinned `dT`) via XPath replace before comparison. Out of scope for this Architecture pass; locked in PLAN.md. **No user input needed.**
 
-## 11. Open Questions
+## 8. Task-002 Architecture-Blocker Closure (Q1, Q2, Q3)
 
-> Per `architecture-format-core` §11 template slot. After review-M-3
-> demotion of A-Q1 and A-Q2: **NO open questions remain** that block
-> the user. All decisions are documented inline as Architect-locked
-> in §7. The Planner may proceed without user gating.
+> This section closes the three architecture-blockers raised by
+> `docs/TASK.md` (Task 002, draft v2) §6. Each Q is a binary design
+> choice; the Architect closes them per §3.1 / §3.2 reasoning above
+> and locks the decision so Planning can proceed without user gating.
+> A user override is possible before Planning ends — once Planning
+> ships the per-task files, override cost rises sharply.
+
+| Q | Decision | Rationale |
+|---|---|---|
+| **Q1 — Single-file `ooxml_editor.py` (~850 LOC) or `ooxml/` sub-package (4 × ~200 LOC)** | **Single-file (Q1=A).** | (a) Keep the F4 region as one cohesive file because the four sub-concerns (scanners / rels / legacy / threaded) **share a non-trivial amount of state** through helper functions like `_xml_serialize`, `_open_or_create_rels`, `_allocate_rid`, `_find_rel_of_type`, `_patch_sheet_rels`, `_patch_content_types`. Splitting forces those helpers into either `rels.py` (where the legacy and threaded writers must import them) or a fifth `_helpers.py` — neither is a clean win. (b) 850 LOC is ~36 % of the 2339 LOC monolith, well below the navigability threshold (~1500 LOC) defined in §3.1. (c) YAGNI on the sub-package: if v2 features (parentId, rich text) bloat one sub-concern, splitting later is cheap because the package boundary is already drawn. **Override:** if v2 work pushes `ooxml_editor.py` past ~1200 LOC, the sub-package option re-opens in a follow-up task. |
+| **Q2 — `cli.py` (~700 LOC) or split `cli.py` (argparse only) + `orchestrator.py` (`main` / `single_cell_main` / `batch_main`)** | **Merged `cli.py` (Q2=A).** | (a) Argparse setup, mutex/dep validation, and `main()` share too much state — the `args` namespace, the `je = args.json_errors` flag, the unified `try / except _AppError / except EncryptedFileError` wrapper. Splitting leaves `cli.py` as a 90-LOC argparse builder that feeds straight into `orchestrator.py:main()` — adds an import hop with zero coupling reduction. (b) `single_cell_main` and `batch_main` are dispatched from `main()` and call into F2/F3/F4/F5 the same way; pulling them into `orchestrator.py` does not isolate any sub-concern that isn't already isolated by F2-F5 living in their own modules. (c) ≤ 700 LOC matches `ooxml_editor.py` and stays below the threshold. **Override:** if a future task adds a third dispatch mode (e.g., `--unpacked-dir` library mode from R9.g), reconsider — three dispatchers + argparse + main is a real argument for splitting. |
+| **Q3 — `_post_pack_validate` / `_post_validate_enabled` belong in `cli_helpers.py` or `cli.py`** | **`cli_helpers.py` (Q3=helpers).** | (a) Both are pure utility functions — no `main()` flow control, no argparse coupling. Their only dependency is `office.validate.py` invocation via subprocess + an env-var read. (b) Moving them to `cli_helpers.py` keeps `cli.py` argparse + main only, which is the §3.1 navigability goal. (c) Tests already import `_post_pack_validate` from the shim; the move is invisible to tests. |
+
+### Knock-on TASK-RTM updates (informational)
+
+Q1=A and Q2=A confirm the analyst's recommendation, so TASK R1.f and
+R1.j stand as written. Q3=helpers confirms TASK §2.5 `cli_helpers.py`
+row scope. **No TASK edits required from the Architect** — the §2
+preamble note in TASK already declared RTM rows recommendation-conditional.
+
+### Q4 / Q5 / Q6 / Q7 are CLOSED in TASK draft v2
+
+Per TASK §6:
+- **Q4** — `__init__.py` is near-empty (Policy A). §3.2 S1.pkg row reflects this.
+- **Q5** — `BatchRow` is NOT re-exported from the shim; programmatic callers use `from xlsx_comment.batch import BatchRow`. xlsx-7 integration is a follow-up task, not a TASK-002 obligation.
+- **Q6** — Yes, `tests/test_xlsx_comment_imports.py` smoke test is mandatory (TASK I12).
+- **Q7** — `.AGENTS.md` exists; R5.b is an update, not a create.
+
+## 9. Open Questions
+
+> **Numbering note (A-M3 from review):** §9, §10 of the
+> `architecture-format-core` template (Scalability, Reliability) are
+> intentionally elided. Rationale: this is a non-network single-process
+> CLI with no scale axis, mirroring the §5 Security elision treatment.
+> The "Open Questions" slot (template §11) is renumbered §9 here so
+> the document is gap-free.
+
+> After §6 closure (Q2/Q5/Q7 from Task 001), §7 closure
+> (A-Q1/A-Q2/A-Q3 from Task 001), and §8 closure (Task-002
+> Q1/Q2/Q3): **NO open questions remain** that block the user.
+> The Planner may proceed without user gating.
 
 - **(none — all questions closed)**
