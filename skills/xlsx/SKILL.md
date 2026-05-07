@@ -28,6 +28,7 @@ single most common xlsx bug).
 - Force formula recalculation in an `.xlsx` via headless LibreOffice, then optionally scan for error cells.
 - Scan an `.xlsx` for formula errors (`#REF!`, `#DIV/0!`, `#VALUE!`, `#NAME?`, `#N/A`, `#NUM!`, `#NULL!`) without recomputing.
 - Add a bar / line / pie chart on a value range with optional categories, title, anchor; stays editable in Excel / LibreOffice.
+- Insert an Excel comment (legacy `<comment>`, optionally with the threaded-comment + personList Excel-365 modern layer) into a target cell, with cross-sheet `--cell` syntax and a batch mode that auto-detects the xlsx-7 findings envelope. Closes the "validation-агент расставляет замечания" pipeline together with `xlsx_check_rules.py` (xlsx-7).
 - Unpack and repack `.xlsx` archives for raw OOXML editing (shared `office/` module with the docx skill).
 - Structurally validate an `.xlsx` (relationships, content types, required parts).
 - Reject password-protected and legacy `.xls` (CFB-container) inputs early in the **reader scripts** (`xlsx_recalc.py`, `xlsx_validate.py`, `xlsx_add_chart.py`, `office/validate.py`, `office/unpack.py`, `preview.py`) with a clear remediation message (exit 3) instead of a `BadZipFile` traceback. `csv2xlsx.py` and `office_passwd.py` are not gated — the former takes CSV/TSV input (no encryption to detect), the latter is the encryption tool itself.
@@ -47,6 +48,7 @@ single most common xlsx bug).
   - `python3 scripts/xlsx_recalc.py INPUT.xlsx [--output OUT.xlsx] [--timeout 120] [--scan-errors] [--json]`
   - `python3 scripts/xlsx_validate.py INPUT.xlsx [--json] [--fail-empty]`
   - `python3 scripts/xlsx_add_chart.py INPUT.xlsx --type bar|line|pie --data RANGE [--categories RANGE] [--title TEXT] [--sheet NAME] [--anchor CELL] [--titles-from-data | --no-titles-from-data] [--output OUT.xlsx]`
+  - `python3 scripts/xlsx_add_comment.py INPUT.xlsx OUTPUT.xlsx (--cell REF --author NAME --text MSG | --batch FILE [--default-author NAME] [--default-threaded]) [--threaded | --no-threaded] [--initials INI] [--date ISO] [--allow-merged-target] [--json-errors]`
   - `python3 scripts/office/unpack.py INPUT.xlsx OUTDIR/`
   - `python3 scripts/office/pack.py INDIR/ OUTPUT.xlsx`
   - `python3 scripts/office/validate.py INPUT.xlsx [--strict] [--json]`
@@ -163,6 +165,8 @@ Audit an incoming `.xlsx`:
 | Force formula recalc | `python3 scripts/xlsx_recalc.py file.xlsx [--scan-errors]` |
 | Scan for `#REF!`/`#DIV/0!`/... | `python3 scripts/xlsx_validate.py file.xlsx --fail-empty` |
 | Add bar/line/pie chart | `python3 scripts/xlsx_add_chart.py file.xlsx --type bar --data B2:B10 [--categories A2:A10] [--title "..."]` |
+| Insert single comment | `python3 scripts/xlsx_add_comment.py file.xlsx out.xlsx --cell A5 --author "..." --text "..." [--threaded]` |
+| Batch comments from xlsx-7 findings | `python3 scripts/xlsx_add_comment.py file.xlsx out.xlsx --batch findings.json --default-author "..."` |
 | Unpack for XML editing | `python3 scripts/office/unpack.py file.xlsx unpacked/` |
 | Repack | `python3 scripts/office/pack.py unpacked/ file.xlsx` |
 | Structural validation (deep) | `python3 scripts/office/validate.py file.xlsx [--json] [--strict]` |
@@ -203,6 +207,25 @@ python3 scripts/xlsx_validate.py forecast.xlsx --json
 Paste the JSON or the human report back to the user, grouped by error
 type and sheet.
 
+**Input** — user request:
+> Run the validator on `timesheet.xlsx` and drop a comment on every
+> problematic cell so my team can triage in Excel.
+
+**Output** — agent action (xlsx-7 → xlsx-6 pipeline; piped envelope):
+```bash
+# xlsx_check_rules.py emits a JSON envelope of findings; xlsx_add_comment.py
+# auto-detects the {ok, summary, findings} shape and writes one comment
+# per finding (skipping group-findings with row=null).
+python3 scripts/xlsx_check_rules.py timesheet.xlsx --rules rules.json --json \
+    | python3 scripts/xlsx_add_comment.py timesheet.xlsx timesheet-annotated.xlsx \
+        --batch - --default-author "Validator Bot"
+```
+
+The `--default-author` flag is required for envelope shape (DEP-2);
+without it the script exits with `MissingDefaultAuthor`. To attach the
+comments as Excel-365 threaded comments instead of legacy bubbles, add
+`--default-threaded`.
+
 ## 12. Resources
 
 - [references/financial-modeling-conventions.md](references/financial-modeling-conventions.md) — colour coding, number formats, formula hygiene, drivers layout.
@@ -212,6 +235,8 @@ type and sheet.
 - [scripts/xlsx_recalc.py](scripts/xlsx_recalc.py) — LibreOffice-backed formula recalculation + error scan.
 - [scripts/xlsx_validate.py](scripts/xlsx_validate.py) — fast formula-error scan without recalc.
 - [scripts/xlsx_add_chart.py](scripts/xlsx_add_chart.py) — bar / line / pie chart attachment over a cell range; chart stays editable in Excel / LibreOffice.
+- [scripts/xlsx_add_comment.py](scripts/xlsx_add_comment.py) — insert an Excel comment (legacy + optional Excel-365 threaded) into a target cell; single-cell mode (`--cell`) or batch mode (`--batch`, auto-detects xlsx-7 findings envelope).
+- [references/comments-and-threads.md](references/comments-and-threads.md) — OOXML data model behind `xlsx_add_comment.py`: part graph, cell-syntax forms, the C1/M-1/M6 pitfalls list (read these before editing the scanner code), v1 honest-scope.
 - [scripts/preview.py](scripts/preview.py) — universal `INPUT → PNG-grid` renderer for `.xlsx`/`.xlsm`/`.docx`/`.pptx`/`.pdf`. Byte-identical across all four office skills.
 - [scripts/office_passwd.py](scripts/office_passwd.py) — set / remove / detect password protection on `.xlsx`/`.docx`/`.pptx` via msoffcrypto-tool (MS-OFB Agile, Office 2010+). Byte-identical across the three OOXML skills (not pdf — pdf has its own AcroForm encryption). Pass `-` as the password to read it from stdin.
 - [scripts/_errors.py](scripts/_errors.py) — `--json-errors` envelope helper (schema `v=1`).

@@ -1,0 +1,19 @@
+[
+  {
+    "cell": "A2",
+    "author": "Validator",
+    "text": "Hours field should be numeric."
+  },
+  {
+    "cell": "Sheet2!B5",
+    "author": "Validator",
+    "text": "Date out of expected range.",
+    "threaded": true
+  },
+  {
+    "cell": "'Q1 2026'!A1",
+    "author": "Validator",
+    "text": "Quarter header missing.",
+    "initials": "VL"
+  }
+]
