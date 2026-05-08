@@ -42,6 +42,7 @@ from .ast_nodes import (
 )
 from .constants import (
     BUILTIN_WHITELIST, COMPOSITE_MAX_DEPTH, REDOS_REJECT_PATTERNS,
+    REGEX_PATTERN_MAX_BYTES,
 )
 from .exceptions import RegexLintFailed, RulesParseError
 
@@ -58,7 +59,16 @@ _TYPE_PREDICATES = {"is_number", "is_date", "is_text", "is_bool", "is_error", "r
 _CMP_OPS = ("==", "!=", "<=", ">=", "<", ">")
 _WEEKDAYS = {"Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"}
 # Forbidden Python source-level tokens (R1.d / SPEC §6 closed-AST guard).
-_FORBIDDEN_TOKENS = ("**", "%", "&", "|", "^", "~", "<<", ">>", "lambda", "import")
+# S4 (Sarcasmotron iter-2): added walrus `:=`, decorator `@`, and
+# triple-quote `"""`/`'''` to defend against future contributors who
+# might bypass the closed-AST design via syntactic sugar; today the
+# closed AST blocks them anyway via fall-through (no parse arm
+# accepts these), but locking explicitly here keeps the closed-AST
+# guarantee intentional rather than accidental.
+_FORBIDDEN_TOKENS = (
+    "**", "%", "&", "|", "^", "~", "<<", ">>", "lambda", "import",
+    ":=", "@", '"""', "'''",
+)
 _VALUE_REF = ValueRef()  # singleton — the implicit `value` identifier
 
 
@@ -123,9 +133,19 @@ def validate_builtin(name: str) -> None:
 
 
 def lint_regex(pattern: str, unsafe_regex: bool = False) -> None:
-    """D5 — sole parse-time ReDoS lint; `unsafe_regex=True` opts out."""
+    """D5 — sole parse-time ReDoS lint; `unsafe_regex=True` opts out.
+    Also enforces S3 length cap to prevent pathological-compile DoS."""
     if unsafe_regex:
         return
+    # S3: pattern-length cap. `regex.compile` has no timeout; an
+    # 800 KiB pattern with deep alternation can wedge the CPU before
+    # the per-cell `fullmatch(timeout=100ms)` ever fires.
+    if len(pattern.encode("utf-8")) > REGEX_PATTERN_MAX_BYTES:
+        raise RegexLintFailed(
+            f"regex pattern exceeds {REGEX_PATTERN_MAX_BYTES} bytes "
+            f"(got {len(pattern.encode('utf-8'))})",
+            subtype="RegexTooLarge", length=len(pattern),
+        )
     for shape in REDOS_REJECT_PATTERNS:
         if _re_stdlib.search(shape, pattern):
             raise RegexLintFailed(

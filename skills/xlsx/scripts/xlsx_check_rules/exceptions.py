@@ -197,13 +197,22 @@ class TimeoutExceeded(_AppError):
 # reach the user as a process-exit-code envelope.
 
 class AggregateTypeMismatch(Exception):
-    """SPEC §5.5.1: non-numeric cell encountered in a numeric aggregate
-    under `--strict-aggregates`."""
+    """SPEC §5.5.1 sentinel — DECLARED for typed-error vocabulary
+    completeness; NEVER raised by xlsx_check_rules at runtime. The
+    `--strict-aggregates` path surfaces non-numeric-cell-in-aggregate
+    via the `aggregate-type-mismatch` *Finding* (severity=error, which
+    drives exit 1) rather than via a process-fatal exception, because
+    the user wants to see WHICH cells violated the rule, not just that
+    one did. This class exists for typed-error documentation; locked
+    by `TestExceptionsTaxonomy` regression test."""
 
 
 class RuleEvalError(Exception):
-    """SPEC §5.5.2: division by zero, NaN, date arithmetic between
-    two dates, or other rule-evaluation arithmetic mistakes."""
+    """SPEC §5.5.2 sentinel — DECLARED for typed-error vocabulary
+    completeness; NEVER raised. Division-by-zero, NaN, date-vs-date
+    arithmetic etc. surface as `rule-eval-error` *Findings* via
+    `_eval_error()` so the run continues with diagnostic visibility.
+    Locked by `TestExceptionsTaxonomy`."""
 
 
 # === Sentinel value (NOT an exception) ====================================

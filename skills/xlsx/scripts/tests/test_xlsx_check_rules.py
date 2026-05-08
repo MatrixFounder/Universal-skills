@@ -2504,6 +2504,101 @@ class TestPerf100kRows(unittest.TestCase):
             f"perf contract violation: peak RSS {rss_bytes / 1024 / 1024:.1f} MB > 500 MB",
         )
 
+    @unittest.skipUnless(
+        os.environ.get("RUN_PERF_TESTS") == "1",
+        "perf gated — set RUN_PERF_TESTS=1 to run",
+    )
+    def test_perf_100k_rows_10_rules(self) -> None:
+        """P4-ext (Sarcasmotron iter-3): 10-rule × 100K-row workload
+        locks the architect-claimed contract that's NOT exercised by
+        the base 5-rule test. Each additional rule forces a fresh
+        per-rule scope walk; without P2's `_build_merge_lookup`
+        memoization, this would be 10× the merge-iteration cost."""
+        import resource as _resource
+        import subprocess, sys as _sys, time as _time
+        from pathlib import Path
+        wb = Path("tests/golden/inputs/huge-100k-rows.xlsx")
+        rules = Path("tests/golden/inputs/huge-100k-rows-10rules.rules.json")
+        if not wb.exists() or not rules.exists():
+            self.skipTest("perf fixtures absent; "
+                            "run `_generate.py --regenerate-perf-fixture` first")
+        t0 = _time.perf_counter()
+        proc = subprocess.run(
+            [_sys.executable, "xlsx_check_rules.py", str(wb),
+             "--rules", str(rules), "--json", "--max-findings", "100"],
+            capture_output=True, text=True,
+        )
+        elapsed = _time.perf_counter() - t0
+        self.assertIn(proc.returncode, (0, 1),
+                       f"10-rule perf path should run cleanly; "
+                       f"got rc={proc.returncode}, "
+                       f"stderr={proc.stderr[:300]!r}")
+        self.assertLess(
+            elapsed, 30.0,
+            f"P4-ext contract violation (10-rule): {elapsed:.1f}s > 30s",
+        )
+        rss = _resource.getrusage(_resource.RUSAGE_CHILDREN).ru_maxrss
+        rss_bytes = rss if _sys.platform == "darwin" else rss * 1024
+        self.assertLess(
+            rss_bytes, 500 * 1024 * 1024,
+            f"P4-ext contract violation (10-rule): peak RSS "
+            f"{rss_bytes / 1024 / 1024:.1f} MB > 500 MB",
+        )
+
+    @unittest.skipUnless(
+        os.environ.get("RUN_PERF_TESTS") == "1",
+        "perf gated — set RUN_PERF_TESTS=1 to run",
+    )
+    def test_perf_100k_rows_full_fidelity_write(self) -> None:
+        """P4 (Sarcasmotron iter-1): the streaming-output path was the
+        only writer covered by the prior perf test. The full-fidelity
+        `write_remarks` path uses `load_workbook(input)` which on a
+        100K×10 workbook can blow past the 500 MB ceiling. Lock the
+        contract on BOTH writers."""
+        import resource as _resource
+        import subprocess, sys as _sys, tempfile, time as _time
+        from pathlib import Path
+        wb = Path("tests/golden/inputs/huge-100k-rows.xlsx")
+        rules = Path("tests/golden/inputs/huge-100k-rows.rules.json")
+        if not wb.exists():
+            self.skipTest("huge-100k-rows.xlsx not present; "
+                            "run `_generate.py --regenerate-perf-fixture` first")
+        with tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False) as f:
+            out_path = Path(f.name)
+        try:
+            t0 = _time.perf_counter()
+            # Default writer = full-fidelity (`load_workbook` + per-cell write).
+            # Explicit `--remark-column auto` exercises the auto-allocation
+            # path; --remark-column-mode new exercises _next_free_column
+            # (P5 fix anchor).
+            proc = subprocess.run(
+                [_sys.executable, "xlsx_check_rules.py", str(wb),
+                 "--rules", str(rules), "--json", "--max-findings", "100",
+                 "--output", str(out_path),
+                 "--remark-column", "auto",
+                 "--remark-column-mode", "new"],
+                capture_output=True, text=True,
+            )
+            elapsed = _time.perf_counter() - t0
+            self.assertIn(proc.returncode, (0, 1),
+                           f"full-fidelity perf path should run cleanly; "
+                           f"got rc={proc.returncode}, "
+                           f"stderr={proc.stderr[:300]!r}")
+            self.assertLess(
+                elapsed, 30.0,
+                f"P4 contract violation (full-fidelity): {elapsed:.1f}s > 30s",
+            )
+            self.assertTrue(out_path.exists() and out_path.stat().st_size > 0)
+            rss = _resource.getrusage(_resource.RUSAGE_CHILDREN).ru_maxrss
+            rss_bytes = rss if _sys.platform == "darwin" else rss * 1024
+            self.assertLess(
+                rss_bytes, 500 * 1024 * 1024,
+                f"P4 contract violation (full-fidelity): peak RSS "
+                f"{rss_bytes / 1024 / 1024:.1f} MB > 500 MB",
+            )
+        finally:
+            out_path.unlink(missing_ok=True)
+
 
 # ---------------------------------------------------------------------------
 # F10 — Workbook output writer (003.15) -------------------------------------
@@ -2964,6 +3059,49 @@ class TestHonestScopeDecimalPrecisionDocumented(unittest.TestCase):
         # be updated in lockstep with the SPEC §11.2 bullet.
         self.assertNotEqual(str(f), str(d))
         self.assertLess(abs(f - float(Decimal("3.14159265358979"))), 1e-13)
+
+
+# =====================================================================
+# Post-merge VDD-multi tier-3 regression locks (Sarcasmotron iter-3).
+# Each class locks one honest-scope behaviour that the iter-2 verifier
+# flagged; if the underlying contract changes, these tests fire.
+# =====================================================================
+
+
+class TestHonestScopeCmpTypeMismatch(unittest.TestCase):
+    """L5/iter-2: cross-type comparisons (number vs date / number vs
+    text) silently return False through `_cmp`'s `except TypeError`
+    catch — same behaviour applies to literal values, CellRef
+    operands, and aggregate operands. Locking the current semantics so
+    a future contributor doesn't accidentally flip it to eval-error
+    without coordinated SPEC update."""
+    def test_cmp_number_vs_date_returns_false(self) -> None:
+        from datetime import date
+        from xlsx_check_rules.evaluator import _cmp
+        # `5 > date(2026,1,1)` → TypeError → False (no exception escape).
+        self.assertFalse(_cmp(5, ">", date(2026, 1, 1)))
+        self.assertFalse(_cmp("text", "<", 7))
+
+
+class TestHonestScopeHardlinkSamePathLimitation(unittest.TestCase):
+    """L6/S6: `Path.resolve()` follows symlinks but does NOT detect
+    hardlinks. Two distinct paths pointing at the same inode pass the
+    same-path guard. Documented honest-scope; lock current behaviour
+    so a future hardening pass updates this test in lockstep."""
+    @unittest.skipUnless(hasattr(os, "link"), "os.link unavailable")
+    def test_hardlink_pair_passes_resolve_equality_check(self) -> None:
+        from xlsx_check_rules.remarks_writer import assert_distinct_paths
+        with tempfile.TemporaryDirectory() as td:
+            primary = Path(td) / "primary.xlsx"
+            primary.write_bytes(b"PK\x03\x04")  # zip magic; content irrelevant
+            link = Path(td) / "link.xlsx"
+            os.link(primary, link)
+            # Sanity: same inode.
+            self.assertEqual(primary.stat().st_ino, link.stat().st_ino)
+            # Resolve gives distinct path strings → guard passes.
+            self.assertNotEqual(primary.resolve(), link.resolve())
+            # The guard does NOT raise — current honest-scope.
+            assert_distinct_paths(primary, link)
 
 
 if __name__ == "__main__":  # pragma: no cover

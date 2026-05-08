@@ -1,0 +1,27 @@
+{
+  "version": 1,
+  "defaults": {"sheet": "Sheet1"},
+  "_comment": "P4-ext (Sarcasmotron iter-3): 10-rule perf workload locks the architect-claimed contract that xlsx-7 holds 30 s / 500 MB at 10 rules × 100K rows. The base 5-rule fixture exercises hot-path classification and aggregation; this 10-rule extension adds 5 more rules that each force a fresh per-rule scope walk — verifying P2's _build_merge_lookup memoization actually pays off (without the cache, 10 rules would re-walk merges 10×).",
+  "rules": [
+    {"id": "hours-realistic", "scope": "col:Hours",
+     "check": "value <= 24", "severity": "error"},
+    {"id": "hours-positive", "scope": "col:Hours",
+     "check": "value > 0", "severity": "error"},
+    {"id": "approved-status", "scope": "col:Status",
+     "check": "value in [Approved, Pending, Rejected]", "severity": "error"},
+    {"id": "project-format", "scope": "col:Project",
+     "check": "regex:^PRJ-\\d{4}$", "severity": "warning"},
+    {"id": "totals-sum", "scope": "col:Cost",
+     "check": "value >= 0", "severity": "error"},
+    {"id": "department-non-empty", "scope": "col:Department",
+     "check": "not_empty", "severity": "warning"},
+    {"id": "manager-non-empty", "scope": "col:Manager",
+     "check": "not_empty", "severity": "warning"},
+    {"id": "weeknum-range", "scope": "col:WeekNum",
+     "check": "between:1,53", "severity": "warning"},
+    {"id": "approved-bool", "scope": "col:Approved",
+     "check": "is_bool", "severity": "info"},
+    {"id": "notes-len-cap", "scope": "col:Notes",
+     "check": "len <= 200", "severity": "warning"}
+  ]
+}

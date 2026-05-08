@@ -17,7 +17,7 @@ from .ast_nodes import (
     GroupByCheck, In, LenPredicate, Literal, Logical, RegexPredicate,
     RuleSpec, StringPredicate, TypePredicate, UnaryOp, ValueRef,
 )
-from .cell_types import ClassifiedCell, LogicalType
+from .cell_types import ClassifiedCell, LogicalType, classify
 from .constants import DEFAULT_REGEX_TIMEOUT_MS
 from .exceptions import CellError
 
@@ -90,9 +90,21 @@ def eval_rule(rule_spec: RuleSpec, scope_result: Any, ctx: EvalContext) -> Itera
         return
     ctx.group_by_result = None
     ctx.group_by_row_map = None
-    for cell in scope_result.cells:
+    # L2 (Sarcasmotron iter-1): wire `--visible-only` through to the
+    # per-cell loop. Previously `iter_cells` existed but was never
+    # called, so hidden rows/cols were always evaluated. Now eval_rule
+    # filters at the only iteration point. Explicit hidden-SHEET names
+    # are still honored at `resolve_sheet` (SPEC §4 honest-scope —
+    # naming a hidden sheet is opt-in).
+    visible_only = bool(ctx.eval_opts.get("visible_only", False)) if ctx.eval_opts else False
+    cells_iter = (c for c in scope_result.cells if not (visible_only and c.is_hidden))
+    for cell in cells_iter:
         # SPEC §5.0.1 — stale-cache one-time warning.
-        if cell.has_formula_no_cache and not ctx.stale_cache_warned:
+        # L1: emit warning at most once per RUN (cli.py hoists
+        # stale_cache_warned across rules) AND only when the user has
+        # NOT opted out via `--ignore-stale-cache`.
+        if (cell.has_formula_no_cache and not ctx.stale_cache_warned
+                and not ctx.eval_opts.get("ignore_stale_cache", False)):
             stderr = ctx.stderr or sys.stderr
             print(
                 "WARNING: workbook has formulas without cached values; "
@@ -446,13 +458,55 @@ def _resolve_operand(node: Any, cell: ClassifiedCell, ctx: EvalContext) -> Any:
         return cell.value
     if isinstance(node, BuiltinCall):
         return _resolve_aggregate(node, ctx, cell)
-    if isinstance(node, (CellRef, ColRef)):
-        # Resolving a cell reference inside an expression requires the
-        # workbook (F11 orchestrator wiring); for now, return a Finding.
-        return _aggregate_unimplemented(ctx, cell, "cell-reference operands require F11 orchestrator")
+    if isinstance(node, CellRef):
+        # L5 (Sarcasmotron iter-1): single-cell lookup against the
+        # active workbook. The cell's value is classified the same way
+        # as scope cells so type-aware comparisons work (e.g.
+        # `value == cell:H1` with H1 holding a number).
+        return _resolve_cell_ref(node, cell, ctx)
+    if isinstance(node, ColRef):
+        # ColRef as a scalar operand is genuinely ambiguous — a column
+        # is a sequence, not a value. Surface eval-error rather than
+        # silently picking row 1.
+        return _eval_error(ctx, cell,
+                            "column reference cannot be used as a scalar operand; "
+                            "use cell:Sheet!A1 or an aggregate like sum(col:Hours)")
     if isinstance(node, BinaryOp) and node.op in _ARITH_OPS:
         return eval_arithmetic(node, cell, ctx)
     return node  # raw value (test convenience)
+
+
+def _resolve_cell_ref(node: CellRef, cell: ClassifiedCell, ctx: EvalContext) -> Any:
+    """Resolve `cell:Sheet!A1` against `ctx.workbook`. Returns the
+    cell's value coerced through `cell_types.classify` so date/error/
+    number semantics match the rest of the evaluator. Falls back to an
+    eval-error finding when the workbook is missing or the address is
+    invalid.
+
+    Honest scope: returns the bare value, NOT the `ClassifiedCell`.
+    Cross-type comparisons (e.g. number-vs-date via `value > cell:H1`)
+    fall through `_cmp`'s `except TypeError: return False` — same
+    behaviour as every other comparison in the evaluator. This is
+    documented and locked by `TestHonestScopeCmpTypeMismatch`."""
+    if ctx.workbook is None:
+        return _eval_error(ctx, cell, "cell-reference operand requires an active workbook")
+    sheet_name = node.sheet or cell.sheet
+    try:
+        ws = ctx.workbook[sheet_name]
+    except KeyError:
+        return _eval_error(ctx, cell, f"cell-reference target sheet not found: {sheet_name!r}")
+    try:
+        target = ws[node.ref]
+    except (KeyError, ValueError):
+        return _eval_error(ctx, cell, f"cell-reference target invalid: {node.ref!r}")
+    classified = classify(target, ctx.eval_opts or {})
+    if classified.logical_type is LogicalType.ERROR:
+        # Compare against an error cell — treat as eval-error rather
+        # than silently swallowing the comparison.
+        return _eval_error(ctx, cell,
+                            f"cell-reference target is an Excel error cell: "
+                            f"{sheet_name}!{node.ref}")
+    return classified.value
 
 
 def _resolve_aggregate(call: BuiltinCall, ctx: EvalContext, cell: ClassifiedCell) -> Any:

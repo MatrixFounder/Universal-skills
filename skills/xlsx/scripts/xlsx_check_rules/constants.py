@@ -91,6 +91,13 @@ REDOS_REJECT_PATTERNS = (
     r"\(.+\|.+\)\*",   # (a|aa)* / similar — alternation in outer * group
 )
 
+# S3: hard length cap on user regex patterns. The 1 MiB rules-file cap
+# bounds total file size, but a single 800 KiB regex can still trigger
+# pathological compile times. 4 KiB is generous for any realistic
+# business-rule regex (largest reasonable: a regional-locale numeric
+# format with ~50 alternations × ~30 chars ≈ 1.5 KiB).
+REGEX_PATTERN_MAX_BYTES = 4 * 1024
+
 # SPEC §7.1 envelope schema_version + rules-file required version.
 SCHEMA_VERSION = 1
 RULES_FILE_VERSION = 1

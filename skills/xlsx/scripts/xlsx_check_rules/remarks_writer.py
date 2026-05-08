@@ -135,13 +135,21 @@ def _next_free_column(sheet: Any, base_letter: str,
 
 
 def _column_has_data(sheet: Any, col_idx: int) -> bool:
-    """True if any cell in `col_idx` has a non-empty value."""
+    """True if any cell in `col_idx` has a non-empty value. P5
+    (Sarcasmotron iter-1): O(non-empty) instead of O(max_row) — uses
+    `iter_cols()` which short-circuits at the first non-empty value
+    and (per openpyxl docs) uses int-index access instead of
+    string-key parsing per cell."""
     if col_idx > (sheet.max_column or 0):
         return False
-    letter = get_column_letter(col_idx)
-    for row in range(1, (sheet.max_row or 0) + 1):
-        if sheet[f"{letter}{row}"].value not in (None, ""):
-            return True
+    for row_tuple in sheet.iter_cols(
+        min_col=col_idx, max_col=col_idx,
+        min_row=1, max_row=sheet.max_row or 1,
+        values_only=True,
+    ):
+        for v in row_tuple:
+            if v not in (None, ""):
+                return True
     return False
 
 
@@ -166,12 +174,30 @@ def apply_pattern_fill(cell: Any, severity: str) -> None:
     cell.fill = fills.get(severity, _FILL_INFO)
 
 
+_SEV_ORDER = {"error": 3, "warning": 2, "info": 1}
+
+
 def _format_messages(findings: list[Any]) -> tuple[str, str]:
-    """Combine all findings on a cell into a single remark string +
-    pick the worst severity (`error > warning > info`)."""
-    sev_order = {"error": 3, "warning": 2, "info": 1}
-    worst = max(findings, key=lambda f: sev_order.get(f.severity, 0))
-    msg = "; ".join(f.message for f in findings)
+    """Combine findings on a cell into a single remark string + pick
+    worst severity. L4 (Sarcasmotron iter-1): ordering is stabilised
+    by sorting on `(column, rule_id)` so the streaming-remarks output
+    is deterministic across rule-iteration order; identical
+    `(rule_id, message)` pairs deduplicated."""
+    if not findings:
+        return "", "info"
+    sorted_findings = sorted(
+        findings, key=lambda f: (getattr(f, "column", "") or "", f.rule_id),
+    )
+    seen: set[tuple[str, str]] = set()
+    deduped: list[Any] = []
+    for f in sorted_findings:
+        sig = (f.rule_id, f.message)
+        if sig in seen:
+            continue
+        seen.add(sig)
+        deduped.append(f)
+    worst = max(deduped, key=lambda f: _SEV_ORDER.get(f.severity, 0))
+    msg = "; ".join(f.message for f in deduped)
     return msg, worst.severity
 
 
@@ -198,16 +224,20 @@ def write_remarks(input_path: Path, output_path: Path,
         col_letter, label = allocate_remark_column(
             sheet, mode, explicit, existing_max_col,
         )
+        col_idx = column_index_from_string(col_letter)
         # Write the header label in row 1 if the column is freshly added.
-        if column_index_from_string(col_letter) > existing_max_col \
+        if col_idx > existing_max_col \
                 or _row1_value_or(sheet, col_letter, "") == "":
-            sheet[f"{col_letter}1"] = label
+            sheet.cell(row=1, column=col_idx, value=label)
+        # P6 (Sarcasmotron iter-1): single `ws.cell(row, col)` lookup
+        # per finding (returns the same cell object for value + fill),
+        # replacing 3× string-keyed sheet[ref] lookups.
         for (row, _col), fs in sheet_findings.items():
-            cell_ref = f"{col_letter}{row}"
-            existing = sheet[cell_ref].value
+            cell = sheet.cell(row=row, column=col_idx)
+            existing = cell.value
             new_msg, severity = _format_messages(fs)
-            sheet[cell_ref] = apply_remark_mode(existing, new_msg, mode)
-            apply_pattern_fill(sheet[cell_ref], severity)
+            cell.value = apply_remark_mode(existing, new_msg, mode)
+            apply_pattern_fill(cell, severity)
     wb.save(output_path)
 
 

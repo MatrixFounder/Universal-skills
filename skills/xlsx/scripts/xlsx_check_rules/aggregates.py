@@ -211,9 +211,17 @@ def eval_group_by(node: GroupByCheck, scope_result: Any, ctx: Any) -> dict[str |
     is_letter = node.key.isalpha() and node.key.isupper()
     key_col_node = ColRef(scope_result.sheet_name, node.key, is_letter)
     key_sr = resolve_scope(key_col_node, ctx.workbook, ctx.defaults, ctx.eval_opts)
+    # L2 follow-up (Sarcasmotron iter-2): the parent eval_rule filter
+    # for `--visible-only` is bypassed for group-by because eval_rule
+    # short-circuits at the rule level. Apply the same filter here on
+    # BOTH the key column and the data scope so hidden rows do NOT
+    # contribute to group totals (matches per-cell rule semantics).
+    visible_only = bool((ctx.eval_opts or {}).get("visible_only", False))
     # Map row -> group key (or sentinel).
     row_to_group: dict[int, Any] = {}
     for c in key_sr.cells:
+        if visible_only and c.is_hidden:
+            continue
         if c.logical_type is LogicalType.ERROR:
             row_to_group[c.row] = "__ERROR__"
         elif c.logical_type is LogicalType.EMPTY:
@@ -225,6 +233,8 @@ def eval_group_by(node: GroupByCheck, scope_result: Any, ctx: Any) -> dict[str |
     groups: dict[Any, list[float]] = {}
     skipped: list[tuple[str, int, str]] = []
     for cell in scope_result.cells:
+        if visible_only and cell.is_hidden:
+            continue
         g = row_to_group.get(cell.row)
         if g == "__ERROR__":
             skipped.append((cell.sheet, cell.row, cell.col))

@@ -56,7 +56,16 @@ def load_rules_file(path: Path | str) -> dict[str, Any]:
             subtype="RulesFileTooLarge", size=size,
         )
 
-    text = p.read_text(encoding="utf-8")
+    # S2: surface UTF-8 decode errors as RulesParseError (an _AppError
+    # subclass) so `--json-errors` envelope routing fires; otherwise
+    # UnicodeDecodeError leaks raw Python traceback past the boundary.
+    try:
+        text = p.read_text(encoding="utf-8")
+    except UnicodeDecodeError as e:
+        raise RulesParseError(
+            f"rules file is not valid UTF-8: {p} (offset {e.start}, byte 0x{e.object[e.start]:02x})",
+            subtype="Encoding", encoding="utf-8", offset=e.start,
+        ) from e
     suffix = p.suffix.lower()
     if suffix == ".json":
         return _validate_version(_load_json(text))

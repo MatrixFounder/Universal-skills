@@ -4,6 +4,7 @@ Routes cross-3/4/5/7 H1 envelopes via `_emit_fatal`."""
 from __future__ import annotations
 
 import argparse
+import re as _re
 import signal
 import sys
 import threading
@@ -160,6 +161,14 @@ def build_parser() -> argparse.ArgumentParser:
         p.add_argument("--json-errors", dest="json_errors", action="store_true",
                        help="emit failures as JSON on stderr (cross-5 envelope)")
 
+    # S5 (Sarcasmotron iter-2): in server-pipeline contexts the
+    # `--json-errors` envelope leaks absolute paths via `details`.
+    # Opt-in `--redact-paths` replaces absolute path components with
+    # their basename in error messages and details before emission.
+    p.add_argument("--redact-paths", dest="redact_paths", action="store_true",
+                   help="strip absolute path components from --json-errors "
+                        "envelope (basename only); useful for log aggregation")
+
     return p
 
 
@@ -197,6 +206,17 @@ def _validate_mutex_dep(args: argparse.Namespace, parser: argparse.ArgumentParse
             "--streaming-output is incompatible with --remark-column-mode append "
             "(DEP-5 IncompatibleFlags); use --remark-column-mode replace or new"
         )
+    # L3: reject --max-findings=1 (degenerate — would emit only the
+    # synthetic 'max-findings-reached' finding with zero real findings).
+    # Allow 0 (unbounded) and ≥2.
+    if args.max_findings == 1:
+        parser.error(
+            "--max-findings=1 is degenerate (would emit only the synthetic "
+            "summary finding with zero real findings); use 0 (unbounded) "
+            "or any value ≥ 2"
+        )
+    if args.max_findings < 0:
+        parser.error("--max-findings must be 0 (unbounded) or a positive integer")
 
     # Default remark-column-mode per TASK §2.5 (R7.d)
     if args.remark_column is not None and args.remark_column_mode is None:
@@ -293,8 +313,21 @@ def _new_summary() -> dict[str, Any]:
 
 def _emit_fatal(err: Any, args: Any | None) -> int:
     """cross-5 envelope wrap when `--json-errors` is set; otherwise plain
-    stderr line. Returns the typed exit code (`err.code`)."""
+    stderr line. Returns the typed exit code (`err.code`).
+
+    S5 (Sarcasmotron iter-2): when `--redact-paths` is set, absolute
+    path strings in the message and `details` dict are replaced with
+    their basename so server-pipeline log aggregators don't capture
+    user-cwd / `/home/<username>/...` filesystem layout."""
     json_mode = bool(args is not None and getattr(args, "json_errors", False))
+    redact = bool(args is not None and getattr(args, "redact_paths", False))
+    msg = str(err)
+    details = getattr(err, "details", None) or None
+    if redact:
+        msg = _redact_paths(msg)
+        if details is not None:
+            details = {k: _redact_paths(v) if isinstance(v, str) else v
+                       for k, v in details.items()}
     try:
         import os as _os
         scripts_dir = _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))
@@ -302,13 +335,48 @@ def _emit_fatal(err: Any, args: Any | None) -> int:
             sys.path.insert(0, scripts_dir)
         from _errors import report_error
         return report_error(
-            str(err), code=err.code, error_type=err.type_,
-            details=getattr(err, "details", None) or None,
-            json_mode=json_mode,
+            msg, code=err.code, error_type=err.type_,
+            details=details, json_mode=json_mode,
         )
     except ImportError:  # pragma: no cover — _errors always present
-        sys.stderr.write(f"{err.type_}: {err}\n")
+        sys.stderr.write(f"{err.type_}: {msg}\n")
         return err.code
+
+
+# POSIX absolute path: starts with `/`, has ≥ 2 segments (so `/single`
+# alone doesn't trigger). Windows absolute path: drive letter + `:` +
+# `\` or `/`, then any non-whitespace. Both stop at whitespace OR a
+# closing message-delimiter punctuation (`)`, `]`, `>`, `,`, `;`).
+# Pattern stored as a string and applied via `_re.sub` (NOT
+# `re.compile`) — the closed-AST honest-scope test
+# (TestHonestScopeNoPythonPlugins) flags any `.compile` attribute
+# access, since stdlib `compile()` and `re.compile()` share the name.
+# Per-call recompilation is cached internally by the `re` module
+# (LRU of last 512 patterns).
+_REDACT_PATH_PATTERN = (
+    r"(?:/[^\s)\]>,;'\"]+(?:/[^\s)\]>,;'\"]+)+"
+    r"|[A-Za-z]:[\\/][^\s)\]>,;'\"]+)"
+)
+
+
+def _redact_paths(s: str) -> str:
+    """Replace absolute-path-shaped substrings with their basename.
+    S5 (Sarcasmotron iter-3): regex-based scan replaces the prior
+    whitespace-token split, which broke on paths containing spaces
+    (e.g. `/Users/me/My Documents/file.xlsx`). The regex stops at
+    whitespace OR a punctuation delimiter that's clearly outside the
+    path; trailing terminal punctuation (`. , ; : ) ] > ' "`) on the
+    matched substring is preserved as-is so messages stay readable."""
+    def _repl(m):
+        full = m.group(0)
+        # Manual basename — `pathlib.Path.name` on POSIX doesn't
+        # recognise `\` separators, so a Windows path passed through
+        # this redactor on a POSIX log aggregator would not be
+        # basename'd. Split on whichever separator appears.
+        if "\\" in full and "/" not in full:
+            return full.rsplit("\\", 1)[-1] or full
+        return full.rsplit("/", 1)[-1] or full
+    return _re.sub(_REDACT_PATH_PATTERN, _repl, s)
 
 
 def _compute_exit_code(summary: dict[str, Any], args: Any) -> int:
@@ -403,8 +471,14 @@ def _run(args: Any) -> int:
     findings: list[Finding] = []
     summary = _new_summary()
     cache = AggregateCache()
+    # P3: regex_compile_cache + stale_cache_warned hoisted to RUN scope so
+    # they survive across rules. Per-rule `EvalContext` reuses these
+    # objects via `regex_compile_cache=…` injection (one compile per
+    # unique pattern across the whole run; one stale-cache warning per
+    # workbook, not per rule).
+    run_regex_cache: dict[str, Any] = {}
+    run_stale_cache_state: list[bool] = [False]  # list-of-1 → mutable across contexts
     flag = _TimeoutFlag()
-    timer = _install_watchdog(args.timeout_seconds, flag)
     eval_opts = {
         "strip_whitespace": not args.no_strip_whitespace,
         "no_table_autodetect": args.no_table_autodetect,
@@ -414,6 +488,7 @@ def _run(args: Any) -> int:
         "treat_text_as_date": set(args.treat_text_as_date or ()),
         "visible_only": args.visible_only,
     }
+    timer = _install_watchdog(args.timeout_seconds, flag)
     t0 = time.perf_counter()
     try:
         for rule in rule_specs:
@@ -428,6 +503,8 @@ def _run(args: Any) -> int:
                 workbook=wb, rule=rule, aggregate_cache=cache,
                 defaults=defaults, eval_opts=eval_opts,
                 strict_aggregates=args.strict_aggregates,
+                regex_compile_cache=run_regex_cache,
+                stale_cache_warned=run_stale_cache_state[0],
             )
             for f in eval_rule(rule, sr, ctx):
                 if flag.tripped:
@@ -436,8 +513,12 @@ def _run(args: Any) -> int:
                 key = f.severity + "s"  # "errors" / "warnings" / "infos"
                 if key in summary:
                     summary[key] += 1
+            # L2: honor `--visible-only` in the checked_cells tally.
+            visible_only = bool(eval_opts.get("visible_only", False))
             summary["checked_cells"] += sum(
-                1 for c in sr.cells if c.logical_type is not LogicalType.EMPTY
+                1 for c in sr.cells
+                if c.logical_type is not LogicalType.EMPTY
+                and not (visible_only and c.is_hidden)
             )
             summary["rules_evaluated"] += 1
             summary["cell_errors"] += ctx.cell_errors
@@ -447,6 +528,8 @@ def _run(args: Any) -> int:
             summary["aggregate_cache_hits"] = max(
                 summary["aggregate_cache_hits"], ctx.aggregate_cache_hits,
             )
+            # L1: persist stale-cache "warned-once" state across rules.
+            run_stale_cache_state[0] = run_stale_cache_state[0] or ctx.stale_cache_warned
     finally:
         _cleanup_watchdog(timer)
     summary["elapsed_seconds"] = round(time.perf_counter() - t0, 3)
