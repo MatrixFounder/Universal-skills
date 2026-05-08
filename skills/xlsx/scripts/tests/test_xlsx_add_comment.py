@@ -898,6 +898,189 @@ class TestPostValidateGuard(unittest.TestCase):
                              "output must be unlinked after validation failure")
 
 
+class TestLegacyDrawingAnchor(unittest.TestCase):
+    """Post-Task-002 hot-fix: `<legacyDrawing r:id=…/>` MUST be present
+    in the worksheet XML when a VML drawing is attached, otherwise
+    Excel / LibreOffice see the rel but do NOT render the comment
+    hover-bubbles. ECMA-376 Part 1 §18.3.1.27.
+
+    Surfaced during real-world testing of `tmp/Анализ релизов.xlsx`:
+    `xl/worksheets/_rels/sheet1.xml.rels` had the vmlDrawing rel, the
+    comments part validated, openpyxl reported all comments present —
+    but Excel's UI showed nothing because the worksheet itself didn't
+    reference the VML anchor.
+    """
+
+    def _run_and_unzip(self, args_extra: list[str]) -> dict[str, str]:
+        """Helper: run main(...) producing an output, return zip parts as dict."""
+        import shutil, tempfile, zipfile
+        from pathlib import Path
+        from xlsx_add_comment import main
+        with tempfile.TemporaryDirectory() as td:
+            src = Path(td) / "in.xlsx"
+            shutil.copy(_clean_input_path(), src)
+            out = Path(td) / "out.xlsx"
+            rc = main([str(src), str(out)] + args_extra)
+            self.assertEqual(rc, 0, f"main() returned {rc}, expected 0")
+            parts = {}
+            with zipfile.ZipFile(out) as z:
+                for name in z.namelist():
+                    parts[name] = z.read(name).decode("utf-8", errors="replace")
+        return parts
+
+    def test_single_cell_legacy_drawing_present(self):
+        """Single-cell: sheet1.xml carries `<legacyDrawing r:id=...>`."""
+        parts = self._run_and_unzip([
+            "--cell", "A5", "--author", "Q", "--text", "msg",
+        ])
+        sheet1 = parts["xl/worksheets/sheet1.xml"]
+        self.assertIn("legacyDrawing", sheet1,
+                      "sheet1.xml must contain <legacyDrawing> after VML attach")
+
+    def test_legacy_drawing_rid_matches_vml_rel(self):
+        """The `<legacyDrawing r:id=...>` must reference the VML rel's rId."""
+        from lxml import etree
+        parts = self._run_and_unzip([
+            "--cell", "A5", "--author", "Q", "--text", "msg",
+        ])
+        sheet_root = etree.fromstring(parts["xl/worksheets/sheet1.xml"].encode("utf-8"))
+        rels_root = etree.fromstring(
+            parts["xl/worksheets/_rels/sheet1.xml.rels"].encode("utf-8")
+        )
+        ss_ns = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
+        r_ns = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
+        pr_ns = "http://schemas.openxmlformats.org/package/2006/relationships"
+        legacy_el = sheet_root.find(f"{{{ss_ns}}}legacyDrawing")
+        self.assertIsNotNone(legacy_el, "legacyDrawing missing")
+        legacy_rid = legacy_el.get(f"{{{r_ns}}}id")
+        # Find the VML rel and its rId.
+        vml_rid = None
+        for rel in rels_root.findall(f"{{{pr_ns}}}Relationship"):
+            if "vmlDrawing" in rel.get("Type", ""):
+                vml_rid = rel.get("Id")
+        self.assertEqual(legacy_rid, vml_rid,
+                         "legacyDrawing r:id must match the VML rel rId")
+
+    def test_batch_legacy_drawing_present(self):
+        """Batch path also emits legacyDrawing on every touched sheet."""
+        import json, shutil, tempfile, zipfile
+        from pathlib import Path
+        from xlsx_add_comment import main
+        rows = [
+            {"cell": "A1", "author": "B", "text": "x"},
+            {"cell": "B2", "author": "B", "text": "y"},
+            {"cell": "C3", "author": "B", "text": "z"},
+        ]
+        with tempfile.TemporaryDirectory() as td:
+            src = Path(td) / "in.xlsx"
+            shutil.copy(_clean_input_path(), src)
+            batch_path = Path(td) / "batch.json"
+            batch_path.write_text(json.dumps(rows), encoding="utf-8")
+            out = Path(td) / "out.xlsx"
+            rc = main([str(src), str(out), "--batch", str(batch_path)])
+            self.assertEqual(rc, 0)
+            with zipfile.ZipFile(out) as z:
+                sheet1 = z.read("xl/worksheets/sheet1.xml").decode("utf-8")
+        self.assertIn("legacyDrawing", sheet1,
+                      "batch path must emit <legacyDrawing> on touched sheet")
+
+
+@unittest.skipIf(
+    __import__("shutil").which("soffice") is None,
+    "LibreOffice (soffice) not on PATH — render-smoke tests skipped. "
+    "Install via `brew install --cask libreoffice` (macOS) / "
+    "`apt install libreoffice` (Debian/Ubuntu) to enable.",
+)
+class TestRenderSmoke(unittest.TestCase):
+    """Post-Task-002 render-pipeline smoke tests.
+
+    **Honest scope of these tests:** they verify that
+    `xlsx_add_comment.py` produces a workbook that LibreOffice CAN
+    open, render to PDF, and convert to PNG WITHOUT crashing or hanging.
+    They do NOT verify that the yellow comment indicator is visually
+    present on the rendered cell — that would require pixel-level
+    image comparison against a known-good reference, which is out of
+    scope for the v1 honest-scope (see TASK 002 R8.a).
+
+    **What these tests catch:** malformed VML (LibreOffice would
+    refuse to render or crash), broken rels chain that would emit
+    "missing target" errors, schema-out-of-order worksheet children
+    that LibreOffice would reject. The bug fixed in
+    `TestLegacyDrawingAnchor` (missing `<legacyDrawing>` element)
+    is caught by the structural tests in that class — render-smoke
+    here is COMPLEMENTARY insurance, not the primary defense.
+
+    **Why skipIf:** LibreOffice is heavyweight; not every developer
+    machine or CI runner has it. The test suite must run cleanly
+    when it's absent. When `soffice` IS on PATH, these tests run
+    automatically.
+    """
+
+    def _render_to_png(self, xlsx_path):
+        """Run preview.py to render `xlsx_path` to PNG. Return Path of PNG."""
+        import subprocess, sys
+        from pathlib import Path
+        out_png = xlsx_path.parent / (xlsx_path.stem + ".preview.png")
+        scripts_dir = Path(__file__).resolve().parents[1]
+        result = subprocess.run(
+            [sys.executable, str(scripts_dir / "preview.py"),
+             str(xlsx_path), str(out_png)],
+            capture_output=True, text=True, timeout=120,
+        )
+        self.assertEqual(
+            result.returncode, 0,
+            f"preview.py failed (rc={result.returncode}):\n"
+            f"STDOUT: {result.stdout}\nSTDERR: {result.stderr}",
+        )
+        self.assertTrue(out_png.is_file(),
+                        f"preview.py exit 0 but PNG not created at {out_png}")
+        return out_png
+
+    def test_single_cell_renders_via_libreoffice(self):
+        """Single-cell output renders without crashing LibreOffice."""
+        import shutil, tempfile
+        from pathlib import Path
+        from xlsx_add_comment import main
+        with tempfile.TemporaryDirectory() as td:
+            src = Path(td) / "in.xlsx"
+            shutil.copy(_clean_input_path(), src)
+            out = Path(td) / "out.xlsx"
+            rc = main([str(src), str(out),
+                       "--cell", "A5", "--author", "Q", "--text", "msg"])
+            self.assertEqual(rc, 0)
+            png = self._render_to_png(out)
+            # PNG header is 8 bytes (\x89PNG\r\n\x1a\n); a render that
+            # produced an empty/corrupt file would fail header parsing
+            # but might still create the file. Be explicit about size.
+            self.assertGreater(
+                png.stat().st_size, 1024,
+                f"PNG suspiciously small ({png.stat().st_size} bytes) — "
+                f"likely render aborted before producing real output",
+            )
+            with open(png, "rb") as f:
+                self.assertEqual(
+                    f.read(8), b"\x89PNG\r\n\x1a\n",
+                    "Output is not a valid PNG (header mismatch)",
+                )
+
+    def test_threaded_renders_via_libreoffice(self):
+        """Threaded output (legacy stub + threadedComment + personList) renders OK."""
+        import shutil, tempfile
+        from pathlib import Path
+        from xlsx_add_comment import main
+        with tempfile.TemporaryDirectory() as td:
+            src = Path(td) / "in.xlsx"
+            shutil.copy(_clean_input_path(), src)
+            out = Path(td) / "out.xlsx"
+            rc = main([str(src), str(out),
+                       "--cell", "A5", "--author", "Q", "--text", "msg",
+                       "--threaded",
+                       "--date", "2026-01-01T00:00:00Z"])
+            self.assertEqual(rc, 0)
+            png = self._render_to_png(out)
+            self.assertGreater(png.stat().st_size, 1024)
+
+
 class TestSamePathGuard(unittest.TestCase):
     """`_assert_distinct_paths` (cross-7 H1). Implemented in task 2.01."""
 

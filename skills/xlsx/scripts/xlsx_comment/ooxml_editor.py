@@ -73,6 +73,10 @@ __all__ = [
     # Threaded comments
     "ensure_threaded_comments_part", "ensure_person_list",
     "add_person", "add_threaded_comment",
+    # Worksheet anchor for VML legacy drawing (post-002 hot-fix —
+    # without this Excel sees the vmlDrawing rel but does NOT render
+    # the yellow comment hover-bubbles. ECMA-376 Part 1 §18.3.1.27.)
+    "ensure_sheet_legacy_drawing_ref",
     # Security boundary — preserved verbatim from Task 001 (m4 from
     # plan-review). NOT a function but a module-level constant; in
     # __all__ so 002.10's smoke test + lint tools see it.
@@ -819,6 +823,83 @@ def add_person(person_list_root: "etree._Element", display_name: str) -> str:
         providerId="None",
     )
     return person_id
+
+
+# ECMA-376 Part 1 §18.3.1.99 worksheet child sequence — elements that
+# MUST follow `<legacyDrawing>` per the schema. When inserting our
+# element, we go BEFORE the first one of these found.
+_AFTER_LEGACY_DRAWING_ELEMENTS = (
+    "legacyDrawingHF", "drawingHF", "picture", "oleObjects",
+    "controls", "webPublishItems", "tableParts", "extLst",
+)
+
+
+def ensure_sheet_legacy_drawing_ref(
+    sheet_xml_path: "Path",
+    vml_rel_id: str,
+) -> None:
+    """Ensure `<legacyDrawing r:id="..."/>` is present in worksheet XML.
+
+    Without this anchor element, Excel / LibreOffice see the
+    `vmlDrawing` Relationship in `_rels/sheetN.xml.rels` but do NOT
+    render the comment hover-bubbles — the yellow speech-balloon
+    indicators in the cell never appear because the worksheet itself
+    doesn't bind the VML drawing to its render layer. ECMA-376 Part 1
+    §18.3.1.27 requires this element on every worksheet that references
+    a VML legacy drawing.
+
+    Idempotent: if `<legacyDrawing>` already exists, its `r:id` is
+    updated to the supplied value (rare — only relevant if the part
+    was rewritten with a different rel id).
+
+    Insertion point per the worksheet child sequence (§18.3.1.99): we
+    place `<legacyDrawing>` BEFORE the first element that must follow
+    it (legacyDrawingHF / drawingHF / picture / oleObjects / controls /
+    webPublishItems / tableParts / extLst). If none of those are
+    present we append at the end of the worksheet, which leaves it
+    after pageSetup / headerFooter / rowBreaks / etc. — the schema-
+    correct position.
+
+    History: this helper was missing in the Task-001 implementation
+    of `xlsx_add_comment.py`. The bug was invisible to the openpyxl-
+    based unit tests (they read `xl/comments1.xml` directly without
+    needing the VML anchor) but visible to actual Excel rendering on
+    end-user files. Surfaced during real-world testing of the
+    `tmp/Анализ релизов.xlsx` fixture; fix landed post-Task-002 chain.
+    """
+    tree = etree.parse(str(sheet_xml_path))
+    root = tree.getroot()
+
+    existing = root.find(f"{{{SS_NS}}}legacyDrawing")
+    if existing is not None:
+        # INVARIANT (vdd-adversarial-r2 LOW#1): updating r:id on an
+        # existing element is safe because `ensure_vml_drawing` calls
+        # `_find_rel_of_type` first and REUSES any existing vmlDrawing
+        # rel verbatim — so `vml_rel_id` is the SAME rId the existing
+        # `<legacyDrawing>` was already pointing at. We are NOT changing
+        # the workbook semantics, just self-healing the attribute if it
+        # had been hand-edited away from the rels target. If a future
+        # change makes `ensure_vml_drawing` allocate a fresh rel even
+        # when one exists, this branch becomes destructive — re-audit.
+        existing.set(f"{{{R_NS}}}id", vml_rel_id)
+    else:
+        new_el = etree.Element(f"{{{SS_NS}}}legacyDrawing")
+        new_el.set(f"{{{R_NS}}}id", vml_rel_id)
+        anchor = None
+        for tag in _AFTER_LEGACY_DRAWING_ELEMENTS:
+            anchor = root.find(f"{{{SS_NS}}}{tag}")
+            if anchor is not None:
+                break
+        if anchor is not None:
+            anchor.addprevious(new_el)
+        else:
+            root.append(new_el)
+
+    sheet_xml_path.write_bytes(
+        etree.tostring(
+            root, xml_declaration=True, encoding="UTF-8", standalone=True,
+        )
+    )
 
 
 def add_threaded_comment(

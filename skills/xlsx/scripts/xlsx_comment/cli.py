@@ -61,6 +61,7 @@ from .merge_dup import (
     detect_existing_comment_state,
     resolve_merged_target,
 )
+from .constants import PR_NS, VML_REL_TYPE
 from .ooxml_editor import (
     _allocate_new_parts,
     _patch_content_types,
@@ -72,9 +73,34 @@ from .ooxml_editor import (
     add_vml_shape,
     ensure_legacy_comments_part,
     ensure_person_list,
+    ensure_sheet_legacy_drawing_ref,
     ensure_threaded_comments_part,
     ensure_vml_drawing,
 )
+
+
+def _vml_rel_id(sheet_rels_root: "etree._Element") -> str:
+    """Return the rId of the `vmlDrawing` Relationship in this sheet rels.
+
+    INVARIANT (vdd-adversarial-r2 LOW#2): there is exactly ONE
+    `vmlDrawing` rel per sheet. Excel itself never emits more than one;
+    `ensure_vml_drawing` reuses any pre-existing rel via
+    `_find_rel_of_type` instead of adding a second; `_patch_sheet_rels`
+    is idempotent on (Type, Target) tuples. If a future change relaxes
+    any of these, this `findall`-then-return-first becomes ambiguous
+    and must grow a discriminator (e.g. by Target).
+
+    `_patch_sheet_rels` returns the rId, but the call is buried inside
+    `ensure_vml_drawing`. Looking up post-hoc here avoids an invasive
+    signature change.
+    """
+    for rel in sheet_rels_root.findall(f"{{{PR_NS}}}Relationship"):
+        if rel.get("Type") == VML_REL_TYPE:
+            return rel.get("Id")
+    raise RuntimeError(
+        "VML rel missing from sheet rels — ensure_vml_drawing should have "
+        "added it; this is a logic-bug, not a user-facing failure mode."
+    )
 
 __all__ = ["build_parser", "main", "single_cell_main", "batch_main"]
 
@@ -245,6 +271,14 @@ def single_cell_main(
     # Sheet rels file may have grown (new comments + vml relationships);
     # always serialise so the new parts are reachable from the worksheet.
     _xml_serialize(sheet_rels_root, sheet_rels_path)
+
+    # Anchor the VML drawing to the worksheet itself via
+    # `<legacyDrawing r:id=…/>`. Without this, Excel / LibreOffice see
+    # the rel in `_rels/sheetN.xml.rels` but do NOT render the yellow
+    # comment hover-bubbles. Post-Task-002 hot-fix.
+    ensure_sheet_legacy_drawing_ref(
+        sheet_part_path, _vml_rel_id(sheet_rels_root),
+    )
 
     # Patch [Content_Types].xml: idempotent Override per new part. The
     # comments part is always per-part Override (no Default Extension
@@ -522,6 +556,17 @@ def batch_main(
             _xml_serialize(st["threaded_root"], st["threaded_path"])
         # Sheet rels may have grown via comments / vml / threaded patches.
         _xml_serialize(st["sheet_rels_root"], st["sheet_rels_path"])
+
+        # Anchor the VML drawing to this sheet's worksheet via
+        # `<legacyDrawing r:id=…/>` (post-Task-002 hot-fix). Without
+        # this Excel sees the rel but does NOT render the comment
+        # hover-bubbles. The sheet has a VML drawing iff its memoised
+        # state has a non-None vml_root.
+        if st["vml_root"] is not None:
+            sheet_part_path = _sheet_part_path(tree_root_dir, st["sheet"])
+            ensure_sheet_legacy_drawing_ref(
+                sheet_part_path, _vml_rel_id(st["sheet_rels_root"]),
+            )
 
         # Patch [Content_Types].xml for this sheet's NEW parts.
         if st["comments_part_was_new"]:
