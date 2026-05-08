@@ -29,6 +29,7 @@ single most common xlsx bug).
 - Scan an `.xlsx` for formula errors (`#REF!`, `#DIV/0!`, `#VALUE!`, `#NAME?`, `#N/A`, `#NUM!`, `#NULL!`) without recomputing.
 - Add a bar / line / pie chart on a value range with optional categories, title, anchor; stays editable in Excel / LibreOffice.
 - Insert an Excel comment (legacy `<comment>`, optionally with the threaded-comment + personList Excel-365 modern layer) into a target cell, with cross-sheet `--cell` syntax and a batch mode that auto-detects the xlsx-7 findings envelope. Closes the "validation-агент расставляет замечания" pipeline together with `xlsx_check_rules.py` (xlsx-7).
+- **Declarative business-rule validation** — `xlsx_check_rules.py` reads a YAML/JSON rules file alongside an `.xlsx` and emits a machine-readable findings envelope (`{ok, summary, findings}`) on stdout; pipes directly into `xlsx_add_comment.py --batch -` for cell-comment placement. Optional `--output` writes a workbook copy with a `Remarks` column + per-severity PatternFill. Hardened DSL (closed AST, no `eval`/`exec`), ReDoS-lint reject-list, billion-laughs YAML alias rejection, and a 100K-row × 10-rule perf contract (≤ 30 s wall-clock).
 - Unpack and repack `.xlsx` archives for raw OOXML editing (shared `office/` module with the docx skill).
 - Structurally validate an `.xlsx` (relationships, content types, required parts).
 - Reject password-protected and legacy `.xls` (CFB-container) inputs early in the **reader scripts** (`xlsx_recalc.py`, `xlsx_validate.py`, `xlsx_add_chart.py`, `office/validate.py`, `office/unpack.py`, `preview.py`) with a clear remediation message (exit 3) instead of a `BadZipFile` traceback. `csv2xlsx.py` and `office_passwd.py` are not gated — the former takes CSV/TSV input (no encryption to detect), the latter is the encryption tool itself.
@@ -49,6 +50,7 @@ single most common xlsx bug).
   - `python3 scripts/xlsx_validate.py INPUT.xlsx [--json] [--fail-empty]`
   - `python3 scripts/xlsx_add_chart.py INPUT.xlsx --type bar|line|pie --data RANGE [--categories RANGE] [--title TEXT] [--sheet NAME] [--anchor CELL] [--titles-from-data | --no-titles-from-data] [--output OUT.xlsx]`
   - `python3 scripts/xlsx_add_comment.py INPUT.xlsx OUTPUT.xlsx (--cell REF --author NAME --text MSG | --batch FILE [--default-author NAME] [--default-threaded]) [--threaded | --no-threaded] [--initials INI] [--date ISO] [--allow-merged-target] [--json-errors]`
+  - `python3 scripts/xlsx_check_rules.py INPUT.xlsx --rules RULES.{json,yaml} [--sheet NAME | --all-sheets] [--visible-only] [--json | --human] [--max-findings N] [--summarize-after N] [--require-data] [--ignore-stale-cache] [--strict-aggregates] [--treat-numeric-as-date COL] [--treat-text-as-date COL] [--timeout SECONDS] [--no-strip-whitespace] [--no-table-autodetect] [--no-merge-info] [--output OUT.xlsx [--remark-column auto|LETTER|HEADER] [--remark-column-mode replace|append|new] [--streaming-output]] [--json-errors]`
   - `python3 scripts/office/unpack.py INPUT.xlsx OUTDIR/`
   - `python3 scripts/office/pack.py INDIR/ OUTPUT.xlsx`
   - `python3 scripts/office/validate.py INPUT.xlsx [--strict] [--json]`
@@ -167,6 +169,9 @@ Audit an incoming `.xlsx`:
 | Add bar/line/pie chart | `python3 scripts/xlsx_add_chart.py file.xlsx --type bar --data B2:B10 [--categories A2:A10] [--title "..."]` |
 | Insert single comment | `python3 scripts/xlsx_add_comment.py file.xlsx out.xlsx --cell A5 --author "..." --text "..." [--threaded]` |
 | Batch comments from xlsx-7 findings | `python3 scripts/xlsx_add_comment.py file.xlsx out.xlsx --batch findings.json --default-author "..."` |
+| Validate against declarative rules | `python3 scripts/xlsx_check_rules.py file.xlsx --rules rules.json --json` |
+| Pipe findings into batch comments | `python3 scripts/xlsx_check_rules.py file.xlsx --rules rules.json --json \| python3 scripts/xlsx_add_comment.py file.xlsx annotated.xlsx --batch - --default-author "Reviewer"` |
+| Workbook copy with Remarks column | `python3 scripts/xlsx_check_rules.py file.xlsx --rules rules.json --output reviewed.xlsx --remark-column auto` |
 | Unpack for XML editing | `python3 scripts/office/unpack.py file.xlsx unpacked/` |
 | Repack | `python3 scripts/office/pack.py unpacked/ file.xlsx` |
 | Structural validation (deep) | `python3 scripts/office/validate.py file.xlsx [--json] [--strict]` |
@@ -237,6 +242,9 @@ comments as Excel-365 threaded comments instead of legacy bubbles, add
 - [scripts/xlsx_add_chart.py](scripts/xlsx_add_chart.py) — bar / line / pie chart attachment over a cell range; chart stays editable in Excel / LibreOffice.
 - [scripts/xlsx_add_comment.py](scripts/xlsx_add_comment.py) — insert an Excel comment (legacy + optional Excel-365 threaded) into a target cell; single-cell mode (`--cell`) or batch mode (`--batch`, auto-detects xlsx-7 findings envelope).
 - [references/comments-and-threads.md](references/comments-and-threads.md) — OOXML data model behind `xlsx_add_comment.py`: part graph, cell-syntax forms, the C1/M-1/M6 pitfalls list (read these before editing the scanner code), v1 honest-scope.
+- [scripts/xlsx_check_rules.py](scripts/xlsx_check_rules.py) — declarative business-rule validator. Reads YAML/JSON rules, emits `{ok, summary, findings}` envelope; pipes into `xlsx_add_comment.py --batch -`. Closed AST + ReDoS lint + billion-laughs alias rejection. Backed by [scripts/xlsx_check_rules/](scripts/xlsx_check_rules/) package.
+- [references/xlsx-rules-format.md](references/xlsx-rules-format.md) — full SPEC for `xlsx_check_rules.py`: rule shape, scope vocabulary, check vocabulary, AST safety, output envelope, exit codes, honest-scope catalogue, regression battery anchors.
+- [examples/check-rules-timesheet.json](examples/check-rules-timesheet.json) + [examples/check-rules-timesheet.xlsx](examples/check-rules-timesheet.xlsx) — worked SPEC §10 example, ready to run end-to-end (validate → pipe → annotate).
 - [scripts/preview.py](scripts/preview.py) — universal `INPUT → PNG-grid` renderer for `.xlsx`/`.xlsm`/`.docx`/`.pptx`/`.pdf`. Byte-identical across all four office skills.
 - [scripts/office_passwd.py](scripts/office_passwd.py) — set / remove / detect password protection on `.xlsx`/`.docx`/`.pptx` via msoffcrypto-tool (MS-OFB Agile, Office 2010+). Byte-identical across the three OOXML skills (not pdf — pdf has its own AcroForm encryption). Pass `-` as the password to read it from stdin.
 - [scripts/_errors.py](scripts/_errors.py) — `--json-errors` envelope helper (schema `v=1`).

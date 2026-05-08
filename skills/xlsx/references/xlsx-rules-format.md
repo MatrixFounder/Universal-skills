@@ -1,10 +1,12 @@
 # xlsx-rules format (design spec for `xlsx_check_rules.py`)
 
-> **Status**: design spec for backlog item `xlsx-7`
-> ([../../../docs/office-skills-backlog.md](../../../docs/office-skills-backlog.md)).
-> Not yet implemented. This file is the contract that the future CLI
-> will honor — kept here so the rule-file shape can be reviewed and
-> stabilized before code lands.
+> **Status**: implementation reference (v1, merged 2026-05-08).
+> ([../../../docs/office-skills-backlog.md](../../../docs/office-skills-backlog.md)
+> row `xlsx-7`). The CLI ships at
+> [`skills/xlsx/scripts/xlsx_check_rules.py`](../scripts/xlsx_check_rules.py)
+> backed by the [`xlsx_check_rules/`](../scripts/xlsx_check_rules/)
+> package; this file is the contract the implementation honors.
+> Design history lives in this file's git log.
 
 ## Table of contents
 
@@ -163,7 +165,7 @@ no expansion).
 | `scope` | yes | Which cells the rule applies to (see §4). |
 | `check` | yes | Predicate the cell value must satisfy (see §5). |
 | `severity` | no (default `error`) | One of `error`, `warning`, `info`. Drives exit code and remark color. |
-| `message` | no | Human-readable. Supports `{row}`, `{col}`, `{cell}`, `{value}`, `{sheet}`, `{group}` substitution. |
+| `message` | no | Human-readable. Supports `$row`, `$col`, `$cell`, `$value`, `$sheet`, `$group` substitution via `string.Template.safe_substitute` (NOT `str.format` — see §6.3 format-string-injection guard). Curly-brace syntax `{value}` was used in pre-v1 drafts; v1 implementation requires the dollar-sign form. |
 | `when` | no | Pre-filter on the same row, e.g. `"col:Status == 'Submitted'"`. Rule skipped if false. |
 | `skip_empty` | no (default `true`) | If `true`, blank cells are skipped (use `required` check to enforce non-emptiness). |
 | `tolerance` | no (default `defaults.tolerance` or `1e-9`) | Absolute numeric tolerance for `==`/`!=` comparisons (cell-vs-cell or cell-vs-aggregate). |
@@ -347,10 +349,9 @@ short-circuit rule evaluation:
 - **`empty`** — if `skip_empty: true` (default), the rule is
   skipped silently. If `skip_empty: false` or the check is
   `required`, the rule evaluates with `value = None`.
-- **`error`** — Excel error cells (`#REF!`, `#N/A`, `#VALUE!`,
-  `#DIV/0!`, `#NAME?`, `#NUM!`, `#NULL!`, `#CALC!`, `#SPILL!`,
-  `#GETTING_DATA`) auto-emit a synthetic finding with
-  `severity: error`, `rule_id: "cell-error"`,
+- **`error`** — Excel error cells (`#NULL!`, `#DIV/0!`, `#VALUE!`,
+  `#REF!`, `#NAME?`, `#NUM!`, `#N/A`) auto-emit a synthetic finding
+  with `severity: error`, `rule_id: "cell-error"`,
   `value: "<error code>"`, and a fixed message
   `Cell contains Excel error: {value}`. **No** other rules are
   evaluated against an error cell — it is treated as fundamentally
@@ -358,6 +359,10 @@ short-circuit rule evaluation:
   has #N/A placeholders), add a rule `{id: "...", scope: "<scope>",
   check: "is_error", severity: "info"}` and the auto-emit is
   downgraded to its severity.
+  *(D4 closure: openpyxl 3.1.5 `ERROR_CODES` exposes exactly the 7
+  codes above as `data_type='e'`; modern codes `#SPILL!`, `#CALC!`,
+  `#GETTING_DATA` round-trip as `text` and DO NOT auto-emit — see
+  §11.2 honest-scope bullet for the workaround.)*
 
 This means a rule like `value > 0` against a `#REF!` cell will
 **not** raise `TypeError`; it will be replaced by the synthetic
@@ -1135,13 +1140,13 @@ xlsx_check_rules.py big.xlsx --rules rules.json \
       "id": "hours-positive",
       "scope": "col:Hours",
       "check": "value > 0",
-      "message": "Hours must be positive (got {value})"
+      "message": "Hours must be positive (got $value)"
     },
     {
       "id": "hours-realistic",
       "scope": "col:Hours",
       "check": "value <= 24",
-      "message": "More than 24 hours at row {row}: {value}"
+      "message": "More than 24 hours at row $row: $value"
     },
     {
       "id": "date-in-period",
@@ -1161,7 +1166,7 @@ xlsx_check_rules.py big.xlsx --rules rules.json \
       "scope": "col:Hours",
       "check": "sum_by:WeekNum <= 40",
       "severity": "warning",
-      "message": "Week {group}: total exceeds 40h"
+      "message": "Week $group: total exceeds 40h"
     },
     {
       "id": "totals-match",
@@ -1263,6 +1268,13 @@ What the v1 spec deliberately does **not** cover. Split into
   Other rules on the same cell are skipped. To validate a cell
   whose formula intentionally returns `#N/A`, add an `is_error`
   rule with `severity: info`.
+- **Modern Excel error codes** — `#SPILL!`, `#CALC!`, `#GETTING_DATA`
+  are NOT recognised by openpyxl <3.2 as `data_type='e'`; they
+  round-trip as plain `text`. xlsx-7 v1 does NOT auto-emit
+  `cell-error` for them. Workaround: hand-author a
+  `regex:^#(SPILL|CALC|GETTING_DATA)` rule on the relevant scope.
+  May be revisited in v2 when openpyxl ships full modern-code
+  support.
 - **Hidden / very-hidden sheets** — `state="hidden"` and
   `state="veryHidden"` (the latter only settable via VBA, invisible
   in Excel's Show-Sheet dialog) are treated identically: included

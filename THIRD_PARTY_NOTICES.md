@@ -45,6 +45,9 @@ None are bundled in this repository.
 | `python-docx` | MIT | docx (template fill, document manipulation) |
 | `openpyxl` | MIT-style | xlsx (workbook creation, editing, validation) |
 | `pandas` | BSD-3-Clause | xlsx (tabular data loading) |
+| `regex` | Apache-2.0 | xlsx (rule-eval per-cell `timeout=` parameter — stdlib `re` lacks this; xlsx-7 / `xlsx_check_rules.py`) |
+| `python-dateutil` | Apache-2.0 / BSD-3-Clause dual-licensed | xlsx (`--treat-text-as-date` opt-in date parser; xlsx-7) |
+| `ruamel.yaml` | MIT | xlsx (YAML 1.2 loader with event-stream alias rejection — PyYAML's `safe_load` does NOT block alias expansion; xlsx-7) |
 | `python-pptx` | MIT | pptx (presentation manipulation) |
 | `Pillow` | HPND | pptx (image composition for thumbnails) |
 | `pypdf` | BSD-3-Clause | pdf (merge, split, metadata) |

@@ -1,6 +1,10 @@
-openpyxl>=3.1.0
+openpyxl>=3.1.5
 pandas>=2.0.0
 lxml>=5.0.0
 defusedxml>=0.7.1
 Pillow>=10.0.0
 msoffcrypto-tool>=5.4.0
+# xlsx-7 (declarative rule validator) deps:
+regex>=2024.0
+python-dateutil>=2.8.0
+ruamel.yaml>=0.18.0

@@ -1,560 +1,760 @@
-# ARCHITECTURE: xlsx-6 — `xlsx_add_comment.py` (with Task-002 module-split)
+# ARCHITECTURE: xlsx-7 — `xlsx_check_rules.py` (declarative business-rule validator)
 
-> **Template:** `architecture-format-core`. This document covers TWO
-> phases of the same script: Task 001 (xlsx-6, MERGED) added the
-> single-file CLI; Task 002 (xlsx-add-comment-modular, MERGED
-> 2026-05-08) split the as-delivered 2339-LOC monolith into a
-> `xlsx_comment/` package while preserving the public CLI surface
-> byte-for-byte. Sections §2.1 / §3.1 / §3.2 / §3.3 reflect the
-> Task-002 decomposition; §4 (Data Model) and §5 (Security) remain
-> unchanged because the OOXML mutations and the trust boundary are
-> identical pre/post-refactor — Task 002 moved code, not behaviour.
-> Section §8 closes Task-002 architecture-blocker Q1, Q2, Q3.
+> **Template:** `architecture-format-core` + extended §5–§9 sections
+> (this is a NEW system per architect-prompt §2 TIER-2 rule). The
+> immediately preceding architecture (xlsx-6 / `xlsx_add_comment.py`,
+> Tasks 001+002 — both MERGED 2026-05-08) is archived at
+> [`docs/architectures/architecture-001-xlsx-add-comment.md`](architectures/architecture-001-xlsx-add-comment.md)
+> and is the **reference precedent** for shim+package layout, OOXML
+> mutation patterns, cross-skill envelopes, and golden-file diff
+> strategy. xlsx-7 mirrors those patterns where applicable; deviations
+> are called out inline.
+>
+> **Status (2026-05-08):** ✅ MERGED — 20-step atomic chain (003.01–003.17)
+> shipped. Per-subtask review trail in `docs/reviews/task-003-*.md`;
+> per-subtask archives in `docs/tasks/task-003-*.md`.
+>
+> **As-built deltas vs. this architecture document** (kept here so
+> future readers don't have to diff against git history):
+>
+> 1. **AST node count grew from 17 to 22** (frozen-dataclass count in
+>    `ast_nodes.py`). The closed-AST contract held — no new node was
+>    needed at parse time; the additional types are internal helpers
+>    (`ValueRef` sentinel for the magic implicit `value`; `Operand`
+>    union; small dispatch types for `_resolve_operand`). The §6.1
+>    "17 types" headline number in this document refers to the
+>    *user-visible* AST surface; cf. `xlsx_check_rules/ast_nodes.py`
+>    for the actual count.
+> 2. **Package LOC budget overshoot (+6.5 %).** The architect-locked
+>    cap was 3560 LOC across 11 modules; actual is 3791 LOC, with
+>    `evaluator.py` (518 LOC) breaching the per-module 500 cap by 18
+>    lines. The overshoot is concentrated in F7's polymorphic AST-node
+>    dispatch (10 predicate types × per-cell `Finding` short-circuiting
+>    in every branch). Honest-scope disclosure in
+>    [`skills/xlsx/scripts/.AGENTS.md`](../skills/xlsx/scripts/.AGENTS.md)
+>    "Honest budget overshoot" subsection.
+> 3. **GroupByCheck wiring landed in 003.17, not 003.12.** The 003.12
+>    aggregates module shipped `eval_group_by` correctly, but the
+>    evaluator's per-cell dispatch routed `GroupByCheck` to
+>    `_aggregate_unimplemented` for the entire 003.13–003.16b
+>    interval (no integration test caught it). 003.17 added
+>    `_eval_group_by_rule` in `evaluator.py` that short-circuits at
+>    the rule level and emits one Finding per VIOLATING GROUP per
+>    SPEC §7.1.3 grouped-finding shape (cell=sheet, row/column=null,
+>    `group=null` for the synthetic empty-key partition). The fix
+>    is locked by the worked example
+>    [`skills/xlsx/examples/check-rules-timesheet.{json,xlsx}`](../skills/xlsx/examples/).
+> 4. **Canary saboteurs hardened post-Sarcasmotron.** `tests/canary_check.sh`
+>    was tightened with (a) post-`sed` `cmp -s` assertion catching
+>    pattern-no-match and (b) textual unittest-output grep that
+>    rejects `unexpected success` (xfail-rc inversion). PRECONDITION
+>    for Stage-2: every saboteur-targeted manifest must carry
+>    `xfail: false`.
+> 5. **Message placeholder syntax disambiguated.** SPEC §3 row 168
+>    + §10 worked example originally used `{value}` (Python
+>    `str.format` syntax); the implementation correctly uses
+>    `string.Template.safe_substitute` (`$value`/`${value}`) per
+>    SPEC §6.3 format-string-injection guard. 003.17 patched the SPEC
+>    text to align with the implementation. The mixed syntax in the
+>    pre-merge git history is not a regression.
 
 ## 1. Task Description
 
-- **TASK (Task 001 — xlsx-6 v1):** [`docs/tasks/task-001-xlsx-add-comment-master.md`](tasks/task-001-xlsx-add-comment-master.md) — archived after merge.
-- **TASK (Task 002 — module split):** [`docs/tasks/task-002-xlsx-add-comment-modular.md`](tasks/task-002-xlsx-add-comment-modular.md) — archived after merge (chain of 11 atomic tasks: `task-002-{01..11}-*.md`).
-- **Reviews trail:** [`docs/reviews/task-001-review.md`](reviews/task-001-review.md) (Task 001 round-2 APPROVED) + [`docs/reviews/task-002-review.md`](reviews/task-002-review.md) (Task 002 task/architecture/plan rounds + 7 Sarcasmotron approvals across the chain).
-- **Brief summary of requirements:** Ship a CLI under `skills/xlsx/scripts/` that inserts an Excel comment (legacy `<comment>`, optionally with the threaded-comment + personList Excel-365 modern layer) into a target cell, with cross-skill cross-3/4/5/7-H1 hardening, an `--batch` mode that auto-detects the xlsx-7 findings envelope, and a v1 honest-scope locked by regression tests. Mirrors `skills/docx/scripts/docx_add_comment.py` in CLI conventions.
-- **Decisions this document closes (handoff from Analyst):**
-  - **Q2 — Empty-text policy:** REJECT — empty/whitespace-only `--text` exits 2 `EmptyCommentBody`. Mirrors `docx_add_comment.py --comment` non-empty check.
-  - **Q5 — Date attribute:** BOTH — default `dT = datetime.now(timezone.utc).isoformat(timespec="seconds")` with `Z` suffix; `--date ISO` overrides. Mirrors `docx_add_comment.py --date`.
-  - **Q7 — Threaded write semantics:** **Option A (Excel-365 fidelity)** — `--threaded` writes BOTH `xl/threadedComments<M>.xml` AND a legacy `<comment>` stub in `xl/commentsN.xml`. `--no-threaded` writes ONLY the legacy `<comment>`. R5.c "mixed legacy+threaded already on the cell" becomes the corollary "if a threaded thread already exists on the cell, append to threaded; else fall through to legacy duplicate-cell rule R5.b".
+- **TASK:** [`docs/TASK.md`](TASK.md) (Task 003, slug `xlsx-check-rules`,
+  draft v2 — Task-Reviewer M1/M2 applied per `docs/reviews/task-003-review.md`).
+- **SPEC contract:** [`skills/xlsx/references/xlsx-rules-format.md`](../skills/xlsx/references/xlsx-rules-format.md)
+  (1456 lines, 12 sections + §13 regression battery — frozen pre-merge).
+- **Brief summary of requirements:** Ship `skills/xlsx/scripts/xlsx_check_rules.py`
+  — a CLI that loads `rules.{json,yaml}` alongside an `.xlsx` workbook
+  and emits machine-readable findings (`{ok, schema_version, summary,
+  findings}`). No `eval`, no code execution on hostile input — rules
+  parse into a closed 17-node AST via a hand-written recursive-descent
+  parser. Optional `--output OUT.xlsx --remark-column …` writes a
+  copy with severity-tinted remarks. Pipes directly into
+  `xlsx_add_comment.py --batch -` (xlsx-6) for findings-as-comments.
+
+- **Decisions this document closes (TASK Open Questions):**
+
+  | TASK Q | Decision | Rationale |
+  |---|---|---|
+  | **Q2 — Module split** | **11 modules + `__init__.py` (12 files), total ≤ 3560 LOC, each ≤ 500 LOC** — locked in §3.2. | Mirrors xlsx-6 Task-002 layout: each F1–F11 functional region maps to one module; no module owns >1 region. The 3560 cap is +27 % over the 2200–2800 LOC estimate (architect-review M-3) — defensible engineering buffer that absorbs the unknowns of a 17-AST-node hand-written parser + Excel-Tables resolver. The estimate is best-case (xlsx-6-shaped); the cap protects against under-estimating dsl_parser.py (where recursive-descent grammars routinely overshoot estimates). |
+  | **Q3 — Streaming `--remark-column-mode replace`** | **A — Read-source / write-dest dual stream, single pass each.** | (a) `WriteOnlyWorkbook` is one-pass by definition; a second-pass design defeats the purpose of `--streaming-output`. (b) `write_remarks_streaming` opens the source via `openpyxl.load_workbook(read_only=True)` and the destination via `WriteOnlyWorkbook`; for each source row it constructs `[cell_or_remark for col in range(1, max_col+1)]` and `append`s. The remark column letter need not be the rightmost data column — substitution at the chosen column index works for any letter ≤ `max_col` (M-1 fix). (c) For `--remark-column LETTER` to the right of `max_col`, the loop extends the row vector with empty cells up to LETTER's index, then writes the remark; positional `append` handles this correctly. (d) `--remark-column auto` is REJECTED with streaming (DEP-4) because auto-pick needs to read existing column letters, which `WriteOnlyWorkbook` doesn't expose; user must pass an explicit letter. **Rejected option B** (reject placements requiring a second pass): no second pass is actually needed under the dual-stream design, so option B's user-facing constraint never fires. |
+  | **Q5 — Fixture-set storage** | **A for fixtures < 50 KB, B for `huge-100k-rows.xlsx` only.** | (a) Hybrid keeps git slim while paying the 100K-row generation cost (estimated 8–15 s, openpyxl `WriteOnlyWorkbook`) only when manifests change. (b) `tests/golden/inputs/_generate.py --check` at CI start re-hashes the manifest and decides whether to regenerate; otherwise reuse the committed binary. (c) Committed binaries: `huge-100k-rows.xlsx`, `huge-100k-rows.rules.json` (~10–20 MB). All other 38 fixtures: regenerated each run. |
+  | **Q7 — `version: 1` strictness** | **Hard exit 2 `RulesParseError: VersionMismatch` on missing or non-`1` version.** | (a) CI determinism: implicit-default + warning is the worst of both worlds (warnings get suppressed, drift goes silent). (b) Future v2 break gets a clean signal. (c) Mirrors the rest of §2.1 strict-rejection theme (anchors / custom tags / dup-keys). Cost to user is one keystroke (`"version": 1`). |
+
+- **Decisions inherited from TASK §0** (D1–D6, locked at Analysis phase
+  + Task-Reviewer round-1; reproduced here so this document is
+  self-contained and the Architect handoff is gap-free):
+
+  | D | Decision |
+  |---|---|
+  | D1 | **Atomic chain delivery** (target 12–18 sub-tasks; planning to lock per-link slice). |
+  | D2 | **Shim + package up front** — `scripts/xlsx_check_rules.py` (≤ 200 LOC) + `scripts/xlsx_check_rules/` (11 modules — see §3.2). |
+  | D3 | **Helper-script generated fixtures** — `tests/golden/inputs/_generate.py` builds 38 of 39 fixtures from declarative manifests; #31 (huge) is committed once per Q5=hybrid. |
+  | D4 | **openpyxl 7-error-code subset honoured** (`#NULL!`, `#DIV/0!`, `#VALUE!`, `#REF!`, `#NAME?`, `#NUM!`, `#N/A`); modern codes (`#SPILL!`, `#CALC!`, `#GETTING_DATA`) demoted to honest scope (user-rule workaround). SPEC §5.0 must be updated accordingly. |
+  | D5 | **4-shape hand-coded ReDoS lint as the SOLE parse-time check** (architect-review m1: `recheck` is a JVM CLI, not a Python wheel — original "soft import" framing was a category error; corrected here). Per-cell `regex.fullmatch(timeout=100ms)` is the runtime safety net. `recheck` stays OUT of `requirements.txt` AND is not subprocess-invoked. See §6.3 for the locked behaviour. |
+  | D6 | **Perf-test gating via `RUN_PERF_TESTS=1` env var** — fixture #31 skipped in CI by default. |
 
 ## 2. Functional Architecture
 
+> **Convention:** F1–F11 are functional regions, each mapping 1:1
+> to a Python module inside `skills/xlsx/scripts/xlsx_check_rules/`.
+> See §3.2 for module file paths and LOC budgets. The Planner
+> uses this F-numbering to size atomic-chain links (D1).
+
 ### 2.1. Functional Components
 
-> **Convention (post Task-002):** each functional component F1–F6
-> below maps 1:1 to a Python module inside the
-> `skills/xlsx/scripts/xlsx_comment/` package. The previous
-> "monolithic single-file CLI" convention from Task 001 is
-> **superseded for the xlsx skill only** because the as-delivered
-> file size (2339 LOC) crossed the navigability threshold that the
-> YAGNI argument was conditional on. The single-file convention
-> remains in force for `docx_add_comment.py` (1101 LOC),
-> `xlsx_add_chart.py`, `xlsx_recalc.py`, `xlsx_validate.py`,
-> `csv2xlsx.py`, and the pptx/pdf scripts — all of which sit comfortably
-> below the threshold. See §8 for the Task-002 closure of Q1/Q2/Q3.
+**Component F1 — CLI / Argument Parser** (TASK Epic E5)
 
-**Component F1 — CLI / Argument Parser**
-
-- **Purpose:** Accept the user's CLI invocation and produce a typed `Args` object whose validity is enforced by argparse + post-parse cross-checks (MX-A, MX-B, DEP-1..DEP-4 from TASK §2.5).
+- **Purpose:** Accept the user's CLI invocation, parse / validate
+  argparse mutex/dep rules (MX-A, MX-B, DEP-1..DEP-7 from TASK §2.5),
+  produce a typed `Args` dataclass.
 - **Functions:**
-  - `parse_args(argv) -> Args`: parse, validate mutex/dependency rules, route argparse usage errors through `_errors.report_error` when `--json-errors` is set (DEP-4).
-  - Input: `sys.argv` (or test-injected list).
-  - Output: `Args` dataclass (`input_path`, `output_path`, `mode: 'cell'|'batch'`, `cell_ref`, `text`, `author`, `initials`, `threaded`, `date_iso`, `batch_path`, `default_author`, `default_threaded`, `allow_merged_target`, `json_errors`).
-  - Related Use Cases: I1.1 (cell parser is reused inside this), §2.5 mutex/dep enforcement.
+  - `build_parser() -> argparse.ArgumentParser`: single-purpose builder; no side effects.
+  - `parse_args(argv) -> Args`: invoke parser + post-parse cross-checks (DEP-4/5 streaming-incompatible combos → exit 2 `IncompatibleFlags`; DEP-6 `,`/`;` separator auto-detect; DEP-7 `--json-errors` envelope routing).
+  - `Args` dataclass keys: `input_path, rules_path, output_path, json_mode, strict, require_data, severity_filter, max_findings, summarize_after, timeout_seconds, sheet_override, header_row_override, include_hidden, no_strip_whitespace, no_table_autodetect, no_merge_info, ignore_stale_cache, strict_aggregates, treat_numeric_as_date, treat_text_as_date, remark_column, remark_column_mode, streaming_output, json_errors`.
+  - Related Use Cases: TASK I5.1, I5.2, I5.3.
 - **Dependencies:** `argparse`, `_errors` (cross-5).
 
-**Component F2 — Cell-syntax parser**
+**Component F2 — Rules-file loader** (TASK Epic E1, Issue I1.1)
 
-- **Purpose:** Convert `--cell` strings to `(sheet_name, cell_ref)` tuples; resolve "first visible sheet" default; case-sensitive lookup.
+- **Purpose:** Load `--rules PATH` (JSON or YAML), enforce 1 MiB pre-parse cap, hardened YAML reader.
 - **Functions:**
-  - `parse_cell_syntax(text) -> (Optional[str], str)`: handles `A5` / `Sheet2!B5` / `'Q1 2026'!A1` / `'Bob''s Sheet'!A1`. Apostrophe escape `''` → `'`. Returns `(None, "A5")` for unqualified, `(sheet, ref)` otherwise.
-  - `resolve_sheet(workbook_xml_root, qualified_or_none, sheet_visibility) -> sheet_name`: applies M2 first-VISIBLE-sheet rule when qualifier is None; case-sensitive lookup when qualifier is given (M3); raises `SheetNotFound` with `details.suggestion` (case-mismatch) or `details.available` (truly missing); raises `NoVisibleSheet` if all hidden and no qualifier.
-  - Related Use Cases: I1.1 (all 7 alternatives).
-- **Dependencies:** `lxml.etree` (read `xl/workbook.xml` and `<sheet state>`).
+  - `load_rules_file(path) -> dict`: dispatch on extension; size-cap pre-parse; route to `_load_json` or `_load_yaml_hardened`.
+  - `_load_yaml_hardened(text) -> dict`: ruamel.yaml `YAML(typ='safe', pure=True, version=(1,2))`, `allow_duplicate_keys=False`. Hooks the parser event stream — abort on any `AliasEvent` or non-empty `anchor` field on `ScalarEvent`/`SequenceStartEvent`/`MappingStartEvent` BEFORE composition. Custom-tag constructor refuses any tag outside canonical YAML 1.2 schema.
+  - **Q7=hard:** missing/wrong `version` → exit 2 `RulesParseError: VersionMismatch`.
+  - Raises: `RulesFileTooLarge`, `RulesParseError` (with sub-type detail), `IOError` (exit 5).
+  - Related Use Cases: TASK I1.1.
+- **Dependencies:** `ruamel.yaml>=0.18.0`, stdlib `json`, `pathlib`.
 
-**Component F3 — Batch loader**
+**Component F3 — DSL parser & AST builder** (TASK Epic E1, Issue I1.2)
 
-- **Purpose:** Read `--batch` file (or stdin), enforce 8 MiB cap pre-parse, auto-detect flat-array vs xlsx-7 envelope, hydrate to a uniform `list[BatchRow]`.
+- **Purpose:** Parse `check` field strings into the closed 17-node AST. Hand-written recursive descent (NOT `ast.parse`).
 - **Functions:**
-  - `load_batch(path_or_dash, default_author, default_threaded) -> list[BatchRow]`: pre-parse size cap via `Path.stat().st_size` (or stream-buffer for stdin); JSON parse (stdlib `json`); inspect root type; map to `BatchRow(cell, text, author, initials, threaded)`. Skip group-findings (`row: null`); count in `summary.skipped_grouped` and emit info to stderr.
-  - Raises: `BatchTooLarge`, `InvalidBatchInput`, `MissingDefaultAuthor`.
-  - Related Use Cases: I2.1, I2.2.
-- **Dependencies:** stdlib `json`, `pathlib`.
+  - `parse_check(text, depth=0) -> ASTNode`: recursive descent over §5 SPEC grammar. Tracks composite depth; exit 2 `CompositeDepth` if > 16.
+  - `parse_composite(dict_form, depth) -> Logical`: object form (`and`/`or`/`not`).
+  - `parse_scope(text) -> ScopeNode`: 10 forms per SPEC §4.
+  - `lint_regex(pattern) -> None`: D5 closure (architect-review m1) — sole parse-time check is the hand-coded reject-list for the 4 classic ReDoS shapes (`(a+)+`, `(a*)*`, `(a|a)+`, `(a|aa)*`). `recheck` is NOT used (JVM CLI, would require `subprocess`). Per-cell `regex.fullmatch(timeout=100ms)` in F7 is the runtime safety net for patterns that escape the 4-shape lint.
+  - `validate_builtin(name) -> None`: enforces 12-name whitelist (`sum/avg/mean/min/max/median/stdev/count/count_nonempty/count_distinct/count_errors/len`) → `UnknownBuiltin`.
+  - Related Use Cases: TASK I1.2.
+- **Dependencies:** `regex>=2024.0`, `recheck` (soft import per D5).
 
-**Component F4 — OOXML editor (workbook unpacker + writer)**
+**Component F4 — AST node types** (TASK Epic E1 + E3, foundation)
 
-- **Purpose:** The single source of truth for OOXML mutations. Owns the workbook-wide invariants (`<o:idmap data>`, `o:spid`, `<authors>` dedup, `<person>` dedup, rels attachment points, Content_Types overrides).
+- **Purpose:** Declare the 17 closed AST node dataclasses (used by F3 and F7). No logic; no import of cell evaluation.
+- **Types:** `Literal`, `CellRef`, `RangeRef`, `ColRef`, `RowRef`, `SheetRef`, `NamedRef`, `TableRef`, `BuiltinCall`, `BinaryOp`, `UnaryOp`, `In`, `Between`, `Logical`, `TypePredicate`, `RegexPredicate`, `LenPredicate`, `StringPredicate`, `DatePredicate`, `GroupByCheck`. Plus `RuleSpec` (top-level wrapper carrying `id, scope, check, severity, message, when, skip_empty, tolerance, header_row, visible_only, treat_numeric_as_date, treat_text_as_date, unsafe_regex` per §3 SPEC).
+- **Functions:** dataclasses + `__repr__` + `to_canonical_str(node)` for §5.5.3 cache-key normalisation.
+- **Dependencies:** stdlib `dataclasses`, `enum`. Pure.
+
+**Component F5 — Cell-value canonicaliser** (TASK Epic E2, Issue I2.1)
+
+- **Purpose:** Map openpyxl cell → 6 logical types (`number/date/bool/text/error/empty`), per SPEC §3.5.
 - **Functions:**
-  - `with_unpacked_workbook(path) -> contextmanager`: unpack via `office.unpack`, yield `WorkbookTree` (a thin wrapper around lxml trees keyed by part name), pack via `office.pack` on exit.
-  - `scan_idmap_used(tree) -> set[int]` and `scan_spid_used(tree) -> set[int]`: workbook-wide pre-scans (C1). **Important — `<o:idmap data>` is a comma-separated LIST per ECMA-376** (e.g. `data="1,5,9"` means this drawing claims shape-type IDs 1, 5, AND 9). The scanner must parse the attribute as `[int(x) for x in attr.split(",")]` and union into the set; treating it as a scalar would silently corrupt heavily-edited workbooks where Excel itself emits multi-claim lists. On *write* xlsx-6 emits a single integer per part (we only ever create one block per new VML part), but the read asymmetry must be encoded — see §4.1 VmlDrawing and §4.2 invariant 3. (Architecture-review M-1.)
-  - `next_part_counter(tree, part_name_pattern) -> int`: e.g. for `xl/comments?.xml` → 1 if none, else `max(N)+1`. Used for `commentsN`, `threadedCommentsM`, `vmlDrawingK`. Counters are independent.
-  - `ensure_legacy_comments_part(tree, sheet_name) -> CommentsPart`: idempotent-create `xl/commentsN.xml` bound to `sheet_name`'s rels.
-  - `ensure_threaded_comments_part(tree, sheet_name) -> ThreadedCommentsPart`: idempotent-create `xl/threadedComments<M>.xml`.
-  - `ensure_person_list(tree) -> PersonListPart`: idempotent-create `xl/persons/personList.xml`; rel goes on `xl/_rels/workbook.xml.rels` (M6).
-  - `ensure_vml_drawing(tree, sheet_name, idmap_data) -> VmlDrawingPart`: idempotent-create `xl/drawings/vmlDrawingK.xml` with chosen `<o:idmap data>`.
-  - `add_legacy_comment(part, ref, author, text) -> None`: append `<comment>`; case-sensitive `<authors>` dedup (m5).
-  - `add_threaded_comment(part, ref, person_id, text, date_iso) -> threaded_id`: append `<threadedComment id="{UUIDv4}" dT="..." personId="..." ref="...">`; v1 does NOT set `parentId` (R9.a).
-  - `add_person(part, display_name) -> person_id`: idempotent — UUIDv5 of displayName, returns existing id if present; case-sensitive dedup matching `<authors>` (m5).
-  - `add_vml_shape(part, ref, spid, sheet_index) -> None`: append `<v:shape id="_x0000_s{spid}" o:spid="...">` with default anchor.
-  - Related Use Cases: I1.2, I1.3, I1.4, I2.3.
-- **Dependencies:** `lxml.etree`, `office.unpack`, `office.pack`, `office._encryption`, `office._macros`.
+  - `classify(cell, opts) -> (LogicalType, value_or_error)`: read `cell.data_type` and number-format string; map per §3.5.
+  - `is_excel_serial_date(n) -> bool`: window check `[25569, 73050]` for `--treat-numeric-as-date` path.
+  - `coerce_text_as_date(s, dayfirst) -> datetime|None`: dateutil with `fuzzy=False`; for `--treat-text-as-date` path. Documented honest-scope (no true strict mode).
+  - `cell_error_token(error_str) -> CellError`: D4 — token for the 7 openpyxl-recognised codes only.
+  - `whitespace_strip(text, opts) -> str`: default-on per `--no-strip-whitespace`.
+  - Related Use Cases: TASK I2.1.
+- **Dependencies:** `openpyxl>=3.1.5`, `python-dateutil>=2.8.0`.
 
-**Component F5 — Merged-cell resolver**
+**Component F6 — Scope resolver** (TASK Epic E2, Issue I2.2)
 
-- **Purpose:** Detect merged-range targets and apply the R6 policy.
+- **Purpose:** Resolve all 10 SPEC §4 scope forms → concrete `(sheet_name, list[Cell])` tuples. Owns Excel-Tables auto-detect, header-row resolution, merged-cell anchor logic, hidden-row/col filter.
 - **Functions:**
-  - `resolve_merged_target(sheet_xml_root, ref, allow_redirect) -> ref`: scans `<mergeCell ref="A1:C3">` ranges; if `ref` falls inside but is not anchor → either raise `MergedCellTarget` (default) or return anchor (when `allow_redirect=True`, emits `MergedCellRedirect` info to stderr).
-  - Related Use Cases: I1.5.
-- **Dependencies:** `lxml.etree`, `re` (range parsing).
+  - `resolve_scope(scope_node, workbook, defaults) -> ScopeResult`: dispatch on `ScopeNode` type; raises `AmbiguousHeader` / `HeaderNotFound` / `MergedHeaderUnsupported`.
+  - `resolve_sheet(qualifier, workbook) -> Worksheet`: SPEC §4.1; case-sensitive; first-non-hidden-XML-order default.
+  - `resolve_header(name, sheet, defaults, allow_table_fallback) -> column_letter`: SPEC §4.2 + §4.3; reads `xl/tables/tableN.xml` for fallback (default-on; `--no-table-autodetect` opts out).
+  - `iter_cells(scope_result, opts) -> Iterator[Cell]`: applies `--visible-only` filter; emits one `merged-cell-resolution` info per merge encountered (suppress `--no-merge-info`).
+  - `resolve_named(name, workbook) -> Range`: rejects multi-area `definedName`.
+  - Related Use Cases: TASK I2.2.
+- **Dependencies:** `openpyxl>=3.1.5`, `lxml>=5.0.0`, `defusedxml>=0.7.1` (only for Excel-Tables XML).
 
-**Component F6 — Pipeline orchestrator (`main`)**
+**Component F7 — Rule evaluator** (TASK Epic E3, Issues I3.1–I3.7)
 
-- **Purpose:** Glue layer: parse args → encryption/macro/same-path checks → unpack → resolve sheet/cell → for each BatchRow apply policy + delegate to F4 → pack → emit JSON envelope on failure.
+- **Purpose:** Evaluate AST nodes against cell values; produce per-cell findings.
 - **Functions:**
-  - `main(argv=None) -> int` (exit code).
-  - `single_cell_main(args, tree)`, `batch_main(args, tree)` — internal sub-routines.
-  - Related Use Cases: ALL.
-- **Dependencies:** F1–F5, `office._encryption.assert_not_encrypted`, `office._macros.warn_if_macros_will_be_dropped`, `_errors`.
+  - `eval_rule(rule_spec, scope_result, ctx) -> Iterator[Finding]`: outer loop over cells; pre-rule triage (§5.0 — error-cells short-circuit to synthetic `cell-error` finding suppressing other rules).
+  - `eval_check(node, value, ctx) -> bool`: dispatch on AST type; covers §5.1 comparisons / §5.2 type guards / §5.3 text+regex / §5.4 dates / §5.5 cross-cell aggregates / §5.7 composite.
+  - `eval_regex(pattern_compiled, value, timeout_ms) -> bool`: `regex` lib `fullmatch(timeout=)`; on TimeoutError → emits `rule-eval-timeout` finding.
+  - `eval_arithmetic(binop, left, right, ctx) -> num`: SPEC §5.5.2 (no `**`, no `%`, no bitwise; date arithmetic → `rule-eval-error`).
+  - `format_message(template, value, ctx) -> str`: `string.Template($value, $row, …)` per SPEC §6.3 — NOT `str.format`.
+  - Related Use Cases: TASK I3.1–I3.7, I3.8 (cell triage + cached-value preflight).
+- **Dependencies:** F4, F5, `regex>=2024.0`, stdlib `string`, `decimal`.
+
+**Component F8 — Aggregate cache & evaluator** (TASK Epic E7, Issues I7.1–I7.2)
+
+- **Purpose:** Implement §5.5.3 aggregate cache: canonical-key SHA-1, per-cell skip/error-event capture, replay semantics, `summary.aggregate_cache_hits` counter.
+- **Functions:**
+  - `eval_aggregate(call_node, scope_node, ctx) -> CacheEntry`: cache-hit-or-compute; cache key = SHA-1 of canonical `(sheet, scope, fn)` after whitespace/quote normalisation, header→letter resolution, Table-fallback equivalence.
+  - `replay_events(entry, rule_id, ctx) -> None`: emit per-cell skip/error events into the calling rule's finding stream; intra-rule replay dedups on `(rule_id, cell)`.
+  - `eval_group_by(call_node, ctx) -> dict[group_key, num]`: SPEC §5.6.
+  - Related Use Cases: TASK I7.1–I7.2.
+- **Dependencies:** F4, F5, F6, stdlib `hashlib`, `statistics`.
+
+**Component F9 — Output emitter** (TASK Epic E4, Issues I4.1–I4.4)
+
+- **Purpose:** Produce the `{ok, schema_version, summary, findings}` JSON envelope (stdout when `--json`) and the human-readable stderr report. Owns sort order, sentinel substitution, finding caps, `--summarize-after` collapse.
+- **Functions:**
+  - `emit_findings(findings, summary, opts, fp) -> None`: deterministic 5-tuple sort `(sheet, row, column, rule_id, group)` with type-homogeneous sentinels per SPEC §7.1.2 (group findings: `row=2**31-1`, `column="￿"`, `group=str`; per-cell findings: `group=""`).
+  - `apply_max_findings(findings, N) -> (capped, truncated_flag)`: stops after N; appends synthetic `max-findings-reached`.
+  - `apply_summarize_after(findings, N_per_rule) -> findings`: collapses runs of same `rule_id` into `{count, sample_cells[10]}`.
+  - `emit_human_report(findings, severity_filter, fp) -> None`: rule_id / cell / severity / message lines.
+  - **M2 invariant** (TASK I8.2): the JSON output MUST always carry `{ok, summary, findings}` — even on `--max-findings 0`, partial-flush, `--severity-filter` paths — to satisfy xlsx-6's batch.py:122 envelope gate.
+  - Related Use Cases: TASK I4.1–I4.4, I8.2.
+- **Dependencies:** stdlib `json`, `sys`.
+
+**Component F10 — Workbook output writer** (TASK Epic E6, Issues I6.1–I6.3)
+
+- **Purpose:** When `--output OUT.xlsx`, write a copy with optional remark column. Two write paths: full-fidelity (default) and streaming (`--streaming-output`).
+- **Functions:**
+  - `write_remarks(input_path, output_path, findings_per_cell, opts) -> None`: full-fidelity path uses `openpyxl.load_workbook` + per-cell write + `save()`; preserves comments / drawings / charts / defined names on un-modified cells.
+  - `write_remarks_streaming(input_path, output_path, findings_per_cell, opts) -> None`: dual-stream design (Q3=A, M-1 closure) — opens source via `openpyxl.load_workbook(read_only=True)` and destination via `WriteOnlyWorkbook`. For each source row, builds `[cell_or_remark for col in range(1, max_col_or_remark_idx+1)]` and `append`s. Remark column letter need not be the rightmost — substitution at the chosen column index works for any letter ≤ source's max_col, and for letters past max_col the row is extended with empty cells up to the remark index. Rejects `--remark-column auto` (DEP-4) and `--remark-column-mode append` (DEP-5) at arg-parse.
+  - `allocate_remark_column(sheet, mode, explicit_letter_or_header) -> column_letter`: implements `auto` / `LETTER` / `HEADER` placement; SPEC §8.1 + Q3 closure.
+  - `apply_remark_mode(existing_value, new_message, mode) -> str`: `replace` overwrite / `append` newline-concat / `new` (allocate sibling letter `_2` suffix).
+  - `apply_pattern_fill(cell, severity) -> None`: red (errors) / yellow (warnings) / blue (info) — full-fidelity only; streaming path uses inline-style `PatternFill` (one of the documented streaming trade-offs in SPEC §11.2).
+  - `assert_distinct_paths(input, output) -> None`: cross-7 H1 `Path.resolve()` same-path → exit 6 `SelfOverwriteRefused`.
+  - Related Use Cases: TASK I6.1–I6.3.
+- **Dependencies:** `openpyxl>=3.1.5`, F2 (rules-side defaults), `_errors`.
+
+**Component F11 — Pipeline orchestrator (`main`)** (TASK Epics E5, E8, ALL glue)
+
+- **Purpose:** End-to-end glue: `parse_args → load_rules → parse_ast → unpack workbook → encryption/macro/same-path checks → for-each-rule(eval+aggregate) → emit JSON+stderr → optional output writer`.
+- **Functions:**
+  - `main(argv=None) -> int`: returns exit code.
+  - `_run(args) -> int`: linear pipeline; cross-3 fail-fast on encrypted; cross-4 `.xlsm` warning; cross-5 `--json-errors` envelope on fatal codes 2/3/5/6/7; cross-7 H1 same-path guard (only when `--output` is set).
+  - **Wall-clock watchdog (architect-locked per M-2):** A `_TimeoutFlag` shared object is set by either (a) a `signal.SIGALRM` handler (POSIX) or (b) a daemon `threading.Timer` (Windows fallback). The handler/timer **only sets the flag** — it does NOT call `_partial_flush` and does NOT touch stdout. The per-rule loop in `_run` checks `_TimeoutFlag.tripped` between rules (and between cells inside a long-running rule); on trip it breaks the loop cleanly, then the **main thread** calls `_partial_flush` post-loop.
+  - `_partial_flush(findings, summary, opts) -> None`: SPEC §7.3 exit-7 timeout. Always called from the **main thread** post-loop, **never** from a signal handler (async-signal-unsafe wrt `json.dump` would emit a torn envelope and silently break xlsx-6's all-three-keys gate, which is exactly the regression fixture #39a is built to catch but cannot if the test harness times out before the handler completes — M-2 closure). Sets `summary.elapsed_seconds = timeout_seconds`, `summary.truncated = false`, then writes the all-three-keys envelope `{ok, summary, findings}` via `json.dump(..., fp); fp.flush()`. Stdout is opened line-buffered via `os.fdopen(1, 'w', buffering=1)` at process start (in `main`) so no buffered prefix can be lost on `os._exit`. After the flush, `_run` returns exit code 7.
+  - Related Use Cases: TASK ALL Epics.
+- **Dependencies:** F1–F10, `office._encryption.assert_not_encrypted`, `office._macros.warn_if_macros_will_be_dropped`, `_errors`, stdlib `signal` / `threading`.
 
 ### 2.2. Functional Components Diagram
 
 ```mermaid
 flowchart TB
     User[CLI invoker] --> F1[F1 ArgParser]
-    F1 --> F6[F6 Orchestrator main]
-    F6 --> Cross3[office._encryption<br/>assert_not_encrypted]
-    F6 --> Cross4[office._macros<br/>warn_if_macros]
-    F6 --> SamePath[Path.resolve eq guard<br/>cross-7 H1]
-    F6 --> F2[F2 CellParser]
-    F6 --> F3[F3 BatchLoader]
-    F2 --> F4[F4 OOXMLEditor]
-    F3 --> F4
-    F6 --> F5[F5 MergedResolver]
-    F5 --> F4
-    F4 --> Unpack[office.unpack]
-    F4 --> Pack[office.pack]
-    F6 --> Errors[_errors.report_error<br/>cross-5]
-    F4 -. JSON envelope on failure .-> Errors
+    F1 --> F11[F11 Orchestrator main]
+    F11 --> Cross3[office._encryption<br/>assert_not_encrypted]
+    F11 --> Cross4[office._macros<br/>warn_if_macros]
+    F11 --> SamePath[Path.resolve eq guard<br/>cross-7 H1<br/>only when --output]
+    F11 --> F2[F2 RulesLoader<br/>JSON / YAML hardened]
+    F2 --> F3[F3 DSL Parser<br/>recursive descent]
+    F3 --> F4[F4 AST nodes]
+    F11 --> F5[F5 CellCanonicaliser]
+    F11 --> F6[F6 ScopeResolver]
+    F6 --> F5
+    F11 --> F7[F7 RuleEvaluator]
+    F7 --> F4
+    F7 --> F5
+    F7 --> F6
+    F7 --> F8[F8 AggregateCache]
+    F8 --> F6
+    F11 --> F9[F9 OutputEmitter<br/>JSON envelope + stderr]
+    F11 --> F10[F10 RemarksWriter<br/>full / streaming]
+    F11 --> Errors[_errors.report_error<br/>cross-5]
+    F2 -. fatal .-> Errors
+    F3 -. fatal .-> Errors
+    F11 -. fatal .-> Errors
+    F9 -. envelope_invariant{ok,summary,findings}<br/>xlsx-6 batch.py:122 .-> Pipe[xlsx_add_comment.py<br/>--batch -]
 ```
 
 ## 3. System Architecture
 
 ### 3.1. Architectural Style
 
-**Style:** Python CLI with a thin **shim script** (`xlsx_add_comment.py`,
-≤ 200 LOC) that delegates to a co-located **`xlsx_comment/` package**
-(9 files = 8 implementation modules + a near-empty `__init__.py`, see
-§3.2). Adopted in Task 002 to replace the Task-001 single-file layout
-that grew to 2339 LOC.
+**Style:** Python CLI with a thin **shim script** (`xlsx_check_rules.py`,
+≤ 200 LOC) that delegates to a co-located **`xlsx_check_rules/`
+package** (12 files = 11 implementation modules + a near-empty
+`__init__.py`). D2 from TASK §0; matches xlsx-6 post-Task-002 layout
+verbatim.
 
-**Justification (Task-002 update):**
-- The Task-001 YAGNI argument was conditional on the file landing at
-  ~1100 LOC like `docx_add_comment.py`. The as-delivered file is 2339
-  LOC because the xlsx variant implements three feature supersets that
-  docx does not have: threaded comments, batch mode, and VML drawing
-  with workbook-wide `<o:idmap data>` invariants. With the premise
-  falsified, the YAGNI conclusion is too.
-- Each new module sits under ~500 LOC (shim ≤ 200, exceptions ≤ 220,
-  cell_parser ≤ 200, batch ≤ 160, ooxml_editor ≤ 850 single-file or
-  4 × ~200 if Q1 picks the sub-package — see §8 closure: **single-file
-  wins**), giving navigability comparable to other office scripts.
-- The `office/` shared module remains the trust boundary
-  (unpack/pack/validate/encryption/macros). Task 002 adds **NO new
-  shared abstraction** — the package is xlsx-private, lives next to
-  the shim, and does not propagate to docx/pptx/pdf. CLAUDE.md §2
-  4-skill replication does NOT activate.
-- The shim re-exports the 35-symbol test-compat surface (TASK §2.5),
-  so existing tests pass without edits. `xlsx_add_comment.py` remains
-  the **single documented entry point**.
+**Justification:**
+- Estimated implementation size ~ 2200–2800 LOC (ratio of TASK requirements R1–R14 to xlsx-6's 2339 LOC). Architect-review M-3 closure: the §3.2 LOC budget table caps total at **3560 LOC** (+27 % over the upper estimate) — an explicit engineering buffer for the unknowns of a hand-written 17-AST-node recursive-descent parser and the Excel-Tables resolver. A Developer who hits the cap on a single module without crossing the total has signal to refactor; total cap forces an architectural review. Crossing the navigability threshold on day one — single-file would pay the same Task-002 refactor cost, only later. D2 + this ARCHITECTURE preempts that cost.
+- One module per F-region keeps cross-module imports unidirectional: F1 → F11; F2 → F3 → F4; F5/F6/F7/F8 form a layered evaluation stack; F9/F10 are pure sinks. No cycles, easy to plan as atomic-chain links.
+- xlsx-7 is **xlsx-private**: NO new shared abstraction is introduced into `office/`. CLAUDE.md §2 4-skill replication does NOT activate. All `office/`-shared modules (`_errors.py`, `_soffice.py`, `preview.py`, `office_passwd.py`, `office/`) are READ-ONLY consumers from xlsx-7.
+- The shim re-exports a stable test-compat surface (selected names from F2, F4, F5, F6, F7, F9, F10, F11) so the test suite can `from xlsx_check_rules import …` without knowing the package internals.
 
-**Anti-pattern explicitly avoided (unchanged from Task 001):** Promoting
-OOXML helpers (`scan_idmap_used`, `next_part_counter`) to `office/`
-would cause the **4-skill replication burden** documented in CLAUDE.md §2.
-These helpers are xlsx-specific (commentsN / threadedComments /
-personList / vmlDrawing don't exist in docx or pptx), so they STAY
-inside `xlsx_comment/ooxml_editor.py`. **This is a constraint, not a
-choice.**
-
-**Convention scope (clarified post-Task-002):** The single-file
-convention is in force per script *until* the script crosses the
-navigability threshold (~1500 LOC of executable code, excluding
-docstrings/comments). At that point, the script is split into a
-co-located `<script>_/` package and the original file becomes a
-≤ 200-LOC shim. This rule applies skill-wide; today only
-`xlsx_add_comment.py` triggers it.
+**Anti-pattern explicitly avoided** (mirrors xlsx-6 ARCHITECTURE §3.1
+note): promoting any xlsx-7 helper to `office/` would trigger the
+**4-skill replication burden** documented in CLAUDE.md §2. None of
+the xlsx-7 helpers (`scope_resolver`, `aggregate_cache`,
+`rule_evaluator`) make sense in docx/pptx/pdf — they all touch
+sheet/row/column abstractions that don't exist in those formats.
+**Constraint, not a choice.**
 
 ### 3.2. System Components
 
-**Component S1 — `skills/xlsx/scripts/xlsx_add_comment.py`** (REDUCED to shim in Task 002)
+**Component S1 — `skills/xlsx/scripts/xlsx_check_rules.py`** (NEW, shim)
 
 - **Type:** Python 3.10+ CLI shim, ≤ 200 LOC.
-- **Purpose:** Single user-facing entry point. Delegates to
-  `xlsx_comment.cli:main()`. Re-exports the 35-symbol test-compat
-  surface (TASK §2.5) so the existing test suite passes without edits.
-- **Implemented Functions:** None of its own; `if __name__ == "__main__":
-  sys.exit(main())`. Re-imports the symbols imported by
-  `tests/test_xlsx_add_comment.py`.
+- **Purpose:** Single user-facing entry point. Delegates to `xlsx_check_rules.cli:main()`. Re-exports the test-compat surface (target ~ 25 symbols, mirroring xlsx-6's 35 — final list locked in Planning).
+- **Implemented Functions:** `if __name__ == "__main__": sys.exit(main())`. Re-imports symbols from package modules.
 - **Technologies:** Python 3.10+ stdlib only.
 - **Interfaces:**
-  - **Inbound:** `python3 scripts/xlsx_add_comment.py …` (CLI, see TASK §2.5).
-  - **Outbound:** delegates to `xlsx_comment.cli.main(argv)` and returns its exit code.
-- **Dependencies:** `xlsx_comment.*` package (next sibling).
+  - **Inbound:** `python3 scripts/xlsx_check_rules.py …` (CLI per TASK §2.5).
+  - **Outbound:** delegates to `xlsx_check_rules.cli.main(argv)` and returns its exit code.
+- **Dependencies:** `xlsx_check_rules.*` package (next sibling).
 
-**Component S1.pkg — `skills/xlsx/scripts/xlsx_comment/`** (NEW package, 9 files)
+**Component S1.pkg — `skills/xlsx/scripts/xlsx_check_rules/`** (NEW, 12 files)
 
 - **Type:** Python 3.10+ package private to the xlsx skill.
-- **Purpose:** Houses the F1–F6 implementation.
-- **Modules** (1:1 with TASK §2.5 file table):
+- **Purpose:** Houses the F1–F11 implementation.
+- **Modules** (locked per Q2=A; one F-region per module; LOC budgets are caps, not targets):
 
   | Module | Maps to F | Public API (selected) | LOC budget |
   |---|---|---|---|
-  | `__init__.py` | — | (near-empty per Q4=A) | ≤ 10 |
-  | `constants.py` | (F-Constants) | `SS_NS`, `R_NS`, `PR_NS`, `CT_NS`, `V_NS`, `O_NS`, `X_NS`, `THREADED_NS`, `VML_CT`, `DEFAULT_VML_ANCHOR`, `BATCH_MAX_BYTES` | ≤ 60 |
-  | `exceptions.py` | (F-Errors) | `_AppError` + 14 typed errors | ≤ 220 |
-  | `cell_parser.py` | F2 | `parse_cell_syntax`, `_load_sheets_from_workbook`, `resolve_sheet` | ≤ 200 |
-  | `batch.py` | F3 | `BatchRow`, `load_batch` | ≤ 160 |
-  | `ooxml_editor.py` | F4 | scanners (`scan_idmap_used`, `scan_spid_used`, `_vml_part_paths`, `_parse_vml`), part-counter (`next_part_counter`, `_allocate_new_parts`), cell-ref helpers, target/path resolution, rels/Content-Types, legacy comment writers, threaded comment writers, `add_person`. | ≤ 850 (single-file per Q1=A) |
-  | `merge_dup.py` | F5 | `resolve_merged_target`, `detect_existing_comment_state`, `_enforce_duplicate_matrix` | ≤ 200 |
-  | `cli_helpers.py` | (F-Helpers + Q3) | `_initials_from_author`, `_resolve_date`, `_validate_args`, `_assert_distinct_paths`, `_content_types_path`, `_post_validate_enabled`, `_post_pack_validate` | ≤ 150 |
-  | `cli.py` | F1 + F6 (Q2=merged) | `build_parser`, `main`, `single_cell_main`, `batch_main` | ≤ 700 |
+  | `__init__.py` | — | (near-empty; re-exports `main` for shim) | ≤ 10 |
+  | `constants.py` | (F-Constants) | namespaces, `RULES_MAX_BYTES = 1 MiB`, `COMPOSITE_MAX_DEPTH = 16`, `BUILTIN_WHITELIST`, `EXCEL_SERIAL_DATE_RANGE = (25569, 73050)`, `OPENPYXL_ERROR_CODES` (D4: 7 codes), `DEFAULT_TIMEOUT_SECONDS = 300`, `DEFAULT_MAX_FINDINGS = 1000`, `DEFAULT_SUMMARIZE_AFTER = 100`, `DEFAULT_REGEX_TIMEOUT_MS = 100`, `REDOS_REJECT_PATTERNS = ((r'^\(.*\+\)\+$', …), …)` (4 classic shapes per D5 fallback) | ≤ 80 |
+  | `exceptions.py` | (F-Errors) | `_AppError` + 16 typed errors: `RulesFileTooLarge`, `RulesParseError` (with subtypes `VersionMismatch` / `UnknownBuiltin` / `CompositeDepth` / `IncompatibleFlags` / `MultiAreaName`), `AmbiguousHeader`, `HeaderNotFound`, `MergedHeaderUnsupported`, `EncryptedInput`, `CorruptInput`, `IOError`, `SelfOverwriteRefused`, `TimeoutExceeded`, plus internal `RegexLintFailed`, `AggregateTypeMismatch`, `CellError` (sentinel token, not raised), `RuleEvalError`. Each carries `code` / `type` / `details` for `_errors.report_error` envelope (cross-5). | ≤ 220 |
+  | `ast_nodes.py` | F4 | 17 dataclasses (§2.1 F4 list) + `RuleSpec`, `to_canonical_str(node)` for cache-key normalisation. | ≤ 250 |
+  | `rules_loader.py` | F2 | `load_rules_file`, `_load_yaml_hardened` (event-stream alias reject), `_validate_version` (Q7=hard) | ≤ 200 |
+  | `dsl_parser.py` | F3 | `parse_check`, `parse_composite`, `parse_scope`, `lint_regex` (D5 soft import), `validate_builtin` | ≤ 400 |
+  | `cell_types.py` | F5 | `classify`, `is_excel_serial_date`, `coerce_text_as_date`, `cell_error_token` (D4), `whitespace_strip` | ≤ 200 |
+  | `scope_resolver.py` | F6 | `resolve_scope`, `resolve_sheet`, `resolve_header` (with Excel-Tables fallback), `iter_cells`, `resolve_named` | ≤ 400 |
+  | `evaluator.py` | F7 | `eval_rule`, `eval_check`, `eval_regex`, `eval_arithmetic`, `format_message` (string.Template) | ≤ 450 |
+  | `aggregates.py` | F8 | `eval_aggregate` (cache + replay), `eval_group_by`, `_canonical_cache_key` (SHA-1) | ≤ 250 |
+  | `output.py` | F9 | `emit_findings`, `apply_max_findings`, `apply_summarize_after`, `emit_human_report`, **M2 invariant: always emits `{ok, summary, findings}`** | ≤ 250 |
+  | `remarks_writer.py` | F10 | `write_remarks`, `write_remarks_streaming` (Q3=A: pre-allocate column), `allocate_remark_column`, `apply_remark_mode`, `apply_pattern_fill`, `assert_distinct_paths` | ≤ 350 |
+  | `cli.py` | F1 + F11 | `build_parser`, `parse_args`, `main`, `_run`, `_partial_flush` | ≤ 500 |
+  | **Total cap** | | | **≤ 3560** (engineering buffer over the ~2200–2800 estimate) |
 
 - **Internal API rules:**
-  - Each module declares an `__all__` list. Cross-module imports use sibling-relative `from .exceptions import _AppError`. Imports through the shim (`from xlsx_add_comment import …`) are **forbidden inside the package** to prevent re-import cycles (TASK R4.b).
-  - `_VML_PARSER` (lxml hardened: `resolve_entities=False`, `no_network=True`, `load_dtd=False`, `huge_tree=False`) lives in `ooxml_editor.py` and is preserved verbatim from Task 001 — it is the security boundary against billion-laughs / XXE on tampered VML.
-- **Technologies:** Same as S1 pre-split (Python 3.10+, `lxml`, `defusedxml`, stdlib).
-- **Dependencies:** Same as Task 001 — `office.unpack`, `office.pack`, `office._encryption`, `office._macros`, `_errors`. **No new deps.**
+  - Each module declares `__all__`. Cross-module imports are sibling-relative (`from .ast_nodes import RuleSpec`). Imports through the shim (`from xlsx_check_rules import …`) are **forbidden inside the package** to prevent re-import cycles (mirrors xlsx-6 TASK R4.b).
+  - `_HARDENED_YAML_PARSER` (ruamel.yaml event-stream filter) lives in `rules_loader.py` and is the security boundary against billion-laughs / custom-tag attacks on tampered rules.
+  - `_REGEX_COMPILE_CACHE` lives in `evaluator.py`; one `regex.compile(pattern)` per unique pattern per run (R9.c).
+  - `_AGGREGATE_CACHE` lives in `aggregates.py`; process-local; not persisted.
 
 **Component S1.shim re-export contract**
 
-- The shim re-exports the **exact 35-symbol set** documented in
-  TASK §2.5 "Re-export contract — AUTHORITATIVE". The set is
-  partitioned: 9 from `constants`, 10 from `exceptions`, 2 from
-  `cell_parser`, 1 from `batch`, 9 from `ooxml_editor` (incl. 3
-  `_`-prefixed helpers tested directly), 2 from `merge_dup` (incl.
-  `_enforce_duplicate_matrix`), 1 from `cli_helpers`
-  (`_post_pack_validate`), 1 from `cli` (`main`).
-- This is the **only** policy under which TASK R3.a ("zero edits to
-  test files") is satisfiable.
+- The shim re-exports the symbol set documented as `__all__` in each
+  package module — the **test-compat surface**. Final list locked in
+  Planning when test files exist. Target: ≤ 30 symbols (xlsx-6 has 35;
+  xlsx-7 is leaner because openpyxl-side helpers don't need
+  re-exporting).
 
-**Component S2 — `skills/xlsx/references/comments-and-threads.md`** (NEW)
+**Component S2 — `skills/xlsx/references/xlsx-rules-format.md`** (MODIFIED — D4 propagation)
 
-- **Type:** Markdown reference document.
-- **Purpose:** Document the OOXML data model the script implements (R10/I4.2 step 5). Particularly the C1-pitfalls section: `<o:idmap data>` is workbook-wide on `<o:shapelayout>`, `o:spid` is per-shape — they are not the same thing, and conflating them in code creates silent collisions.
-- **Implemented Functions:** Documentation only.
-- **Technologies:** Markdown.
-- **Interfaces:** Linked from `skills/xlsx/SKILL.md` §12.
-- **Dependencies:** None.
+- **Modifications (Issue I9.5):**
+  - §Status header: "design spec for backlog item xlsx-7" → "implementation reference (v1 merged 2026-MM-DD)".
+  - §5.0: error-code list reduced from 10 to 7 (D4); `#SPILL!` / `#CALC!` / `#GETTING_DATA` moved into a new §11.x bullet "modern-Excel error codes not auto-detected by openpyxl<3.2 — user-rule workaround required".
+  - §13.1: add fixture #10b (negative test: `#SPILL!` stored as text → no `cell-error` finding); add fixtures #39a and #39b (M2: envelope all-three-keys invariant on partial-flush + `--max-findings 0`).
 
 **Component S3 — `skills/xlsx/SKILL.md`** (MODIFIED)
 
 - **Modifications:**
-  - §2 Capabilities — add comment-insertion bullet.
-  - §4 Script Contract — add the CLI signature (one line, full flag list cross-referencing TASK §2.5).
-  - §10 Quick Reference — add a row (template per TASK I4.2 AC).
-  - §12 Resources — link `xlsx_add_comment.py` and `references/comments-and-threads.md`.
+  - §2 Capabilities — add "declarative rules-based validation" bullet.
+  - §4 Script Contract — add `xlsx_check_rules.py` CLI signature (one line, full flag list cross-referencing TASK §2.5).
+  - §10 Quick Reference — add row (template per TASK I9.5 AC).
+  - §12 Resources — link `xlsx_check_rules.py`, `examples/check-rules-timesheet.{json,xlsx}`, `references/xlsx-rules-format.md`.
 
-**Component S4 — `skills/xlsx/examples/comments-batch.json`** (NEW)
+**Component S4 — `skills/xlsx/scripts/.AGENTS.md`** (MODIFIED)
 
-- **Type:** Tiny JSON fixture (≤ 5 rows, flat-array shape).
-- **Purpose:** Illustrate the `--batch` flat-array shape for users reading SKILL.md.
+- **Modifications:** add a "xlsx_check_rules/" module map section (mirrors the xlsx-6 entry); declare the `regex>=2024.0`, `python-dateutil>=2.8.0`, `ruamel.yaml>=0.18.0`, `openpyxl>=3.1.5` dep deltas and reference D5 soft-import policy for `recheck`.
 
-**Component S5 — `skills/xlsx/scripts/tests/test_e2e.sh`** (MODIFIED)
+**Component S5 — `skills/xlsx/examples/check-rules-timesheet.json` + `…timesheet.xlsx`** (NEW, both files)
 
-- **Modifications:** Append a new `xlsx_add_comment` block with at minimum the 11 ACs enumerated in TASK §3 (clean-no-comments / existing-legacy preserve / threaded / threaded-rel-attachment / multi-sheet partition / merged-cell-target / merged-cell-redirect / batch-50 / batch-50-with-existing-vml / apostrophe-sheet / same-path / encrypted / macro `.xlsm` / hidden-first-sheet / idmap-conflict / `BatchTooLarge`).
+- **Type:** SPEC §10 worked example committed as runnable fixture.
+- **Purpose:** Showcase a realistic timesheet validation; doubles as smoke-test fixture #2 for the battery.
 
-**Component S6 — `skills/xlsx/scripts/tests/test_xlsx_add_comment.py`** (NEW)
+**Component S6 — `skills/xlsx/scripts/tests/`** (NEW directory tree)
 
-- **Type:** Python `unittest` module.
-- **Purpose:** Unit tests for F2 (cell parser, including A1.1.f case-mismatch), F3 (batch loader, including envelope shape detection + 9 MiB rejection), F4 helpers (`scan_idmap_used`, `scan_spid_used`, `add_person` UUIDv5 stability, `casefold()` for `STRAẞE`), F5 (merged-range scanner), and the honest-scope locks (R9.a–R9.g — names follow `Test*HonestScope*`).
-- **Convention:** Run via `./.venv/bin/python -m unittest discover -s tests`, same pattern as existing `office/tests/`.
+- **Sub-components:**
+  - `tests/test_xlsx_check_rules.py` (NEW, Python unittest) — unit tests for F2 (loader hardening), F3 (parser AST + ReDoS lint), F4 (canonicalisation), F5 (cell types incl. D4 7-code subset), F6 (scope forms incl. AmbiguousHeader/HeaderNotFound/MergedHeader), F7 (per-check eval), F8 (cache replay determinism + #19a strict mode), F9 (sort sentinel + caps + M2 invariant), F10 (remarks). Naming convention `Test*HonestScope*` for negative-test classes.
+  - `tests/test_battery.py` (NEW) — Q5=hybrid driver: walks `tests/golden/manifests/`, runs `tests/golden/inputs/_generate.py --check` (re-hash manifest; regenerate if stale; `huge-100k-rows.xlsx` cached unless its manifest hash changes), invokes `xlsx_check_rules.py`, asserts `(exit_code, summary keys subset, findings rule_id set ⊇ required, ∩ forbidden = ∅)`.
+  - `tests/canary_check.sh` (NEW) — 10 saboteurs per SPEC §13.3; reverts via `trap`. CI gate: each saboteur MUST cause battery to fail.
+  - `tests/golden/inputs/_generate.py` (NEW, Python) — D3 fixture generator from manifests in `tests/golden/manifests/*.yaml`. `--check` mode for Q5 hybrid (re-hash manifest, regenerate stale).
+  - `tests/golden/manifests/*.yaml` (NEW) — declarative fixture descriptors (one per fixture #1–#39 + #10b + #39a + #39b).
+  - `tests/golden/inputs/.gitignore` — excludes auto-generated `.xlsx` / `.json` outputs (Q5=A small fixtures); explicit `!huge-100k-rows.xlsx` allow-list (Q5=B large fixture committed).
+  - `tests/golden/README.md` (NEW) — fixture provenance + "agent-output-only — DO NOT open in Excel" warning (R14.e).
+  - `tests/test_e2e.sh` (MODIFIED) — append a new `xlsx_check_rules` block exercising the 39 fixtures + xlsx-6 envelope pipeline #39 / #39a / #39b.
 
-**Component S7 — `skills/xlsx/scripts/tests/golden/`** (NEW directory)
+**Component S7 — `skills/xlsx/scripts/requirements.txt`** (MODIFIED)
 
-- **Type:** Directory of binary `.xlsx` golden outputs.
-- **Purpose:** Anchor regression tests. Files are agent-output-only — `tests/golden/README.md` documents "DO NOT open in Excel" (m4 + R9.d).
-- **CI:** `test_e2e.sh` regenerates and diffs goldens (`zipdiff`-style, comparing per-part XML semantically since byte-equality is impossible due to UUIDv4 non-determinism on `<threadedComment id>` — R9.e). Comparison strategy: use `lxml` + `xml.etree.ElementTree` canonicalisation, ignore ephemeral `<threadedComment id>` and `dT` attributes when `--date` is not pinned.
+- **Modifications:**
+  - Bump `openpyxl>=3.1.0` → `openpyxl>=3.1.5` (R2 / SPEC §5.4.2 locale-format date detection).
+  - Add `regex>=2024.0` (per-cell timeout for §5.3.1).
+  - Add `python-dateutil>=2.8.0` (likely already a transitive dep of pandas; pin explicitly for `--treat-text-as-date`).
+  - Add `ruamel.yaml>=0.18.0` (YAML 1.2 hardening).
+  - **NOT added:** `recheck` (D5 soft import only).
 
-### 3.3. Components Diagram (post-Task-002)
+**Component S8 — `THIRD_PARTY_NOTICES.md`** (MODIFIED, root)
+
+- **Modifications:** add attributions for the 3 new direct deps (`regex`, `python-dateutil`, `ruamel.yaml`). Per CLAUDE.md §3 license hygiene, in the same commit that introduces them.
+
+### 3.3. Components Diagram
 
 ```mermaid
 flowchart LR
-    subgraph "skills/xlsx/ (existing, unchanged by Task 002)"
-        SKILL[SKILL.md - unchanged]
+    subgraph "skills/xlsx/ (existing — unchanged by xlsx-7)"
         Office[scripts/office/<br/>unpack pack validate]
-        Errors[scripts/_errors.py]
-        Existing[csv2xlsx<br/>xlsx_recalc<br/>xlsx_validate<br/>xlsx_add_chart]
+        ErrPy[scripts/_errors.py]
+        Existing[xlsx_add_comment<br/>xlsx_recalc<br/>xlsx_validate<br/>xlsx_add_chart<br/>csv2xlsx]
     end
-    subgraph "Task-001 (xlsx-6) — MERGED"
-        Ref[references/<br/>comments-and-threads.md<br/>+ §6 module map]
-        Example[examples/<br/>comments-batch.json]
-        Tests[tests/<br/>test_xlsx_add_comment.py +<br/>test_e2e.sh +<br/>golden/]
-    end
-    subgraph "Task-002 — module split"
-        Shim["xlsx_add_comment.py<br/>(shim ≤200 LOC<br/>+ 35-symbol re-exports)"]
-        Pkg["xlsx_comment/<br/>(9 modules)"]
+    subgraph "xlsx-7 NEW"
+        Shim["xlsx_check_rules.py<br/>(shim ≤200 LOC<br/>+ ~25-symbol re-exports)"]
+        Pkg["xlsx_check_rules/<br/>(12 modules)"]
         Init["__init__.py"]
         Const["constants.py"]
         Exc["exceptions.py"]
-        Cell["cell_parser.py"]
-        Batch["batch.py"]
-        OOXML["ooxml_editor.py"]
-        Merge["merge_dup.py"]
-        CliH["cli_helpers.py"]
+        Ast["ast_nodes.py"]
+        Loader["rules_loader.py"]
+        Parser["dsl_parser.py"]
+        CellTy["cell_types.py"]
+        Scope["scope_resolver.py"]
+        Eval["evaluator.py"]
+        Agg["aggregates.py"]
+        Out["output.py"]
+        Rem["remarks_writer.py"]
         Cli["cli.py"]
-        Pkg --> Init
-        Pkg --> Const
-        Pkg --> Exc
-        Pkg --> Cell
-        Pkg --> Batch
-        Pkg --> OOXML
-        Pkg --> Merge
-        Pkg --> CliH
-        Pkg --> Cli
+        Pkg --> Init & Const & Exc & Ast & Loader & Parser & CellTy & Scope & Eval & Agg & Out & Rem & Cli
+        Ref[references/<br/>xlsx-rules-format.md<br/>+ §5.0 + §13.1 D4/M2 patches]
+        Ex[examples/<br/>check-rules-timesheet.json + .xlsx]
+        Tests[tests/<br/>test_xlsx_check_rules.py +<br/>test_battery.py +<br/>canary_check.sh +<br/>golden/manifests + golden/inputs]
     end
     Shim -->|delegates to| Cli
-    Shim -.re-exports.- Const
-    Shim -.re-exports.- Exc
-    Shim -.re-exports.- Cell
-    Shim -.re-exports.- Batch
-    Shim -.re-exports.- OOXML
-    Shim -.re-exports.- Merge
-    Shim -.re-exports.- CliH
-    Shim -.re-exports main.- Cli
-    OOXML -->|imports| Office
-    Cli -->|imports| Errors
+    Shim -.re-exports.- Loader & Parser & CellTy & Scope & Eval & Agg & Out & Rem
+    Loader -->|YAML hardening| Parser
+    Parser -->|AST| Ast
+    Cli -->|orchestrates| Loader & Parser & CellTy & Scope & Eval & Agg & Out & Rem
+    Eval -->|consults| Ast & CellTy & Scope & Agg
+    Agg -->|reads| Scope
+    Rem -->|reads input,<br/>writes copy| Office
+    Cli -->|cross-3/4/5/7| Office & ErrPy
+    Out -. envelope_invariant{ok,summary,findings} .-> Pipe[xlsx_add_comment.py<br/>--batch -<br/>batch.py:122]
     Tests -->|exercise via shim| Shim
-    SKILL -->|links| Shim
-    SKILL -->|links| Ref
 ```
 
 ## 4. Data Model (Conceptual)
 
-> **Note:** The "data model" here is the OOXML part graph the script
-> mutates. There is no relational DB. The model below describes the
-> **on-disk OOXML invariants** xlsx-6 must preserve.
+> **Note:** xlsx-7 is a stateless validator. There is no relational
+> DB, no persistent storage. The "data model" is the **in-memory
+> graph** flowing through the pipeline + the **on-disk OOXML graph**
+> the validator reads (and optionally writes a copy of). Three
+> conceptual aggregates: (a) the **Rules tree** (parsed AST); (b)
+> the **Workbook view** (cells classified into 6 logical types); (c)
+> the **Findings stream** (output JSON envelope).
 
 ### 4.1. Entities Overview
 
-#### Entity: `Workbook (xl/workbook.xml + xl/_rels/workbook.xml.rels)`
+#### Entity: `RuleSpec` (in-memory; F4)
 
-- **Description:** The root of the OOXML graph. Lists sheets and (via rels) the workbook-scoped parts.
-- **Key attributes:**
-  - `<sheet name="..." sheetId="N" r:id="rIdN" state="visible|hidden|veryHidden">` — order matters; first visible determines "default sheet" (M2).
-- **Relationships (rels):**
-  - 1:N → Sheet parts (`xl/worksheets/sheet<N>.xml`).
-  - **0..1 → `personList` part (NEW for threaded mode — M6).** This is workbook-scoped, NOT sheet-scoped.
+- **Description:** One rule from `rules.{json,yaml}`, fully parsed.
+- **Key attributes:** `id: str` (unique per file), `scope: ScopeNode`, `check: ASTNode`, `severity: Literal["error","warning","info"]` (default `error`), `message: str|None`, `when: ASTNode|None`, `skip_empty: bool` (default `True`), `tolerance: float` (default `1e-9`), `header_row: int|None`, `visible_only: bool|None`, `treat_numeric_as_date: bool|None`, `treat_text_as_date: bool|None`, `unsafe_regex: bool` (default `False`).
 - **Business rules:**
-  - Sheet name lookup is case-sensitive (M3).
-  - Default-sheet rule = first sheet with `state` absent or `"visible"`.
+  - `id` MUST be unique within the rules file; duplicate → exit 2 `RulesParseError`.
+  - `severity` drives `summary.errors/warnings/info` counters and exit-code computation.
+  - Composite-form `check` depth ≤ 16; deeper → exit 2 `CompositeDepth`.
 
-#### Entity: `Sheet (xl/worksheets/sheet<S>.xml + xl/_rels/sheet<S>.xml.rels)`
+#### Entity: `ScopeNode` + 10 sub-types (in-memory; F4)
 
-- **Description:** One worksheet's content + its rels.
-- **Key attributes:**
-  - `<mergeCell ref="A1:C3">` — merged ranges; anchor = top-left.
-- **Relationships (rels):**
-  - 0..1 → `commentsN` part (legacy comments part — N is part-counter, NOT sheet-index — I1.2).
-  - 0..1 → `vmlDrawingK` part (VML drawing for legacy-comment hover bubbles — K is part-counter, independent of N).
-  - **0..1 → `threadedComments<M>` part (NEW for threaded mode — M is part-counter, independent of N and K).**
+- **Description:** AST representation of SPEC §4 scope forms.
+- **Sub-types:** `CellRef("Sheet!A5")`, `RangeRef("Sheet!A2:A100")`, `ColRef(header_or_letter)`, `MultiColRef([...])`, `RowRef(N)`, `SheetRef(name)`, `NamedRef(name)`, `TableRef(name, [col])`.
 - **Business rules:**
-  - A sheet without comments has no `commentsN` rel; xlsx-6 creates the part on demand.
-  - The relationship target is the part PATH (e.g. `../comments2.xml`); it does NOT have to match the sheet number.
+  - Sheet qualifier is case-sensitive; quoted form supports apostrophe-escape `''` → `'`.
+  - `ColRef` resolves through `defaults.header_row` (default `1`); Excel-Tables fallback default-on (`--no-table-autodetect` opts out).
+  - `NamedRef` rejects multi-area `definedName` at parse.
 
-#### Entity: `LegacyCommentsPart (xl/comments<N>.xml)`
+#### Entity: `LogicalCell` (in-memory; F5)
 
-- **Description:** ECMA-376 legacy comments. Each part is bound to ONE sheet (via that sheet's rels).
-- **Key attributes:**
-  - `<comments xmlns="..."><authors><author>{displayName}</author>...</authors><commentList><comment ref="A5" authorId="0"><text><r><t>...</t></r></text></comment>...</commentList></comments>`.
+- **Description:** Canonicalised cell view; the unit of rule evaluation.
+- **Key attributes:** `(sheet: str, row: int, col: str)`, `logical_type: LogicalType` (six-valued enum), `value: Union[int, float, str, bool, datetime, CellError, None]`, `is_anchor_of_merge: bool`, `merge_range: str|None`, `is_hidden: bool`.
 - **Business rules:**
-  - `authorId` is the position of `<author>` inside `<authors>`; dedup is **case-sensitive identity comparison on displayName** (m5).
-  - `<comment ref>` is unbounded — multiple comments on the same cell are legal in legacy. v1 handles by R5 rules.
+  - `logical_type` is computed once per cell; downstream stages (F7, F8) consume it without re-classification.
+  - `error` cells short-circuit other rules via the §5.0 auto-emit path.
+  - `empty` cells are filtered by `skip_empty: true` (default).
 
-#### Entity: `ThreadedCommentsPart (xl/threadedComments<M>.xml)` *(modern, optional)*
+#### Entity: `Finding` (in-memory + JSON output; F9)
 
-- **Description:** Excel-365 threaded comments extension. Bound to ONE sheet via that sheet's rels.
+- **Description:** One emitted observation. Either per-cell or grouped (group-by aggregate).
 - **Key attributes:**
-  - `<ThreadedComments xmlns="..."><threadedComment ref="A5" dT="ISO-8601" personId="{...}" id="{UUIDv4}">{plain text}</threadedComment>...</ThreadedComments>`.
+  - Per-cell: `cell` (`Sheet!Ref`), `sheet`, `row: int`, `column: str`, `rule_id: str`, `severity: str`, `value: Any`, `expected: Any|absent`, `tolerance: float|absent`, `message: str`.
+  - Grouped: same keys but `cell` = bare sheet name, `row: null`, `column: null`, `group: str`, `value` = aggregate result, `expected: float|absent`.
+  - Synthetic (auto-emitted): `rule_id ∈ {"cell-error", "rule-eval-error", "rule-eval-timeout", "rule-eval-nan", "aggregate-type-mismatch", "merged-cell-resolution", "stale-cache-warning", "max-findings-reached", "no-data-checked", "aggregate-cache-replay"}`.
 - **Business rules:**
-  - `personId` MUST resolve to a `<person id>` in `personList.xml` — without it Excel won't render the thread.
-  - **`id` is UUIDv4 — non-deterministic by design (R9.e).**
-  - v1 does NOT set `parentId` (R9.a). All threaded comments are top-level.
+  - **Sort key** is the 5-tuple `(sheet_name, row, column_letter, rule_id, group)` with type-homogeneous sentinels per SPEC §7.1.2 — `row=2**31-1`, `column="￿"`, `group=str` for grouped findings; `group=""` for per-cell findings. **MUST be deterministic** across runs (golden-file tests rely on this).
+  - **JSON shape**: per-cell findings emit `row`/`column` as concrete values; grouped findings emit them as `null`. Sentinels exist only inside the sort key, never in JSON output.
 
-#### Entity: `PersonList (xl/persons/personList.xml)` *(modern, optional)*
+#### Entity: `Summary` (in-memory + JSON output; F9)
 
-- **Description:** Excel-365 persons registry. Workbook-scoped (rel goes on `xl/_rels/workbook.xml.rels`, M6).
-- **Key attributes:**
-  - `<personList xmlns="..."><person displayName="..." id="{UUIDv5(URL_NS, displayName)}" userId="..." providerId="None"/></personList>`.
+- **Description:** Aggregate counters across the run.
+- **Key attributes:** `errors, warnings, info, checked_cells, rules_evaluated, cell_errors, skipped_in_aggregates, regex_timeouts, eval_errors, aggregate_cache_hits, elapsed_seconds, truncated`.
 - **Business rules:**
-  - **Obligatory whenever any threadedComment exists** (per backlog).
-  - `userId` derived via `str.casefold()` (m1) for non-ASCII parity.
-  - `providerId="None"` is the literal string — not Python `None` — meaning "no SSO provider".
-  - Dedup is case-sensitive on `displayName`, matching `<authors>` dedup (m5).
+  - `errors/warnings/info` are **unfiltered totals** — reflect the workbook's actual state regardless of `--severity-filter` / `--max-findings`. Consumers wanting visible counts compute `len([f for f in findings if f.severity == X])` (SPEC §12.1 stability promise).
+  - `aggregate_cache_hits` is the canary-tested counter (saboteur #9): N rules referencing the same canonical scope produce ≥ N − 1 hits.
+  - `skipped_in_aggregates` is the unique-`(rule_id, cell)`-pair count post-replay-dedup.
 
-#### Entity: `VmlDrawing (xl/drawings/vmlDrawing<K>.xml)`
+#### Entity: `AggregateCacheEntry` (in-memory; F8)
 
-- **Description:** Legacy VML drawing required for Excel to render the yellow hover-bubble on legacy comments. Bound to ONE sheet via that sheet's rels.
-- **Key attributes:**
-  - Root: `<xml xmlns:v="..." xmlns:o="..." xmlns:x="..."><o:shapelayout v:ext="edit"><o:idmap v:ext="edit" data="N1,N2,..."/></o:shapelayout><v:shapetype id="_x0000_t202" .../><v:shape id="_x0000_sNNNN" o:spid="_x0000_sNNNN" type="#_x0000_t202">...</v:shape>...</xml>`.
-- **Business rules (the C1 + M-1 contract):**
-  - **`<o:idmap data>` is a COMMA-SEPARATED LIST per ECMA-376** — each integer in the list is claimed by this drawing. **Read** must parse the full list; **write** may emit a single integer (xlsx-6 only ever creates one block per part). The set of all integers across all `<o:idmap data>` lists in all `vmlDrawing*.xml` parts must be workbook-wide unique. (M-1 fix.)
-  - **`<v:shape id="_x0000_sNNNN" o:spid>` integer NNNN is workbook-wide unique** across all VML parts. Mirrors Excel's own `_x0000_s1025`-then-`_x0000_s1026`-… allocator.
-  - These are TWO DIFFERENT collision domains — conflating them is the round-1 mistake C1, and treating `data` as a scalar is the round-2 architecture-review mistake M-1.
-
-#### Entity: `ContentTypes ([Content_Types].xml)`
-
-- **Description:** OOXML manifest of part-name → MIME-type bindings.
-- **Key attributes:** `<Override PartName="/xl/comments2.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.comments+xml"/>` and similar for `threadedComments`, `personList`, `vmlDrawing`.
+- **Description:** Memoised aggregate result + per-cell skip/error events for replay.
+- **Key attributes:** `(value: number, skipped_cells: list[CellRef], error_cells: list[CellRef], cache_hits: int)`.
+- **Cache key:** SHA-1 of canonical `(sheet_resolved, scope_canonical, fn_name)` — SPEC §5.5.3 dedup spec; `col:Hours` and `table:T1[Hours]` hash to the same key when they refer to the same cell range under Excel-Tables fallback.
 - **Business rules:**
-  - Adding a new part REQUIRES adding the matching `<Override>` (idempotent: skip if present, never duplicate).
-  - `vmlDrawing` uses `Default Extension="vml"` if not already present; xlsx-6 prefers `<Override>` per part for safety (matching what Excel itself emits for fresh files).
+  - **Replay determinism**: the second consumer of a cache entry replays per-cell skip/error events into its own rule context; intra-rule dedup on `(rule_id, cell)` (defensive); inter-rule no-dedup (each rule emits independently). Fixture #19a anchors this.
 
-### Relationships diagram
+### 4.2. Pipeline-wide invariants the implementation MUST preserve
 
-```mermaid
-erDiagram
-    Workbook ||--o{ Sheet : contains
-    Workbook ||--o| PersonList : "rel (workbook-scoped, M6)"
-    Sheet ||--o| LegacyCommentsPart : "rel"
-    Sheet ||--o| ThreadedCommentsPart : "rel (modern)"
-    Sheet ||--o| VmlDrawing : "rel"
-    LegacyCommentsPart ||--o{ Comment : contains
-    ThreadedCommentsPart ||--o{ ThreadedComment : contains
-    ThreadedComment }o--|| Person : "personId resolves to"
-    PersonList ||--o{ Person : contains
-    VmlDrawing ||--o{ VShape : contains
-    LegacyCommentsPart ||--|| Author : "authorId is index into"
-    ContentTypes ||--o{ LegacyCommentsPart : "Override per part"
-    ContentTypes ||--o{ ThreadedCommentsPart : "Override per part"
-    ContentTypes ||--o| PersonList : "Override"
-    ContentTypes ||--o{ VmlDrawing : "Override per part"
+These invariants are the contract that makes xlsx-7 correct *and*
+paranoid about hostile inputs. Each maps to a TASK requirement and
+a regression fixture or canary saboteur:
+
+1. **No `eval`** in xlsx-7's import graph (TASK R1.d / NFR; CI grep test).
+2. **`ast.parse` not used** for DSL parsing (TASK R1.d / NFR; CI grep test).
+3. **`yaml.safe_load` not imported** (TASK NFR; CI grep test).
+4. **YAML rules-file rejects** anchors / aliases / custom tags / dup-keys / YAML-1.1 bool coercion in ≤ 100 ms (fixtures #23/#24/#25/#26).
+5. **Composite depth cap 16** (fixture #27).
+6. **Builtin whitelist 12 names** (fixture #30).
+7. **Rules-file size cap 1 MiB** pre-parse (fixture #28).
+8. **Closed AST 17 node types** — no attribute access, no `**`, no `%`, no bitwise, no lambda. **Locked by F3 parser unit tests in `tests/test_xlsx_check_rules.py`, not a §13 battery fixture** (architect-review m3 — the Planner should NOT size a fixture for this; the parser tests are exhaustive).
+9. **D4 7-error-code subset** for §5.0 auto-emit (fixture #10 + new #10b).
+10. **Deterministic finding sort** (5-tuple with sentinels per SPEC §7.1.2) — golden-file byte equality (fixture #2).
+11. **M2 envelope all-three-keys invariant** — `{ok, summary, findings}` in xlsx-7 `--json` output, on every code path including partial-flush and `--max-findings 0` (fixtures #39a + #39b).
+12. **Aggregate-cache canonicalisation** equates `col:Hours` with `table:T1[Hours]` when Tables-fallback resolution coincides — but ONLY when `--no-table-autodetect` is OFF (fixture #19).
+13. **Same-path `--output` resolves** via `Path.resolve()` and follows symlinks → exit 6 (fixtures #37, parity with xlsx-6 cross-7 H1).
+14. **Encryption fail-fast** at exit 3 via `office._encryption.assert_not_encrypted` (fixture #38).
+15. **`.xlsm` macro warning** to stderr without aborting (cross-4 parity).
+16. **`--json-errors` envelope** wraps fatal codes 2/3/5/6/7; finding-level codes 0/1/4 ALWAYS use SPEC §7.1 schema (cross-5 parity).
+17. **Performance contract** — fixture #31 ≤ 30 s wall-clock & ≤ 500 MB RSS gated by `RUN_PERF_TESTS=1` (D6).
+
+## 5. Interfaces
+
+### 5.1. External CLI Interface (TASK §2.5)
+
+The CLI surface is the single user-facing interface; full flag table
+is in TASK §2.5 (authoritative). The Architect locks two additional
+constraints:
+
+- **Argparse error routing (DEP-7):** every argparse usage error
+  must route through `_errors.report_error` when `--json-errors` is
+  set. Implementation: subclass `argparse.ArgumentParser` with
+  `_print_message` → fan-out to `_errors.report_error` when the
+  flag is present in the partial parse. (Mirrors xlsx-6 cli.py's
+  `_HardenedArgParser`.)
+- **`--rules` accepts `-` (stdin)?** **NO.** Stdin is reserved for
+  the xlsx-6 envelope-pipe contract (`xlsx_check_rules.py … --json |
+  xlsx_add_comment.py … --batch -`). Allowing `--rules -` would
+  conflict with future stdin uses and forces a buffer-everything
+  semantics on rules files — `Path` only is simpler and matches the
+  1 MiB cap enforcement model.
+
+### 5.2. Internal Module API (Q2 module list)
+
+Each F-region module exposes a narrow `__all__`. Cross-module imports
+are sibling-relative. The shim's re-export list (locked in Planning
+when test files exist) constitutes the **stable public surface** —
+breaking it requires a new version bump on the SPEC's
+`schema_version`. Internal helpers (`_-prefixed`) are explicitly NOT
+re-exported and may change without notice.
+
+Two internal contracts are load-bearing and called out:
+
+- **`F8.eval_aggregate`** is the only entrypoint that mutates the
+  aggregate cache. F7 calls F8; F8 calls F6/F5; no other dataflow.
+- **`F9.emit_findings`** is the only writer of stdout. F11 calls
+  F9; no other module writes to stdout (mistakes here would corrupt
+  the envelope under M2). Stderr writers are `F11` (warnings,
+  `--no-json` human report) and `F2`/`F3` (parse errors via cross-5).
+
+### 5.3. Cross-skill envelopes
+
+xlsx-7 honours all 4 cross-skill envelopes used by the office-skills
+family:
+
+- **cross-3 (encryption):** `office._encryption.assert_not_encrypted`
+  on the input workbook → exit 3 `EncryptedInput` if encrypted.
+- **cross-4 (`.xlsm` macros):** `office._macros.warn_if_macros_will_be_dropped`
+  to stderr; non-fatal; output (if any) preserves macros byte-equivalent
+  (matches xlsx-6 R8.c).
+- **cross-5 (`--json-errors`):** wraps fatal exit codes 2/3/5/6/7 in
+  the shared `_errors.envelope` schema.
+- **cross-7 H1 (same-path):** `Path(input).resolve() == Path(output).resolve()`
+  → exit 6 `SelfOverwriteRefused`. **Only checked when `--output` is
+  set** (xlsx-7 has no required write path, unlike xlsx-6).
+
+### 5.4. xlsx-6 envelope pipeline contract (M2)
+
+The xlsx-7 `--json` output MUST always emit `{ok, summary, findings}`
+as the top-level keys. The xlsx-6 batch.py:122 gate is:
+
+```python
+if isinstance(root, dict) and {"ok", "summary", "findings"} <= set(root.keys()):
 ```
 
-### 4.2. Workbook-wide invariants the editor MUST preserve
+xlsx-7 satisfies this on every code path:
 
-These are the invariants that make xlsx-6 correct *and* paranoid about
-hostile inputs:
+- Happy path (exit 0/1): all three keys.
+- `--require-data` on empty workbook (exit 1): all three keys; `findings` carries `[{"rule_id": "no-data-checked", …}]`.
+- `--max-findings 0` (cap disabled, stderr warning): all three keys; `findings` is the full unbounded array.
+- `--max-findings N` truncated (exit 0/1): all three keys; `summary.truncated: true`; `findings` ends with `max-findings-reached`.
+- Wall-clock timeout (exit 7): all three keys; `summary.truncated: false`, `summary.elapsed_seconds = timeout`; `findings` is the partial flush. **Architect-locked write ordering (M-2):** `_partial_flush` runs in the main thread post-loop after the watchdog flag breaks the per-rule loop — NEVER from a signal handler (async-signal-unsafe wrt `json.dump`). Stdout is line-buffered at process start (`os.fdopen(1, 'w', buffering=1)`); `_partial_flush` calls `fp.flush()` after `json.dump` to guarantee no torn envelope can ship.
+- `--severity-filter` (exit 0/1/4): all three keys; `findings` is filtered subset; `summary.errors/warnings/info` are still **unfiltered totals** (SPEC §12.1).
 
-1. **Idempotent overrides.** Adding a part that already has an `<Override>` does not produce a duplicate.
-2. **Single rels-Relationship per (sheet, target).** Adding a `commentsN` rel to a sheet that already binds to `commentsN` is a no-op.
-3. **`<o:idmap data>` integers workbook-wide unique.** The `data` attribute is a comma-separated list; the union of all integers across all VML parts must be a set without duplicates. (C1 + M-1.)
-4. **`o:spid` workbook-wide uniqueness.** (C1)
-5. **`personList` is workbook-scoped, NOT sheet-scoped.** (M6)
-6. **Author dedup is case-sensitive on displayName** in BOTH `<authors>` and `<personList>`. (m5)
-7. **Pre-existing comments preserved byte-equivalent** — only added nodes show in the diff. (R8.b)
-8. **`xl/vbaProject.bin` preserved** when the output extension is `.xlsm`. (R8.c)
-9. **Encryption / legacy-CFB fail-fast at exit 3.** (R7.a / cross-3)
-10. **Same-path (resolved) refused at exit 6.** (R7.d / cross-7 H1)
+Fixtures #39 / #39a / #39b lock this invariant.
 
-## 5. Security
+## 6. Technology Stack
 
-> Loading the extended template would add §5 Security as a separate
-> chapter; for a single-file CLI that does no network I/O and no shell
-> execution, the relevant security surface is small and fits inside
-> §4. Repeating it here for explicit traceability against `architecture-design`
-> §2 "Security: Built-in".
+### 6.1. Runtime
+- **Python 3.10+** (matches `xlsx_add_comment.py` and `office/`).
+- **Process model:** single-process, single-threaded. Concurrent runs
+  against the same `--output` path produce a race; documented in SPEC
+  §11.2 (use distinct outputs or serialize).
 
-- **Input validation boundary:** `office/unpack` is the trust boundary. `defusedxml` (already in `requirements.txt`) protects against XML-bomb / XXE / billion-laughs in the parsed parts. `office/unpack` itself is hardened against zip-bomb and path-traversal (existing protection inherited from docx).
-- **Batch JSON cap:** 8 MiB pre-parse via `Path.stat().st_size` (m2). Stdin uses a buffered read with the same cap.
-- **No shell execution.** `subprocess` is NOT imported. `os.system` is NOT used.
-- **No network I/O.** xlsx-6 does not fetch URLs.
-- **XML insertion safety.** `lxml.etree.SubElement` + `.text` and `.set` (NOT string concatenation) handle escaping for author / text / sheet-name strings — including untrusted user input in `--text` and `--author`.
-- **UUID generation:** `uuid.uuid5(uuid.NAMESPACE_URL, displayName)` for stable `<person id>`; `uuid.uuid4()` for ephemeral `<threadedComment id>`. Neither carries privacy concerns since the input is the user-supplied `displayName`.
-
-**OWASP Top 10 mapping (those that apply to a non-network CLI):**
-- A03 Injection — addressed via lxml-mediated XML escaping (above).
-- A04 Insecure design — covered by the workbook-wide invariants list (§4.2).
-- A06 Vulnerable components — `lxml`, `defusedxml`, `openpyxl` are pinned in `skills/xlsx/scripts/requirements.txt`; no new deps added.
-- A08 Software & data integrity — output validates under `office/validate.py` and `xlsx_validate.py --fail-empty` (R8.a, AC in I3.2).
-
-## 6. Open-Question closure (what this document fixes)
-
-| Q | Decision | Rationale |
+### 6.2. Direct PyPI dependencies (`requirements.txt` deltas)
+| Package | Version | Why |
 |---|---|---|
-| **Q2 — Empty-text policy** | **REJECT** with exit 2 `EmptyCommentBody` envelope. | Mirrors `docx_add_comment.py --comment` (required + non-empty). Empty comments have zero legitimate use case in a CI / agent pipeline. Easier to relax later than to retract. |
-| **Q5 — Date attribute** | **`--date` flag, default `datetime.now(timezone.utc).isoformat(timespec="seconds")` with `Z` suffix.** | Determinism for tests; Excel renders both ISO with timezone and the bare `YYYY-MM-DDTHH:MM:SSZ` form. Mirrors `docx_add_comment.py`. |
-| **Q7 — Threaded write semantics** | **Option A (Excel-365 fidelity).** `--threaded` writes BOTH `xl/threadedComments<M>.xml` AND a legacy `<comment>` stub in `xl/commentsN.xml`. `--no-threaded` writes ONLY the legacy `<comment>`. The "stub" body is identical to the threaded body (plain text). | (1) Excel itself writes both parts when it creates a threaded comment — fidelity is the safer default. (2) Keeps older Excel + LibreOffice readable. (3) `--no-threaded` becomes a *suppression* flag, mirroring Excel's own toggling pattern. (4) Full duplicate-cell matrix in §6.1. |
+| `openpyxl` | bump `>=3.1.0` → `>=3.1.5` | SPEC §5.4.2 — locale-format date detection on Russian/JP workbooks. |
+| `regex` | new `>=2024.0` | `regex.fullmatch(timeout=)` — stdlib `re` lacks per-cell timeout. |
+| `python-dateutil` | new `>=2.8.0` | `--treat-text-as-date` fallback parser (SPEC §5.4.1 path 4). Likely already a transitive dep of `pandas>=2.0.0`; pin explicitly. |
+| `ruamel.yaml` | new `>=0.18.0` | YAML 1.2 parser with `allow_duplicate_keys=False` + event-stream alias rejection. PyYAML's `safe_load` does NOT block alias expansion — cannot use it. |
 
-### 6.1 Duplicate-cell behaviour matrix (R5 corollary; closes architecture-review M-2)
+### 6.3. ReDoS lint (D5 closure, architect-review m1 correction)
 
-The behaviour for a duplicate cell — meaning the target cell already
-has at least one comment in the **input** workbook — depends jointly
-on (a) what part(s) hold the existing comment(s) and (b) which mode is
-selected. R5.b in TASK §2 only covers the empty-cell + `--no-threaded`
-case explicitly; this table fills in the rest.
+`recheck` is a **Scala/JVM CLI** ([github.com/makenowjust-labs/recheck](https://github.com/makenowjust-labs/recheck)), not a PyPI wheel — there is no `import recheck` available in the per-skill `.venv/`. The "soft import" framing in the original TASK D5 was a category error caught by the architect reviewer. **Locked behaviour for v1:**
 
-| Existing input state on the cell | `--threaded` | `--no-threaded` |
+- xlsx-7 ships **only the hand-coded reject-list** for the 4 classic ReDoS shapes (`(a+)+`, `(a*)*`, `(a|a)+`, `(a|aa)*`), evaluated at parse time in `dsl_parser.lint_regex`.
+- `recheck` is **not invoked at all** in v1 — no `subprocess` call, no `shutil.which` probe (would otherwise contradict §6.4 "no `subprocess`").
+- Per-cell `regex.fullmatch(timeout=100ms)` is the **runtime safety net**; the parse-time lint is defense-in-depth, not the sole barrier.
+- If a user ships a pattern that is genuinely catastrophic but escapes the 4-shape lint, the per-cell timeout catches it in ≤ 100 ms and emits a `rule-eval-timeout` finding (counted in `summary.regex_timeouts`).
+- A future v2 may add a stronger lint pass (e.g. via the Python `interegular` package, which IS a wheel) — out of scope for v1.
+
+| Item | Status |
+|---|---|
+| `recheck` | **NOT used** — JVM CLI, would require subprocess. |
+| 4-shape hand-coded reject-list | **Sole parse-time lint** (D5 closure). |
+| `regex.fullmatch(timeout=)` | **Runtime safety net** — bounds wall-clock per cell. |
+
+### 6.4. Excluded technology choices
+- **No ORM.** xlsx-7 doesn't have a database.
+- **No web framework.** No network I/O.
+- **No `subprocess`.** xlsx-7 does not exec sub-processes.
+- **Stdlib `re` is FORBIDDEN** for rule regex evaluation (no timeout) — only `regex` lib. Stdlib `re` may be used internally for non-rule string processing (e.g. cell-ref parsing).
+- **`yaml.safe_load` is FORBIDDEN** (does not block alias expansion).
+- **`ast.parse` is FORBIDDEN** for DSL parsing (would expose Python syntax surface).
+- **`eval`/`exec`/`compile`/`__import__` are FORBIDDEN** anywhere in the package.
+
+### 6.5. Test stack
+- **`unittest`** (stdlib) — no `pytest`. Matches xlsx-6 convention.
+- **`hypothesis`** (optional) — soft import for property-based fuzz (SPEC §13.4); not in `requirements.txt`; `pip install hypothesis` for local property-test runs only.
+
+## 7. Security
+
+### 7.1. Trust boundaries
+- **`office/unpack`** is the trust boundary for the input workbook. `defusedxml` (already pinned) protects against XML-bomb / XXE / billion-laughs in workbook XML.
+- **`rules_loader.load_rules_file`** is the trust boundary for the rules file. YAML hardening (anchor/alias rejection, custom-tag rejection, dup-key rejection, 1 MiB pre-parse cap) keeps untrusted YAML safe.
+- **`evaluator.eval_regex`** is the trust boundary for user-supplied regex patterns. `regex` lib + per-cell `timeout=100ms` + parse-time ReDoS lint (D5) bound CPU-spend.
+
+### 7.2. Hostile-input defences
+| Threat | Defence | Test |
 |---|---|---|
-| **Cell empty (no comment yet)** | Write legacy stub + threadedComment (Q7 default). | Write legacy `<comment>` only. |
-| **Legacy `<comment>` only** (older xlsx-6 output, hand-edited workbook, or non-Excel-365 source) | Write a fresh `<threadedComment>` on the same cell AND keep the existing legacy `<comment>` in place; the new top-level threadedComment forms a new thread (v1 has no `parentId`, so it is independent of the existing legacy entry). Per §6 Q7 fidelity: ALSO append a NEW legacy `<comment>` stub matching the new threadedComment body (so the two-part stub:thread invariant holds for the *new* entry). The pre-existing legacy `<comment>` stays untouched (R8.b byte-equivalence). | exit 2 `DuplicateLegacyComment` (R5.b — unchanged). |
-| **Threaded thread exists** (with or without matching legacy stub) | Append a new `<threadedComment>` to the same `ref` (forms an additional top-level entry in that thread; v1 NO `parentId`). If the cell also has a legacy stub, ALSO append a matching legacy `<comment>` per fidelity rule. | **exit 2 `DuplicateThreadedComment`** (NEW envelope — see §6.2). Silently writing a legacy-only comment alongside an existing thread produces a workbook where older clients see two unrelated comments and Excel-365 sees an orphan legacy entry — the worst of both worlds. Refuse fast. |
-| **Threaded only, NO legacy stub** (hand-authored or older agent output that didn't follow Q7 fidelity) | Append `<threadedComment>` to thread; do NOT add a legacy stub for the existing thread (we don't retro-fix non-fidelity input — only honour fidelity for entries WE write). For the new entry: write both per Q7 default. | **exit 2 `DuplicateThreadedComment`** (same as above). |
+| Billion-laughs YAML | ruamel.yaml event-stream alias rejection pre-composition | Fixture #23 ≤ 100 ms |
+| Custom YAML tag (`!!python/object`) | Custom-tag constructor refuses anything outside YAML 1.2 schema | Fixture #24 |
+| YAML 1.1 bool trap (`yes/no`) | `version=(1,2)` — strings stay strings | Fixture #25 |
+| YAML duplicate keys | `allow_duplicate_keys=False` | Fixture #26 |
+| Regex DoS | `regex` lib `timeout=100ms` + parse-time lint (4 classic shapes minimum, `recheck` stronger when available) | Fixture #22 ≤ 100 ms or per-cell timeout |
+| Deep composite recursion | Depth cap 16; exit 2 `CompositeDepth` | Fixture #27 |
+| Huge rules file | 1 MiB pre-parse `Path.stat().st_size` cap; exit 2 `RulesFileTooLarge` | Fixture #28 |
+| Format-string injection | `string.Template` (`$value`), NOT `str.format` | Fixture #29 |
+| Unknown builtin | 12-name whitelist; exit 2 `UnknownBuiltin` | Fixture #30 |
+| String-with-`&` false-positive (alias-rejection over-trigger) | Event-stream filter checks the `anchor` attribute, NOT a byte-scanner | Fixture #23a (negative regression) |
 
-### 6.2 New exit-code-2 envelope: `DuplicateThreadedComment`
+### 7.3. OWASP Top 10 mapping (those that apply to a non-network CLI)
+- **A01 Broken access control** — N/A (CLI; no remote callers).
+- **A03 Injection** — addressed via `string.Template` for messages, lxml-mediated XML escaping in remarks output, and the closed AST forbidding code-execution paths.
+- **A04 Insecure design** — covered by §4.2 invariants (fixtures + canary saboteurs prevent silent regressions).
+- **A05 Security misconfiguration** — defaults are strict (whitespace strip, table-autodetect, hidden-row include, severity-filter wide-open). Loose modes are explicit opt-in flags.
+- **A06 Vulnerable components** — direct deps pinned in `requirements.txt`; CLAUDE.md §3 license hygiene attributions in `THIRD_PARTY_NOTICES.md`.
+- **A07 Auth failures** — N/A.
+- **A08 Software & data integrity** — output validates under `office/validate.py` (cross-skill convention) and `xlsx_validate.py --fail-empty` (consistency with xlsx-6 R8.a). Findings JSON has `schema_version` (SPEC §7.1) for downstream-tool drift detection.
+- **A09 Logging failures** — stderr human report carries finding details for operator review; sensitive cell values can leak into logs (operator's choice — documented in SPEC honest scope).
+- **A10 SSRF** — N/A (no network I/O).
 
-Section M-2 of the architecture review introduced this envelope. It
-needs to be reflected in the **TASK §2.5 Exit-code matrix** during the
-Architecture cleanup pass — added here as an authoritative architecture
-note so the developer does not miss it.
+### 7.4. Privilege & filesystem boundaries
+- xlsx-7 reads only the paths in `INPUT.xlsx` and `--rules` and writes only to `--output` (when set). `Path.resolve()` is used both for the same-path guard (cross-7 H1) and for ensuring no path-traversal via crafted symlinks in inputs.
+- `office/unpack` already includes path-traversal hardening from the docx skill (verified by xlsx-6 task review).
+- **TOCTOU honest scope (architect-review m6):** The `Path.resolve()` same-path guard catches static symlink races, but a symlink mutated between `resolve()` (same-path check) and `open(output, 'wb')` (write) is **out of scope** for v1. Mirrors the xlsx-6 cross-7 H1 honest-scope gap; documented as a v1 limitation in SPEC §11.2 (action item: add a one-line entry under Issue I9.5 SPEC patches).
 
-```
-{
-  "v": 1,
-  "error": "Cannot insert legacy-only comment on cell {ref} of sheet {sheet}: "
-           "a threaded comment thread already exists. Use --threaded to append "
-           "to the thread, or pick a different cell.",
-  "code": 2,
-  "type": "DuplicateThreadedComment",
-  "details": {
-    "sheet": "Sheet1",
-    "cell": "A5",
-    "existing_thread_size": 2
-  }
-}
-```
+## 8. Scalability and Performance
 
-## 7. Architect-locked decisions (post-review M-3)
+### 8.1. Performance contract (TASK NFR + R9.f)
+Committed bound: `huge-100k-rows.xlsx × 5-rule.rules.json` ≤ **30 s
+wall-clock** & ≤ **500 MB peak RSS** on a 4-core machine. Fixture
+#31 enforces. Gated by `RUN_PERF_TESTS=1` (D6).
 
-> All TASK Open Questions (Q1–Q7) are closed (Q1 → R9.f deferred,
-> Q2/Q5/Q7 → §6 above, Q3/Q4/Q6 → analyst recommendations accepted).
-> The architecture-review demoted the previously-flagged "open questions"
-> A-Q1 and A-Q2 to Architect-locked decisions (M-3) — both have one
-> sensible answer and the user need not confirm separately. They are
-> recorded here for traceability and may be overridden before
-> development if the user objects.
+### 8.2. Caching strategy
+- **Aggregate cache (F8)** — process-local; canonical-key SHA-1; single read per shared scope across N rules. Cache replay is **semantically transparent** (output identical with/without cache, only timing differs). `summary.aggregate_cache_hits` is the canary counter (saboteur #9 trips it deterministically regardless of CI box speed).
+- **Regex compile cache (F7)** — one `regex.compile(pattern)` per unique pattern per run.
+- **No persistent cache.** CI/local runs always start cold.
 
-- **A-Q1 (locked) — Test fixture provenance.** Generate fixtures by (a) opening a new Excel-365 workbook, (b) adding 1–2 legacy comments + 1–2 threaded comments via Excel UI, (c) saving as `.xlsx` and `.xlsm`. Commit to `skills/xlsx/scripts/tests/golden/inputs/` with provenance in `tests/golden/README.md`. Files ≤ 50 KB each. **Override:** none expected; user may swap in different fixtures during planning if the chosen ones miss a real-world variant.
+### 8.3. Streaming mode (`--streaming-output`)
+- `openpyxl.WriteOnlyWorkbook` for ≥ 100K-cell workbooks.
+- **Q3=A trade-off:** remark column letter is allocated ahead of time; flow-on impact is that `--remark-column auto` is rejected at arg-parse with streaming (DEP-4) — the auto-pick needs to read existing column letters which the write-only workbook can't expose. `--remark-column-mode append` similarly rejected (DEP-5) — append needs to read the existing cell value to concatenate.
+- **Documented honest-scope trade-offs** (SPEC §11.2): streaming output loses conditional formatting on the remark column (uses inline-style `PatternFill` instead). Comments / drawings / charts / defined names on cells **NOT** modified by xlsx-7 are preserved (openpyxl streaming does pass through opaque parts).
 
-- **A-Q2 (locked) — `--no-threaded` default.** Threaded is **opt-in via `--threaded`**. Default mode = legacy-only (equivalent to `--no-threaded`). Matches backlog tone ("опц." = optional) and `docx_add_comment.py` precedent (where threading is opt-in via `--parent`). **Override:** none expected.
+### 8.4. Memory model
+- **Read-only mode** (no `--output`): can stream-read up to ~1M cells (openpyxl iter-rows with `read_only=True`).
+- **Read-write mode** (`--output` without `--streaming-output`): full tree loaded into memory; practical limit ~100K cells.
+- **Streaming-write mode** (`--output --streaming-output`): back to ~1M cells, with the §8.3 trade-offs.
 
-- **A-Q3 (PLAN-internal) — Goldens diff strategy.** Use `lxml.etree.tostring(..., method='c14n')` (NOT `c14n2` — `c14n2` does NOT canonicalise attribute order; m-5 review note) for canonical comparison; mask volatile attributes (`<threadedComment id>`, unpinned `dT`) via XPath replace before comparison. Out of scope for this Architecture pass; locked in PLAN.md. **No user input needed.**
+### 8.5. Wall-clock budget
+- `--timeout SECONDS` (default 300) caps total wall-clock. On overrun → exit 7 `TimeoutExceeded` + partial-flush envelope (M2: still `{ok, summary, findings}` valid for xlsx-6 pipeline).
+- Per-cell regex budget 100 ms (`defaults.regex_timeout`). Overrun → finding `rule-eval-timeout`, increment `summary.regex_timeouts`.
 
-## 8. Task-002 Architecture-Blocker Closure (Q1, Q2, Q3)
+## 9. Reliability and Fault Tolerance
 
-> This section closes the three architecture-blockers raised by
-> `docs/TASK.md` (Task 002, draft v2) §6. Each Q is a binary design
-> choice; the Architect closes them per §3.1 / §3.2 reasoning above
-> and locks the decision so Planning can proceed without user gating.
-> A user override is possible before Planning ends — once Planning
-> ships the per-task files, override cost rises sharply.
+### 9.1. Error handling philosophy
+- **Fail fast on hostile or malformed input** at parse time (exit 2). Better to refuse than guess.
+- **Fail soft on per-cell evaluation errors** — emit a `rule-eval-error` finding and continue (e.g. division by zero in a rule expression). One bad cell does not abort the whole scan.
+- **Cross-skill envelopes** for fatal errors when `--json-errors` is set (cross-5).
 
-| Q | Decision | Rationale |
-|---|---|---|
-| **Q1 — Single-file `ooxml_editor.py` (~850 LOC) or `ooxml/` sub-package (4 × ~200 LOC)** | **Single-file (Q1=A).** | (a) Keep the F4 region as one cohesive file because the four sub-concerns (scanners / rels / legacy / threaded) **share a non-trivial amount of state** through helper functions like `_xml_serialize`, `_open_or_create_rels`, `_allocate_rid`, `_find_rel_of_type`, `_patch_sheet_rels`, `_patch_content_types`. Splitting forces those helpers into either `rels.py` (where the legacy and threaded writers must import them) or a fifth `_helpers.py` — neither is a clean win. (b) 850 LOC is ~36 % of the 2339 LOC monolith, well below the navigability threshold (~1500 LOC) defined in §3.1. (c) YAGNI on the sub-package: if v2 features (parentId, rich text) bloat one sub-concern, splitting later is cheap because the package boundary is already drawn. **Override:** if v2 work pushes `ooxml_editor.py` past ~1200 LOC, the sub-package option re-opens in a follow-up task. |
-| **Q2 — `cli.py` (~700 LOC) or split `cli.py` (argparse only) + `orchestrator.py` (`main` / `single_cell_main` / `batch_main`)** | **Merged `cli.py` (Q2=A).** | (a) Argparse setup, mutex/dep validation, and `main()` share too much state — the `args` namespace, the `je = args.json_errors` flag, the unified `try / except _AppError / except EncryptedFileError` wrapper. Splitting leaves `cli.py` as a 90-LOC argparse builder that feeds straight into `orchestrator.py:main()` — adds an import hop with zero coupling reduction. (b) `single_cell_main` and `batch_main` are dispatched from `main()` and call into F2/F3/F4/F5 the same way; pulling them into `orchestrator.py` does not isolate any sub-concern that isn't already isolated by F2-F5 living in their own modules. (c) ≤ 700 LOC matches `ooxml_editor.py` and stays below the threshold. **Override:** if a future task adds a third dispatch mode (e.g., `--unpacked-dir` library mode from R9.g), reconsider — three dispatchers + argparse + main is a real argument for splitting. |
-| **Q3 — `_post_pack_validate` / `_post_validate_enabled` belong in `cli_helpers.py` or `cli.py`** | **`cli_helpers.py` (Q3=helpers).** | (a) Both are pure utility functions — no `main()` flow control, no argparse coupling. Their only dependency is `office.validate.py` invocation via subprocess + an env-var read. (b) Moving them to `cli_helpers.py` keeps `cli.py` argparse + main only, which is the §3.1 navigability goal. (c) Tests already import `_post_pack_validate` from the shim; the move is invisible to tests. |
+### 9.2. Determinism
+- Output `findings[]` array is byte-identical across runs on the same workbook + rules. Sort sentinels per SPEC §7.1.2 are type-homogeneous; Python's stable sort + code-point string ordering is locale-independent.
+- UUID generation is **not used** in xlsx-7 (unlike xlsx-6 which generates `<threadedComment id>` UUIDv4). xlsx-7 is fully deterministic.
 
-### Knock-on TASK-RTM updates (informational)
+### 9.3. Resource cleanup
+- Workbook handles closed via context managers (`openpyxl.load_workbook` + explicit `wb.close()` in `finally`).
+- Rules file handle closed immediately after read.
+- Output workbook (when `--output`) flushed and closed on success **and** on partial-flush (exit 7) — `try/finally` in F11.
 
-Q1=A and Q2=A confirm the analyst's recommendation, so TASK R1.f and
-R1.j stand as written. Q3=helpers confirms TASK §2.5 `cli_helpers.py`
-row scope. **No TASK edits required from the Architect** — the §2
-preamble note in TASK already declared RTM rows recommendation-conditional.
+## 10. Open Questions
 
-### Q4 / Q5 / Q6 / Q7 are CLOSED in TASK draft v2
+> All TASK Open Questions Q2/Q3/Q5/Q7 are closed in §1 (Q2 → §3.2
+> module table; Q3 → §1 decisions table option A as refined by
+> architect-review M-1 dual-stream design; Q5 → §1 hybrid A+B; Q7 →
+> §1 hard exit 2). Q1/Q4/Q6 were closed at TASK level (D5/D4/D6).
+> The architect-review (`docs/reviews/architecture-003-review.md`)
+> applied M-1 (Q3 dual-stream clarification), M-2 (`_partial_flush`
+> main-thread post-loop ordering), M-3 (LOC budget alignment to 3560),
+> and m1 (D5 corrected — `recheck` is a JVM CLI, not a Python wheel;
+> hand-coded 4-shape lint is the sole parse-time check). All review
+> findings landed in §1 / §2.1 F3 / §2.1 F11 / §3.1 / §5.4 / §6.3 /
+> §7.4 / §4.2 invariant #8.
 
-Per TASK §6:
-- **Q4** — `__init__.py` is near-empty (Policy A). §3.2 S1.pkg row reflects this.
-- **Q5** — `BatchRow` is NOT re-exported from the shim; programmatic callers use `from xlsx_comment.batch import BatchRow`. xlsx-7 integration is a follow-up task, not a TASK-002 obligation.
-- **Q6** — Yes, `tests/test_xlsx_comment_imports.py` smoke test is mandatory (TASK I12).
-- **Q7** — `.AGENTS.md` exists; R5.b is an update, not a create.
+**No open questions remain that block the user.** The Planner may
+proceed without user gating to produce `docs/PLAN.md` and per-task
+files `docs/tasks/task-003-{NN}-*.md`.
 
-## 9. Open Questions
+### Architect-locked decisions for Planning
 
-> **Numbering note (A-M3 from review):** §9, §10 of the
-> `architecture-format-core` template (Scalability, Reliability) are
-> intentionally elided. Rationale: this is a non-network single-process
-> CLI with no scale axis, mirroring the §5 Security elision treatment.
-> The "Open Questions" slot (template §11) is renumbered §9 here so
-> the document is gap-free.
+These are 3 minor decisions the Architect locks now to free up
+Planning bandwidth; user may override before per-task files ship.
 
-> After §6 closure (Q2/Q5/Q7 from Task 001), §7 closure
-> (A-Q1/A-Q2/A-Q3 from Task 001), and §8 closure (Task-002
-> Q1/Q2/Q3): **NO open questions remain** that block the user.
-> The Planner may proceed without user gating.
+- **A-Q1 (locked) — Test fixture provenance for the committed
+  `huge-100k-rows.xlsx`.** Generated by
+  `tests/golden/inputs/_generate.py --regenerate-perf-fixture` using
+  openpyxl `WriteOnlyWorkbook` + a deterministic seed (`random.seed(42)`).
+  Manifest `tests/golden/manifests/huge-100k-rows.yaml` carries
+  `version: 1` and a SHA-256 hash; regenerate when manifest version
+  bumps.
 
-- **(none — all questions closed)**
+- **A-Q2 (locked) — Goldens diff strategy.** No `.xlsx`-byte goldens.
+  All assertions are on the `findings JSON` envelope (key subset
+  + sorted finding sequence + summary counters). For #34/#35
+  remark-column round-trip fixtures: assert remark column exists, has
+  the expected fill colour per row, and contains the expected message
+  substring (NOT byte equality — openpyxl write differs from
+  Excel-365 write).
+
+- **A-Q3 (locked) — Test runner integration.** `tests/test_e2e.sh`
+  gains a `xlsx_check_rules` block (non-perf fixtures). Perf fixture
+  #31 lives in a separate `tests/test_perf.sh` invoked only when
+  `RUN_PERF_TESTS=1` (D6). Validator gate (`validate_skill.py`) must
+  stay green throughout.

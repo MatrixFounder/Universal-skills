@@ -1,0 +1,34 @@
+# SPEC §13.1 fixture #7 — locks `AmbiguousHeader` (§4.2). Two columns on
+# the same sheet share the header "Hours"; xlsx-7 must refuse to resolve
+# `col:Hours` and exit 2 with the offending column letters listed.
+id: 7
+name: dup-header
+shape: simple-grid
+rules_format: json
+xfail: false   # 003.14b orchestrator wires scope resolution → exit 2; promoted from xfail
+sheet:
+  name: Sheet1
+  cells:
+    A1: { type: header, value: "Hours" }   # first occurrence
+    B1: { type: header, value: "Hours" }   # duplicate — ambiguous
+    C1: { type: header, value: "Project" }
+    A2: { type: number, value: 8 }
+    B2: { type: number, value: 7 }
+    C2: { type: text,   value: "PRJ-1" }
+rules: |
+  {
+    "version": 1,
+    "rules": [
+      {
+        "id": "any",
+        "scope": "col:Hours",
+        "check": "value > 0",
+        "severity": "error"
+      }
+    ]
+  }
+expected:
+  exit_code: 2
+  required_rule_ids: []
+  forbidden_rule_ids: []
+  requires_envelope: false

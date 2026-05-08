@@ -1,0 +1,31 @@
+# SPEC §13.1 fixture #9 — sheet-name escaping (§4.1): single apostrophe
+# in a sheet name is encoded as a doubled apostrophe in the rule's sheet
+# qualifier. Workbook sheet name = `Bob's Sheet`; rule scope =
+# `'Bob''s Sheet'!cell:A1` (per Excel/ECMA-376).
+id: 9
+name: apostrophe-sheet
+shape: simple-grid
+rules_format: json
+xfail: false   # 003.14b orchestrator end-to-end works; promoted from xfail
+sheet:
+  name: "Bob's Sheet"
+  cells:
+    A1: { type: number, value: 42 }
+rules: |
+  {
+    "version": 1,
+    "rules": [
+      {
+        "id": "ap-positive",
+        "scope": "'Bob''s Sheet'!cell:A1",
+        "check": "value > 0",
+        "severity": "error"
+      }
+    ]
+  }
+expected:
+  exit_code: 0
+  summary:
+    errors: 0
+  required_rule_ids: []
+  forbidden_rule_ids: []

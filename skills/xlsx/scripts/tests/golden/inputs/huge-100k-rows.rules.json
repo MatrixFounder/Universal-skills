@@ -1,0 +1,16 @@
+{
+  "version": 1,
+  "defaults": {"sheet": "Sheet1"},
+  "rules": [
+    {"id": "hours-realistic", "scope": "col:Hours",
+     "check": "value <= 24", "severity": "error"},
+    {"id": "hours-positive", "scope": "col:Hours",
+     "check": "value > 0", "severity": "error"},
+    {"id": "approved-status", "scope": "col:Status",
+     "check": "value in [Approved, Pending, Rejected]", "severity": "error"},
+    {"id": "project-format", "scope": "col:Project",
+     "check": "regex:^PRJ-\\d{4}$", "severity": "warning"},
+    {"id": "totals-sum", "scope": "col:Cost",
+     "check": "value >= 0", "severity": "error"}
+  ]
+}

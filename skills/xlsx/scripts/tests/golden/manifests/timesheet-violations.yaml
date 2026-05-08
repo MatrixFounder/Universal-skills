@@ -1,0 +1,70 @@
+# SPEC §13.1 fixture #2 — required_rule_ids [hours-realistic, totals-match];
+# forbidden_rule_ids [hours-positive] (no positive-hours violations in this
+# fixture). Echoes the SPEC §10 worked example structure.
+id: 2
+name: timesheet-violations
+shape: simple-grid
+rules_format: json
+xfail: false   # 003.14b orchestrator end-to-end works; promoted from xfail
+sheet:
+  name: Timesheet
+  cells:
+    A1: { type: header, value: "Date" }
+    B1: { type: header, value: "Hours" }
+    C1: { type: header, value: "Project" }
+    D1: { type: header, value: "Status" }
+    E1: { type: header, value: "WeekNum" }
+    H1: { type: number, value: 100 }     # totals-match cell — disagrees with sum(Hours)=44
+    # Row 2 — valid
+    A2: { type: date,   value: "2026-05-01" }
+    B2: { type: number, value: 8 }
+    C2: { type: text,   value: "PRJ-1234" }
+    D2: { type: text,   value: "Approved" }
+    E2: { type: text,   value: "W18" }
+    # Row 3 — hours-realistic violation (28 > 24)
+    A3: { type: date,   value: "2026-05-02" }
+    B3: { type: number, value: 28 }
+    C3: { type: text,   value: "PRJ-5678" }
+    D3: { type: text,   value: "Pending" }
+    E3: { type: text,   value: "W18" }
+    # Row 4 — valid
+    A4: { type: date,   value: "2026-05-03" }
+    B4: { type: number, value: 8 }
+    C4: { type: text,   value: "PRJ-1234" }
+    D4: { type: text,   value: "Approved" }
+    E4: { type: text,   value: "W18" }
+rules: |
+  {
+    "version": 1,
+    "defaults": { "sheet": "Timesheet" },
+    "rules": [
+      {
+        "id": "hours-realistic",
+        "scope": "col:Hours",
+        "check": "value <= 24",
+        "severity": "error",
+        "message": "More than 24 hours at row $row: $value"
+      },
+      {
+        "id": "totals-match",
+        "scope": "cell:H1",
+        "check": "value == sum(col:Hours)",
+        "tolerance": 0.01,
+        "severity": "error",
+        "message": "Total in H1 disagrees with sum of Hours column"
+      },
+      {
+        "id": "hours-positive",
+        "scope": "col:Hours",
+        "check": "value > 0",
+        "severity": "error"
+      }
+    ]
+  }
+expected:
+  exit_code: 1
+  summary:
+    errors: 2
+    warnings: 0
+  required_rule_ids: [hours-realistic, totals-match]
+  forbidden_rule_ids: [hours-positive]   # all Hours values are > 0

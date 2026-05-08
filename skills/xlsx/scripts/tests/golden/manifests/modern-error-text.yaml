@@ -1,0 +1,40 @@
+# SPEC §13.1 fixture #10b — D4 lock (architect-review M-1):
+# openpyxl 3.1.5 ERROR_CODES recognises only 7 codes. Modern Excel codes
+# (#SPILL!, #CALC!, #GETTING_DATA) are stored as text by openpyxl and do
+# NOT auto-emit a synthetic `cell-error` finding (SPEC §5.0). The user
+# workaround is a hand-authored regex rule on the relevant scope.
+#
+# This fixture's column "Hours" contains the literal text "#SPILL!" in
+# A2 (NOT a `<c t="e">` error cell). The rule `is_number` returns false
+# for the text cell, producing one finding `bad-hours` — but NOT a
+# `cell-error` synthetic finding. The forbidden-rule-ids assertion locks D4.
+id: 10
+name: modern-error-text
+shape: simple-grid
+rules_format: json
+xfail: false   # 003.14b orchestrator end-to-end works; promoted from xfail
+sheet:
+  name: Sheet1
+  cells:
+    A1: { type: header, value: "Hours" }
+    A2: { type: text,   value: "#SPILL!" }    # text containing a modern-error glyph; NOT data_type='e'
+    A3: { type: number, value: 8 }
+rules: |
+  {
+    "version": 1,
+    "rules": [
+      {
+        "id": "bad-hours",
+        "scope": "col:Hours",
+        "check": "is_number",
+        "severity": "error"
+      }
+    ]
+  }
+expected:
+  exit_code: 1
+  summary:
+    errors: 1
+    cell_errors: 0           # D4 lock: zero auto-emit for `#SPILL!` stored as text.
+  required_rule_ids: [bad-hours]
+  forbidden_rule_ids: [cell-error]   # The auto-emit rule_id MUST NOT appear.

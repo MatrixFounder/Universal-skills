@@ -1,0 +1,50 @@
+{
+  "version": 1,
+  "defaults": { "sheet": "Timesheet", "severity": "error" },
+  "rules": [
+    {
+      "id": "required-fields",
+      "scope": "cols:Date,Hours,Project",
+      "check": "required",
+      "message": "Required field empty"
+    },
+    {
+      "id": "hours-positive",
+      "scope": "col:Hours",
+      "check": "value > 0",
+      "message": "Hours must be positive (got $value)"
+    },
+    {
+      "id": "hours-realistic",
+      "scope": "col:Hours",
+      "check": "value <= 24",
+      "message": "More than 24 hours at row $row: $value"
+    },
+    {
+      "id": "date-in-period",
+      "scope": "col:Date",
+      "check": "date_in_month:2026-05",
+      "message": "Date outside reporting period (May 2026)"
+    },
+    {
+      "id": "project-code-format",
+      "scope": "col:Project",
+      "check": "regex:^[A-Z]{3}-\\d{4}$",
+      "severity": "warning",
+      "message": "Project code should match XXX-NNNN"
+    },
+    {
+      "id": "weekly-cap",
+      "scope": "col:Hours",
+      "check": "sum_by:WeekNum <= 40",
+      "severity": "warning",
+      "message": "Week $group: total exceeds 40h"
+    },
+    {
+      "id": "approved-status",
+      "scope": "col:Status",
+      "check": "value in [Approved, Pending, Rejected]",
+      "message": "Status must be Approved/Pending/Rejected"
+    }
+  ]
+}

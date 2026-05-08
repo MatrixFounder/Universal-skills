@@ -1400,6 +1400,17 @@ run_golden "tests/golden/inputs/with_legacy.xlsx" "$TMP/g-idmap.xlsx" \
     "--cell D7 --author Q --text added_shape" \
     "T-golden-idmap-conflict"
 
+# ---------------------------------------------------------------------------
+# xlsx_check_rules (xlsx-7) — block expanded incrementally by tasks 003.05+.
+# In task-003-02 this block contains the happy-path smoke only; per-fixture
+# E2E checks are added once the relevant F-region ships.
+# ---------------------------------------------------------------------------
+echo
+echo "xlsx_check_rules (xlsx-7):"
+"$PY" "$SKILL_DIR/xlsx_check_rules.py" --help > /dev/null 2>&1 \
+    && ok "xlsx-7-help" \
+    || nok "xlsx-7-help" "--help did not exit 0"
+
 echo
 echo "$pass passed, $fail failed"
 [ "$fail" -eq 0 ]

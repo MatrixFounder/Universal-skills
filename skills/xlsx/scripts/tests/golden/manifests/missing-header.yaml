@@ -1,0 +1,33 @@
+# SPEC §13.1 fixture #8 — locks `HeaderNotFound` (§4.2): rule references
+# `col:Quux` but no column has that header. xlsx-7 must exit 2 and the
+# error envelope's `details.available` lists the present headers
+# (truncated to first 50).
+id: 8
+name: missing-header
+shape: simple-grid
+rules_format: json
+xfail: false   # 003.14b orchestrator wires scope resolution → exit 2; promoted from xfail
+sheet:
+  name: Sheet1
+  cells:
+    A1: { type: header, value: "Hours" }
+    B1: { type: header, value: "Project" }
+    A2: { type: number, value: 8 }
+    B2: { type: text,   value: "PRJ-1" }
+rules: |
+  {
+    "version": 1,
+    "rules": [
+      {
+        "id": "any",
+        "scope": "col:Quux",
+        "check": "value > 0",
+        "severity": "error"
+      }
+    ]
+  }
+expected:
+  exit_code: 2
+  required_rule_ids: []
+  forbidden_rule_ids: []
+  requires_envelope: false
