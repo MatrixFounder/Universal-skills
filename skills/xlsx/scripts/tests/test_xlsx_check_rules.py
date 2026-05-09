@@ -3104,5 +3104,177 @@ class TestHonestScopeHardlinkSamePathLimitation(unittest.TestCase):
             assert_distinct_paths(primary, link)
 
 
+class TestComprehensiveRulesCoverage(unittest.TestCase):
+    """End-to-end fixture covering every SPEC §4–§5 rule family on a
+    single multi-sheet workbook (`comprehensive-rules.xlsx`, 26 sheets,
+    ≥ 20 rows each).
+
+    Authored as a regression net for the full xlsx-7 rule surface — if
+    any rule family stops firing (or fires differently), this test
+    detects it. Driven by the committed
+    `comprehensive-rules.expected.json` manifest emitted by the
+    generator at `tests/golden/inputs/make_comprehensive_fixture.py`.
+
+    The fixture is regenerated only on demand (Q5 hybrid pattern); the
+    test asserts:
+      1. Validator exits 1 (errors present, by design).
+      2. `summary.cell_errors == 3` (the 3 D4 codes #REF!/#N/A/#DIV/0!).
+      3. `summary.errors >= manifest.summary_floor.min_errors`.
+      4. Every `rule_id` in `manifest.rule_id_counts` appears in the
+         findings, with count ≥ predicted.
+      5. Every `(sheet, row, column, rule_id)` tuple in
+         `manifest.sampled_findings` is found in the validator output
+         (allows extras — e.g., findings the generator didn't predict —
+         to surface with a warning rather than a hard fail).
+    """
+    # P1/P2 (Sarcasmotron iter-1 on this fixture): cache the subprocess
+    # result + manifest at class scope. The validator is deterministic,
+    # the fixture is read-only, and 5 test methods consume the same
+    # (rc, envelope) tuple — running 5× wasted ~1-3 s per CI invocation.
+    # Lazy init in setUp; safe under serial `unittest discover` runners.
+    # NOT thread-safe under `pytest -n auto` parallel workers — would
+    # need a class-level lock or fixture re-architecture in that case.
+    _cached_rc: int | None = None
+    _cached_env: dict | None = None
+    _cached_manifest: dict | None = None
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.fixture_dir = Path(__file__).parent / "golden" / "inputs"
+        cls.workbook = cls.fixture_dir / "comprehensive-rules.xlsx"
+        cls.rules = cls.fixture_dir / "comprehensive-rules.rules.json"
+        cls.expected_path = cls.fixture_dir / "comprehensive-rules.expected.json"
+
+    def setUp(self) -> None:
+        for p in (self.workbook, self.rules, self.expected_path):
+            if not p.exists():
+                self.skipTest(
+                    f"comprehensive fixture absent: {p.name}; regenerate via "
+                    f"`tests/golden/inputs/make_comprehensive_fixture.py`",
+                )
+        # Lazy-init the cache once; setUp runs before every test method
+        # but the body short-circuits on the second call.
+        cls = type(self)
+        if cls._cached_env is None:
+            import json as _json
+            scripts_dir = Path(__file__).parent.parent
+            # P3: bump --max-findings to a generous-but-bounded cap (500)
+            # so a runaway regression (1M findings) can't balloon stdout
+            # parse + memory. The fixture currently emits 269 findings;
+            # 500 is well above the floor.
+            proc = subprocess.run(
+                [sys.executable, "xlsx_check_rules.py", str(cls.workbook),
+                 "--rules", str(cls.rules), "--json", "--max-findings", "500"],
+                capture_output=True, text=True, cwd=scripts_dir, timeout=60,
+            )
+            cls._cached_rc = proc.returncode
+            cls._cached_env = _json.loads(proc.stdout)
+            cls._cached_manifest = _json.loads(cls.expected_path.read_text())
+
+    def _run_validator(self) -> tuple[int, dict]:
+        return type(self)._cached_rc, type(self)._cached_env  # type: ignore[return-value]
+
+    def _manifest(self) -> dict:
+        return type(self)._cached_manifest  # type: ignore[return-value]
+
+    def test_exit_code_and_summary_floor(self) -> None:
+        rc, env = self._run_validator()
+        manifest = self._manifest()
+        self.assertEqual(rc, 1, f"expected exit 1 (errors present); got {rc}")
+        self.assertFalse(env["ok"], "envelope.ok should be False (errors present)")
+        floor = manifest["summary_floor"]
+        self.assertGreaterEqual(
+            env["summary"]["errors"], floor["min_errors"],
+            f"summary.errors regression: expected ≥ {floor['min_errors']}, "
+            f"got {env['summary']['errors']}",
+        )
+        self.assertEqual(
+            env["summary"]["cell_errors"], floor["min_cell_errors"],
+            f"summary.cell_errors should equal {floor['min_cell_errors']} "
+            f"(D4 7-code subset); got {env['summary']['cell_errors']}",
+        )
+
+    def test_all_rule_families_fire(self) -> None:
+        """Every rule_id in the manifest's rule_id_counts must appear
+        at least once in the validator output. Catches regressions
+        where a rule type stops being evaluated."""
+        _, env = self._run_validator()
+        manifest = self._manifest()
+        from collections import Counter as _Counter
+        actual_counts = _Counter(f["rule_id"] for f in env["findings"])
+        for rule_id, predicted in manifest["rule_id_counts"].items():
+            actual = actual_counts.get(rule_id, 0)
+            self.assertGreaterEqual(
+                actual, predicted,
+                f"rule {rule_id!r} fired {actual}× but predicted "
+                f"≥ {predicted}× (regression: rule family broke)",
+            )
+        # Cell-error auto-emit is engine-side, not in the predictions.
+        self.assertGreaterEqual(
+            actual_counts.get("cell-error", 0), 3,
+            "cell-error auto-emit should fire on the 3 D4 error cells",
+        )
+
+    def test_sampled_cells_flagged(self) -> None:
+        """Spot-check that specific (sheet, row, col, rule_id) tuples
+        from the manifest appear in the actual findings. Builds a set
+        for O(1) lookup, then iterates."""
+        _, env = self._run_validator()
+        manifest = self._manifest()
+        actual = {(f["sheet"], f["row"], f["column"], f["rule_id"])
+                  for f in env["findings"]}
+        missing: list[dict] = []
+        for sample in manifest["sampled_findings"]:
+            row = sample["row"] if sample["row"] != 0 else None  # 0 = grouped sentinel
+            col = sample["column"] or None
+            key = (sample["sheet"], row, col, sample["rule_id"])
+            # Grouped findings have row=None, column=None in the envelope.
+            if row is None:
+                # Match by (sheet, rule_id) only for grouped findings.
+                hit = any(f["sheet"] == sample["sheet"]
+                          and f["rule_id"] == sample["rule_id"]
+                          for f in env["findings"])
+                if not hit:
+                    missing.append(sample)
+            else:
+                if key not in actual:
+                    missing.append(sample)
+        if missing:
+            self.fail(
+                f"{len(missing)} predicted findings missing from validator "
+                f"output. First 5: {missing[:5]}",
+            )
+
+    def test_envelope_shape_invariants(self) -> None:
+        """M2 architect-lock: envelope always has {ok, summary,
+        findings} keys; findings have the SPEC §7.1.1 shape."""
+        _, env = self._run_validator()
+        self.assertIn("ok", env)
+        self.assertIn("summary", env)
+        self.assertIn("findings", env)
+        for required in ("errors", "warnings", "info", "cell_errors",
+                          "rules_evaluated", "checked_cells"):
+            self.assertIn(required, env["summary"],
+                          f"summary missing key {required!r}")
+        # Every finding must have the fixed fields.
+        for f in env["findings"][:50]:  # spot-check first 50 (full sweep is redundant)
+            for required in ("cell", "sheet", "row", "column",
+                              "rule_id", "severity", "value", "message"):
+                self.assertIn(required, f,
+                              f"finding missing {required!r}: {f}")
+
+    def test_no_eval_errors_except_documented(self) -> None:
+        """`rule-eval-error` should NOT fire on this fixture — every
+        rule is well-formed. Catches parser regressions where a
+        previously-working rule starts emitting eval-errors."""
+        _, env = self._run_validator()
+        eval_errs = [f for f in env["findings"] if f["rule_id"] == "rule-eval-error"]
+        self.assertEqual(
+            len(eval_errs), 0,
+            f"unexpected rule-eval-error findings on a well-formed "
+            f"fixture: {eval_errs[:3]}",
+        )
+
+
 if __name__ == "__main__":  # pragma: no cover
     unittest.main()

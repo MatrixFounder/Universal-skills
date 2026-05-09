@@ -1,0 +1,121 @@
+{
+  "version": 1,
+  "_comment": "Comprehensive rules-coverage fixture (post-003 hardening). Pairs with comprehensive-rules.xlsx (26 sheets, ≥20 rows each). Each rule targets exactly one sheet via the 'SheetName'! qualifier. Rule IDs match the predicted findings emitted by tests/golden/inputs/make_comprehensive_fixture.py — the test asserts every (sheet, row, col, rule_id) tuple appears.",
+  "defaults": {
+    "tolerance": 0.000000001,
+    "header_row": 1
+  },
+  "rules": [
+    {"id": "compare-eq",  "scope": "CompareScalar!col:EqVal",  "check": "value == 100"},
+    {"id": "compare-neq", "scope": "CompareScalar!col:NeqVal", "check": "value != 0"},
+    {"id": "compare-lt",  "scope": "CompareScalar!col:LtVal",  "check": "value < 50"},
+    {"id": "compare-lte", "scope": "CompareScalar!col:LteVal", "check": "value <= 50"},
+    {"id": "compare-gt",  "scope": "CompareScalar!col:GtVal",  "check": "value > 0"},
+    {"id": "compare-gte", "scope": "CompareScalar!col:GteVal", "check": "value >= 10"},
+
+    {"id": "between-inc",  "scope": "Between!col:IncVal",  "check": "between:0,24"},
+    {"id": "between-excl", "scope": "Between!col:ExclVal", "check": "between_excl:0,1"},
+
+    {"id": "status-allowlist", "scope": "InList!col:Status",
+     "check": "value in [Approved, Pending, Rejected]"},
+    {"id": "status-denylist",  "scope": "InList!col:Forbidden",
+     "check": "value not in [Draft]"},
+
+    {"id": "type-num",  "scope": "TypeGuards!col:NumCol",  "check": "is_number"},
+    {"id": "type-text", "scope": "TypeGuards!col:TextCol", "check": "is_text"},
+    {"id": "type-date", "scope": "TypeGuards!col:DateCol", "check": "is_date"},
+    {"id": "type-bool", "scope": "TypeGuards!col:BoolCol", "check": "is_bool"},
+    {"id": "required-non-empty", "scope": "TypeGuards!col:ReqCol",
+     "check": "required", "skip_empty": false},
+
+    {"id": "project-format", "scope": "Regex!col:ProjectCode",
+     "check": "regex:^PRJ-\\d{4}$"},
+
+    {"id": "len-cap",         "scope": "LenText!col:LenCapped", "check": "len <= 10"},
+    {"id": "notes-required",  "scope": "LenText!col:Notes",
+     "check": "not_empty", "skip_empty": false},
+    {"id": "starts-with",     "scope": "LenText!col:StartsTok", "check": "starts_with:OK-"},
+    {"id": "ends-with",       "scope": "LenText!col:EndsTok",   "check": "ends_with:.csv"},
+
+    {"id": "date-in-month", "scope": "Dates!col:InMonth", "check": "date_in_month:2026-05"},
+    {"id": "date-in-range", "scope": "Dates!col:InRange",
+     "check": "date_in_range:2026-01-01,2026-06-30"},
+    {"id": "date-before",   "scope": "Dates!col:Before",  "check": "date_before:2026-06-01"},
+    {"id": "date-after",    "scope": "Dates!col:After",   "check": "date_after:2026-01-01"},
+    {"id": "date-weekday",  "scope": "Dates!col:Weekday",
+     "check": "date_weekday:Mon,Tue,Wed,Thu,Fri"},
+
+    {"id": "agg-sum",            "scope": "AggregatesBasic!cell:H23",
+     "check": "value == sum(AggregatesBasic!col:Hours)"},
+    {"id": "agg-avg",            "scope": "AggregatesBasic!cell:H24",
+     "check": "value == avg(AggregatesBasic!col:Hours)", "tolerance": 0.01},
+    {"id": "agg-min",            "scope": "AggregatesBasic!cell:H25",
+     "check": "value == min(AggregatesBasic!col:Hours)"},
+    {"id": "agg-max",            "scope": "AggregatesBasic!cell:H26",
+     "check": "value >= max(AggregatesBasic!col:Hours)"},
+    {"id": "agg-median",         "scope": "AggregatesBasic!cell:H27",
+     "check": "value == median(AggregatesBasic!col:Hours)", "tolerance": 0.01},
+    {"id": "agg-count",          "scope": "AggregatesBasic!cell:H28",
+     "check": "value == count(AggregatesBasic!col:Hours)"},
+    {"id": "agg-count-nonempty", "scope": "AggregatesBasic!cell:H29",
+     "check": "value == count_nonempty(AggregatesBasic!col:Hours)"},
+
+    {"id": "budget-cap", "scope": "AggregateArith!cell:H1",
+     "check": "value >= sum(AggregateArith!col:Cost)"},
+
+    {"id": "sum-by-week",   "scope": "GroupBy!col:Hours",
+     "check": "sum_by:WeekNum <= 40", "severity": "warning"},
+    {"id": "count-by-week", "scope": "GroupBy!col:Hours",
+     "check": "count_by:WeekNum >= 2", "severity": "warning"},
+    {"id": "avg-by-week",   "scope": "GroupBy!col:Hours",
+     "check": "avg_by:WeekNum <= 10", "severity": "warning"},
+
+    {"id": "and-hours-realistic", "scope": "Composite!col:Hours",
+     "check": {"and": ["value > 0", "value <= 24"]}},
+    {"id": "not-cancelled",       "scope": "Composite!col:Status",
+     "check": {"not": "value == 'Cancelled'"}},
+
+    {"id": "or-suspect", "scope": "OrComposite!col:Amount",
+     "check": {"or": ["value > 50", "value < 10"]},
+     "severity": "warning"},
+
+    {"id": "when-hours-realistic", "scope": "WhenFilter!col:Hours",
+     "check": "value <= 24",
+     "when": "is_number"},
+
+    {"id": "exact-100", "scope": "Tolerance!col:Measured",
+     "check": "value == 100", "tolerance": 0.5},
+
+    {"id": "merged-text-only", "scope": "MergedData!col:MergedAnchor",
+     "check": "is_text"},
+
+    {"id": "range-positive", "scope": "RangeRef!A2:B21", "check": "value > 0"},
+
+    {"id": "row5-text", "scope": "RowRef!row:5", "check": "is_text"},
+
+    {"id": "sheet-numbers-only", "scope": "SheetScope!col:B", "check": "is_number"},
+
+    {"id": "table-hours-realistic", "scope": "ExcelTable!col:Hours",
+     "check": "value <= 24"},
+
+    {"id": "must-have", "scope": "RequiredSkipEmpty!col:MustHave",
+     "check": "required", "skip_empty": false},
+
+    {"id": "apostrophe-hours-realistic", "scope": "'Apo''s Sheet'!col:Hours",
+     "check": "value <= 24"},
+
+    {"id": "cross-sheet-cap", "scope": "CrossSheetA!col:Spend",
+     "check": "value <= sum(CrossSheetB!col:Cost)"},
+
+    {"id": "distinct-count", "scope": "CountDistinct!cell:H1",
+     "check": "value == count_distinct(CountDistinct!col:Status)"},
+    {"id": "errors-count",   "scope": "CountDistinct!cell:H2",
+     "check": "value == count_errors(CountDistinct!col:Status)"},
+
+    {"id": "hidden-positive", "scope": "HiddenRows!col:Val", "check": "value > 0"},
+
+    {"id": "error-cells-visit", "scope": "ErrorCells!col:MaybeError",
+     "check": "value > 0",
+     "_comment": "Visits the column so SPEC §5.0 cell-error auto-emit fires for #REF!/#N/A/#DIV/0! cells. The non-error rows pass; the error rows short-circuit to synthetic 'cell-error' findings."}
+  ]
+}

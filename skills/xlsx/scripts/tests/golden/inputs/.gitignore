@@ -20,3 +20,7 @@
 !huge-100k-rows.xlsx
 !huge-100k-rows.rules.json
 !huge-100k-rows-10rules.rules.json
+!comprehensive-rules.xlsx
+!comprehensive-rules.rules.json
+!comprehensive-rules.expected.json
+!make_comprehensive_fixture.py
