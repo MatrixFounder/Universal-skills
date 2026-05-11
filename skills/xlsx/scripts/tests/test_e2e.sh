@@ -1408,17 +1408,19 @@ run_golden() {
         nok "$name" "xlsx_add_comment exited non-zero"
         return
     }
-    "$PY" -c "
+    local diff_msg
+    diff_msg=$("$PY" -c "
 import sys
 sys.path.insert(0, 'tests')
 from _golden_diff import diff_xlsx
 result = diff_xlsx('$out', '$golden')
-if result is not None:
-    print(result, file=sys.stderr)
-    sys.exit(1)
-" 2>/dev/null \
-        && ok "$name" \
-        || nok "$name" "golden-diff mismatch (run: PY -c 'from _golden_diff import diff_xlsx; print(diff_xlsx(\"$out\", \"$golden\"))')"
+print(result if result is not None else 'OK')
+" 2>&1)
+    if [ "$diff_msg" = "OK" ]; then
+        ok "$name"
+    else
+        nok "$name" "golden-diff: ${diff_msg}"
+    fi
 }
 
 run_golden "tests/golden/inputs/clean.xlsx" "$TMP/g-clean.xlsx" \
