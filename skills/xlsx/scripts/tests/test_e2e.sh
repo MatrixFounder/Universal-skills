@@ -1409,17 +1409,21 @@ run_golden() {
         return
     }
     local diff_msg
+    local diff_rc=0
+    # `|| diff_rc=$?` keeps set -e happy if the Python helper raises
+    # (e.g. on a malformed zip); we want the message in the nok, not
+    # a silent abort.
     diff_msg=$("$PY" -c "
 import sys
 sys.path.insert(0, 'tests')
 from _golden_diff import diff_xlsx
 result = diff_xlsx('$out', '$golden')
 print(result if result is not None else 'OK')
-" 2>&1)
-    if [ "$diff_msg" = "OK" ]; then
+" 2>&1) || diff_rc=$?
+    if [ "$diff_rc" -eq 0 ] && [ "$diff_msg" = "OK" ]; then
         ok "$name"
     else
-        nok "$name" "golden-diff: ${diff_msg}"
+        nok "$name" "golden-diff rc=$diff_rc: ${diff_msg}"
     fi
 }
 
