@@ -23,6 +23,21 @@ THREADED_NS = "http://schemas.microsoft.com/office/spreadsheetml/2018/threadedco
 _VOLATILE_XPATH = f".//{{{THREADED_NS}}}threadedComment"
 _PINNED_DATE_MARKER = "2026-01-01"
 
+# Parts excluded from the c14n diff because their content is volatile in
+# ways the test doesn't care about:
+#   - docProps/core.xml: openpyxl unconditionally overwrites
+#     `<dcterms:modified>` with `datetime.now(UTC)` on every save, even
+#     when `wb.properties.modified` is pinned. xlsx_add_comment is a
+#     pure unpack→edit→pack pipeline (office/pack.py) that passes
+#     docProps/core.xml through unchanged FROM THE INPUT — so as soon
+#     as the input fixture is regenerated (which test_e2e.sh does on
+#     fresh checkouts), `modified` drifts to the regen time and the
+#     diff fails on a part orthogonal to comment-injection correctness.
+#     This excludes only docProps/core.xml — comment-bearing parts
+#     (comments*.xml, threadedComments*.xml, vmlDrawing*.xml, sheet
+#     rels, [Content_Types].xml) remain fully checked.
+_VOLATILE_PARTS = frozenset({"docProps/core.xml"})
+
 
 def canon_part(xml_bytes: bytes) -> bytes:
     """Mask volatile attributes, then C14N-serialise.
@@ -68,6 +83,8 @@ def diff_xlsx(actual_path: Path, golden_path: Path) -> str | None:
             )
         for part in sorted(a_parts):
             if not (part.endswith(".xml") or part.endswith(".rels")):
+                continue
+            if part in _VOLATILE_PARTS:
                 continue
             a_canon = canon_part(a.read(part))
             g_canon = canon_part(g.read(part))

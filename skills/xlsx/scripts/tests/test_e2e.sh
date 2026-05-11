@@ -19,6 +19,43 @@ nok() { printf '  ✗ %s\n  → %s\n' "$1" "$2"; fail=$((fail+1)); }
 
 source "$ROOT/tests/visual/_visual_helper.sh"
 
+# --- fixture bootstrap ----------------------------------------------------
+# The xlsx-6 synthetic fixtures (clean.xlsx, multi_sheet.xlsx,
+# hidden_first.xlsx, merged.xlsx, with_legacy.xlsx, macro.xlsm) are
+# .gitignored (see tests/golden/inputs/.gitignore — "produced by
+# regenerate_synthetic_inputs.py … live on the developer's filesystem
+# only"). On a fresh checkout — including every CI run — they don't
+# exist, and every test that opens them fails with "Input not found".
+# Regenerate idempotently before the suite runs. The script is
+# deterministic (pinned 2026-01-01 epoch) so re-running is a no-op
+# byte-for-byte. encrypted.xlsx is intentionally non-deterministic
+# (fresh salt per run) and is produced separately via office_passwd.py.
+GOLDEN_IN="tests/golden/inputs"
+if [ ! -s "$GOLDEN_IN/clean.xlsx" ] || [ ! -s "$GOLDEN_IN/encrypted.xlsx" ]; then
+    echo "fixtures bootstrap:"
+    # Call the 5 gitignored fixture generators directly. We avoid running
+    # `regenerate_synthetic_inputs.py` as a script because its main()
+    # also re-emits the committed macro.xlsm (a 1-byte-different but
+    # functionally equivalent deterministic copy), which would dirty a
+    # local working tree on first run.
+    "$PY" -c "
+import sys; sys.path.insert(0, 'tests')
+from regenerate_synthetic_inputs import (
+    make_clean, make_multi_sheet, make_hidden_first,
+    make_merged, make_with_legacy,
+)
+for fn in (make_clean, make_multi_sheet, make_hidden_first, make_merged, make_with_legacy):
+    fn()
+" >/dev/null \
+        && ok "regenerate_synthetic_inputs (5 fixtures, macro.xlsm left as committed)" \
+        || nok "regenerate_synthetic_inputs" "exit=$?"
+    "$PY" office_passwd.py --encrypt password123 \
+        "$GOLDEN_IN/clean.xlsx" "$GOLDEN_IN/encrypted.xlsx" >/dev/null 2>&1 \
+        && [ -s "$GOLDEN_IN/encrypted.xlsx" ] \
+        && ok "office_passwd.py --encrypt → encrypted.xlsx" \
+        || nok "office_passwd.py --encrypt" "encrypted.xlsx missing or empty"
+fi
+
 # --- csv2xlsx -------------------------------------------------------------
 echo "csv2xlsx:"
 "$PY" csv2xlsx.py ../examples/fixture.csv "$TMP/out.xlsx" >/dev/null 2>&1 \
