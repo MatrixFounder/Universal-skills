@@ -1671,6 +1671,261 @@ else
     nok "T-roundtrip-xlsx8-synthetic" "structural mismatch vs golden fixture"
 fi
 
+# ============================================================
+# xlsx-3 / md_tables2xlsx — Stage 1 scaffolding (task-005-02)
+# ============================================================
+# All 14 cases are SKIP stubs until the corresponding sub-task lands.
+# Pattern: emit "SKIP T-<name>" line; do NOT call nok/ok so the
+# script's pass/fail counters reflect only live xlsx-3 cases.
+
+skip_md_tables() {
+    echo "SKIP T-$1 (xlsx-3 stub — task-005-NN)"
+}
+
+# Tags from TASK §5 (13) + 1 from plan-review m3 (T-indented-code-block-skip).
+# ---- T-md-tables-happy-gfm: full GFM pipeline, 3 sheets named after headings.
+if "$PY" "$SKILL_DIR/md_tables2xlsx.py" \
+        "$SKILL_DIR/../examples/md_tables_simple.md" \
+        "$TMP/md_gfm.xlsx" >/dev/null 2>&1 \
+   && "$PY" -c "
+import openpyxl
+wb = openpyxl.load_workbook('$TMP/md_gfm.xlsx')
+assert wb.sheetnames == ['Q1 Budget', 'Team', 'Status'], wb.sheetnames
+assert [c.value for c in wb['Q1 Budget'][1]] == ['Item', 'Cost', 'Notes']
+" >/dev/null 2>&1; then
+    ok "T-md-tables-happy-gfm"
+else
+    nok "T-md-tables-happy-gfm" "GFM pipeline broken"
+fi
+
+# ---- T-md-tables-happy-html: HTML <table> with colspan/rowspan.
+if "$PY" "$SKILL_DIR/md_tables2xlsx.py" \
+        "$SKILL_DIR/../examples/md_tables_html.md" \
+        "$TMP/md_html.xlsx" >/dev/null 2>&1 \
+   && "$PY" -c "
+import openpyxl
+wb = openpyxl.load_workbook('$TMP/md_html.xlsx')
+assert wb.sheetnames == ['Burndown', 'Cross-Team Matrix'], wb.sheetnames
+ws = wb['Cross-Team Matrix']
+ranges = [str(r) for r in ws.merged_cells.ranges]
+assert 'A1:A2' in ranges, ranges  # Team rowspan
+assert 'B1:C1' in ranges, ranges  # Quarter 1 colspan
+" >/dev/null 2>&1; then
+    ok "T-md-tables-happy-html"
+else
+    nok "T-md-tables-happy-html" "HTML colspan/rowspan broken"
+fi
+
+# ---- T-md-tables-stdin-dash: stdin pipe produces same structure.
+if cat "$SKILL_DIR/../examples/md_tables_simple.md" | \
+   "$PY" "$SKILL_DIR/md_tables2xlsx.py" - "$TMP/md_stdin.xlsx" >/dev/null 2>&1 \
+   && "$PY" -c "
+import openpyxl
+wb = openpyxl.load_workbook('$TMP/md_stdin.xlsx')
+assert wb.sheetnames == ['Q1 Budget', 'Team', 'Status']
+" >/dev/null 2>&1; then
+    ok "T-md-tables-stdin-dash"
+else
+    nok "T-md-tables-stdin-dash" "stdin pipeline broken"
+fi
+
+# ---- T-md-tables-same-path (was LIVE since 005-03; keep).
+set +e
+sp_input="$TMP/same.md"
+echo "# placeholder" > "$sp_input"
+sp_stderr=$("$PY" "$SKILL_DIR/md_tables2xlsx.py" "$sp_input" "$sp_input" --json-errors 2>&1 >/dev/null)
+sp_rc=$?
+set -e
+if [ "$sp_rc" = "6" ] \
+   && echo "$sp_stderr" | grep -q '"v": 1' \
+   && echo "$sp_stderr" | grep -q '"code": 6' \
+   && echo "$sp_stderr" | grep -q '"type": "SelfOverwriteRefused"'; then
+    ok "T-md-tables-same-path"
+else
+    nok "T-md-tables-same-path" "rc=$sp_rc stderr=$sp_stderr"
+fi
+
+# ---- T-md-tables-no-tables: prose-only fixture → exit 2 NoTablesFound.
+set +e
+nt_stderr=$("$PY" "$SKILL_DIR/md_tables2xlsx.py" \
+    "$SKILL_DIR/../examples/md_tables_no_tables.md" \
+    "$TMP/md_nt.xlsx" --json-errors 2>&1 >/dev/null)
+nt_rc=$?
+set -e
+if [ "$nt_rc" = "2" ] \
+   && echo "$nt_stderr" | grep -q '"type": "NoTablesFound"'; then
+    ok "T-md-tables-no-tables"
+else
+    nok "T-md-tables-no-tables" "rc=$nt_rc"
+fi
+
+# ---- T-md-tables-no-tables-allow-empty: same fixture + --allow-empty → exit 0.
+if "$PY" "$SKILL_DIR/md_tables2xlsx.py" \
+       "$SKILL_DIR/../examples/md_tables_no_tables.md" \
+       "$TMP/md_nta.xlsx" --allow-empty >/dev/null 2>&1 \
+   && "$PY" -c "
+import openpyxl
+wb = openpyxl.load_workbook('$TMP/md_nta.xlsx')
+assert wb.sheetnames == ['Empty'], wb.sheetnames
+" >/dev/null 2>&1; then
+    ok "T-md-tables-no-tables-allow-empty"
+else
+    nok "T-md-tables-no-tables-allow-empty" "Empty placeholder not produced"
+fi
+
+# ---- T-md-tables-fenced-code-table-only: fenced-table fixture → exit 2.
+set +e
+"$PY" "$SKILL_DIR/md_tables2xlsx.py" \
+    "$SKILL_DIR/../examples/md_tables_fenced.md" \
+    "$TMP/md_fc.xlsx" >/dev/null 2>&1
+fc_rc=$?
+set -e
+if [ "$fc_rc" = "2" ]; then
+    ok "T-md-tables-fenced-code-table-only"
+else
+    nok "T-md-tables-fenced-code-table-only" "rc=$fc_rc (expected 2)"
+fi
+
+# ---- T-md-tables-html-comment-table-only: <!-- <table>... --> → exit 2.
+echo '# Doc' > "$TMP/md_hc.md"
+echo '' >> "$TMP/md_hc.md"
+echo '<!-- <table><tr><td>x</td></tr></table> -->' >> "$TMP/md_hc.md"
+set +e
+"$PY" "$SKILL_DIR/md_tables2xlsx.py" "$TMP/md_hc.md" "$TMP/md_hc.xlsx" >/dev/null 2>&1
+hc_rc=$?
+set -e
+if [ "$hc_rc" = "2" ]; then
+    ok "T-md-tables-html-comment-table-only"
+else
+    nok "T-md-tables-html-comment-table-only" "rc=$hc_rc"
+fi
+
+# ---- T-md-tables-coerce-leading-zero: column "007"/"042" stays text.
+cat > "$TMP/md_lz.md" <<'EOF_LZ'
+# Codes
+
+| Code | Name |
+|------|------|
+| 007  | Bond |
+| 042  | Answer |
+EOF_LZ
+if "$PY" "$SKILL_DIR/md_tables2xlsx.py" "$TMP/md_lz.md" "$TMP/md_lz.xlsx" >/dev/null 2>&1 \
+   && "$PY" -c "
+import openpyxl
+wb = openpyxl.load_workbook('$TMP/md_lz.xlsx')
+ws = wb['Codes']
+assert ws['A2'].value == '007', ws['A2'].value
+assert ws['A3'].value == '042', ws['A3'].value
+" >/dev/null 2>&1; then
+    ok "T-md-tables-coerce-leading-zero"
+else
+    nok "T-md-tables-coerce-leading-zero" "leading zeros lost"
+fi
+
+# ---- T-md-tables-coerce-iso-date: column 2026-05-11 → Excel date cell.
+cat > "$TMP/md_iso.md" <<'EOF_ISO'
+# Dates
+
+| Event | When |
+|-------|------|
+| Start | 2026-05-11 |
+| End   | 2026-05-15 |
+EOF_ISO
+if "$PY" "$SKILL_DIR/md_tables2xlsx.py" "$TMP/md_iso.md" "$TMP/md_iso.xlsx" >/dev/null 2>&1 \
+   && "$PY" -c "
+import openpyxl, datetime
+wb = openpyxl.load_workbook('$TMP/md_iso.xlsx')
+ws = wb['Dates']
+v = ws['B2'].value
+assert isinstance(v, (datetime.date, datetime.datetime)), type(v)
+" >/dev/null 2>&1; then
+    ok "T-md-tables-coerce-iso-date"
+else
+    nok "T-md-tables-coerce-iso-date" "ISO date not coerced"
+fi
+
+# ---- T-md-tables-sheet-name-sanitisation: ## Q1: [Budget] → sanitised.
+cat > "$TMP/md_sn.md" <<'EOF_SN'
+## Q1: [Budget]
+
+| a | b |
+|---|---|
+| 1 | 2 |
+EOF_SN
+if "$PY" "$SKILL_DIR/md_tables2xlsx.py" "$TMP/md_sn.md" "$TMP/md_sn.xlsx" >/dev/null 2>&1 \
+   && "$PY" -c "
+import openpyxl
+wb = openpyxl.load_workbook('$TMP/md_sn.xlsx')
+name = wb.sheetnames[0]
+# Forbidden chars (:, [, ]) MUST be stripped.
+assert ':' not in name, name
+assert '[' not in name and ']' not in name, name
+assert 'Q1' in name
+assert 'Budget' in name
+" >/dev/null 2>&1; then
+    ok "T-md-tables-sheet-name-sanitisation"
+else
+    nok "T-md-tables-sheet-name-sanitisation" "sheet name not sanitised"
+fi
+
+# ---- T-md-tables-sheet-name-dedup: two ## Results → Results + Results-2.
+cat > "$TMP/md_dd.md" <<'EOF_DD'
+## Results
+
+| a | b |
+|---|---|
+| 1 | 2 |
+
+## Results
+
+| c | d |
+|---|---|
+| 3 | 4 |
+EOF_DD
+if "$PY" "$SKILL_DIR/md_tables2xlsx.py" "$TMP/md_dd.md" "$TMP/md_dd.xlsx" >/dev/null 2>&1 \
+   && "$PY" -c "
+import openpyxl
+wb = openpyxl.load_workbook('$TMP/md_dd.xlsx')
+assert wb.sheetnames == ['Results', 'Results-2'], wb.sheetnames
+" >/dev/null 2>&1; then
+    ok "T-md-tables-sheet-name-dedup"
+else
+    nok "T-md-tables-sheet-name-dedup" "dedup not applied"
+fi
+
+# ---- T-md-tables-envelope-cross5-shape (LIVE since 005-03; keep).
+set +e
+ue_stderr=$("$PY" "$SKILL_DIR/md_tables2xlsx.py" --invalid-flag-xyz --json-errors 2>&1 >/dev/null)
+ue_rc=$?
+set -e
+if [ "$ue_rc" = "2" ] \
+   && echo "$ue_stderr" | grep -q '"v": 1' \
+   && echo "$ue_stderr" | grep -q '"type": "UsageError"'; then
+    ok "T-md-tables-envelope-cross5-shape"
+else
+    nok "T-md-tables-envelope-cross5-shape" "rc=$ue_rc stderr=$ue_stderr"
+fi
+
+# ---- T-md-tables-indented-code-block-skip: 4-space-indented table → exit 2.
+cat > "$TMP/md_ic.md" <<'EOF_IC'
+# Doc
+
+Some prose.
+
+    | a | b |
+    |---|---|
+    | 1 | 2 |
+EOF_IC
+set +e
+"$PY" "$SKILL_DIR/md_tables2xlsx.py" "$TMP/md_ic.md" "$TMP/md_ic.xlsx" >/dev/null 2>&1
+ic_rc=$?
+set -e
+if [ "$ic_rc" = "2" ]; then
+    ok "T-md-tables-indented-code-block-skip"
+else
+    nok "T-md-tables-indented-code-block-skip" "rc=$ic_rc (expected 2; indented code not stripped)"
+fi
+
 echo
 echo "$pass passed, $fail failed"
 [ "$fail" -eq 0 ]
