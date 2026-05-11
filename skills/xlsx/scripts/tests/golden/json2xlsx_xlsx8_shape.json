@@ -1,0 +1,11 @@
+{
+  "Employees": [
+    {"Name": "Alice", "Hired": "2024-01-15", "Salary": 100000, "Active": true},
+    {"Name": "Bob",   "Hired": "2025-06-01", "Salary": 95000,  "Active": true},
+    {"Name": "Carol", "Hired": "2026-02-20", "Salary": null,   "Active": false}
+  ],
+  "Departments": [
+    {"Dept": "Eng", "Head": "Alice", "HC": 12},
+    {"Dept": "Ops", "Head": "Bob",   "HC": 8}
+  ]
+}

@@ -1463,6 +1463,214 @@ echo "xlsx_check_rules (xlsx-7):"
     && ok "xlsx-7-help" \
     || nok "xlsx-7-help" "--help did not exit 0"
 
+# ---------------------------------------------------------------------------
+# json2xlsx (xlsx-2) — block expanded incrementally by tasks 004.03+.
+# In task-004-02 this block carries only the smoke gates (--help short-
+# circuit, package re-exports, golden fixture committed). Per-feature E2E
+# tags (11 named cases per docs/tasks/task-004-02-test-scaffolding.md) are
+# added once the relevant F-region ships:
+#   T-same-path                     → 004.03 (cli_helpers.assert_distinct_paths)
+#   T-invalid-json                  → 004.04 + 004.07 (CLI envelope)
+#   T-empty-array                   → 004.04 + 004.07
+#   T-happy-single-sheet            → 004.07 (full CLI)
+#   T-happy-multi-sheet             → 004.07
+#   T-happy-jsonl                   → 004.07
+#   T-stdin-dash                    → 004.07
+#   T-iso-dates                     → 004.07
+#   T-strict-dates-aware-rejected   → 004.07
+#   T-roundtrip-xlsx8-synthetic     → 004.08
+#   T-envelope-cross5-shape         → 004.07 (FileNotFound path through _run)
+# ---------------------------------------------------------------------------
+echo
+echo "json2xlsx (xlsx-2):"
+"$PY" "$SKILL_DIR/json2xlsx.py" --help > /dev/null 2>&1 \
+    && ok "xlsx-2-help" \
+    || nok "xlsx-2-help" "--help did not exit 0"
+
+"$PY" -c "from json2xlsx import main, _AppError, EmptyInput, NoRowsToWrite, JsonDecodeError, UnsupportedJsonShape, InvalidSheetName, TimezoneNotSupported, InvalidDateString, SelfOverwriteRefused, PostValidateFailed, convert_json_to_xlsx, _run" > /dev/null 2>&1 \
+    && ok "xlsx-2-imports" \
+    || nok "xlsx-2-imports" "package re-exports broken"
+
+"$PY" -c "
+import json
+from pathlib import Path
+p = Path('tests/golden/json2xlsx_xlsx8_shape.json')
+d = json.loads(p.read_text())
+assert list(d.keys()) == ['Employees', 'Departments']
+assert len(d['Employees']) == 3 and len(d['Departments']) == 2
+" > /dev/null 2>&1 \
+    && ok "xlsx-2-golden-fixture" \
+    || nok "xlsx-2-golden-fixture" "tests/golden/json2xlsx_xlsx8_shape.json missing or malformed"
+
+# ---------------------------------------------------------------------------
+# xlsx-2 / json2xlsx CLI E2E (004.07) — 10 of 11 inventory tags lit here.
+# T-roundtrip-xlsx8-synthetic stays deferred until 004.08 (the synthetic
+# fixture is in tests/golden/, but the assertion against the produced
+# workbook is finalised in 004.08).
+# ---------------------------------------------------------------------------
+
+# T-same-path: input == output via resolve() → exit 6 + envelope.
+: > "$TMP/sp.xlsx"
+set +e
+sp_stderr=$("$PY" "$SKILL_DIR/json2xlsx.py" "$TMP/sp.xlsx" "$TMP/sp.xlsx" --json-errors 2>&1 >/dev/null)
+sp_rc=$?
+set -e
+if [ "$sp_rc" = "6" ] \
+   && echo "$sp_stderr" | grep -q '"type": "SelfOverwriteRefused"' \
+   && echo "$sp_stderr" | grep -q '"v": 1' \
+   && echo "$sp_stderr" | grep -q '"code": 6'; then
+    ok "T-same-path"
+else
+    nok "T-same-path" "rc=$sp_rc stderr=$sp_stderr"
+fi
+
+# T-happy-single-sheet: array-of-objects → 1 sheet with a numeric cell.
+echo '[{"Name":"Alice","Age":30}]' > "$TMP/hs.json"
+if "$PY" "$SKILL_DIR/json2xlsx.py" "$TMP/hs.json" "$TMP/hs.xlsx" >/dev/null 2>&1 \
+   && "$PY" -c "
+import openpyxl
+wb = openpyxl.load_workbook('$TMP/hs.xlsx')
+assert wb.sheetnames == ['Sheet1']
+ws = wb.active
+assert ws['A1'].value == 'Name' and ws['B1'].value == 'Age'
+assert ws['B2'].value == 30
+" >/dev/null 2>&1; then
+    ok "T-happy-single-sheet"
+else
+    nok "T-happy-single-sheet" "structural assertion failed"
+fi
+
+# T-happy-multi-sheet: dict-of-arrays → 2 sheets in input order.
+echo '{"A":[{"x":1}],"B":[{"y":2}]}' > "$TMP/hm.json"
+if "$PY" "$SKILL_DIR/json2xlsx.py" "$TMP/hm.json" "$TMP/hm.xlsx" >/dev/null 2>&1 \
+   && "$PY" -c "
+import openpyxl
+wb = openpyxl.load_workbook('$TMP/hm.xlsx')
+assert wb.sheetnames == ['A', 'B']
+" >/dev/null 2>&1; then
+    ok "T-happy-multi-sheet"
+else
+    nok "T-happy-multi-sheet" "sheet names or count mismatch"
+fi
+
+# T-happy-jsonl: one JSON object per line, .jsonl extension.
+printf '{"a":1}\n{"a":2}\n' > "$TMP/hj.jsonl"
+if "$PY" "$SKILL_DIR/json2xlsx.py" "$TMP/hj.jsonl" "$TMP/hj.xlsx" >/dev/null 2>&1 \
+   && "$PY" -c "
+import openpyxl
+wb = openpyxl.load_workbook('$TMP/hj.xlsx')
+ws = wb.active
+assert ws['A1'].value == 'a' and ws['A2'].value == 1 and ws['A3'].value == 2
+" >/dev/null 2>&1; then
+    ok "T-happy-jsonl"
+else
+    nok "T-happy-jsonl" "row count or values mismatch"
+fi
+
+# T-stdin-dash: pipe JSON via stdin sentinel `-`.
+if echo '[{"a":1}]' | "$PY" "$SKILL_DIR/json2xlsx.py" - "$TMP/sd.xlsx" >/dev/null 2>&1 \
+   && [ -f "$TMP/sd.xlsx" ]; then
+    ok "T-stdin-dash"
+else
+    nok "T-stdin-dash" "stdin pipe produced no output"
+fi
+
+# T-invalid-json: truncated input → exit 2 + JsonDecodeError envelope.
+printf '[{' > "$TMP/ij.json"
+set +e
+ij_stderr=$("$PY" "$SKILL_DIR/json2xlsx.py" "$TMP/ij.json" "$TMP/ij.xlsx" --json-errors 2>&1 >/dev/null)
+ij_rc=$?
+set -e
+if [ "$ij_rc" = "2" ] \
+   && echo "$ij_stderr" | grep -q '"type": "JsonDecodeError"' \
+   && echo "$ij_stderr" | grep -q '"line"' \
+   && echo "$ij_stderr" | grep -q '"column"'; then
+    ok "T-invalid-json"
+else
+    nok "T-invalid-json" "rc=$ij_rc stderr=$ij_stderr"
+fi
+
+# T-empty-array: `[]` → exit 2 + NoRowsToWrite.
+echo '[]' > "$TMP/ea.json"
+set +e
+ea_stderr=$("$PY" "$SKILL_DIR/json2xlsx.py" "$TMP/ea.json" "$TMP/ea.xlsx" --json-errors 2>&1 >/dev/null)
+ea_rc=$?
+set -e
+if [ "$ea_rc" = "2" ] && echo "$ea_stderr" | grep -q '"type": "NoRowsToWrite"'; then
+    ok "T-empty-array"
+else
+    nok "T-empty-array" "rc=$ea_rc stderr=$ea_stderr"
+fi
+
+# T-iso-dates: ISO date string → date cell with number_format.
+echo '[{"Hired":"2024-01-15"}]' > "$TMP/id.json"
+if "$PY" "$SKILL_DIR/json2xlsx.py" "$TMP/id.json" "$TMP/id.xlsx" >/dev/null 2>&1 \
+   && "$PY" -c "
+import openpyxl
+wb = openpyxl.load_workbook('$TMP/id.xlsx')
+ws = wb.active
+assert ws['A2'].data_type == 'd'
+assert ws['A2'].number_format == 'YYYY-MM-DD'
+" >/dev/null 2>&1; then
+    ok "T-iso-dates"
+else
+    nok "T-iso-dates" "date coercion or number_format mismatch"
+fi
+
+# T-strict-dates-aware-rejected: aware datetime under --strict-dates → exit 2 TimezoneNotSupported.
+echo '[{"Ts":"2024-01-15T09:00:00Z"}]' > "$TMP/sda.json"
+set +e
+sda_stderr=$("$PY" "$SKILL_DIR/json2xlsx.py" "$TMP/sda.json" "$TMP/sda.xlsx" --strict-dates --json-errors 2>&1 >/dev/null)
+sda_rc=$?
+set -e
+if [ "$sda_rc" = "2" ] && echo "$sda_stderr" | grep -q '"type": "TimezoneNotSupported"'; then
+    ok "T-strict-dates-aware-rejected"
+else
+    nok "T-strict-dates-aware-rejected" "rc=$sda_rc stderr=$sda_stderr"
+fi
+
+# T-envelope-cross5-shape: FileNotFound path → frozen cross-5 schema.
+set +e
+ec_stderr=$("$PY" "$SKILL_DIR/json2xlsx.py" /nonexistent/foo.json "$TMP/ec.xlsx" --json-errors 2>&1 >/dev/null)
+ec_rc=$?
+set -e
+if [ "$ec_rc" = "1" ] \
+   && echo "$ec_stderr" | grep -q '"v": 1' \
+   && echo "$ec_stderr" | grep -q '"error"' \
+   && echo "$ec_stderr" | grep -q '"code": 1' \
+   && echo "$ec_stderr" | grep -q '"type": "FileNotFound"' \
+   && ! echo "$ec_stderr" | grep -q '"ok"' \
+   && ! echo "$ec_stderr" | grep -q '"message"'; then
+    ok "T-envelope-cross5-shape"
+else
+    nok "T-envelope-cross5-shape" "envelope shape mismatch (rc=$ec_rc)"
+fi
+
+# T-roundtrip-xlsx8-synthetic: read tests/golden/json2xlsx_xlsx8_shape.json,
+# produce a workbook, assert structural equivalence (sheet names,
+# headers, key cell values, null preservation, bool preservation).
+if "$PY" "$SKILL_DIR/json2xlsx.py" \
+        "$SKILL_DIR/tests/golden/json2xlsx_xlsx8_shape.json" \
+        "$TMP/rt.xlsx" >/dev/null 2>&1 \
+   && "$PY" -c "
+import openpyxl
+wb = openpyxl.load_workbook('$TMP/rt.xlsx')
+assert wb.sheetnames == ['Employees', 'Departments']
+emp = wb['Employees']
+assert [c.value for c in emp[1]] == ['Name', 'Hired', 'Salary', 'Active']
+assert emp['A2'].value == 'Alice'
+assert emp['C2'].value == 100000
+assert emp['D2'].value is True
+assert emp['C4'].value is None  # null Salary
+assert emp['D4'].value is False
+dept = wb['Departments']
+assert [c.value for c in dept[1]] == ['Dept', 'Head', 'HC']
+" >/dev/null 2>&1; then
+    ok "T-roundtrip-xlsx8-synthetic"
+else
+    nok "T-roundtrip-xlsx8-synthetic" "structural mismatch vs golden fixture"
+fi
+
 echo
 echo "$pass passed, $fail failed"
 [ "$fail" -eq 0 ]

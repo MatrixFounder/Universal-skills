@@ -19,12 +19,14 @@ single most common xlsx bug).
 
 **STOP and READ THIS if you are thinking:**
 - "I'll just call `DataFrame.to_excel` and ship it." → **WRONG**. `to_excel` writes no styles, no frozen header, and no auto-filter. The result looks amateur. Use `csv2xlsx.py`.
+- "I'll just call `pd.DataFrame.from_records(rows).to_excel(out)` on my LLM JSON output." → **WRONG**. Same `to_excel` styling gap, plus pandas' `infer_objects` heuristics silently promote mixed-type columns to `object`/`float64` (an `int` column with one `null` becomes `float64`). Use `json2xlsx.py` — preserves native JSON types, ISO-date auto-coercion, csv2xlsx-style header.
 - "I wrote formulas with openpyxl, so the numbers are there." → **WRONG**. `openpyxl` stores formulas as strings with no cached value. Every downstream consumer (pandas, charts, external apps) sees `None`. Run `xlsx_recalc.py` before shipping.
 - "Validation says OK, the formulas must be fine." → **WRONG**. `xlsx_validate.py` scans for cached error values. If there are no cached values at all (fresh openpyxl output), the scan is meaningless. Use `--fail-empty` or recalc first.
 - "Leading zeros in my phone-number column vanished; it's fine." → **WRONG**. It is almost never fine. Excel and pandas both coerce `"007"` to `7` by default. `csv2xlsx.py` detects leading-zero columns and keeps them as text; inline code should either pass `dtype=str` to pandas or set `cell.number_format = "@"` in openpyxl.
 
 ## 2. Capabilities
 - Convert a CSV / TSV to a styled `.xlsx` with bold header, freeze-first-row, auto-filter, auto column widths, and leading-zero preservation.
+- Convert a JSON / JSONL document (file or stdin `-`) to a styled `.xlsx` with the SAME visual contract as csv2xlsx (`json2xlsx.py`). Three input shapes auto-detected: array-of-objects (single sheet), dict-of-arrays-of-objects (multi-sheet), JSONL (one JSON object per line — `.jsonl` extension). Preserves native JSON types (int / float / bool / null / str); ISO-8601 date strings auto-coerced to Excel datetime cells; `--strict-dates` makes timezone-aware datetimes a hard fail. Cross-cutting parity: cross-5 `--json-errors` envelope, cross-7 H1 same-path guard (exit 6 `SelfOverwriteRefused`), stdin pipe `-`. Round-trip contract with the future `xlsx2json.py` (xlsx-8) is frozen at [`skills/xlsx/references/json-shapes.md`](references/json-shapes.md).
 - Force formula recalculation in an `.xlsx` via headless LibreOffice, then optionally scan for error cells.
 - Scan an `.xlsx` for formula errors (`#REF!`, `#DIV/0!`, `#VALUE!`, `#NAME?`, `#N/A`, `#NUM!`, `#NULL!`) without recomputing.
 - Add a bar / line / pie chart on a value range with optional categories, title, anchor; stays editable in Excel / LibreOffice.

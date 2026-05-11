@@ -1,408 +1,642 @@
-# Task 003 — xlsx-7 — `xlsx_check_rules.py` (declarative business-rule validator)
+# Task 004 — xlsx-2 — `json2xlsx.py` (JSON → styled .xlsx converter)
 
-> **Source contract:** [`skills/xlsx/references/xlsx-rules-format.md`](../skills/xlsx/references/xlsx-rules-format.md)
-> (the design spec, hereafter **SPEC**). This TASK is a derivative of
-> SPEC, structured for VDD execution. Where this TASK and SPEC disagree,
-> SPEC wins and this TASK is updated. Section numbers in `[SPEC §N]`
-> brackets cross-reference SPEC.
+> **Backlog row:** `xlsx-2` (`docs/office-skills-backlog.md`).
+> **Predecessor / sibling:** `csv2xlsx.py` (`skills/xlsx/scripts/csv2xlsx.py`,
+> 203 LOC, MERGED) — xlsx-2 is the **JSON-shaped parallel** to that CLI.
+> **Symmetric companion:** `xlsx2json.py` from xlsx-8 (open, scheduled
+> day-1 after xlsx-2). xlsx-2 MUST accept the canonical xlsx-8 output
+> shape so the agent loop `xlsx2json → edit-JSON → json2xlsx`
+> round-trips without manual XML.
+> **Status:** **DRAFT** — pre-Architecture / Planning.
 
 ## 0. Meta Information
-- **Task ID:** `003`
-- **Slug:** `xlsx-check-rules`
-- **Backlog row:** `xlsx-7` (`docs/office-skills-backlog.md`)
-- **Effort estimate:** **L** (M→L per backlog after VDD-adversarial pass).
-- **Predecessor:** `xlsx-6` (`xlsx_add_comment.py`) — **MERGED** (Tasks 001, 002).
-  xlsx-7 produces the findings envelope that xlsx-6 `--batch` consumes.
-- **Status:** ✅ MERGED 2026-05-08 — 20-step atomic chain (003.01–003.17) shipped. All RTM rows R1–R14 closed; D1–D6 + Q1–Q3 / Q5–Q7 architecture decisions reflected in implementation. Per-subtask review trail in `docs/reviews/task-003-*.md`; per-subtask archives in `docs/tasks/task-003-*.md`. Final regression: 311 unit + 113 E2E + canary-meta (Saboteur 04 active, 9 deferred to Stage-2) + 4-skill `validate_skill.py` green + CLAUDE.md §2 byte-identity diffs empty.
-- **Decisions locked from `/vdd-start-feature` Q&A (2026-05-08):**
-  - **D1 — Delivery shape:** **Atomic chain** of sub-tasks (mirrors
-    xlsx-6 Task 001 = 15 sub-tasks; final count for xlsx-7 set in
-    Planning phase, target 12–18).
-  - **D2 — Code layout:** **Shim + package up front** —
-    `scripts/xlsx_check_rules.py` (≤ 200 LOC shim, re-exports test-compat
-    surface) + `scripts/xlsx_check_rules/` package (one module per Epic
-    region, target ≤ 500 LOC each). Avoids a Task-002-style refactor.
-  - **D3 — Fixtures:** **Helper-script generated** —
-    `tests/golden/inputs/_generate.py` builds all 39 `.xlsx` + `.json`/
-    `.yaml` triples from declarative manifests. CI regenerates;
-    `.gitignore` excludes large `.xlsx` outputs from git (manifests are
-    committed).
-- **Decisions locked from Task-Reviewer round-1 (2026-05-08, see `docs/reviews/task-003-review.md`):**
-  - **D4 (was Q4) — Excel error subset.** openpyxl `ERROR_CODES` (cell.py:46) recognises exactly **7 codes**: `#NULL!`, `#DIV/0!`, `#VALUE!`, `#REF!`, `#NAME?`, `#NUM!`, `#N/A`. xlsx-7 v1 honours those 7 only — they reach `data_type='e'` and trigger the §5.0 auto-emit. The 3 modern Excel codes (`#SPILL!`, `#CALC!`, `#GETTING_DATA`) are stored by openpyxl as `text` and are **NOT** auto-emitted in v1. Workaround for users whose workbooks rely on the modern codes: hand-author a `regex:^#(SPILL|CALC|GETTING_DATA)` rule on the relevant scope. **Action items downstream:** (a) update SPEC §5.0 to list 7 codes (move the other 3 into SPEC §11 honest-scope as "modern-Excel error codes not auto-detected by openpyxl") — Issue I9.5; (b) add fixture #10b: workbook with `#SPILL!` stored as text → no `cell-error` finding without a user rule.
-  - **D5 (was Q1) — `recheck` availability:** **Soft import + hand-coded reject-list fallback.** ReDoS pattern lint at parse uses `recheck` if importable; otherwise falls back to a hand-coded reject-list for the 4 classic shapes (`(a+)+`, `(a*)*`, `(a|a)+`, `(a|aa)*`). Skill install never breaks on a `recheck` PyPI outage (CLAUDE.md "Независимость скиллов"). `recheck` stays OUT of `requirements.txt`; hard dep is only `regex>=2024.0` for the per-cell `timeout=` parameter.
-  - **D6 (was Q6) — Perf-test gating:** **`RUN_PERF_TESTS=1` opt-in.** Fixture #31 (100K rows × 5 rules ≤ 30 s ≤ 500 MB RSS) is **skipped in CI by default**, runs locally only when `RUN_PERF_TESTS=1`. Matches the xlsx-6 perf-test convention (no perf gating in CI; reviewer runs locally before merge).
+
+- **Task ID:** `004`
+- **Slug:** `json2xlsx`
+- **Backlog row:** `xlsx-2` (`docs/office-skills-backlog.md` §xlsx).
+- **Effort estimate:** **S → M** (backlog says S "несколько строк на
+  pandas", but VDD-mode kick-off Q&A (2026-05-11) widened scope:
+  3 input shapes + ISO-date coercion + cross-cutting parity (cross-5
+  envelope, cross-7 H1 same-path, stdin `-`) + xlsx-8 round-trip
+  integration test + atomic-chain plan shape. Final LOC estimate: shim
+  ≤ 220 + `json2xlsx/` package ~600 + tests ~800.
+- **Decisions locked from `/vdd-start-feature` Q&A (2026-05-11):**
+  - **D1 — JSON shapes:** v1 accepts **three** input shapes (auto-
+    detected by file extension and first-non-whitespace JSON token):
+    1. **Array-of-objects** (single-sheet, mirrors `csv2xlsx`):
+       `[{col: val, …}, {col: val, …}, …]`.
+    2. **Multi-sheet dict** (mirrors xlsx-8 `--sheet all`):
+       `{"Sheet1": [{…}, …], "Sheet2": [{…}, …]}`.
+    3. **JSONL** (one JSON object per line — single-sheet, streaming
+       LLM-output friendly): `{"col": "v1"}\n{"col": "v2"}\n`.
+    Detection rule (deterministic): `.jsonl` extension → JSONL; else
+    parse JSON document and dispatch on root type (`list` → shape 1,
+    `dict-of-lists-of-objects` → shape 2; anything else → exit 2
+    `UnsupportedJsonShape`).
+  - **D2 — Type strategy:** Native JSON types preserved (int / float /
+    bool / null / str). **ISO-date string coercion** is opt-in-default:
+    strings matching `YYYY-MM-DD` or `YYYY-MM-DDTHH:MM:SS[.fff][±HH:MM|Z]`
+    → Excel datetime cell with `number_format = "YYYY-MM-DD"` /
+    `"YYYY-MM-DD HH:MM:SS"`. Opt-out: `--no-date-coerce`. Custom format
+    via `--date-format STRFTIME`. **Heterogeneous schema** (array of
+    objects with different keys) → union all keys, missing → empty
+    cell. Order: insertion order of first row + insertion order of
+    new keys as they appear.
+  - **D3 — Cross-cutting parity:** Full surface — `--json-errors`
+    envelope (cross-5); same-path guard exit 6 `SelfOverwriteRefused`
+    via `Path.resolve()` (cross-7 H1, follows symlinks); stdin `-`
+    as INPUT (LLM-pipe). **N/A:** cross-3 (encryption) and cross-4
+    (macro) — input is JSON, not OOXML, so those guards are
+    inapplicable on input. **Output** is a fresh `.xlsx` workbook
+    (no macros, never password-protected).
+  - **D4 — Round-trip integration test:** Dedicated E2E
+    `T-roundtrip-xlsx8` locks the symmetry contract with xlsx-8.
+    Because xlsx-8 ships **after** xlsx-2 (backlog day-1 sequence),
+    v1 implementation uses **synthetic golden JSON** that exactly
+    matches the xlsx-8 output shape declared in the backlog
+    (`[{header1: value1, ...}, ...]` per sheet,
+    `{"Sheet1": [...], "Sheet2": [...]}` for multi-sheet). When
+    xlsx-8 lands, a follow-up `T-roundtrip-xlsx8-live` wires the
+    actual `xlsx2json | json2xlsx` pipe and asserts structural
+    equivalence. **Open Question O1** tracks this coupling.
+  - **D5 — Plan shape:** Atomic chain of **8–12 sub-tasks**
+    (mirrors Task 003 pattern). Shim + package up front (Task-003 D2
+    pattern, **NOT** Task-001 → 002 refactor pattern). Per-subtask
+    review files in `docs/reviews/`, archive in `docs/tasks/`.
+- **Decisions locked from task-reviewer round-1 (2026-05-11, see `docs/reviews/task-004-review.md`):**
+  - **D6 (was O2) — No explicit `--input-format` flag in v1.** The
+    detection rule of R1+R2 (`.jsonl` extension → JSONL; else dispatch
+    on JSON root token) is deterministic and documented. A user-
+    override flag is **deferred to v2**. Rationale: agents almost
+    always know what shape they're producing; the override flag adds
+    surface area without a real-world use-case in the corpus.
+  - **D7 (was O5) — `--strict-dates` rejects aware datetimes.**
+    Under `--strict-dates`, a timezone-aware datetime string → exit 2
+    `TimezoneNotSupported` envelope. Without `--strict-dates`, R4.e
+    applies (aware → UTC naive). Locks the timezone contract before
+    Architecture so the Architect doesn't have to re-litigate.
+
+---
 
 ## 1. General Description
 
 ### Goal
-Ship a CLI under `skills/xlsx/scripts/` that loads a declarative
-`rules.json|yaml` file alongside an `.xlsx` workbook and emits
-machine-readable findings (`{ok, schema_version, summary, findings}`)
-plus optional in-workbook remarks. **No `eval`, no code execution
-on hostile input** — rules parse into a closed AST (17 node types,
-hand-written recursive-descent parser). CLI is the **find-and-report**
-half of the timesheet/budget review pipeline; xlsx-6 is the
-**act-on-findings** half.
+
+Ship a CLI **`skills/xlsx/scripts/json2xlsx.py`** that converts a
+JSON input (file or stdin) into a styled `.xlsx` workbook. Three
+canonical input shapes are auto-detected: (1) array-of-objects
+(single sheet, parallel to `csv2xlsx`); (2) multi-sheet dict
+(`{sheet_name: [rows]}`); (3) JSONL (one JSON object per line).
+Output styling matches `csv2xlsx` 1:1 (bold header, light-grey fill,
+center alignment, freeze first row, auto-filter, auto column widths).
+Native JSON types are preserved; ISO-8601 date strings are auto-
+coerced to Excel datetime cells by default.
 
 ### Why now
-- xlsx-6 (`xlsx_add_comment.py`) is merged; its `--batch` mode already
-  auto-detects an xlsx-7 envelope shape (`{ok, summary, findings: […]}`
-  → comments per finding). xlsx-7 closes that loop.
-- The backlog row is the single largest open item in `xlsx/` and
-  enables the full "validation + remark + comment" use case advertised
-  in `skills/xlsx/SKILL.md`.
+
+- **Closes the agent's natural output path.** LLMs produce JSON
+  natively. Today the agent has to (a) emit CSV (lossy for strings
+  containing commas, no native types, leading-zero footgun) and pipe
+  through `csv2xlsx`, or (b) call openpyxl directly (no styling, easy
+  to break leading zeros). `json2xlsx` removes that footgun.
+- **Closes the xlsx-8 round-trip.** xlsx-8 will emit
+  `[{col: val, …}]` per sheet / `{sheet: [...]}` for all-sheets.
+  Without xlsx-2, the agent can read a workbook → edit JSON → cannot
+  write it back without unsafe openpyxl scratch code.
+- **Parity gap.** docx has md2docx + html2docx; pdf has md2pdf +
+  html2pdf; pptx has md2pptx + outline2pptx; xlsx has only csv2xlsx.
+  Adding json2xlsx normalises the input-format coverage matrix.
 
 ### Connection with existing system
-- **Trust boundary** = `office/unpack` + `office/pack` (cross-skill
-  shared module, **MUST NOT** be modified — CLAUDE.md §2). xlsx-7
-  is a **read-mostly** consumer; the only write path is the optional
-  `--output OUT.xlsx --remark-column …` workbook copy.
-- **Cross-skill envelopes**: cross-3 (encryption fail-fast),
-  cross-4 (`.xlsm` macro warning), cross-5 (`--json-errors` shared
-  envelope), cross-7 H1 (same-path `Path.resolve()` guard).
-- **Pipe-mate**: xlsx-6 `--batch -` consumes xlsx-7 `--json` output
-  directly. `findings[i].row == null` (group findings) auto-skipped
-  by xlsx-6 [SPEC §9 ↔ xlsx-6 TASK §2 R5/R6].
-- **Composes with**: `xlsx_recalc.py` (run before xlsx-7 to populate
-  formula caches), `xlsx_validate.py` (post-output sanity check).
 
-### Reference use-case (from SPEC §10 worked example)
-A reviewer runs xlsx-7 on `timesheet.xlsx` with `timesheet.rules.json`
-(8 rules: required-fields / hours-positive / hours-realistic /
-date-in-period / project-code-format / weekly-cap / totals-match /
-approved-status). Output:
-- `timesheet.reviewed.xlsx` with auto-allocated `Remarks` column
-  (red for errors, yellow for warnings).
-- Exit code 1 (errors present) + JSON envelope on stdout.
-- Stderr: human-readable report.
+| Existing component | Role |
+| :--- | :--- |
+| `csv2xlsx.py` | **Reference implementation** for output styling, type-coercion guards, header formatting. xlsx-2 reuses the visual contract 1:1 — same `HEADER_FILL`/`HEADER_FONT`/`HEADER_ALIGN`/`MAX_COL_WIDTH` constants either by import or by copy-with-comment. |
+| `_errors.py` (`add_json_errors_argument`, `report_error`) | Cross-5 envelope provider. xlsx-2 uses it for every CLI exit ≠ 0. |
+| `office/` validators | After write, output passes through `office/validators/xlsx.py` in the post-validate hook (parity with xlsx-6 `XLSX_ADD_COMMENT_POST_VALIDATE`). Activated by `XLSX_JSON2XLSX_POST_VALIDATE=1`. |
+| xlsx-8 `xlsx2json.py` (open) | Symmetric companion — its output shape is xlsx-2's input contract (D4). |
+| `cross-7 H1` (same-path guard) | Inherited convention: input path = output path → exit 6. |
+
+### Use-case context (concrete)
+
+1. **LLM → spreadsheet.** Agent computes a 50-row table of
+   "Vendor / Item / Cost / Date" as JSON and ships
+   `agent_output.xlsx` to the user.
+   ```bash
+   json2xlsx.py agent_out.json report.xlsx
+   ```
+2. **Pipe from another tool.** A query tool emits JSON on stdout;
+   xlsx-2 catches it.
+   ```bash
+   curl … | jq '.results' | json2xlsx.py - report.xlsx --json-errors
+   ```
+3. **Multi-sheet dashboard.** Agent emits
+   `{"Employees": […], "Departments": […]}`; xlsx-2 writes a 2-sheet
+   workbook.
+4. **xlsx-8 edit loop (post xlsx-8 landing).** Read existing workbook
+   to JSON, edit, write back:
+   ```bash
+   xlsx2json.py original.xlsx --sheet all > edit.json
+   $EDITOR edit.json
+   json2xlsx.py edit.json roundtrip.xlsx
+   ```
+
+---
 
 ## 2. Requirements Traceability Matrix (RTM)
 
-> Granularity: each Epic row decomposes to ≥ 3 sub-features; sub-features
-> map to Issues in §3.
-
 | ID | Requirement | MVP? | Sub-features |
-|---|---|---|---|
-| R1 | **Rule-file parser & AST** [SPEC §2, §6] | yes | (a) JSON/YAML detection by ext; (b) 1 MiB pre-parse size cap → exit 2 `RulesFileTooLarge`; (c) ruamel.yaml typ='safe', YAML 1.2, no anchors/aliases (`AliasEvent` reject), no custom tags, no dup-keys, no YAML-1.1 bool coercion; (d) hand-written recursive-descent parser — NOT `ast.parse`; (e) closed 17-node AST whitelist; (f) composite depth cap 16 → exit 2 `CompositeDepth`; (g) builtin whitelist (`sum/avg/mean/min/max/median/stdev/count/count_nonempty/count_distinct/count_errors/len`) → exit 2 `UnknownBuiltin`; (h) `version: 1` enforcement. |
-| R2 | **Cell-value type model** [SPEC §3.5] | yes | (a) 6 logical types `number/date/bool/text/error/empty`; (b) "numbers stored as text" stays `text` (no auto-coerce); (c) `Decimal` → `float` for arithmetic; (d) whitespace strip default-on (per-rule and `--no-strip-whitespace` opt-out); (e) `cell-error` auto-emit on `error` type, suppresses other rules unless `is_error: info` declared. |
-| R3 | **Scope vocabulary** [SPEC §4] | yes | (a) forms: `cell:` / `RANGE` / `col:HEADER` / `col:LETTER` / `cols:LIST` / `row:N` / `sheet:NAME` / `named:NAME` / `table:NAME` / `table:NAME[COL]`; (b) sheet qualifier (plain / quoted / apostrophe-escaped `''`); (c) header semantics (case-sensitive, whitespace-stripped, `defaults.header_row` default `1`, `0` to disable); (d) duplicate header → `AmbiguousHeader`; missing → `HeaderNotFound`+available; merged → `MergedHeaderUnsupported`; (e) Excel-Tables auto-detect (`xl/tables/tableN.xml` fallback, `--no-table-autodetect` opt-out); (f) merged-cell anchor resolution + `merged-cell-resolution` info; (g) hidden rows/cols included by default, `--visible-only` opts out. |
-| R4 | **Check vocabulary** [SPEC §5] | yes | (a) §5.1 comparisons (`==`/`!=`/`<`/`<=`/`>`/`>=` + `between`/`between_excl` + `in`/`not in`); (b) §5.2 type guards (`is_number`/`is_date`/`is_text`/`is_bool`/`is_error`/`required`); (c) §5.3 text (`regex:` + `len OP N` + `not_empty` + `starts_with:`/`ends_with:`); (d) §5.4 dates (`date_in_month/range/before/after/weekday`) + `--treat-numeric-as-date` + `--treat-text-as-date` opt-in flags; (e) §5.5 cross-cell aggregates (sum/avg/min/max/median/stdev/count/count_nonempty/count_distinct/count_errors) — cross-sheet OK; (f) §5.6 group-by (`sum_by/count_by/avg_by:KEY OP X`); (g) §5.7 composite (`and/or/not`, depth ≤ 16); (h) §3 fields (`severity`, `message`, `when`, `skip_empty`, `tolerance`). |
-| R5 | **Output JSON envelope** [SPEC §7] | yes | (a) `{ok, schema_version: 1, summary, findings}`; (b) summary keys: `errors/warnings/info/checked_cells/rules_evaluated/cell_errors/skipped_in_aggregates/regex_timeouts/eval_errors/aggregate_cache_hits/elapsed_seconds/truncated`; (c) finding fields per §7.1.1; (d) deterministic sort by 5-tuple `(sheet,row,column,rule_id,group)` with type-homogeneous sentinels per §7.1.2; (e) grouped findings shape per §7.1.3 (`row=null`, `column=null`, `cell="<sheetName>"`); (f) `--max-findings N` cap (default `1000`) → `summary.truncated` + synthetic `max-findings-reached`; (g) `--summarize-after N` (default `100` per `rule_id`) → collapsed entries with `count`, `sample_cells`. |
-| R6 | **Exit codes** [SPEC §7.3] | yes | (a) 0 pass; (b) 1 ≥ 1 error; (c) 2 RulesParseError; (d) 3 unreadable / encrypted (cross-3); (e) 4 `--strict` ∧ ≥ 1 warning; (f) 5 IO error; (g) 6 same-path (cross-7 H1); (h) 7 wall-clock timeout. `--json-errors` (cross-5) wraps fatal codes 2/3/5/6/7 in shared envelope; finding-level codes 0/1/4 ALWAYS use the §7.1 schema. |
-| R7 | **CLI surface** [SPEC §8] | yes | (a) ≥ 22 flags (full list in §2.5 below); (b) mutex pairs: `--include-hidden` × `--visible-only`, `--json` × `--no-json`; (c) deps: `--remark-column` ⇒ `--output`; `--remark-column-mode` ⇒ `--remark-column`; `--streaming-output` ⇒ `--output`; (d) `--remark-column-mode` default `new` (preserves user data via `_2` suffix); (e) §8.2.1 streaming-incompatible combos rejected at arg-parse (`IncompatibleFlags` exit 2). |
-| R8 | **Workbook output** [SPEC §8.1, §11.2] | yes | (a) `--output` writes a copy + remark column; (b) `--remark-column auto` picks first free letter; (c) `replace`/`append`/`new` modes; (d) PatternFill red/yellow/blue per severity; (e) `--streaming-output` (openpyxl `WriteOnlyWorkbook`) for ≥ 100K-cell perf; (f) cross-7 H1 same-path → exit 6; (g) round-trip preservation: comments / drawings / charts / defined names on cells **NOT** modified by xlsx-7. |
-| R9 | **Performance & adversarial hardening** [SPEC §5.3.1, §11.2] | yes | (a) `regex` PyPI lib (NOT stdlib `re`) + per-cell `timeout=100ms`; (b) ReDoS pattern lint at parse via `recheck` (or hand-coded reject-list fallback for the 4 classic shapes); (c) compilation cache (one `re.compile` per unique pattern per run); (d) per-cell budget overflow → finding `rule-eval-timeout`; (e) wall-clock cap `--timeout 300` default → exit 7; (f) **Perf contract** — `huge-100k-rows.xlsx × 5-rule.rules.json` ≤ 30 s wall-clock & ≤ 500 MB RSS on a 4-core machine (assertion in fixture #31). |
-| R10 | **Aggregate cache & determinism** [SPEC §5.5.3] | yes | (a) canonical key = SHA-1 of `(sheet, scope, fn)` after whitespace/quote normalisation, sheet-qualifier resolution, header→letter resolution, Table-fallback equivalence; (b) cache entry stores `(value, skipped_cells, error_cells, cache_hits)`; (c) replay re-emits per-cell skip/error events into each consuming rule (under `--strict-aggregates`); (d) intra-rule replay dedup on `(rule_id, cell)`; inter-rule no-dedup; (e) `summary.aggregate_cache_hits` counter (fixture #19 anchor). |
-| R11 | **Cross-skill integration** | yes | (a) cross-3 fail-fast on encrypted input (exit 3); (b) cross-4 `.xlsm` warning to stderr; (c) cross-5 `--json-errors` envelope on fatal exit codes; (d) cross-7 H1 `Path.resolve()` same-path → exit 6; (e) **xlsx-6 envelope contract**: `xlsx_check_rules.py … --json | xlsx_add_comment.py … --batch -` produces output `.xlsx` with one comment per non-grouped finding (fixture #39). |
-| R12 | **Regression battery** [SPEC §13] | yes | (a) ≥ 21 xlsx-7 fixtures (manifest in §3 E9); (b) 10 canary saboteurs in `tests/canary_check.sh` — each must fail the battery; (c) all adversarial fixtures (#22–#30) reject ≤ 100 ms wall-clock; (d) deterministic golden output (sort order locked by §7.1.2 sentinels). |
-| R13 | **Honest scope (v1)** [SPEC §11] | yes | (a) no JOIN-style lookups (`vlookup` semantics); (b) no datetime arithmetic; (c) no auto-fix (find/report only); (d) no Python plugins/lambdas; (e) no native Excel-`<dataValidations>` ingestion; (f) no message localisation; (g) no multi-row / merged headers; (h) no transposed layout; (i) no multi-area `definedName`; (j) Decimal precision loss documented; (k) cached-value dependency (run `xlsx_recalc.py` first); (l) regression tests **lock each limitation** (negative tests in §3 E9). |
-| R14 | **Documentation** | yes | (a) `skills/xlsx/SKILL.md` §2/§4/§10/§12 entries for `xlsx_check_rules.py`; (b) `skills/xlsx/scripts/.AGENTS.md` updated with new module map; (c) `skills/xlsx/references/xlsx-rules-format.md` SPEC moves from "design spec" to "implementation reference" (§Status header updated post-merge) AND §5.0 error-code list reduced from 10 to 7 per D4 (§11 picks up the 3 modern codes as honest-scope); (d) `examples/check-rules-timesheet.{json,xlsx}` (the §10 worked example) committed as runnable reference (BOTH files needed); (e) `tests/golden/README.md` documents fixture provenance ("agent-output-only — DO NOT open in Excel" mirroring xlsx-6 m4/R9.d). |
+| :--- | :--- | :--- | :--- |
+| **R1** | **Read JSON from file path or stdin.** | ✅ | (a) `INPUT.json` resolved via `Path`. (b) Sentinel `-` reads from `sys.stdin` (UTF-8 strict; replace-on-error rejected to fail-loud on truncated pipes). (c) `--encoding utf-8` flag for file mode (default utf-8). (d) Empty input → exit 2 `EmptyInput`. (e) Invalid JSON / JSONL line → exit 2 `JsonDecodeError` with line/column details. |
+| **R2** | **Detect & dispatch on JSON shape.** | ✅ | (a) `.jsonl` extension → JSONL parser. (b) Else parse single JSON document. (c) `root is list of dicts` → shape-1 array-of-objects, single sheet. (d) `root is dict where every value is a list of dicts` → shape-2 multi-sheet. (e) Anything else (scalar root, list-of-lists, list-of-scalars, dict-of-scalars, mixed-value dict) → exit 2 `UnsupportedJsonShape` with details `{root_type, hint}`. (f) Empty array `[]` and empty multi-sheet `{}` → exit 2 `NoRowsToWrite` (writing zero-row workbooks is almost always a bug). |
+| **R3** | **Preserve JSON native types.** | ✅ | (a) `int` → numeric cell. (b) `float` → numeric cell. (c) `bool` → bool cell (Excel boolean). (d) `null` → empty cell (no value set). (e) `str` (non-date) → string cell. (f) Mixed-type column (e.g., `Age: 30` in row 1, `Age: "n/a"` in row 2) → each cell typed individually; no column-wide coercion. |
+| **R4** | **Coerce ISO-8601 date strings.** | ✅ | (a) Date-only `YYYY-MM-DD` → `datetime.date` → `number_format = "YYYY-MM-DD"`. (b) Datetime `YYYY-MM-DDTHH:MM:SS` (+ optional `.fff`, `±HH:MM`/`Z` timezone) → `datetime.datetime` → `number_format = "YYYY-MM-DD HH:MM:SS"`. (c) `--no-date-coerce` → strings preserved as text. (d) `--date-format STRFTIME` → custom output `number_format`. (e) Naive vs aware datetimes (default): aware datetimes are converted to UTC and stored naive (Excel has no native tz); a `--keep-timezone` toggle is **out of scope v1**, documented in §11 Honest Scope. (f) Invalid candidate (`"2026-13-99"`, `"2024-01-15ish"`) → string cell, NO coercion, NO warning (silent fall-through; users who need strict parsing add `--strict-dates`). (g) **Under `--strict-dates` (locked via D7):** aware datetime → exit 2 `TimezoneNotSupported` envelope with `details: {value, sheet, row, column, tz_offset}`; invalid candidate (R4.f) → exit 2 `InvalidDateString`. |
+| **R5** | **Schema heterogeneity → union keys.** | ✅ | (a) Headers = ordered set of all keys across all rows in a sheet. (b) Order = first-seen wins (row 1 keys first, then keys new to row 2 appended, etc.). (c) Missing key in a row → empty cell (no value, NOT `null` text). (d) Extra key — same as case (a); the new column is appended. (e) No fail-fast mode in v1; `--strict-schema` deferred to v2 per Open Question O3. |
+| **R6** | **Style output workbook (csv2xlsx parity).** | ✅ | (a) Bold header (`HEADER_FONT`). (b) Light-grey fill `F2F2F2` (`HEADER_FILL`). (c) Centre alignment (`HEADER_ALIGN`). (d) Freeze first row `ws.freeze_panes = "A2"`. (e) Auto-filter over data range when rows ≥ 1. (f) Column widths = `min(max(header_len, max_value_len) + 2, MAX_COL_WIDTH=50)`. (g) Flags `--no-freeze` and `--no-filter` mirror csv2xlsx. |
+| **R7** | **Multi-sheet write (D1 shape-2).** | ✅ | (a) Each top-level dict key → one sheet, name preserved verbatim (Excel sheet-name rules enforced: ≤ 31 chars, no `[]:*?/\\`, not `History`). (b) Sheet-name violation → exit 2 `InvalidSheetName` with details `{name, reason}`. Auto-sanitization (truncate/replace) is **out of scope v1** — fail-loud per §11 Honest Scope. (c) Duplicate top-level sheet keys are silently collapsed by `json.loads()` (last-wins per RFC 8259 §4); xlsx-2 v1 does NOT detect this and documents the gap in §11 Honest Scope. Proper detection requires `json.JSONDecoder(object_pairs_hook=…)` and is deferred to v2. (d) Single-sheet input writes to `--sheet NAME` (default `Sheet1`); multi-sheet input **ignores** `--sheet` with a stderr warning (avoid silent override). |
+| **R8** | **Cross-cutting (cross-5 envelope, cross-7 same-path, stdin).** | ✅ | (a) `--json-errors` accepted; on every non-zero exit emit the **frozen cross-5 schema** `{v: 1, error, code, type, details?}` via `_errors.report_error(...)` (see `skills/xlsx/scripts/_errors.py:39,126-138`). **Do NOT** introduce `ok` / `message` keys — those belong to xlsx-6's findings envelope, a different payload. `details` always merged into the helper, never written directly. (b) `Path(input).resolve() == Path(output).resolve()` → exit 6 `SelfOverwriteRefused` (skip when input is stdin `-`). (c) Stdin `-` reads JSON from `sys.stdin.buffer` (binary then UTF-8 decode) to avoid Windows newline translation breaking JSONL. (d) Cross-3 / cross-4 not applicable (no OOXML input). |
+| **R9** | **CLI surface (argparse).** | ✅ | (a) Positional `input` and `output`. (b) `--sheet NAME` (single-sheet default override). (c) `--no-freeze`, `--no-filter`. (d) `--no-date-coerce`, `--date-format STR`, `--strict-dates`. (e) `--encoding utf-8` (file mode only). (f) `--json-errors`. (g) `--help` echoes the module docstring's first line (csv2xlsx pattern). (h) Unknown flag → argparse default exit 2. |
+| **R10** | **Post-validate hook (opt-in).** | ✅ | (a) `XLSX_JSON2XLSX_POST_VALIDATE=1` env-var triggers `office/validators/xlsx.py` after `wb.save()`. (b) Validate failure → exit 7 `PostValidateFailed` envelope with `details.validator_output[:8192]`. (c) Output file is unlinked on failure (mirrors xlsx-6 `--post-validate` cleanup). (d) Truthy allowlist `1/true/yes/on` (case-insensitive); anything else → off (parity with xlsx-6 `_post_validate_enabled()`). |
+| **R11** | **Tests: unit + E2E + round-trip.** | ✅ | (a) `tests/test_json2xlsx.py` ≥ 25 unit tests covering parse/coerce/style/schema-drift/sheet-validation/encoding. (b) `tests/test_e2e.sh` adds ≥ 10 named E2E cases. (c) `T-roundtrip-xlsx8` (synthetic JSON → workbook → assert structure). (d) `T-roundtrip-xlsx8-live` (skip-with-reason, activates when xlsx-8 lands). (e) Performance budget: 10 000-row × 6-column array-of-objects → `.xlsx` ≤ 3 s on the same fixture-runner as csv2xlsx 10K-row benchmark (gated by `RUN_PERF_TESTS=1`, no CI gate). |
+| **R12** | **Docs: SKILL.md + .AGENTS.md + examples.** | ✅ | (a) `skills/xlsx/SKILL.md` §2 Capabilities adds JSON bullet. (b) `skills/xlsx/SKILL.md` §1 Red Flags adds "I'll just `df.to_excel`" rebuttal cross-ref. (c) `skills/xlsx/scripts/.AGENTS.md` (if present) updates section on script inventory. (d) `examples/` gains `json2xlsx_simple.json` + `json2xlsx_multisheet.json` + their golden `.xlsx` outputs (referenced from SKILL.md). (e) docs/office-skills-backlog.md xlsx-2 row marked ✅ DONE in the merge commit. |
+| **R13** | **Skill-validator + repo-level invariants green.** | ✅ | (a) `python3 .claude/skills/skill-creator/scripts/validate_skill.py skills/xlsx` exits 0 after change. (b) CLAUDE.md §2 byte-identity diffs unchanged (json2xlsx adds NEW file; doesn't touch `office/` or `_soffice.py` or `_errors.py` or `preview.py` or `office_passwd.py`). (c) `python3 -m unittest discover` exits 0 inside `skills/xlsx/scripts/`. (d) E2E `tests/test_e2e.sh` exits 0. |
 
-## 2.5 CLI surface (authoritative flag table)
+---
 
-> The Architect MAY tighten defaults during Architecture review;
-> additions/removals require user gating.
+## 3. Use Cases
 
-```
-xlsx_check_rules.py INPUT.xlsx --rules RULES.{json,yaml}
-                    [--json | --no-json]
-                    [--strict] [--require-data]
-                    [--severity-filter LIST]
-                    [--max-findings N] [--summarize-after N]
-                    [--timeout SECONDS]
-                    [--sheet NAME] [--header-row N]
-                    [--include-hidden | --visible-only]
-                    [--no-strip-whitespace] [--no-table-autodetect]
-                    [--no-merge-info] [--ignore-stale-cache]
-                    [--strict-aggregates]
-                    [--treat-numeric-as-date COLS]
-                    [--treat-text-as-date COLS]
-                    [--output OUT.xlsx
-                     [--remark-column auto|LETTER|HEADER]
-                     [--remark-column-mode replace|append|new]
-                     [--streaming-output]]
-                    [--json-errors]
-```
+### UC-1 — Agent emits LLM-computed table
 
-### Mutex / dependency rules (must be enforced in argparse)
-- **MX-A:** `--json` ⊕ `--no-json` (default `--no-json`).
-- **MX-B:** `--include-hidden` ⊕ `--visible-only` (default include).
-- **DEP-1:** `--remark-column` ⇒ `--output`.
-- **DEP-2:** `--remark-column-mode` ⇒ `--remark-column`.
-- **DEP-3:** `--streaming-output` ⇒ `--output`.
-- **DEP-4:** `--streaming-output` ∧ `--remark-column auto` → exit 2 `IncompatibleFlags`.
-- **DEP-5:** `--streaming-output` ∧ `--remark-column-mode append` → exit 2 `IncompatibleFlags`.
-- **DEP-6:** `--treat-numeric-as-date` and `--treat-text-as-date` accept `,`-separated headers/letters; if any token contains `,`, switch to `;` separator (auto-detected by presence of `;`).
-- **DEP-7:** All argparse usage errors route through `_errors.report_error` when `--json-errors` is set.
+#### Actors
+- **Agent** (LLM-driven script that produces JSON-array output).
+- **System** (json2xlsx CLI).
 
-### Exit codes
-| Code | Type | Trigger |
-|---|---|---|
-| 0 | OK | All rules pass; warnings/info allowed unless `--strict`. |
-| 1 | RuleErrors | ≥ 1 error finding (or `--require-data` ∧ `checked_cells == 0`). |
-| 2 | RulesParseError / IncompatibleFlags / UnknownBuiltin / CompositeDepth / RulesFileTooLarge / AmbiguousHeader / HeaderNotFound / MergedHeaderUnsupported | Bad rules or bad flag combo. |
-| 3 | EncryptedInput / CorruptInput | Cross-3 fail-fast; not an .xlsx. |
-| 4 | StrictWarnings | `--strict` ∧ ≥ 1 warning finding. |
-| 5 | IOError | Path read/write failure. |
-| 6 | SelfOverwriteRefused | Cross-7 H1 (resolved input==output). |
-| 7 | TimeoutExceeded | `--timeout` exceeded; partial findings flushed if `--json`. |
+#### Preconditions
+- Agent produces a JSON-array file (or stdout pipe) where rows are
+  uniform objects with string-named keys.
 
-## 3. Epics & Use Cases
+#### Main Scenario
+1. Agent writes `agent_out.json`:
+   ```json
+   [
+     {"Vendor": "Acme", "Item": "Widget", "Cost": 12.5, "Date": "2026-05-11"},
+     {"Vendor": "Beta", "Item": "Sprocket", "Cost": 7.0, "Date": "2026-05-10"}
+   ]
+   ```
+2. Agent runs `python3 json2xlsx.py agent_out.json report.xlsx`.
+3. System parses JSON; detects shape-1 (array-of-objects).
+4. System builds DataFrame; coerces "2026-05-11"/"2026-05-10" to dates.
+5. System writes workbook: 1 sheet "Sheet1", bold header row, freeze pane "A2", auto-filter, column widths sized.
+6. System exits 0; no stdout output.
 
-> One Epic ≈ one orthogonal capability cluster. Each Issue is a
-> Use Case with Actors / Preconditions / Main Scenario / Alternative
-> Scenarios / Postconditions / Acceptance Criteria. Issues are sized
-> to ≤ 1 atomic task per chain-link rule (D1).
+#### Alternative Scenarios
+- **A1 (Pipe from stdin):** Agent runs `tool | json2xlsx.py - report.xlsx`. Step 1 replaced with `sys.stdin.buffer` read; rest identical.
+- **A2 (Same-path collision):** Agent runs `json2xlsx.py file.xlsx file.xlsx` (typo). System resolves both paths, detects equality, exits 6 with envelope `{type: "SelfOverwriteRefused", details: {input, output}}`. Mirrors cross-7 H1.
+- **A3 (Empty input):** `agent_out.json = "[]"`. System exits 2 `NoRowsToWrite`. Rationale: writing zero-row workbooks is virtually always a bug; if intentional, user uses csv2xlsx with `--allow-empty` (out of scope v1).
+- **A4 (Schema drift):** Row 1 has `{Vendor, Item}`; row 2 has `{Vendor, Item, Note}`. System unions keys → 3 columns; row 1 `Note` cell is empty. No warning.
+- **A5 (Invalid JSON):** Truncated file `[{"Vendor":` → exit 2 `JsonDecodeError` with `details: {line, column, msg}`.
 
-### Epic E1 — Rules-file parsing & AST safety [maps R1, R9 lint]
+#### Postconditions
+- Output `.xlsx` is a valid OOXML workbook openable by Excel / LO.
+- Native JSON types preserved; ISO-date strings written as Excel dates.
 
-#### Issue I1.1 — Rules file loader (JSON / YAML) with hardening
-- **Actors:** Reviewer (CLI invoker), System (parser).
-- **Preconditions:** `--rules PATH` resolves; file ≤ 1 MiB.
-- **Main Scenario:**
-  1. Reviewer invokes `xlsx_check_rules.py W.xlsx --rules R.yaml`.
-  2. System checks `Path(R).stat().st_size ≤ 1 MiB` → otherwise exit 2 `RulesFileTooLarge`.
-  3. System detects format by extension (`.json` → stdlib `json`; `.yaml`/`.yml` → ruamel.yaml).
-  4. **YAML path:** install ruamel.yaml `YAML(typ='safe', pure=True, version=(1,2))` with `allow_duplicate_keys=False`. Hook the parser event stream and abort on any `AliasEvent` or non-empty `anchor` field on `ScalarEvent`/`SequenceStartEvent`/`MappingStartEvent` BEFORE composition.
-  5. System rejects any custom tag not in canonical YAML 1.2 schema (str/int/float/bool/null/seq/map/timestamp).
-  6. System validates `version: 1` and presence of `rules: [...]` (≥ 1 element).
-  7. System hands the dict to the AST builder (I1.2).
-- **Alternative Scenarios:**
-  - **Alt-1:** YAML with anchors → exit 2; **must complete ≤ 100 ms** (alias rejected pre-composition, no expansion).
-  - **Alt-2:** YAML with `!!python/object` → exit 2 (custom-tag reject).
-  - **Alt-3:** YAML with `value in [yes, no]` → strings stay strings (YAML 1.1 bool trap disabled); legal rule, no error.
-  - **Alt-4:** YAML with duplicate keys → exit 2 (`allow_duplicate_keys=False`).
-  - **Alt-5:** YAML scalar containing literal `&` (e.g. `description: 'see Q1 & Q2'`) → **MUST NOT** be rejected (negative regression).
-  - **Alt-6:** rules file 1.5 MiB → exit 2 `RulesFileTooLarge`.
-- **Postconditions:** parsed dict in memory, ready for AST build.
-- **Acceptance Criteria:**
-  - ✅ Fixture `billion-laughs.rules.yaml` exits 2 in ≤ 100 ms (no memory blow-up).
-  - ✅ Fixture `yaml-string-with-ampersand.rules.yaml` exits 0 (no false positive).
-  - ✅ Stdlib `yaml.safe_load` is **NOT** imported (grep test).
+#### Acceptance Criteria
+- ✅ Exit 0 on valid array-of-objects.
+- ✅ Output workbook opens in LibreOffice without errors.
+- ✅ Header row has bold + light-grey + centre styling.
+- ✅ Date cell `data_type == "n"` and `number_format` matches `YYYY-MM-DD`.
+- ✅ Cost cell stored as float `12.5`, not string `"12.5"`.
+- ✅ stderr is silent on the happy path (matches csv2xlsx).
 
-#### Issue I1.2 — Hand-written DSL parser (recursive descent, closed AST)
-- **Actors:** System (parser).
-- **Preconditions:** I1.1 produced a `dict` with `rules: [...]`.
-- **Main Scenario:**
-  1. For each rule, parse `check` field. If `str`, run recursive-descent over the DSL grammar (§5 SPEC). If `dict`, route to composite handler (`and`/`or`/`not`).
-  2. Build AST nodes from the closed 17-type whitelist (`Literal`, `CellRef`, `RangeRef`, `ColRef`, `RowRef`, `SheetRef`, `NamedRef`, `TableRef`, `BuiltinCall`, `BinaryOp`, `UnaryOp`, `In`, `Between`, `Logical`, `TypePredicate`, `RegexPredicate`, `LenPredicate`, `StringPredicate`, `DatePredicate`, `GroupByCheck`).
-  3. Track composite depth; exit 2 `CompositeDepth` if > 16.
-  4. Validate `BuiltinCall.name` against whitelist (`sum/avg/mean/min/max/median/stdev/count/count_nonempty/count_distinct/count_errors/len`); exit 2 `UnknownBuiltin` otherwise.
-  5. **Pattern-lint** (R9): for each `RegexPredicate`, run `recheck` (or hand-coded fallback) for the 4 classic ReDoS shapes (`(a+)+`, `(a*)*`, `(a|a)+`, `(a|aa)*`). Reject at parse unless rule carries `"unsafe_regex": true`.
-  6. **Forbidden Python constructs** — no attribute access (`.`), no `**`, no `%`, no bitwise, no lambda. Tested by hostile fixtures.
-- **Acceptance Criteria:**
-  - ✅ `ast.parse` is **NOT** in the import graph of the parser module (grep test).
-  - ✅ Fixture `deep-composite.rules.json` (1000-level `and`) exits 2 `CompositeDepth`.
-  - ✅ Fixture `unknown-builtin.rules.json` (`foo(col:X)`) exits 2 `UnknownBuiltin`.
-  - ✅ Fixture `regex-dos.rules.json` (`^(a+)+$`) is rejected at parse (or per-cell timeout if `unsafe_regex: true`) within 100 ms.
+---
 
-### Epic E2 — Cell-value type model & scope resolution [maps R2, R3]
+### UC-2 — Multi-sheet workbook from `{sheet: [rows]}` dict
 
-#### Issue I2.1 — Cell-value canonicalisation (six logical types)
-- **Actors:** System (cell reader).
-- **Preconditions:** workbook unpacked via `office/unpack`; cell read via openpyxl.
-- **Main Scenario:**
-  1. Read cell via openpyxl `data_only=False` (we want the formula presence signal for §5.0.1 stale-cache).
-  2. Map openpyxl type → logical type per SPEC §3.5: `<c t="n">` non-date → `number`; `<c t="n">` date-format or `<c t="d">` → `date`; `<c t="b">` → `bool`; `<c t="s">`/`<c t="inlineStr">` → `text` (whitespace stripped per `--no-strip-whitespace`); `<c t="e">` → `error` (synthetic `CellError(code)` token); empty/`None` → `empty`.
-  3. **DO NOT** auto-coerce `text` "42" to `number` (§3.5.1).
-  4. **Decimal**: `<c t="d">` → coerce to `float` for arithmetic; equality uses rule's `tolerance`.
-  5. Cells with `<f>` (formula) but no `<v>` (cached value) → emit one-time stderr stale-cache warning (suppressed by `--ignore-stale-cache`) and treat value as `empty` for that cell.
-- **Alternative Scenarios:**
-  - **Alt-1:** `error` cell → auto-emit `cell-error` finding (SEV `error`, `value="<error code>"`); skip ALL other rules on this cell. Counted in `summary.cell_errors`. Suppress by user-rule `is_error: info`.
-  - **Alt-2:** `--treat-numeric-as-date COLS`: serial in `[25569, 73050]` is logical-type `date` for those cols.
-  - **Alt-3:** `--treat-text-as-date COLS`: pass through `dateutil.parser.parse(s, fuzzy=False, dayfirst=...)`; on parse failure, stays `text`.
-- **Acceptance Criteria:**
-  - ✅ Fixture `errors-as-values.xlsx` auto-emits `cell-error` for every `#REF!`/`#N/A` cell; other rules suppressed.
-  - ✅ Fixture `formulas-no-cache.xlsx` triggers ONE stale-cache stderr warning (not one per cell), and rule findings see `value=None`.
-  - ✅ Fixture `localized-dates-ru-text.xlsx` (Russian text dates) WITHOUT `--treat-text-as-date` → `date_in_period` MISFIRES per honest scope (negative test).
+#### Actors
+- **Agent** (or human emitting structured JSON).
+- **System**.
 
-#### Issue I2.2 — Scope resolver (10 forms)
-- **Actors:** System (scope resolver).
-- **Main Scenario:**
-  1. Parse scope string (or use AST node from I1.2).
-  2. Resolve sheet qualifier (plain / quoted / apostrophe-escaped). Default = first non-hidden sheet in `xl/workbook.xml` element order (deterministic across openpyxl versions).
-  3. Resolve form: `cell:` / `RANGE` / `col:HEADER` / `col:LETTER` / `cols:LIST` / `row:N` / `sheet:NAME` / `named:NAME` / `table:NAME` / `table:NAME[COL]`.
-  4. **Header lookup** uses `defaults.header_row` (default `1`); case-sensitive; whitespace-stripped.
-  5. **Excel-Tables fallback**: if cell range lies inside an Excel Table (read `xl/tables/tableN.xml`), Table header takes precedence over `header_row` (default-on; `--no-table-autodetect` opts out).
-  6. **Merged cells**: anchor (top-left) carries the value; non-anchor cells in merge return `None` (= `empty`); emit one info `merged-cell-resolution` per merge encountered (suppress with `--no-merge-info`).
-  7. **Hidden rows/cols**: included by default; `--visible-only` filters out `<row hidden="1">` / `<col hidden="1">`.
-- **Alternative Scenarios:**
-  - **Alt-1:** Duplicate header on same sheet → exit 2 `AmbiguousHeader` listing offending column letters.
-  - **Alt-2:** Missing header → exit 2 `HeaderNotFound` with available-header list (truncated to 50).
-  - **Alt-3:** Merged cell IN header row → exit 2 `MergedHeaderUnsupported`.
-  - **Alt-4:** Multi-area `definedName` (`Sheet1!A1:A10,Sheet1!B1:B10`) → exit 2 `RulesParseError`.
-  - **Alt-5:** Quoted sheet name with apostrophe (`'Bob''s Sheet'!A1`) → resolve correctly (case-sensitive, apostrophe doubled).
-  - **Alt-6:** `header_row: 0` → header forms (`col:HEADER`, `cols:NAME,...`) become parse errors; only `cell:`/range/`col:LETTER`/`row:N`/`sheet:`/`named:` allowed.
-- **Acceptance Criteria:** fixtures #3, #4, #5, #7, #8, #9, #13 all locked.
+#### Preconditions
+- JSON input is a dict whose values are all `list[dict]`.
 
-### Epic E3 — Check vocabulary [maps R4]
+#### Main Scenario
+1. Input `multi.json`:
+   ```json
+   {
+     "Employees": [{"Name": "Alice", "Salary": 100000}, {"Name": "Bob", "Salary": 95000}],
+     "Departments": [{"Dept": "Eng", "Head": "Alice"}]
+   }
+   ```
+2. Run `json2xlsx.py multi.json multi.xlsx`.
+3. System detects shape-2 (multi-sheet dict).
+4. System creates two worksheets in insertion order: "Employees", "Departments".
+5. Each sheet receives independent styling (bold header, freeze, auto-filter).
+6. Exit 0.
 
-> Each Issue locks one §5 sub-section. AC = relevant battery rows
-> + at least one negative case (`is_number` against text-stored
-> "42" returns `false`).
+#### Alternative Scenarios
+- **A1 (Invalid sheet name):** Key `"Q1/Q2"` → exit 2 `InvalidSheetName` (contains `/`).
+- **A2 (Duplicate sheet name in input JSON):** Python's `json.loads()` accepts duplicate top-level keys and silently keeps the last value (RFC 8259 §4 is permissive). xlsx-2 v1 does NOT detect this — only one survives, no error raised. Locking detection requires `json.JSONDecoder(object_pairs_hook=…)`, deferred to v2. Documented in §11 Honest Scope item 5; not a v1 bug.
+- **A3 (`--sheet` flag with multi-sheet input):** Flag ignored, stderr warning `--sheet ignored when JSON root is multi-sheet dict`. Exit 0.
+- **A4 (One sheet empty):** `{"Sheet1": [...], "Sheet2": []}` → exit 2 `NoRowsToWrite` with `details: {empty_sheet: "Sheet2"}`. v1 is fail-loud; partial-write is deferred.
 
-- **I3.1 — Comparison & membership** [§5.1]
-- **I3.2 — Type guards** [§5.2]
-- **I3.3 — Text rules + regex hardening** [§5.3, §5.3.1]
-- **I3.4 — Date rules + localisation fallback** [§5.4, §5.4.1, §5.4.2]
-- **I3.5 — Cross-cell aggregates + arithmetic + tolerance** [§5.5]
-- **I3.6 — Group-by aggregates** [§5.6]
-- **I3.7 — Composite (object form) + depth cap** [§5.7]
-- **I3.8 — Pre-rule cell triage (§5.0) + cached-value preflight (§5.0.1)**
+#### Postconditions
+- Workbook has the same number of sheets as top-level dict keys, in order.
 
-Acceptance criteria for each Issue: SPEC §5.x text + ≥ 2 fixtures
-from §13 (one positive, one negative).
+#### Acceptance Criteria
+- ✅ `len(wb.sheetnames) == len(input_dict)`.
+- ✅ `wb.sheetnames` matches input key order exactly.
+- ✅ Each sheet is independently styled per R6.
 
-### Epic E4 — Output JSON envelope [maps R5, R6]
+---
 
-#### Issue I4.1 — Findings envelope schema + sort order
-- **Main Scenario:** emit `{ok, schema_version: 1, summary: {...}, findings: [...]}` to stdout when `--json`; suppress with `--no-json` (default).
-- **Sort key:** 5-tuple `(sheet_name, row, column_letter, rule_id, group)` with type-homogeneous sentinels per §7.1.2 (group findings: `row=2**31-1`, `column="￿"`, `group=str`).
-- **Acceptance Criteria:** fixture `clean-pass.xlsx` → byte-identical output across runs (deterministic).
+### UC-3 — JSONL streaming input
 
-#### Issue I4.2 — Finding caps (`--max-findings`, `--summarize-after`)
-- **Main Scenario:** stop emitting after N; keep walking workbook for `summary.*` totals; append synthetic `max-findings-reached`. `--summarize-after N` collapses runs of same `rule_id` once N emitted with `count` + `sample_cells[10]`.
+#### Actors
+- **Agent** producing one-JSON-per-line output (common for log-style
+  LLM emissions).
 
-#### Issue I4.3 — Exit codes (full matrix from §2.5)
+#### Preconditions
+- Input file has `.jsonl` extension OR stdin pipe with `--input-format jsonl` (open question, see O2).
 
-#### Issue I4.4 — Stderr human report (when `--no-json`) / stdout pure JSON (when `--json`)
+#### Main Scenario
+1. Input `events.jsonl`:
+   ```
+   {"event": "login", "user": "alice", "ts": "2026-05-11T09:00:00Z"}
+   {"event": "logout", "user": "alice", "ts": "2026-05-11T09:30:00Z"}
+   ```
+2. Run `json2xlsx.py events.jsonl events.xlsx`.
+3. System detects `.jsonl` extension → JSONL parser.
+4. Each line parsed independently; one row per line.
+5. Output single-sheet `.xlsx` with 3 columns (`event`, `user`, `ts`).
 
-### Epic E5 — CLI surface & flag interactions [maps R7]
+#### Alternative Scenarios
+- **A1 (Blank line in middle):** Skipped silently (whitespace-only lines are stripped before parse).
+- **A2 (Malformed line N):** Exit 2 `JsonDecodeError` with `details: {line: N, msg}`.
+- **A3 (Mixed JSONL — line 5 is an array):** Exit 2 `UnsupportedJsonShape` with `details: {line: 5, expected: "object"}`.
 
-#### Issue I5.1 — argparse setup (≥ 22 flags, mutex MX-A/B, deps DEP-1..7)
-#### Issue I5.2 — `--treat-numeric-as-date` / `--treat-text-as-date` `,`/`;` auto-switch
-#### Issue I5.3 — Streaming-incompatible combos (DEP-4, DEP-5) → exit 2 `IncompatibleFlags` at arg-parse
+#### Postconditions
+- One sheet, N data rows, headers = union of keys.
 
-### Epic E6 — Workbook output (remark column) [maps R8]
+#### Acceptance Criteria
+- ✅ Auto-detection via extension alone, no flag required.
+- ✅ Malformed-line error message points to source line number.
 
-#### Issue I6.1 — Output-copy + remark column allocation
-- **Main Scenario:**
-  1. Without `--output`: do not write any workbook.
-  2. With `--output OUT.xlsx`: copy input → out, apply remark column.
-  3. `--remark-column auto`: pick first free letter to the right of data region.
-  4. `--remark-column LETTER|HEADER`: explicit placement.
-  5. PatternFill: red (errors), yellow (warnings), blue (info).
-  6. Round-trip: comments / drawings / charts / defined names on un-modified cells preserved.
+---
 
-#### Issue I6.2 — Remark-column-mode (`replace`/`append`/`new` default)
+### UC-4 — Stdin pipe with envelope error
 
-#### Issue I6.3 — `--streaming-output` (openpyxl `WriteOnlyWorkbook`) for ≥ 100K cells
-- **Acceptance Criteria:** fixtures #32, #32a, #32b, #32c locked.
+#### Actors
+- **Agent** in a multi-stage shell pipeline.
 
-### Epic E7 — Performance & adversarial hardening [maps R9, R10]
+#### Preconditions
+- Caller passes `-` as input and `--json-errors` to capture errors
+  programmatically.
 
-#### Issue I7.1 — Regex hardening (`regex` lib, per-cell timeout, lint, compile cache)
-#### Issue I7.2 — Aggregate cache with replay semantics (R10) + `summary.aggregate_cache_hits`
-#### Issue I7.3 — Wall-clock `--timeout` + exit 7 + partial-flush
-#### Issue I7.4 — Perf contract: 100K rows × 5 rules ≤ 30 s & ≤ 500 MB RSS (fixture #31)
+#### Main Scenario
+1. Caller: `cat valid.json | python3 json2xlsx.py - out.xlsx --json-errors`.
+2. System reads `sys.stdin.buffer`, decodes UTF-8 strict, parses JSON.
+3. Writes workbook, exits 0.
 
-### Epic E8 — Cross-skill integration [maps R11]
+#### Alternative Scenarios
+- **A1 (Truncated pipe):** stdin closes mid-JSON → exit 2 envelope `{ok: false, code: 2, type: "JsonDecodeError", message: "...", details: {...}}`.
+- **A2 (No `-`, just empty input file):** Treat as A3 in UC-1 → `EmptyInput` envelope.
 
-#### Issue I8.1 — cross-3 (encrypted), cross-4 (.xlsm), cross-5 (--json-errors), cross-7 H1 (same-path)
-#### Issue I8.2 — xlsx-6 envelope contract (full pipeline fixture #39 / #39a / #39b)
-- **Main Scenario:**
-  1. `xlsx_check_rules.py timesheet.xlsx --rules timesheet.rules.json --json | xlsx_add_comment.py timesheet.xlsx --batch - --default-author "Reviewer Bot" --output reviewed.xlsx`.
-  2. xlsx-6 auto-detects envelope shape — root must be a JSON **object containing all three keys** `{ok, summary, findings}` (xlsx-6 [`batch.py:122`](../skills/xlsx/scripts/xlsx_comment/batch.py#L122); this is the **frozen contract**). xlsx-7's `--json` output therefore MUST always emit all three top-level keys, even on `--max-findings 0` / `--severity-filter` / `--require-data` / timeout-with-partial-flush paths. Maps `cell ← findings[i].cell`, `text ← findings[i].message`.
-  3. xlsx-6 skips findings with `row=null` (group-aggregate); counts in `summary.skipped_grouped`.
-- **Acceptance Criteria:**
-  - ✅ Fixture #39 (happy path): `reviewed.xlsx` has exactly `len(non-grouped findings)` comments; xlsx-6 exit 0; xlsx-7 exit code preserved as `$PIPESTATUS[0]`.
-  - ✅ Fixture #39a: xlsx-7 timeout-partial-flush output (exit 7 + partial JSON) still has all three top-level keys `{ok, summary, findings}`; piping to xlsx-6 succeeds (no `InvalidBatchInput`).
-  - ✅ Fixture #39b: xlsx-7 `--max-findings 0` (cap disabled, stderr warning per §8.1) still emits `summary` and `ok`; xlsx-6 round-trip clean.
+#### Postconditions
+- Envelope on stderr (cross-5 convention; frozen schema per R8.a).
+- Stdout untouched (reserved for future `--output -` mode, **not v1**).
 
-### Epic E9 — Regression battery + Honest scope locks + Docs [maps R12, R13, R14]
+#### Acceptance Criteria
+- ✅ Envelope JSON parses on caller side (`head -1 stderr | jq` works).
+- ✅ Envelope contains `v: 1`, `error` (the human-readable message), `code` (int), `type` (the ErrorClass string), and `details` (object, may be empty).
+- ✅ Envelope does NOT contain `ok` or `message` keys (those are xlsx-6 findings-envelope vocabulary, not cross-5).
+- ✅ Exit code matches envelope `code` field exactly.
 
-#### Issue I9.1 — Fixture generator (`tests/golden/inputs/_generate.py`)
-Builds all 39 `.xlsx` (+ `.json`/`.yaml` rule files + `expected.json`)
-triples from declarative manifests in `tests/golden/manifests/`. CI
-regenerates each run; `tests/golden/inputs/*.xlsx` is `.gitignore`d.
+---
 
-#### Issue I9.2 — `test_battery.py` driver
-Walks `tests/golden/manifests/`, regenerates fixtures, runs `xlsx_check_rules.py`, asserts:
-- exit code matches `expected.exit_code`.
-- `summary` keys match exactly (subset compare for elastic counts allowed).
-- `findings[]` `rule_id` set ⊇ `expected.required_rule_ids` and ∩ `expected.forbidden_rule_ids = ∅`.
+### UC-5 — xlsx-8 round-trip (deferred live wiring)
 
-#### Issue I9.3 — Canary saboteur runner (`tests/canary_check.sh`, ≥ 10 saboteurs)
-Reverts each saboteur via `trap`. Battery MUST fail for each saboteur; missing failure → CI red.
+#### Actors
+- **Agent** reading then editing then re-writing a workbook.
 
-#### Issue I9.4 — Honest-scope regression locks
-For each item in §11 SPEC: a fixture + test that asserts the v1 limitation. Negative-test naming convention `Test*HonestScope*`.
+#### Preconditions
+- xlsx-8 (`xlsx2json.py`) is **eventually** available. v1 of xlsx-2 uses synthetic JSON matching xlsx-8's declared output shape.
 
-#### Issue I9.5 — Docs
-- `skills/xlsx/SKILL.md` §2/§4/§10/§12 entries for `xlsx_check_rules.py`.
-- `skills/xlsx/scripts/.AGENTS.md` updated.
-- `examples/check-rules-timesheet.{json,xlsx}` runnable demo (= SPEC §10 worked example).
-- `tests/golden/README.md` provenance + "DO NOT open in Excel".
-- `references/xlsx-rules-format.md` §Status header → "implementation reference (v1 merged)".
+#### Main Scenario (post xlsx-8 landing — v1 includes scaffolding only)
+1. `python3 xlsx2json.py original.xlsx --sheet all > intermediate.json`.
+2. Agent edits `intermediate.json` (adds rows, fixes typos).
+3. `python3 json2xlsx.py intermediate.json roundtrip.xlsx`.
+4. Compare `roundtrip.xlsx` to `original.xlsx`: sheet names, headers, cell values match. **Formatting/styles NOT compared** (xlsx-2 produces fresh styling; original may have user-authored styles).
 
-## 4. Non-functional Requirements
+#### Alternative Scenarios
+- **A1 (v1, xlsx-8 not yet built):** Test scaffolded as `T-roundtrip-xlsx8` using synthetic JSON (hard-coded fixture mirroring xlsx-8 spec). Live wiring deferred to `T-roundtrip-xlsx8-live`, marked `@unittest.skipUnless(_xlsx2json_available())`.
 
-### Performance
-- **Committed bound:** `huge-100k-rows.xlsx × 5-rule.rules.json` ≤ 30 s wall-clock & ≤ 500 MB peak RSS on a 4-core machine. Fixture #31 enforces.
-- **Adversarial-input rejection:** all §13 hostile fixtures (#22–#30) reject at parse in ≤ 100 ms wall-clock.
-- **Aggregate cache:** N rules referencing the same canonical scope walk the column **once**; `summary.aggregate_cache_hits ≥ N − 1`.
-- **Streaming mode** (`--streaming-output`): ≥ 100K-cell workbooks fit in a single openpyxl `WriteOnlyWorkbook` pass (some flag combos rejected — DEP-4, DEP-5).
+#### Postconditions
+- Structural equivalence preserved across the round-trip.
 
-### Correctness / Compatibility
-- **No `eval`** in the import graph (grep test in CI).
-- **`ast.parse` not used** for DSL parsing (hand-written recursive-descent).
-- **`yaml.safe_load` not imported** (ruamel.yaml only — grep test).
-- **Deterministic output:** byte-identical findings JSON across re-runs on the same workbook+rules (sort sentinels per §7.1.2).
+#### Acceptance Criteria
+- ✅ Synthetic `T-roundtrip-xlsx8` passes in v1 CI.
+- ✅ Live `T-roundtrip-xlsx8-live` test is wired but skipped with explicit reason mentioning xlsx-8 dependency.
+- ✅ When xlsx-8 lands, live test passes without xlsx-2 code change.
 
-### Security
-- **Trust boundary:** `office/unpack` (defusedxml against XML-bombs / XXE / billion-laughs in workbook XML).
-- **Rules-file YAML hardening:** anchors / aliases / custom tags / dup-keys / YAML-1.1 bool coercion all rejected. 1 MiB hard cap.
-- **Regex DoS:** `regex` lib + per-cell 100 ms timeout + parse-time ReDoS lint via `recheck` (or hand-coded reject-list fallback).
-- **Format-string injection:** `string.Template` for `message` interpolation, NOT `str.format`.
-- **No shell exec:** `subprocess` not imported in xlsx-7 module graph.
-- **No network I/O:** xlsx-7 does not fetch URLs.
-- **OWASP A03/A04/A06/A08** mapped (mirror `docs/ARCHITECTURE.md` §5 xlsx-6 mapping).
+---
 
-### Cross-skill compatibility
-- `office/`, `_soffice.py`, `_errors.py`, `preview.py`, `office_passwd.py` — **NOT** modified by xlsx-7 (CLAUDE.md §2 4-skill replication does NOT activate).
-- xlsx-7 is **xlsx-private**; no propagation to docx/pptx/pdf.
+## 4. Non-Functional Requirements
+
+### 4.1. Performance
+
+- 10 000-row × 6-column array-of-objects → `.xlsx` ≤ **3 s** on
+  the same fixture-runner machine used for the xlsx-7 100K-row
+  benchmark (csv2xlsx has no committed perf test; this is an
+  informal target, not a regression gate).
+- 100 000-row JSONL (single-stream) → `.xlsx` ≤ **30 s** (loose
+  budget; openpyxl normal mode, NOT write-only). If this budget is
+  exceeded, fall back to openpyxl `write_only=True` is deferred to
+  v2 per Open Question O4.
+- Memory budget: 500 MB RSS for 100K-row case (matches xlsx-7 budget).
+- Performance tests gated by `RUN_PERF_TESTS=1` env-var; no CI gate
+  (xlsx-6 / xlsx-7 convention; reviewer runs locally).
+
+### 4.2. Security
+
+- **No `eval`, no `exec`.** JSON is parsed with `json.loads` /
+  `json.JSONDecoder.raw_decode`. No user-supplied format strings
+  reach `str.format` or `%`-formatting (use `string.Template` if
+  templated output ever lands — not v1).
+- **JSON-bomb defense.** Python's `json` module is not natively
+  vulnerable to billion-laughs (no entity expansion in JSON spec),
+  but extremely deep nesting can blow the C stack. Add explicit
+  recursion guard: input parsed with default limit (1000 levels);
+  document the limit in `--help`. Out-of-scope for v1: per-key
+  size cap.
+- **Sheet-name injection.** Excel sheet-name rules enforced
+  (R7.b); a key like `"=cmd|'/c calc'!A1"` would NOT trigger Excel
+  formula evaluation when used as a *sheet name* (only as a cell
+  value with leading `=`). Cell-value leading `=` interpretation
+  is **out of scope v1**; document in Honest Scope §11. csv2xlsx
+  has the same behaviour (does not auto-escape leading `=`).
+- **Path safety.** `Path.resolve()` for input/output / same-path
+  check; follows symlinks. TOCTOU honest scope: symlink mutated
+  between `resolve()` and `open()` is out of scope (parity with
+  xlsx-7 architect-review m6).
+
+### 4.3. Compatibility
+
+- Python ≥ 3.10 (matches xlsx skill baseline).
+- Dependencies: `openpyxl`, `pandas`, `python-dateutil` (already in
+  xlsx `requirements.txt` from xlsx-7) — **no new dependency**.
+- No platform-specific code; same Win/Mac/Linux contract as
+  csv2xlsx.
+- Excel 2016+ / LibreOffice 7.0+ for date number-format rendering.
+
+### 4.4. Maintainability
+
+- Shim file `json2xlsx.py` ≤ 220 LOC (CLI argparse + dispatch).
+- Package `json2xlsx/` modules ≤ 500 LOC each (Task-003 D2
+  pattern): `loaders.py`, `coerce.py`, `writer.py`, `cli_helpers.py`,
+  `exceptions.py`.
+- Unit-test coverage ≥ 85 % of `json2xlsx/` module LOC (excluded:
+  argparse plumbing).
+
+---
 
 ## 5. Constraints and Assumptions
 
 ### Technical constraints
-- **Python 3.10+** (matches `xlsx_add_comment.py` and `office/`).
-- **No new system tools** beyond what's already in `install.sh`.
-- **New PyPI deps** (subject to Architect review):
-  - `regex>=2024.0` — required for `timeout=` parameter (R9).
-  - `python-dateutil>=2.8.0` — required for `--treat-text-as-date` (R4d). May already be a transitive dep of pandas; verify.
-  - `ruamel.yaml>=0.18.0` — required for YAML 1.2 parsing + alias rejection (R1c).
-  - `recheck` — optional (graceful fallback to hand-coded reject-list per R9b); add to `requirements.txt` only if available cross-platform.
-- **Existing deps reused:** `openpyxl>=3.1.5` (R2 / §5.4.2 — bump from `>=3.1.0` to `>=3.1.5`), `lxml>=5.0.0`, `defusedxml>=0.7.1`, `pandas>=2.0.0`.
 
-### Business constraints
-- **VDD strict mode:** atomic chain (D1) with per-task review (Sarcasmotron / VDD-adversarial pass at chain-end recommended, mirroring xlsx-6 Task 002).
-- **Backwards compat:** `xlsx_check_rules.py` is a **new** script; no existing public API to preserve.
+- C1. **No new top-level dependency.** Reuse `openpyxl`, `pandas`,
+  `python-dateutil` already present from xlsx-7.
+- C2. **No edit of shared `office/` / `_soffice.py` / `_errors.py` /
+  `preview.py` / `office_passwd.py`** unless absolutely necessary.
+  Any such edit triggers the 3-skill or 4-skill replication protocol
+  (CLAUDE.md §2). Default: leave shared modules untouched.
+- C3. **No new shared modules.** New code lives entirely inside
+  `skills/xlsx/scripts/json2xlsx.py` (shim) and
+  `skills/xlsx/scripts/json2xlsx/` (package).
+- C4. **License preserved.** xlsx skill is Proprietary; new files
+  inherit `LicenseRef-Proprietary` and contribute to `LICENSE` /
+  `NOTICE` per office-skill convention.
+
+### Business / scope constraints
+
+- C5. **No write-back to existing workbooks.** json2xlsx ALWAYS
+  produces a fresh `.xlsx`. Editing an existing workbook
+  (preserving formulas, charts, styles) is out of scope — that is
+  the `xlsx-4` (charts/data-validation preservation) and `docx-6`-
+  parallel territory.
+- C6. **No mixed input forms in v1.** Picking JSON or JSONL is by
+  extension/root-token; user can't force the parser via flag.
+  Documented as Open Question O2 (low-risk; agents typically know
+  what they're producing).
+- C7. **No formula injection escape on cell values.** Leading `=`
+  in a JSON string value goes through to Excel as a formula (or as
+  text — depends on Excel's leading-`=` heuristic). Mirrors
+  csv2xlsx; documented in Honest Scope §11.
 
 ### Assumptions
-- The shape of the xlsx-7 findings envelope (object with `findings: [...]`) is **already promised** by xlsx-6 — changing it would be a cross-task regression. Architect MUST treat §7.1 as frozen.
-- Helper script `_generate.py` (D3) will use openpyxl + the same fixtures-per-row pattern that xlsx-6's `tests/golden/inputs/` README describes. Hand-craft NOT required.
-- `xlsx_recalc.py` is run by the user before xlsx-7 if their workbook has formulas without cached values. xlsx-7 emits a one-time stale-cache warning but does **NOT** auto-invoke recalc (that would be a side-effect violating "find and report").
-- Excel 365 round-trip mutation is **out of scope** (§11.2): goldens are agent-output-only; we never assert post-Excel-touch byte equality.
 
-## 6. Open Questions
-
-> Decisions D1–D6 (Delivery / Layout / Fixtures / openpyxl-error-set / `recheck` / perf-gating) are LOCKED at the top of this TASK (§0). The Open Questions below are RESERVED for the Architect; Planning may not proceed until each is closed (or deferred with explicit user gating). Original Q1, Q4, Q6 were closed by D5, D4, D6 respectively after Task-Reviewer round-1.
-
-- **Q2 — Module split inside `xlsx_check_rules/` package (D2 confirmed layout, but not internals).** Candidate modules: `__init__.py`, `constants.py`, `exceptions.py`, `rules_parser.py` (E1), `ast_nodes.py` (E1 + E3), `cell_types.py` (E2), `scope_resolver.py` (E2), `evaluator.py` (E3), `aggregates.py` (E3 + R10 cache), `output.py` (E4 emit), `cli_helpers.py`, `cli.py` (E5 + E6 main). Architect to lock module boundaries + LOC budget per module (target ≤ 500 LOC each; total ≤ 3000 LOC).
-
-- **Q3 — Streaming-output remark-column-mode `replace` semantics.** SPEC §8.2.1 says streaming + `replace` is supported but does not specify what happens when the destination column is OUT of the streaming write order (column letters past the last data column written). Architect to decide:
-  - **A** — Allocate the remark column letter ahead of time; stream all data including remark column in single pass.
-  - **B** — Reject explicit-letter `--remark-column` placements that would require a second pass.
-
-- **Q5 — Fixture-set storage.** D3 says `_generate.py` builds fixtures on the fly. Architect to clarify CI strategy:
-  - **A** — Generate every test run; no `.xlsx` in git.
-  - **B** — Generate once, commit `.xlsx` outputs into `tests/golden/inputs/`; CI re-runs only on manifest change (cached binary).
-  Recommendation: **A** for small fixtures, **B** for `huge-100k-rows.xlsx` (10–20 MB; expensive to generate on every run).
-
-- **Q7 — `version: 1` strictness.** SPEC §2 says rules file MUST carry `version: 1`. Architect to decide if missing/wrong version is exit 2 `RulesParseError: VersionMismatch` or implicit-default to v1 with a stderr warning. Recommendation: hard exit 2 (CI determinism).
+- A1. xlsx-8 (`xlsx2json.py`) is a separate task that ships AFTER
+  xlsx-2. Synthetic round-trip test is therefore the lock; live
+  test activates post xlsx-8 merge.
+- A2. The xlsx skill's `requirements.txt` already pins all needed
+  Python deps. No `requirements.txt` edit required for xlsx-2.
+- A3. The agent supplying JSON is responsible for the JSON's
+  structural correctness; xlsx-2 reports clearly but does NOT
+  recover (no "best-effort" parsing).
 
 ---
 
-**Next step:** Architecture phase — Architect reads this TASK,
-closes Q1–Q7, and produces an updated `docs/ARCHITECTURE.md` with
-F1–F11 functional decomposition aligned with the §3 Epic boundaries.
+## 6. Open Questions
+
+> The following are **non-blocking** for Architecture / Planning
+> phase start, but MUST be resolved before the corresponding
+> sub-task in the atomic chain begins. Each links to the sub-task
+> that closes it.
+
+- **O1 — xlsx-8 coupling.** Round-trip test design is synthetic
+  in v1 (D4). When xlsx-8 lands, does the integration test live
+  in xlsx-2's test file (preferred — owns the contract) or in
+  xlsx-8's test file (alternative — owns the producer)?
+  **Proposal:** owner of the contract = xlsx-2; live test is added
+  to `tests/test_json2xlsx.py` in the xlsx-8 merge commit.
+  **Sub-task that resolves:** Planning phase decision; tracked in
+  xlsx-8 task notes.
+
+- **O3 — `--strict-schema`.** R5 unions keys silently. Should v1
+  add a fail-fast mode for production pipelines that reject
+  schema drift?
+  **Proposal:** Defer to v2. xlsx-7 already handles structural
+  validation on the workbook side; xlsx-2's job is to write
+  whatever JSON it gets.
+  **Sub-task that resolves:** Sub-task 004.04 (type-coercion +
+  schema rules).
+
+- **O4 — Write-only mode for ≥ 100K rows.** Performance budget
+  4.1 says 30 s loose. If real-world JSONL files blow past this,
+  do we switch to openpyxl `write_only=True`?
+  **Proposal:** Defer to v2. Mention in §11 Honest Scope.
+  **Sub-task that resolves:** Sub-task 004.05 (writer); decision
+  reflected in `writer.py` module-level docstring.
+
+- **O6 — Leading `=` in cell values.** C7 documents the gap. Add
+  a `--escape-formulas` flag (prepends `'` to leading-`=` values
+  to force text) in v1?
+  **Proposal:** Defer to v2 unless reviewer disagrees. csv2xlsx
+  has the same gap; fixing both at once in a follow-up is more
+  coherent.
+  **Sub-task that resolves:** Sub-task 004.07 (cross-cutting).
+
+> O2 (`--input-format` flag) and O5 (`--strict-dates` rejects aware
+> datetimes) were **promoted to D6 and D7** in §0 Meta Information
+> during round-1 task-reviewer resolution. See
+> `docs/reviews/task-004-review.md` §Resolution.
+
+---
+
+## 7. Definition of Done
+
+- [x] `docs/TASK.md` exists with this content; Task ID 004.
+- [ ] `docs/ARCHITECTURE.md` §2 (Functional Architecture) and §3 (System Architecture) updated to include json2xlsx layer.
+- [ ] `docs/PLAN.md` and `docs/tasks/task-004-*.md` (8–12 sub-tasks) authored under Stub-First.
+- [ ] Each sub-task has a `docs/reviews/task-004-XX-review.md` companion (post-implementation).
+- [ ] All R1–R13 acceptance criteria met.
+- [ ] CLAUDE.md §2 byte-identity diffs unchanged (`docx ↔ xlsx ↔ pptx ↔ pdf` cross-skill scripts).
+- [ ] `validate_skill.py skills/xlsx` exits 0.
+- [ ] backlog row xlsx-2 marked ✅ DONE with Status block (date + LOC + test counts).
+- [ ] No regression on existing xlsx tests (`csv2xlsx`, `xlsx_add_chart`, `xlsx_add_comment`, `xlsx_recalc`, `xlsx_validate`, `xlsx_check_rules`).
+- [ ] **xlsx-8 input-contract freeze sub-task** (closes review m1): `skills/xlsx/references/json-shapes.md` authored at end of atomic chain, exhaustively specifying (a) sheet-name key under `--sheet all` (verbatim Excel sheet name), (b) null-cell JSON representation (`null` value vs omitted key), (c) datetime serialization (ISO-8601 with offset, never Excel-serial), (d) `--header-row N>1` behaviour, (e) formula resolution (cached value vs `=…` string). Both xlsx-2 R2 and the future xlsx-8 task reference this file; xlsx-8 implementation MUST conform on landing, removing the risk of `T-roundtrip-xlsx8-live` breaking xlsx-2 (UC-5 AC).
+
+---
+
+## 8. Exit codes (CLI contract)
+
+| Exit | Type (envelope `type`) | When |
+| :---: | :--- | :--- |
+| 0 | `Ok` | Success. |
+| 1 | `IOError` | Output path unwritable, disk full, parent dir not created (and `--mkdirs` not in v1 — output's parent MUST exist). |
+| 2 | `EmptyInput` / `NoRowsToWrite` / `JsonDecodeError` / `UnsupportedJsonShape` / `InvalidSheetName` / `DuplicateSheetName` / `TimezoneNotSupported` (under `--strict-dates`) | User-input errors. |
+| 6 | `SelfOverwriteRefused` | Cross-7 H1: resolved input path == resolved output path. |
+| 7 | `PostValidateFailed` | Optional post-validate hook (R10) returned non-zero. |
+
+All non-zero exits emit a **cross-5 envelope** when `--json-errors`
+is set. The schema is the one frozen in `_errors.py:39` (one JSON
+line on stderr, single-call `report_error(...)`):
+
+```json
+{
+  "v": 1,
+  "error": "JSON root must be array-of-objects or dict-of-arrays-of-objects",
+  "code": 2,
+  "type": "UnsupportedJsonShape",
+  "details": {
+    "root_type": "list",
+    "first_element_type": "int",
+    "hint": "Did you mean to wrap each row in an object?"
+  }
+}
+```
+
+> Field-by-field semantics: `v` is the envelope schema version
+> (`SCHEMA_VERSION = 1` in `_errors.py`). `error` is the human-
+> readable message. `code` matches the process exit status. `type` is
+> the symbolic error class. `details` is a free-form object (may be
+> omitted by the helper when empty). **Do NOT** use `ok` / `message` —
+> those are vocabulary from the xlsx-6 findings-envelope (a different
+> payload) and conflating them is a known pitfall (Task-003 M2).
+
+---
+
+## 9. Cross-skill Replication Audit (CLAUDE.md §2)
+
+xlsx-2 does **NOT** edit any cross-skill replicated module. R13.b is the gate. For belt-and-braces, the Developer MUST run before any commit:
+
+```bash
+diff -qr skills/docx/scripts/office skills/xlsx/scripts/office
+diff -qr skills/docx/scripts/office skills/pptx/scripts/office
+diff -q  skills/docx/scripts/_soffice.py skills/xlsx/scripts/_soffice.py
+diff -q  skills/docx/scripts/_soffice.py skills/pptx/scripts/_soffice.py
+for s in xlsx pptx pdf; do
+    diff -q skills/docx/scripts/_errors.py skills/$s/scripts/_errors.py
+    diff -q skills/docx/scripts/preview.py  skills/$s/scripts/preview.py
+done
+diff -q skills/docx/scripts/office_passwd.py skills/xlsx/scripts/office_passwd.py
+diff -q skills/docx/scripts/office_passwd.py skills/pptx/scripts/office_passwd.py
+```
+
+All eleven `diff` invocations MUST be silent. **If any output appears, the change is wrong** — xlsx-2's job is to add new files under `skills/xlsx/scripts/` only.
+
+---
+
+## 10. New file inventory (planned)
+
+| Path | Purpose | Approx. LOC |
+| :--- | :--- | ---: |
+| `skills/xlsx/scripts/json2xlsx.py` | CLI shim (argparse + dispatch into the package) | ≤ 220 |
+| `skills/xlsx/scripts/json2xlsx/__init__.py` | Package marker + public surface re-export | ≤ 30 |
+| `skills/xlsx/scripts/json2xlsx/loaders.py` | JSON / JSONL parsing + shape detection | ~ 180 |
+| `skills/xlsx/scripts/json2xlsx/coerce.py` | Type / ISO-date coercion logic | ~ 200 |
+| `skills/xlsx/scripts/json2xlsx/writer.py` | openpyxl write loop + styling | ~ 200 |
+| `skills/xlsx/scripts/json2xlsx/exceptions.py` | `_AppError` + typed errors (`EmptyInput`, `NoRowsToWrite`, `JsonDecodeError`, `UnsupportedJsonShape`, `InvalidSheetName`, `TimezoneNotSupported`, `InvalidDateString`, `PostValidateFailed`, `SelfOverwriteRefused`) | ~ 90 |
+| `skills/xlsx/scripts/json2xlsx/cli_helpers.py` | `_post_validate_enabled()` clone, stdin reader, path resolver | ~ 60 |
+| `skills/xlsx/scripts/tests/test_json2xlsx.py` | Unit tests (≥ 25 cases) | ~ 600 |
+| `skills/xlsx/scripts/tests/test_e2e.sh` | Append ≥ 10 named E2E cases | + ~ 200 |
+| `skills/xlsx/examples/json2xlsx_simple.json` | Fixture (array-of-objects) | small |
+| `skills/xlsx/examples/json2xlsx_multisheet.json` | Fixture (multi-sheet dict) | small |
+| `skills/xlsx/examples/json2xlsx_events.jsonl` | Fixture (JSONL) | small |
+| `skills/xlsx/references/json-shapes.md` | Round-trip contract spec (R12 + DoD §7 m1 sub-task) | ~ 250 |
+
+Total new code: ~ 1 580 LOC (close to the §0 estimate of ~ 1 620 — confirms M-tier).
+
+---
+
+## 11. Honest Scope (v1 limitations)
+
+These are the limitations xlsx-2 v1 **deliberately accepts**. Each is
+referenced from one or more sections above. The Architect / Planner
+must NOT silently widen scope to close them; instead, file a v2 backlog
+row (xlsx-2a, xlsx-2b, …) if the limitation becomes pressing.
+
+1. **Aware datetime → naive UTC (R4.e).** Default behaviour. A
+   `--keep-timezone` flag that would store the timezone offset as a
+   sibling column is **out of scope v1**. Under `--strict-dates`
+   (D7 / R4.g) aware datetimes hard-fail with `TimezoneNotSupported`
+   instead of silently being shifted. Excel itself has no native
+   timezone type; any cross-tool fidelity is best-effort.
+2. **Leading `=` in JSON string values (C7).** A string like
+   `"=A1+1"` passes through to Excel as-is. Excel's own leading-`=`
+   heuristic then decides whether to interpret it as a formula
+   (usually yes) or text (rarely). xlsx-2 does **not** auto-prepend
+   `'` to defuse formula injection (csv2xlsx parity). The
+   `--escape-formulas` flag is deferred to v2 per O6 and will land
+   simultaneously in csv2xlsx + json2xlsx.
+3. **100 000-row write-only mode (O4).** xlsx-2 v1 uses openpyxl's
+   normal-write mode. Real-world inputs that blow past the 30 s
+   loose budget warrant openpyxl `write_only=True`, but the
+   trade-off (no late style edits, slightly different cell-typing
+   path) needs its own design pass. Deferred to v2 per O4.
+4. **Sheet-name auto-sanitization (R7.b).** Invalid keys fail-loud
+   with `InvalidSheetName`. Truncating `"Q1/Q2 results 2026 review"`
+   to `"Q1Q2 results 2026 revi"` would silently mutate data;
+   fail-loud is the safer default for an agent-targeted CLI. A
+   `--sanitize-sheet-names` flag is a v2 candidate.
+5. **Duplicate top-level JSON keys collapsed by `json.loads()`
+   (R7.c / UC-2 Alt-A2).** Python's stdlib `json` module accepts
+   duplicate keys and silently keeps the last value (RFC 8259 §4 is
+   permissive on this). Detecting duplicates requires custom
+   `json.JSONDecoder(object_pairs_hook=…)`. xlsx-2 v1 does NOT do
+   this. Practical impact is low (humans rarely hand-author duplicate
+   sheet keys; tools that emit JSON deduplicate upstream). Deferred
+   to v2.
+6. **TOCTOU on the same-path guard (R8.b).** `Path.resolve()`
+   compares paths at one moment; a symlink racing between
+   `resolve()` and `open(output, "wb")` is **out of scope v1**.
+   Mirrors xlsx-7 architect-review m6 (locked precedent).
+7. **Cell-value `=cmd|'/c calc'!A1` injection (R7 §4.2).** The
+   same leading-`=` story as honest-scope item 2, but specifically
+   for the WIN32-CSV-injection class. xlsx-2 does NOT escape; the
+   downstream consumer (Excel, LO, Numbers) is responsible. csv2xlsx
+   has the same gap; honest-scope item 2 covers the v2 fix.
+
+> If you arrive at one of these limitations during implementation and
+> believe it is now blocking, **stop and escalate** — do not silently
+> widen v1. Open a Question in `docs/TASK.md` or a follow-up backlog
+> row.
