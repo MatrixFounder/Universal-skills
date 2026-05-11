@@ -181,6 +181,17 @@ def _run(args: argparse.Namespace) -> int:
                 coerce_opts=coerce_opts,
             )
         except OSError as exc:
+            # VDD-multi Logic M2 fix: openpyxl's `wb.save()` writes the
+            # output zip incrementally. A mid-save OSError (disk full,
+            # revoked write permission) leaves a partial / corrupt
+            # .xlsx on disk that downstream pipelines may mistakenly
+            # consume. Clean up the partial file before surfacing the
+            # envelope. Mirrors the post-validate cleanup pattern.
+            if args.output.exists():
+                try:
+                    args.output.unlink()
+                except OSError:
+                    pass
             return report_error(
                 f"Failed to write output: {exc}",
                 code=1, error_type="IOError",
@@ -189,16 +200,31 @@ def _run(args: argparse.Namespace) -> int:
 
         # 7. Optional post-validate hook.
         if post_validate_enabled():
-            passed, captured = run_post_validate(args.output)
+            passed, hook_ok, captured = run_post_validate(args.output)
             if not passed:
-                # Cleanup on failure (mirrors xlsx-6).
-                try:
-                    args.output.unlink()
-                except OSError:
-                    pass
+                # VDD-multi Logic H1 fix: only unlink the workbook when
+                # the validator ran to completion AND reported a real
+                # workbook problem. If `hook_ok=False` (validator
+                # missing / timed out / crashed), the workbook itself
+                # is presumed valid; emit the envelope but DO NOT
+                # delete the user's output.
+                if hook_ok:
+                    try:
+                        args.output.unlink()
+                    except OSError:
+                        pass
+                    err_type = "PostValidateFailed"
+                    err_msg = "Post-validate hook failed"
+                else:
+                    err_type = "PostValidateHookError"
+                    err_msg = (
+                        "Post-validate hook could not run "
+                        "(validator missing or timed out); "
+                        "workbook left intact"
+                    )
                 return report_error(
-                    "Post-validate hook failed",
-                    code=7, error_type="PostValidateFailed",
+                    err_msg,
+                    code=7, error_type=err_type,
                     details={"validator_output": captured[:8192]},
                     json_mode=je,
                 )

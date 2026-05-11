@@ -22,10 +22,12 @@ The style-constant drift assertion (`test_style_constants_drift_csv2xlsx`)
 is **NOT** skipped — it locks the AQ-1 contract live against csv2xlsx
 and self-skips the writer-side mirror until 004.06 lands the constants.
 
-The round-trip synthetic test (`test_synthetic_roundtrip`) is skipped
-until 004.08 finalises the green assertion against the golden JSON;
-the live round-trip test (`test_live_roundtrip`) is gated by
-`@unittest.skipUnless(_xlsx2json_available(), …)` — AQ-5 lock.
+The round-trip synthetic test (`test_synthetic_roundtrip`) is live
+since 004.08 (writer + CLI + post-validate were all in place by then,
+so the assertion against the golden JSON could be finalised). The
+live round-trip test (`test_live_roundtrip`) is gated by
+`@unittest.skipUnless(_xlsx2json_available(), …)` — AQ-5 lock —
+and activates automatically once xlsx-8 lands.
 """
 from __future__ import annotations
 
@@ -219,6 +221,60 @@ class TestLoaders(unittest.TestCase):
             detect_and_parse(b'[{\n', source="t.json", is_jsonl_hint=False)
         self.assertGreaterEqual(cm.exception.details["line"], 1)
         self.assertGreaterEqual(cm.exception.details["column"], 1)
+
+    # ----- VDD-multi Security M-1: invalid UTF-8 routes through envelope
+
+    def test_invalid_utf8_raises_jsondecodeerror(self) -> None:
+        """VDD-multi Security M-1: malformed UTF-8 bytes (e.g., latin-1
+        / UTF-16-LE BOM) MUST surface through the typed `JsonDecodeError`
+        envelope, NOT as an uncaught `UnicodeDecodeError` traceback
+        (AQ-3 contract: every taxonomy error routes through report_error).
+        """
+        from json2xlsx.loaders import detect_and_parse
+        from json2xlsx.exceptions import JsonDecodeError
+        # Invalid lone-byte 0xff cannot appear in a UTF-8 stream.
+        with self.assertRaises(JsonDecodeError) as cm:
+            detect_and_parse(b"\xff\xfe garbage", source="bad.json", is_jsonl_hint=False)
+        self.assertIn("UTF-8", cm.exception.details["msg"])
+        self.assertEqual(cm.exception.details["line"], 1)
+
+    def test_invalid_utf8_jsonl_line_reports_line_number(self) -> None:
+        """VDD-multi Security M-1 on the JSONL path: malformed UTF-8
+        on a specific line surfaces as JsonDecodeError with line N."""
+        from json2xlsx.loaders import detect_and_parse
+        from json2xlsx.exceptions import JsonDecodeError
+        # line 1 OK, line 2 has invalid UTF-8.
+        raw = b'{"a": 1}\n\xff\xfe\n{"a": 3}\n'
+        with self.assertRaises(JsonDecodeError) as cm:
+            detect_and_parse(raw, source="t.jsonl", is_jsonl_hint=True)
+        self.assertEqual(cm.exception.details["line"], 2)
+
+    # ----- VDD-multi Logic H2: NaN / Infinity rejection
+
+    def test_json_nan_rejected_as_jsondecodeerror(self) -> None:
+        """VDD-multi Logic H2: Python's json.loads silently accepts
+        `NaN`/`Infinity`/`-Infinity` literals (non-strict mode). xlsx-2
+        MUST reject them at decode time so they never reach openpyxl
+        (where they would produce a workbook Excel renders as #NUM!
+        or refuses to open).
+        """
+        from json2xlsx.loaders import detect_and_parse
+        from json2xlsx.exceptions import JsonDecodeError
+        for token in (b"NaN", b"Infinity", b"-Infinity"):
+            payload = b'[{"v": ' + token + b'}]'
+            with self.assertRaises(JsonDecodeError, msg=f"token={token!r}") as cm:
+                detect_and_parse(payload, source="bad.json", is_jsonl_hint=False)
+            self.assertIn("non-finite", cm.exception.details["msg"].lower())
+
+    def test_jsonl_nan_rejected_with_line_number(self) -> None:
+        """Same H2 guard on the JSONL path — reports the offending line."""
+        from json2xlsx.loaders import detect_and_parse
+        from json2xlsx.exceptions import JsonDecodeError
+        raw = b'{"a": 1}\n{"a": NaN}\n'
+        with self.assertRaises(JsonDecodeError) as cm:
+            detect_and_parse(raw, source="t.jsonl", is_jsonl_hint=True)
+        self.assertEqual(cm.exception.details["line"], 2)
+        self.assertIn("non-finite", cm.exception.details["msg"].lower())
 
 
 # ===========================================================================
@@ -426,6 +482,29 @@ class TestWriter(unittest.TestCase):
         for variant in ("History", "history", "HISTORY", "HiStOrY"):
             with self.assertRaises(InvalidSheetName, msg=variant):
                 _validate_sheet_name(variant)
+
+    def test_validate_sheet_name_control_chars(self) -> None:
+        """VDD-multi Logic M1 + Security LOW-1: Excel rejects control
+        characters in sheet names. Plain `\\x00`, `\\n`, `\\t`, `\\r`
+        all must trip the validator."""
+        from json2xlsx.writer import _validate_sheet_name
+        from json2xlsx.exceptions import InvalidSheetName
+        for bad in ("\x00leading-nul", "tab\there", "new\nline", "ret\rurn", "bell\x07"):
+            with self.assertRaises(InvalidSheetName, msg=repr(bad)) as cm:
+                _validate_sheet_name(bad)
+            self.assertIn("control character", cm.exception.details["reason"])
+
+    def test_validate_sheet_name_apostrophe_edge(self) -> None:
+        """VDD-multi Logic M1: Excel forbids `'` at first or last
+        position (single-quote is its formula sheet-delimiter)."""
+        from json2xlsx.writer import _validate_sheet_name
+        from json2xlsx.exceptions import InvalidSheetName
+        for bad in ("'leading", "trailing'", "'both'"):
+            with self.assertRaises(InvalidSheetName, msg=bad) as cm:
+                _validate_sheet_name(bad)
+            self.assertIn("apostrophe", cm.exception.details["reason"])
+        # Apostrophe in the middle is fine (Excel allows it).
+        _validate_sheet_name("Bob's Sheet")
 
     # ----- integration-level: build then re-open via openpyxl --------------
 
@@ -669,6 +748,10 @@ class TestExceptions(unittest.TestCase):
         self.assertEqual(exc.code, 6)
         self.assertEqual(exc.error_type, "SelfOverwriteRefused")
         self.assertEqual(exc.details, {"input": "/tmp/a", "output": "/tmp/b"})
+        # VDD-multi Logic L5 fix: human-readable message must include
+        # BOTH paths (helps users debug which side typo'd).
+        self.assertIn("/tmp/a", exc.message)
+        self.assertIn("/tmp/b", exc.message)
 
     def test_post_validate_failed_truncates_8192(self) -> None:
         """TC-UNIT-EXC-03 — validator output capped at 8192 BYTES of UTF-8.
@@ -962,19 +1045,23 @@ class TestPostValidate(unittest.TestCase):
 
     def test_run_post_validate_success_on_valid_workbook(self) -> None:
         """On a structurally-valid xlsx produced by xlsx-2, the
-        cross-format validator should exit 0 → returns (True, ...)."""
+        cross-format validator should exit 0 → (True, True, ...)."""
         from json2xlsx.cli_helpers import run_post_validate
         with tempfile.TemporaryDirectory() as td:
             out = self._write_valid_workbook(td)
-            passed, captured = run_post_validate(out)
+            passed, hook_ok, captured = run_post_validate(out)
             self.assertTrue(
                 passed,
                 f"post-validate failed on a valid xlsx: {captured[:1000]}",
             )
+            self.assertTrue(hook_ok, "hook_ok must be True when validator ran")
 
-    def test_run_post_validate_missing_validator_returns_false(self) -> None:
-        """If `office/validate.py` is missing, return (False, '...not found...')
-        — defensive path; never crashes the CLI."""
+    def test_run_post_validate_missing_validator_returns_hook_failure(self) -> None:
+        """If `office/validate.py` is missing, return
+        (False, False, '...not found...') — VDD-multi H1 fix: the
+        hook_ok=False flag tells the CLI orchestrator NOT to unlink
+        the (presumably valid) output workbook on this code path.
+        """
         import json2xlsx.cli_helpers as ch
         with tempfile.TemporaryDirectory() as td:
             out = self._write_valid_workbook(td)
@@ -987,10 +1074,11 @@ class TestPostValidate(unittest.TestCase):
                 return original_is_file(self_path)
             Path.is_file = fake_is_file  # type: ignore[method-assign]
             try:
-                passed, captured = ch.run_post_validate(out)
+                passed, hook_ok, captured = ch.run_post_validate(out)
             finally:
                 Path.is_file = original_is_file  # type: ignore[method-assign]
             self.assertFalse(passed)
+            self.assertFalse(hook_ok, "hook_ok must be False on missing-validator path")
             self.assertIn("not found", captured)
 
     def test_post_validate_off_by_default(self) -> None:
@@ -1011,19 +1099,16 @@ class TestPostValidate(unittest.TestCase):
             if prev is not None:
                 os.environ["XLSX_JSON2XLSX_POST_VALIDATE"] = prev
 
-    def test_post_validate_failure_unlinks_output_via_cli(self) -> None:
-        """When the hook is enabled AND fails, the CLI:
-          (a) emits a PostValidateFailed envelope (exit 7),
-          (b) unlinks the output (cleanup-on-failure per xlsx-6 mirror).
-
-        Failure is simulated by monkey-patching `run_post_validate`
-        from the `cli` module's import binding (the orchestrator
-        captured it by reference at module load time, so patching the
-        original `cli_helpers.run_post_validate` would NOT take effect).
+    def test_post_validate_workbook_failure_unlinks_output(self) -> None:
+        """VDD-multi H1 fix: when the hook ran to completion AND
+        reported a real workbook problem (`passed=False, hook_ok=True`),
+        the CLI MUST:
+          (a) emit a PostValidateFailed envelope (exit 7),
+          (b) unlink the output (cleanup-on-failure).
         """
         import json2xlsx.cli as cli_mod
         original = cli_mod.run_post_validate
-        cli_mod.run_post_validate = lambda _out: (False, "synthetic failure")
+        cli_mod.run_post_validate = lambda _out: (False, True, "synthetic workbook failure")
         os.environ["XLSX_JSON2XLSX_POST_VALIDATE"] = "1"
         try:
             with tempfile.TemporaryDirectory() as td:
@@ -1041,6 +1126,36 @@ class TestPostValidate(unittest.TestCase):
             cli_mod.run_post_validate = original
             os.environ.pop("XLSX_JSON2XLSX_POST_VALIDATE", None)
 
+    def test_post_validate_hook_failure_keeps_output(self) -> None:
+        """VDD-multi H1 fix: when the hook itself broke (validator
+        missing / timeout / etc. — `hook_ok=False`), the CLI MUST:
+          (a) emit a PostValidateHookError envelope (exit 7),
+          (b) LEAVE the output workbook intact — it is presumed valid.
+        Prevents the worst-case regression where a missing validator
+        silently deletes a freshly-produced, correct workbook.
+        """
+        import json2xlsx.cli as cli_mod
+        original = cli_mod.run_post_validate
+        cli_mod.run_post_validate = lambda _out: (
+            False, False, "validator not found: synthetic"
+        )
+        os.environ["XLSX_JSON2XLSX_POST_VALIDATE"] = "1"
+        try:
+            with tempfile.TemporaryDirectory() as td:
+                inp = Path(td) / "in.json"
+                inp.write_text('[{"a": 1}]', encoding="utf-8")
+                out = Path(td) / "out.xlsx"
+                rc = cli_mod.main([str(inp), str(out)])
+                self.assertEqual(rc, 7)
+                # CRITICAL: output MUST survive hook-infrastructure failure.
+                self.assertTrue(
+                    out.is_file(),
+                    "workbook must NOT be deleted when the hook itself fails",
+                )
+        finally:
+            cli_mod.run_post_validate = original
+            os.environ.pop("XLSX_JSON2XLSX_POST_VALIDATE", None)
+
 
 # ===========================================================================
 # Public surface invariants (locked by 004.01 — re-asserted here)
@@ -1049,6 +1164,37 @@ class TestPublicSurface(unittest.TestCase):
     """Re-locks the 004.01 public-surface contract at the unit-test level
     so accidental package-init rewrites are caught early.
     """
+
+    def test_convert_helper_kwargs_with_flag_lookalike_value(self) -> None:
+        """VDD-multi Logic M4 fix: a kwarg whose VALUE starts with `--`
+        must NOT poison the argparse parse. The helper uses
+        `--flag=value` form so the value cannot be misread as a flag.
+        """
+        from json2xlsx import convert_json_to_xlsx
+        with tempfile.TemporaryDirectory() as td:
+            inp = Path(td) / "in.json"
+            inp.write_text('[{"a": 1}]', encoding="utf-8")
+            out = Path(td) / "out.xlsx"
+            # `date_format` starts with `--` — must NOT be swallowed as
+            # a separate `--strict-dates` flag.
+            rc = convert_json_to_xlsx(
+                str(inp), str(out),
+                date_format="--strict-dates",
+            )
+            self.assertEqual(rc, 0)
+            self.assertTrue(out.is_file())
+            # The date_format string is stored on the date cell — verify
+            # by writing a date column to confirm the value applied.
+            inp.write_text('[{"d": "2024-01-15"}]', encoding="utf-8")
+            out2 = Path(td) / "out2.xlsx"
+            rc2 = convert_json_to_xlsx(
+                str(inp), str(out2),
+                date_format="--strict-dates",
+            )
+            self.assertEqual(rc2, 0)
+            import openpyxl
+            wb = openpyxl.load_workbook(out2)
+            self.assertEqual(wb.active["A2"].number_format, "--strict-dates")
 
     def test_re_export_set(self) -> None:
         from json2xlsx import (

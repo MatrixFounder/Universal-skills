@@ -145,7 +145,13 @@ class InvalidDateString(_AppError):
 class SelfOverwriteRefused(_AppError):
     def __init__(self, *, input_path: str, output_path: str) -> None:
         super().__init__(
-            f"Input and output resolve to the same path: {input_path}",
+            # VDD-multi Logic L5 fix: include both paths in the
+            # human-readable message so users without --json-errors
+            # see whether the typo was on the input or output side.
+            (
+                f"Input and output resolve to the same path "
+                f"(input={input_path!r}, output={output_path!r})"
+            ),
             code=6, error_type="SelfOverwriteRefused",
             details={"input": input_path, "output": output_path},
         )

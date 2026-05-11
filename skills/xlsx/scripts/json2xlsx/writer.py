@@ -55,6 +55,12 @@ MAX_COL_WIDTH = 50
 # bearing). Forbidden character set per ECMA-376 / Excel 2016+ docs.
 _FORBIDDEN_SHEET_CHARS = frozenset("[]:*?/\\")
 _RESERVED_SHEET_NAMES = frozenset({"history"})  # case-insensitive match
+# VDD-multi Logic M1 + Security LOW-1 lock: Excel additionally rejects
+# control chars (`\x00`-`\x1f`) and apostrophe (`'`) at first or last
+# position. Without these guards a JSON sheet key like `"'foo'"` or
+# `"benign‮exe.sh"` slips past xlsx-2 and either crashes openpyxl
+# on title assignment or lands a Unicode RTL spoof in Excel's tab.
+_CONTROL_CHAR_ORDS = frozenset(range(0x00, 0x20))
 
 
 def write_workbook(
@@ -212,6 +218,19 @@ def _validate_sheet_name(name: str) -> None:
     Auto-sanitization (truncate/replace) is out of scope v1 because
     silently mutating user-supplied sheet keys is more dangerous than
     a clear error.
+
+    Rule set (VDD-multi merged from Logic M1 + Security LOW-1):
+      1. Non-empty.
+      2. Length ≤ 31 chars.
+      3. No `[]:*?/\\` characters (ECMA-376 forbidden set).
+      4. No control characters (`\\x00`-`\\x1f` — break OOXML serialisation
+         on some Excel builds; `\\u202E` RTL-override etc. are NOT
+         covered by this gate, but are far less common and risk-rated
+         lower than control chars).
+      5. Apostrophe (`'`) not at first or last character — Excel
+         hard-rejects on workbook load (the apostrophe is its
+         single-quote sheet-name delimiter in formulas).
+      6. Not case-insensitive `"history"` (Excel reserved).
     """
     if not name:
         raise InvalidSheetName(name=name, reason="empty")
@@ -225,6 +244,20 @@ def _validate_sheet_name(name: str) -> None:
         raise InvalidSheetName(
             name=name,
             reason=f"contains forbidden character(s) {bad}",
+        )
+    ctrl_indices = [i for i, c in enumerate(name) if ord(c) in _CONTROL_CHAR_ORDS]
+    if ctrl_indices:
+        raise InvalidSheetName(
+            name=name,
+            reason=(
+                f"contains control character(s) at offset(s) "
+                f"{ctrl_indices} (Excel rejects \\x00-\\x1f)"
+            ),
+        )
+    if name.startswith("'") or name.endswith("'"):
+        raise InvalidSheetName(
+            name=name,
+            reason="apostrophe is not permitted at the start or end of a sheet name",
         )
     if name.lower() in _RESERVED_SHEET_NAMES:
         raise InvalidSheetName(

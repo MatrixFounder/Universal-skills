@@ -87,13 +87,36 @@ def read_stdin_utf8() -> bytes:
     return sys.stdin.buffer.read()
 
 
-def run_post_validate(output: Path) -> tuple[bool, str]:
+def run_post_validate(output: Path) -> tuple[bool, bool, str]:
     """Invoke `office/validate.py` on `output` via subprocess.
 
-    Returns `(passed, captured_output)`. Captured output is the
-    concatenation of stdout + stderr decoded as UTF-8 (errors replaced).
-    The caller truncates to ≤ 8192 bytes when embedding into the
-    cross-5 envelope's `details.validator_output`.
+    Returns `(passed, hook_ok, captured_output)` — the three-state
+    contract addresses VDD-multi Logic H1: the orchestrator MUST
+    distinguish a **workbook failure** (validator ran, reported a
+    real defect in our output → unlink + envelope) from a
+    **hook-infrastructure failure** (validator missing / timed out /
+    crashed before evaluating the workbook → envelope but DO NOT
+    unlink a perfectly-valid workbook the user just produced).
+
+      passed   — True iff validator exit == 0 (workbook is valid).
+      hook_ok  — True iff the hook itself ran to completion. False
+                 when the validator file is missing OR the subprocess
+                 timed out OR raised before producing an exit code.
+                 The CLI uses this flag to decide whether unlinking
+                 the output is appropriate.
+      captured — stdout + stderr decoded as UTF-8 (errors replaced).
+                 The caller truncates to ≤ 8192 bytes (UTF-8 byte
+                 cap, not char cap) when embedding into the cross-5
+                 envelope's `details.validator_output`.
+
+    Truth table:
+      passed=T, hook_ok=T → workbook valid, success path
+      passed=F, hook_ok=T → workbook failed → orchestrator unlinks
+      passed=F, hook_ok=F → hook broken (missing/timeout) → orchestrator
+                              keeps the (presumably valid) workbook;
+                              user sees envelope but doesn't lose data
+      passed=T, hook_ok=F → cannot occur (no successful exit code
+                              without the hook running)
 
     The entry point is `office/validate.py` (the cross-format
     dispatcher that picks the per-extension validator), NOT
@@ -109,9 +132,6 @@ def run_post_validate(output: Path) -> tuple[bool, str]:
     of-file path setup (`sys.path.insert(0, parent)`) handles its
     own import resolution.
 
-    Defensive: if the validator file is missing (skill broken),
-    return `(False, "validator not found: ...")` rather than crashing.
-
     Timeout: 60 s. The validator should complete in milliseconds on
     typical workbooks; a longer wait indicates a validator bug.
     """
@@ -120,7 +140,9 @@ def run_post_validate(output: Path) -> tuple[bool, str]:
     validator = scripts_dir / "office" / "validate.py"
 
     if not validator.is_file():
-        return False, f"validator not found: {validator}"
+        # Hook-infrastructure failure — skill broken / under maintenance.
+        # Do NOT signal a workbook problem.
+        return False, False, f"validator not found: {validator}"
 
     try:
         proc = subprocess.run(
@@ -131,7 +153,10 @@ def run_post_validate(output: Path) -> tuple[bool, str]:
             check=False,
         )
     except subprocess.TimeoutExpired:
-        return False, "validator timed out after 60s"
+        # Hook-infrastructure failure — validator hung. The workbook
+        # we just wrote is fine; surface the hook problem without
+        # deleting our output.
+        return False, False, "validator timed out after 60s"
 
     captured = (proc.stdout + proc.stderr).decode("utf-8", errors="replace")
-    return proc.returncode == 0, captured
+    return proc.returncode == 0, True, captured

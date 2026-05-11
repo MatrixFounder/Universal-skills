@@ -30,6 +30,28 @@ from .exceptions import (
 )
 
 
+class _NanInfRejected(Exception):
+    """Internal sentinel — raised by `_reject_nan_inf` to halt
+    `json.loads` when a non-finite literal appears in the input.
+    Caught at the call site and translated to `JsonDecodeError` for
+    a uniform cross-5 envelope.
+    """
+
+    def __init__(self, token: str) -> None:
+        super().__init__(token)
+        self.token = token
+
+
+def _reject_nan_inf(token: str) -> None:
+    """Parse-time guard against Python's non-strict JSON acceptance
+    of `NaN`, `Infinity`, `-Infinity`. Passed to `json.loads(...,
+    parse_constant=...)`. Raises `_NanInfRejected` so the loader
+    can surface a typed envelope rather than letting the value
+    flow through to openpyxl.
+    """
+    raise _NanInfRejected(token)
+
+
 @dataclass(frozen=True)
 class ParsedInput:
     """Shape-normalised representation produced by F2.
@@ -111,10 +133,43 @@ def detect_and_parse(
             source_label=source,
         )
 
+    # VDD-multi Security M-1 fix: surface UTF-8 decoding failures
+    # through the same cross-5 envelope contract as JSON parse errors
+    # (AQ-3 lock — every taxonomy error routes through report_error,
+    # never raw Python tracebacks for malformed input). UTF-16 / latin-1
+    # bytes / random binary land here.
     try:
-        doc = json.loads(raw.decode("utf-8"))
+        text = raw.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise JsonDecodeError(
+            line=1,
+            column=exc.start + 1,
+            msg=(
+                f"invalid UTF-8 byte sequence at offset {exc.start} "
+                f"({exc.reason})"
+            ),
+        ) from exc
+
+    # VDD-multi Logic H2 fix: Python's json.loads is non-strict — it
+    # silently accepts the literal tokens `NaN`, `Infinity`, and
+    # `-Infinity`. These would flow through coerce_cell as `float`
+    # and openpyxl would write them into the cell XML, producing a
+    # workbook that Excel renders as #NUM! errors (or refuses to
+    # open). parse_constant rejects them at decode time with a
+    # typed envelope.
+    try:
+        doc = json.loads(text, parse_constant=_reject_nan_inf)
     except json.JSONDecodeError as exc:
         raise JsonDecodeError(line=exc.lineno, column=exc.colno, msg=exc.msg) from exc
+    except _NanInfRejected as exc:
+        raise JsonDecodeError(
+            line=1, column=1,
+            msg=(
+                f"non-finite numeric literal {exc.token!r} is not valid "
+                "for an Excel cell (NaN / Infinity / -Infinity not "
+                "supported; emit `null` instead)"
+            ),
+        ) from exc
 
     shape = _dispatch_root(doc)
     if shape == "array_of_objects":
@@ -156,10 +211,36 @@ def _parse_jsonl(raw: bytes) -> list[dict[str, Any]]:
         s = line.strip()
         if not s:
             continue
+        # UTF-8 decode first so an invalid byte sequence surfaces as
+        # a typed JsonDecodeError envelope rather than an uncaught
+        # UnicodeDecodeError traceback (VDD-multi Security M-1 lock,
+        # applied to the JSONL path too).
         try:
-            parsed = json.loads(s)
+            text = s.decode("utf-8")
+        except UnicodeDecodeError as exc:
+            raise JsonDecodeError(
+                line=idx,
+                column=exc.start + 1,
+                msg=(
+                    f"invalid UTF-8 byte sequence at offset {exc.start} "
+                    f"on JSONL line {idx} ({exc.reason})"
+                ),
+            ) from exc
+        try:
+            # Same NaN/Inf guard as the single-document path (VDD-multi
+            # Logic H2 lock).
+            parsed = json.loads(text, parse_constant=_reject_nan_inf)
         except json.JSONDecodeError as exc:
             raise JsonDecodeError(line=idx, column=exc.colno, msg=exc.msg) from exc
+        except _NanInfRejected as exc:
+            raise JsonDecodeError(
+                line=idx, column=1,
+                msg=(
+                    f"non-finite numeric literal {exc.token!r} is not "
+                    "valid for an Excel cell on JSONL line "
+                    f"{idx} (NaN / Infinity / -Infinity not supported)"
+                ),
+            ) from exc
         if not isinstance(parsed, dict):
             raise UnsupportedJsonShape(
                 root_type=type(parsed).__name__,
