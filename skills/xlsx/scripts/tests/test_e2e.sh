@@ -534,10 +534,19 @@ integrity_pair() {
 
 # T-clean-no-comments — task 2.04 LANDED: clean.xlsx + --cell A5 produces
 # xl/commentsN.xml + xl/drawings/vmlDrawingK.xml + Overrides + sheet rels.
+# CI-diagnostic wrapper: capture stderr to file, surface on failure. The
+# previous form (`>/dev/null 2>&1`) silently swallowed errors and let
+# `set -euo pipefail` abort the script mid-section without context,
+# leaving CI with only "Process completed with exit code 1." in the log.
+set +e
 "$PY" xlsx_add_comment.py tests/golden/inputs/clean.xlsx "$TMP/T-clean.xlsx" \
-    --cell A5 --author "Reviewer" --text "msg" >/dev/null 2>&1
+    --cell A5 --author "Reviewer" --text "msg" >/dev/null 2>"$TMP/T-clean.err"
 rc=$?
-[ "$rc" -eq 0 ] && [ -s "$TMP/T-clean.xlsx" ] || nok "T-clean-no-comments" "exit=$rc"
+set -e
+if [ "$rc" -ne 0 ] || [ ! -s "$TMP/T-clean.xlsx" ]; then
+    err_blob=$(head -c 4096 "$TMP/T-clean.err" 2>/dev/null || true)
+    nok "T-clean-no-comments" "exit=$rc stderr=${err_blob:-<empty>}"
+fi
 # Validate produced workbook + assert OOXML shape via lxml.
 "$PY" -m office.validate "$TMP/T-clean.xlsx" >/dev/null 2>&1 \
     && "$PY" -c "
