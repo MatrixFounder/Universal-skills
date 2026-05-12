@@ -2540,7 +2540,10 @@ PTPYEOF
 cat > "$TMP/pt_runner.py" << 'PTRUNNEREOF'
 import sys, os, tempfile
 from pathlib import Path
-sys.path.insert(0, '/Users/sergey/dev-projects/Universal-skills/skills/docx/scripts')
+# Scripts dir comes from the env var set on the parent invocation
+# (was previously hardcoded to a developer-local absolute path, which
+# broke GitHub Actions runners — 2026-05-12 CI fix).
+sys.path.insert(0, os.environ["DOCX_E2E_SCRIPTS_DIR"])
 import docx_replace
 def fake_materialise(md_path, scripts_dir, tmpdir):
     # Ignore md_path; return the pre-built malicious docx instead.
@@ -2562,8 +2565,8 @@ sys.exit(rc)
 PTRUNNEREOF
 PT_BASE_ABS=$(cd ../examples && pwd)/docx_replace_body.docx
 set +e
-pt_stderr=$("$PY" "$TMP/pt_runner.py" "$TMP/pt_malicious.docx" \
-    "$PT_BASE_ABS" "$TMP/pt_out.docx" 2>&1)
+pt_stderr=$(DOCX_E2E_SCRIPTS_DIR="$SKILL_DIR" "$PY" "$TMP/pt_runner.py" \
+    "$TMP/pt_malicious.docx" "$PT_BASE_ABS" "$TMP/pt_out.docx" 2>&1)
 pt_rc=$?
 set -e
 if [ "$pt_rc" = "1" ] && echo "$pt_stderr" | grep -q '"type": *"Md2DocxOutputInvalid"' \
