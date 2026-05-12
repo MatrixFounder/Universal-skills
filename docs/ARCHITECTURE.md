@@ -1,6 +1,13 @@
 # ARCHITECTURE: xlsx-8 — `xlsx2csv.py` / `xlsx2json.py` read-back CLIs
 
-> **Status:** DRAFT v1 — pending Architecture-Reviewer approval.
+> **Status:** ✅ **IMPLEMENTED 2026-05-12** (8 atomic sub-tasks
+> 010-01..010-08 + vdd-multi adversarial review with 6 fixes — see
+> §14 Post-merge adaptations). 841 tests green; ruff clean; 12-line
+> cross-skill `diff -q` silent; `validate_skill.py skills/xlsx`
+> exit 0. Body below preserves the design-time specification verbatim;
+> the post-merge implementation differs in a small number of
+> documented ways — see **§14 Post-merge adaptations** at the foot of
+> this document for the full delta.
 >
 > Prior `docs/ARCHITECTURE.md` (xlsx-10.A `xlsx_read/`) is archived
 > verbatim at
@@ -1020,3 +1027,186 @@ architecture documents MUST reference these by ID when discussing
 shared behaviour (e.g. xlsx-9 reuses the U+203A flatten separator
 from D4; xlsx-10.B may reference the closed-API consumer pattern from
 D-A5).
+
+---
+
+## 14. Post-merge adaptations (vdd-multi 2026-05-12)
+
+This section documents implementation choices that **deviate from**
+or **extend** the design above. Each adaptation was identified by
+the parallel critic pass (`/vdd-multi`) after the 010-01..010-08
+chain merged. All have regression tests in
+`scripts/xlsx2csv2json/tests/`.
+
+### 14.1. `--include-hyperlinks` forces `read_only_mode=False` (C1 fix)
+
+**Discovered by:** critic-logic (HIGH) and critic-performance
+(CRITICAL) jointly.
+**Root cause:** openpyxl's `ReadOnlyWorksheet.iter_rows()` returns
+`ReadOnlyCell` objects which do NOT expose `cell.hyperlink`. The
+hyperlink metadata lives in `xl/worksheets/_rels/sheetN.xml.rels`
+and is only joined to cells by the in-memory (non-streaming)
+`Worksheet` class. The xlsx-10.A library auto-selects
+`read_only=True` for files > 10 MiB (per `_workbook._decide_read_only`)
+— for those workbooks, `_extract_hyperlinks_for_region` returned an
+empty map silently.
+**Fix:** `cli._dispatch_to_emit` passes
+`read_only_mode=False if args.include_hyperlinks else None` to
+`open_workbook`. Trade-off: large workbook + hyperlinks requested
+loads in non-streaming mode (memory cost ∝ workbook size). The
+trade-off is opt-in (controlled by the flag). Honest scope **(m)**
+in TASK §1.4.
+**Regression test:**
+`test_e2e.py::test_22_pre_hyperlinks_read_only_mitigation` pins both
+the failure mode (force `read_only=True` directly → empty map) and
+the shim's mitigation (through `convert_xlsx_to_json` → hyperlinks
+survive end-to-end).
+
+### 14.2. `--datetime-format raw` JSON coercion via `default=_json_default` (H1 fix)
+
+**Discovered by:** critic-logic (HIGH).
+**Root cause:** the library returns native `datetime` / `date` /
+`time` / `timedelta` objects under `datetime_format="raw"`. The
+stdlib `json` module cannot encode them — `json.dumps` raised
+`TypeError: Object of type datetime is not JSON serializable`.
+**Fix:** `emit_json.emit_json` passes `default=_json_default` to
+`json.dumps`. The helper coerces `datetime` / `date` / `time` via
+`.isoformat()` and `timedelta` via `.total_seconds()`. Honest scope
+**(n)** in TASK §1.4 — `raw` and `ISO` produce identical JSON output
+today; the flag remains meaningful for library-level Python callers.
+**Regression test:**
+`test_e2e.py::test_H1_datetime_raw_with_json_does_not_crash`.
+
+### 14.3. `TableData.warnings` re-emitted via `warnings.warn` at dispatch boundary (H2 fix)
+
+**Discovered by:** critic-logic (HIGH).
+**Root cause:** the library's `read_table` appends soft warnings
+(synthetic-headers, ambiguous-header-boundary, stale-cache) to
+`TableData.warnings: list[str]` WITHOUT calling `warnings.warn`. The
+shim's outer `warnings.catch_warnings(record=True)` block only
+sees what's emitted via the warnings module — TableData strings
+were invisible. HS-7 contract ("warnings routed to stderr via
+`warnings.showwarning`") was violated.
+**Fix:** `dispatch.iter_table_payloads` loops over
+`table_data.warnings` and re-emits each via
+`warnings.warn(msg, UserWarning, stacklevel=2)` after the
+hyperlink-map step. Caught by the shim's outer block, replayed via
+`warnings.showwarning` per HS-7.
+**Regression test:**
+`test_e2e.py::test_H2_table_data_warnings_propagate_to_stderr`
+(uses `listobject_header_zero.xlsx` to trigger the synthetic-headers
+warning via subprocess; asserts stderr contains both
+`"synthetic col_"` and the table name).
+
+### 14.4. Terminal envelope branches for unhandled exceptions (H3 fix)
+
+**Discovered by:** critic-security (HIGH).
+**Root cause:** `_run_with_envelope` caught only 5 documented
+exception classes (`FileNotFoundError`, `BadZipFile`,
+`EncryptedWorkbookError`, `SheetNotFound`, `OverlappingMerges`) +
+`_AppError`. Any other exception — `PermissionError` (disk full /
+EACCES on output_dir), `OSError`, `MemoryError`, generic
+`RuntimeError` from openpyxl internals, `KeyError` from xlsx_read
+internals — escaped uncaught. Python printed a full traceback to
+stderr, which contained absolute paths via `cli.py`, openpyxl
+internals, and the input file path itself — defeating the
+basename-only promise in §7.2.
+**Fix:** added two terminal branches at the end of `_run_with_envelope`:
+
+```python
+except (PermissionError, OSError) as exc:
+    filename = Path(getattr(exc, "filename", "") or "").name
+    return _errors.report_error(
+        f"I/O error: {filename or type(exc).__name__}",
+        code=1, error_type=type(exc).__name__,
+        details={"filename": filename} if filename else {},
+        json_mode=json_mode, stream=sys.stderr,
+    )
+except Exception as exc:  # noqa: BLE001 — terminal envelope
+    return _errors.report_error(
+        f"Internal error: {type(exc).__name__}",
+        code=1, error_type=type(exc).__name__,
+        details={},  # raw message dropped to prevent path leak
+        json_mode=json_mode, stream=sys.stderr,
+    )
+```
+
+Raw exception messages are dropped on the generic branch (they may
+contain paths from openpyxl / xlsx_read internals); `PermissionError`
+/ `OSError` get a structured `details.filename` from the exception's
+own attribute. Honest scope **(p)** in TASK §1.4.
+**Regression tests:**
+`test_e2e.py::test_H3_unhandled_exception_caught_no_path_leak` and
+`test_H3_generic_exception_redacted`.
+
+### 14.5. Mode-aware `--header-rows` default (M1 fix)
+
+**Discovered by:** critic-logic (MED).
+**Root cause:** the parser default was `1` (int). The conflict rule
+`isinstance(args.header_rows, int) and args.tables != "whole"` thus
+fired unconditionally whenever the user typed `--tables auto` (or
+`listobjects` / `gap`) without an explicit `--header-rows`, even
+though the user accepted the default. argparse cannot distinguish
+"user typed 1" from "argparse fell back to 1".
+**Fix:** parser default is now `None`; `_validate_flag_combo`
+materialises it:
+- `args.header_rows is None and args.tables == "whole"` → `1`
+- `args.header_rows is None and args.tables != "whole"` → `"auto"`
+
+The explicit-int conflict rule still fires (correctly) when the
+user types a literal integer under a multi-table mode.
+**Regression tests:**
+`test_e2e.py::test_M1_default_header_rows_with_tables_auto_no_conflict`
+and `test_M1_explicit_int_header_rows_with_multi_table_still_conflicts`.
+
+### 14.6. Multi-region CSV collision suffix (M2 fix)
+
+**Discovered by:** critic-logic (MED).
+**Root cause:** two regions sharing `(sheet, region_name)` — most
+commonly a user-named ListObject `Table-1` colliding with a
+gap-detect fallback `Table-1` — both wrote to
+`<output_dir>/<sheet>/Table-1.csv`. The second silently overwrote
+the first.
+**Fix:** `_emit_multi_region` maintains a `written: set[Path]`
+tracker. On collision, append `__2` / `__3` / ... to the filename
+until the path is unique. The path-traversal guard is re-checked
+for each suffix variant. Honest scope **(o)** in TASK §1.4.
+**Regression test:**
+`test_emit_csv.py::test_M2_colliding_region_names_get_numeric_suffix`.
+
+### 14.7. Accepted-risk items (NOT fixed in this iteration)
+
+The critics flagged additional items deferred to v2:
+
+- **Unicode normalization in path validator** (security M, critic
+  S/H2): sheet names with `․․` (one-dot-leader) or
+  `．．` (fullwidth full stop) bypass the ASCII `".."`
+  reject; the `is_relative_to` defense-in-depth still catches the
+  resulting path, but the first-line defense has a gap. Accepted
+  because: (a) macOS / Linux v1 scope minimises Windows-specific
+  pitfalls; (b) defense-in-depth is sound; (c) workbook authors
+  can already produce filename-confused output through other
+  channels.
+- **CSV injection on `=` / `+` / `-` / `@`-prefixed cell values**
+  (security M, critic S/M2): xlsx-8 emits cell values verbatim;
+  Excel/Calc reopening the CSV may interpret leading `=` as a
+  formula. Matches csv2xlsx parity (no defusing there either) —
+  joint fix tracked as xlsx-2a / csv2xlsx-1 backlog item.
+- **`javascript:` / `data:` URIs in hyperlinks** (security M,
+  critic S/M3): hyperlink targets are emitted verbatim in JSON
+  `href` and CSV markdown-link text. Downstream consumers
+  (LLM renderers, markdown viewers) must sanitise. Documented as
+  caller responsibility — would add `--hyperlink-scheme-allowlist`
+  in v2 if user demand surfaces.
+- **JSON full-payload materialisation** (perf H, critic P/H2): the
+  emit_json path holds the entire shape + serialized string in
+  memory before write. Within the 250 MiB / 10K×20 budget but
+  tight. Streaming JSON deferred to v2.
+- **TOCTOU race in `_emit_multi_region`** (security M, critic
+  S/H3): a local attacker with write access to `output_dir` can
+  symlink-swap between `resolve()` and `open("w")`. `O_NOFOLLOW`
+  via `os.open` would close the window. Deferred — the threat
+  model is local attacker with write access, not in v1 scope.
+
+These items are documented here for traceability; the vdd-multi
+verdict was PASS after the 6 fixes above landed.

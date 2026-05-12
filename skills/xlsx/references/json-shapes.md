@@ -299,3 +299,138 @@ xlsx-8 merge commit. The xlsx-8 merge commit MUST:
 If xlsx-8 discovery work requires a revision to this spec, BOTH
 files must update synchronously in the same commit; otherwise
 `test_live_roundtrip` breaks until parity is restored.
+
+---
+
+## §11 xlsx-8 read-back shapes (`xlsx2json.py` output)
+
+> **Frozen contract** as of TASK 010 merge (xlsx-8). The four output
+> shapes below are produced by `xlsx2json.py` and the
+> `convert_xlsx_to_json` public helper. xlsx-2 (`json2xlsx.py`) v1
+> consume behaviour is documented per shape.
+
+### §11.1 Shape 1 — Single sheet, single region (flat array-of-objects)
+
+```json
+[
+  {"id": 1, "name": "alice", "score": 95},
+  {"id": 2, "name": "bob",   "score": 87}
+]
+```
+
+- Triggered when:
+  - `--sheet <NAME>` selects a single sheet AND that sheet has 1
+    region, OR
+  - the workbook has exactly 1 visible sheet (default `--sheet all`)
+    with 1 region.
+- xlsx-2 v1 consume: **lossless** — `convert_json_to_xlsx(...)` reads
+  this as the array-of-objects input shape (§2.1 above).
+
+### §11.2 Shape 2 — Multi-sheet, single region per sheet (dict-of-arrays)
+
+```json
+{
+  "SheetA": [{"k": "a", "v": 1}, {"k": "b", "v": 2}],
+  "SheetB": [{"x": "p", "y": 10}]
+}
+```
+
+- Triggered when: `--sheet all` (default) AND > 1 visible sheet AND
+  each sheet has exactly 1 region.
+- xlsx-2 v1 consume: **lossless** — matches the multi-sheet dict
+  input shape (§2.2 above).
+
+### §11.3 Shape 3 — Multi-sheet, multi-region per sheet (nested `tables`)
+
+```json
+{
+  "Summary": {
+    "tables": {
+      "RevenueTable": [{"quarter": "Q1", "revenue": 1000}],
+      "CostsTable":   [{"category": "salary", "amount": 5000}]
+    }
+  },
+  "Other": [{"k": "a"}]
+}
+```
+
+- Triggered when: `--sheet all` AND ≥ 1 sheet has > 1 region
+  detected. Per-sheet shape is **mixed**: a sheet with 1 region uses
+  the flat form (Shape 2 per-sheet); a sheet with > 1 region uses
+  the `tables` wrapper.
+- The `tables` key is spelled verbatim, lowercase ASCII. Region keys
+  inside are ListObject names, named-range names, or `Table-N` for
+  gap-detected regions.
+- xlsx-2 v1 consume: **LOSSY** — xlsx-2 v1 does NOT recognise the
+  `tables` key as a region container. Two recover paths:
+  - The `tables` key collapses to a sheet-named entry whose value is
+    `{"tables": {...}}` — a non-array, which xlsx-2 v1 then treats
+    as an unsupported shape and rejects with
+    `UnsupportedJsonShape` (exit 2).
+  - **Workaround:** consumers wanting round-trip MUST emit with
+    `--tables whole` (Shape 1 or Shape 2). Full restoration via
+    xlsx-2 v2 `--write-listobjects` deferred (TASK §6.2).
+
+### §11.4 Shape 4 — Single sheet, multi-region (flat `{Name: [...]}`)
+
+```json
+{
+  "RevenueTable": [{"quarter": "Q1", "revenue": 1000}],
+  "CostsTable":   [{"category": "salary", "amount": 5000}]
+}
+```
+
+- Triggered when: `--sheet <NAME>` (or single visible sheet) AND
+  > 1 region.
+- xlsx-2 v1 consume: shape collides with **§2.2 multi-sheet dict**
+  — xlsx-2 v1 reads this as TWO separate sheets named "RevenueTable"
+  and "CostsTable", which is *almost* the right semantic. Original
+  Excel sheet name is **lost**; the regions become top-level sheets.
+  Lossy but recoverable.
+
+### §11.5 Hyperlink cell shape (when `--include-hyperlinks`)
+
+```json
+{"col_a": {"value": "click here", "href": "https://..."},
+ "col_b": 42}
+```
+
+- Each hyperlinked cell becomes a 2-key object replacing the raw
+  value. Non-hyperlinked cells in the same row remain raw.
+- Keys are spelled verbatim: `"value"` (cell text), `"href"` (URL).
+- xlsx-2 v1 consume: **LOSSY** — xlsx-2 reads the dict as the cell
+  value (a JSON object becomes a string `{...}` written into Excel).
+  Round-trip recover deferred to xlsx-2 v2.
+
+### §11.6 `--header-flatten-style array` shape (multi-row header)
+
+```json
+[
+  [
+    {"key": ["2026 plan", "Q1"], "value": 100},
+    {"key": ["2026 plan", "Q2"], "value": 200}
+  ]
+]
+```
+
+- Triggered by explicit `--header-flatten-style array` (CSV ignores
+  this flag silently per ARCH Q-2).
+- Each row becomes an **array of `{key: [parts], value: v}` objects**,
+  not a dict. Splits the U+203A separator that xlsx_read uses for
+  multi-row header flatten.
+- xlsx-2 v1 consume: **LOSSY** — xlsx-2 cannot ingest array-of-arrays
+  shape; falls through to `UnsupportedJsonShape`.
+
+### §11.7 Round-trip activation
+
+The `test_live_roundtrip` test in
+`scripts/tests/test_json2xlsx.py::TestRoundTripXlsx8` was previously
+gated by `@unittest.skipUnless(_xlsx2json_available(), …)` and
+activated automatically once `import xlsx2json` succeeded. After
+TASK 010 merge:
+
+1. The shim `skills/xlsx/scripts/xlsx2json.py` is present, so
+   `_xlsx2json_available()` returns True.
+2. The test body now performs `xlsx2json → json2xlsx → xlsx2json`
+   and asserts byte-identical JSON output (for Shape 1 / Shape 2
+   fixtures only — Shapes 3 / 4 are lossy by design).

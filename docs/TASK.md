@@ -135,6 +135,38 @@ applicable.
   `mode="auto"` then filters out regions where
   `region.source != "gap_detect"` (no library API extension in v1;
   see Q-A6).
+- **(m) `--include-hyperlinks` forces `read_only_mode=False`** at
+  workbook open (vdd-multi C1 fix). openpyxl's `ReadOnlyCell` does
+  NOT expose `cell.hyperlink` — the data lives in
+  `xl/worksheets/_rels/sheetN.xml.rels` and is only joined to cells
+  by the in-memory `Worksheet` (non-streaming). The library
+  auto-selects `read_only=True` for files > 10 MiB; to make the flag
+  actually work, the shim overrides to `read_only=False` when
+  hyperlinks are requested. Trade-off: increased memory cost for
+  large workbooks (caller-controlled, opt-in).
+- **(n) `--datetime-format raw` (JSON) emits ISO-8601** strings
+  (vdd-multi H1 fix). The library returns native Python `datetime`
+  objects; stdlib `json` cannot encode them, so the shim coerces
+  via `.isoformat()`. Net: `raw` and `ISO` produce **identical** JSON
+  output today. The flag distinction is meaningful for Python
+  callers using the library directly, NOT for CLI JSON output.
+  CSV path is unaffected (it str()-coerces via `csv.writer`).
+- **(o) Multi-region CSV same-name regions get a `__N` suffix**
+  (vdd-multi M2 fix). Two regions sharing `(sheet, region_name)` —
+  most commonly a ListObject named `Table-1` colliding with a
+  gap-detect fallback `Table-1` — previously silently overwrote.
+  The shim now appends `__2`, `__3`, ... to the second-and-later
+  collisions during a single emit pass. Region names that already
+  contain literal `__` are unaffected; the suffix is applied only
+  on file-path collision.
+- **(p) Internal errors surface as redacted envelopes**
+  (vdd-multi H3 fix). Exceptions outside the documented dispatch
+  table (`PermissionError`, `OSError`, generic `RuntimeError`, etc.)
+  are caught by a terminal envelope branch and rendered as
+  `Internal error: <ClassName>` with empty `details` — the raw
+  message is dropped to prevent absolute-path leaks from openpyxl /
+  xlsx_read internals. For local debugging, run without
+  `--json-errors` to see the Python traceback.
 
 ---
 

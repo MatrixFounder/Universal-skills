@@ -1013,14 +1013,85 @@ class TestRoundTripXlsx8(unittest.TestCase):
     @unittest.skipUnless(_xlsx2json_available(), "xlsx-8 not landed yet")
     def test_live_roundtrip(self) -> None:
         """Live test: xlsx2json(original) → JSON → json2xlsx → assert
-        structural equivalence. Activated automatically once xlsx-8
-        lands and `import xlsx2json` succeeds.
+        structural equivalence.
 
-        Implementation body is reserved for the xlsx-8 merge commit
-        (per O1 closure — xlsx-2 owns the contract; xlsx-8 wires the
-        live invocation).
+        Activated automatically (skipUnless predicate becomes True
+        once `import xlsx2json` succeeds — true at TASK 010 merge).
+
+        Round-trip scope:
+        - xlsx-2 produces an .xlsx from the golden JSON.
+        - xlsx-8 (`xlsx2json`) reads it back to JSON.
+        - The re-emitted JSON is structurally equivalent to the
+          golden (sheet names, headers, row count, key cell values).
+
+        Shape 3 / Shape 4 (nested `tables`, single-sheet multi-region)
+        are lossy on xlsx-2 v1 consume per §11 of `json-shapes.md`
+        and are explicitly out of scope here. The golden fixture is
+        Shape 2 (multi-sheet dict-of-arrays).
         """
-        self.skipTest("Implementation deferred to xlsx-8 merge commit.")
+        import json
+        from json2xlsx import convert_json_to_xlsx
+        from xlsx2csv2json import convert_xlsx_to_json
+
+        with tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False) as tmp_xlsx:
+            xlsx_path = Path(tmp_xlsx.name)
+        with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as tmp_json:
+            json_path = Path(tmp_json.name)
+        try:
+            # Phase 1: golden JSON → xlsx via xlsx-2.
+            rc1 = convert_json_to_xlsx(str(self.GOLDEN), str(xlsx_path))
+            self.assertEqual(rc1, 0, "xlsx-2 conversion failed")
+
+            # Phase 2: xlsx → JSON via xlsx-8.
+            rc2 = convert_xlsx_to_json(str(xlsx_path), str(json_path))
+            self.assertEqual(rc2, 0, "xlsx-8 conversion failed")
+
+            # Phase 3: structural equivalence of golden vs re-emit.
+            golden = json.loads(self.GOLDEN.read_text("utf-8"))
+            emitted = json.loads(json_path.read_text("utf-8"))
+
+            # Top-level keys (sheet names) match.
+            self.assertEqual(set(emitted.keys()), set(golden.keys()))
+
+            # Per sheet: row count + headers + key cell values match.
+            for sheet_name, golden_rows in golden.items():
+                emitted_rows = emitted[sheet_name]
+                self.assertEqual(
+                    len(emitted_rows), len(golden_rows),
+                    f"row count mismatch on sheet {sheet_name!r}",
+                )
+                # Headers (dict keys) match for the first row at least.
+                self.assertEqual(
+                    set(emitted_rows[0].keys()), set(golden_rows[0].keys()),
+                    f"header set mismatch on sheet {sheet_name!r}",
+                )
+                # Key cell values: strings, ints, bools, nulls
+                # round-trip cleanly. ISO date strings round-trip as
+                # ISO date strings (xlsx-2 writes a datetime cell,
+                # xlsx-8 reads it back as ISO string under default
+                # datetime_format).
+                for i, (g, e) in enumerate(zip(golden_rows, emitted_rows)):
+                    for k in g:
+                        # Honest scope: xlsx-2 writes ISO-date strings
+                        # as Excel date cells; xlsx-8 reads them back
+                        # as ISO datetime (`2024-01-15T00:00:00`). The
+                        # date portion is preserved — accept either.
+                        golden_v, emitted_v = g[k], e[k]
+                        if (
+                            isinstance(golden_v, str)
+                            and isinstance(emitted_v, str)
+                            and len(golden_v) == 10  # YYYY-MM-DD
+                            and emitted_v.startswith(golden_v)
+                        ):
+                            continue
+                        self.assertEqual(
+                            emitted_v, golden_v,
+                            f"cell mismatch sheet={sheet_name} row={i} key={k}: "
+                            f"golden={golden_v!r}, emitted={emitted_v!r}",
+                        )
+        finally:
+            xlsx_path.unlink(missing_ok=True)
+            json_path.unlink(missing_ok=True)
 
 
 # ===========================================================================
