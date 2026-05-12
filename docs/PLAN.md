@@ -1,226 +1,378 @@
-# Development Plan: Task 009 — `xlsx-10.A` `xlsx_read/` library
+# Development Plan: Task 010 — `xlsx-8` `xlsx2csv.py` / `xlsx2json.py` read-back CLIs
 
 > **Mode:** VDD (Verification-Driven Development) + Stub-First.
-> **Status:** ✅ **MERGED 2026-05-12** (all 8 sub-tasks complete +
-> vdd-multi 3-iteration adversarial cycle). 178 xlsx_read tests +
-> 511 existing-xlsx tests green; ruff clean; validate_skill exit 0;
-> 12-line cross-skill `diff -q` silent. Post-merge adaptations
-> captured in [ARCHITECTURE.md §13](ARCHITECTURE.md).
-> **TASK:** [TASK.md](TASK.md) (Task 009, slug `xlsx-read-library`).
-> **Architecture:** [ARCHITECTURE.md](ARCHITECTURE.md) (xlsx-10.A).
-> **Prior plan archived:** [plans/plan-008-docx-replace-relocators.md](plans/plan-008-docx-replace-relocators.md).
+> **Status:** DRAFT v1 — pending Plan-Reviewer approval.
+> **TASK:** [TASK.md](TASK.md) (Task 010, slug `xlsx-read-back`).
+> **Architecture:** [ARCHITECTURE.md](ARCHITECTURE.md) (xlsx-8 — thin
+> shim + `xlsx2csv2json/` package on top of xlsx-10.A `xlsx_read/`).
+> **Prior plan archived:** [plans/plan-009-xlsx-read-library.md](plans/plan-009-xlsx-read-library.md).
 > **Atomic-chain hint (architect handoff):** [ARCHITECTURE.md §11](ARCHITECTURE.md).
+
+---
 
 ## 0. Strategy Summary
 
-- **Phase 1 (Structure & Stubs)** — single bootstrap task `009-01`:
-  package skeleton, toolchain (`pyproject.toml` + `ruff` +
-  `install.sh` + `requirements.txt`), all 7 module files as
-  importable stubs (`raise NotImplementedError` / `return None` /
-  hardcoded sentinels), all public dataclasses + enums + typed
-  exceptions **fully defined** (the contract is final), `__all__`
-  locked, `tests/` skeleton with one E2E stub asserting the
-  hardcoded sentinel behaviour, `SKILL.md §10` known-duplication
-  marker, `.AGENTS.md §xlsx_read` section.
-- **Phase 2 (Logic Implementation)** — 6 module-scoped logic
-  tasks (`009-02 … 009-07`) each replacing one private module's
-  stubs with real behaviour, adding the unit-test coverage for that
-  module, and **updating** the running E2E to assert real values
-  per `tdd-stub-first §2`.
-- **Stage 3 (Integration + final gates)** — task `009-08`:
-  `WorkbookReader.read_table` glue pulling F3+F5+F6 together,
-  context-manager protocol, 30 E2E scenarios from TASK §5.5,
-  closed-API regression test, `validate_skill.py` exit 0, 12-line
-  `diff -q` silent gate.
+### 0.1. Chainlink Decomposition Overview
 
-> **Atomicity check:** each task target = single F-region (one
-> module + its tests) — within the 2–4 hour budget per planner
+This plan is a **Chainlink** (VDD discipline): every Issue from the
+TASK RTM (R1–R20) is decomposed into one or more **Beads** (atomic
+sub-issues), each implementable in a single sitting (2–4 h) and
+verifiable through a single test case or test cluster. Beads are
+grouped by **module-scoped tasks** (`task-010-NN-*.md`), and each
+task is tagged Stub-First per `skill-tdd-stub-first §1–§2`.
+
+### 0.2. Phasing
+
+- **Phase 1 (Structure & Stubs)** — single bootstrap task `010-01`:
+  package skeleton (`xlsx2csv2json/`), both shims (`xlsx2csv.py` +
+  `xlsx2json.py`), `__init__.py` `__all__` lock with all exception
+  classes defined (the public contract is frozen up-front), every
+  module a `pass`/`NotImplementedError` stub, `tests/` skeleton with
+  ONE smoke E2E asserting the hardcoded sentinel behaviour (Red →
+  Green on stubs). Toolchain is **inherited unchanged** from
+  xlsx-10.A (`pyproject.toml` / `ruff` / `install.sh` /
+  `requirements.txt` are NOT touched — see TASK §6.1 and ARCH C4/C5/C6).
+
+- **Phase 2 (Logic Implementation)** — 5 module-scoped logic tasks
+  (`010-02` cross-cutting, `010-03` cli/argparse, `010-04`
+  dispatch/reader-glue, `010-05` emit-json, `010-06` emit-csv) — each
+  replacing one private module's stubs with real behaviour and
+  adding the unit-test cluster for that module; existing E2E smoke
+  test is **updated** to assert real values per
+  `tdd-stub-first §2`.
+
+- **Stage 3 (Integration + final gates)** — task `010-07`
+  round-trip + references update (flip xlsx-2's `TestRoundTripXlsx8`
+  skipUnless gate, append xlsx-8 read-back section to
+  `references/json-shapes.md`, add the 30-E2E test cluster from TASK
+  §5.5), then task `010-08` final-docs + validation
+  (`SKILL.md`/`.AGENTS.md`, `validate_skill.py` exit 0, 12-line
+  `diff -q` silent gate, LOC budget verification).
+
+> **Atomicity check:** each task target = single F-region (one or
+> two modules + their tests) — within the 2–4 h budget per planner
 > prompt §1. All tasks include explicit Stub-First gates per
 > `tdd-stub-first §2`.
+
+### 0.3. Cross-skill replication gate
+
+**This task does NOT replicate anywhere** — `xlsx2csv2json/`,
+`xlsx2csv.py`, `xlsx2json.py` are xlsx-specific (consume
+`xlsx_read/` which is xlsx-only). The 12-line `diff -q` silent gate
+(ARCH §9.4) MUST stay silent every task — the gating shell snippet
+appears in every task file under "Acceptance Criteria".
 
 ---
 
 ## 1. Task Execution Sequence
 
-### Stage 1 — Structure, Stubs, Toolchain
+### Stage 1 — Structure, Stubs, Test Scaffolding
 
-- **Task 009-01** [STUB CREATION] — Package skeleton, toolchain,
-  module stubs, public surface contract, first stub E2E test.
-  - RTM: [R1], [R2], [R6] (signature only), [R10], [R11], [R12]
-  - Use Cases: UC-06 (closed-API enforcement); scaffolds UC-01..UC-05.
-  - Description File: [tasks/task-009-01-pkg-skeleton-and-toolchain.md](tasks/task-009-01-pkg-skeleton-and-toolchain.md)
+- **Task 010-01** [STUB CREATION] — Package skeleton, both shims,
+  exceptions catalogue, `__all__` lock, smoke E2E asserting
+  hardcoded sentinels.
+  - RTM: [R1], [R2], [R3], [R18] (docstring stubs), exception
+    catalogue from [R4–R17] (declared, not implemented).
+  - Use Cases: scaffolds UC-01..UC-10 (all stubs return sentinels);
+    establishes UC-09 envelope plumbing skeleton.
+  - Description File: [tasks/task-010-01-pkg-skeleton.md](tasks/task-010-01-pkg-skeleton.md)
   - Priority: Critical (blocks every later task).
   - Dependencies: none.
 
-### Stage 2 — Logic Implementation (per F-region, in dependency order)
+### Stage 2 — Logic Implementation (cross-cutting first, then per F-region)
 
-- **Task 009-02** [LOGIC IMPLEMENTATION] — `_workbook.py` (F1) —
-  `open_workbook`, encryption probe (cross-3), macro probe
-  (cross-4), `read_only` heuristic, `EncryptedWorkbookError`
-  + `MacroEnabledWarning` wiring, **M8 spike** (empirical
-  openpyxl-overlapping-merge behaviour test).
-  - RTM: [R3]
-  - Use Cases: UC-01.
-  - Description File: [tasks/task-009-02-workbook-open-encrypt-macro.md](tasks/task-009-02-workbook-open-encrypt-macro.md)
-  - Priority: Critical.
-  - Dependencies: 009-01.
+- **Task 010-02** [LOGIC IMPLEMENTATION] — Cross-cutting envelopes,
+  `_AppError` subclasses with `CODE`, same-path guard, basename-only
+  leak prevention.
+  - RTM: [R14], [R15], [R16], [R17]; D-A10 from ARCH.
+  - Use Cases: UC-07 (encrypted), UC-08 (same-path), UC-09
+    (`--json-errors` envelope).
+  - Description File: [tasks/task-010-02-cross-cutting.md](tasks/task-010-02-cross-cutting.md)
+  - Priority: Critical (every later task depends on the envelope
+    plumbing).
+  - Dependencies: 010-01.
 
-- **Task 009-03** [LOGIC IMPLEMENTATION] — `_sheets.py` (F2) —
-  enumerate, resolve, `SheetInfo` population, `SheetNotFound`.
-  - RTM: [R4]
-  - Use Cases: UC-02.
-  - Description File: [tasks/task-009-03-sheets-enumerate-resolve.md](tasks/task-009-03-sheets-enumerate-resolve.md)
-  - Priority: Critical.
-  - Dependencies: 009-01, 009-02.
-
-- **Task 009-04** [LOGIC IMPLEMENTATION] — `_merges.py` (F3) —
-  parse `<mergeCells>`, 3 policies (anchor-only / fill / blank),
-  `OverlappingMerges` fail-loud detector (M8 fix).
-  - RTM: [R9]
-  - Use Cases: UC-04 main + A7 (overlapping).
-  - Description File: [tasks/task-009-04-merges-policy-overlap.md](tasks/task-009-04-merges-policy-overlap.md)
+- **Task 010-03** [LOGIC IMPLEMENTATION] — `cli.py`: full argparse
+  surface per ARCH §5.1; `build_parser(format_lock=...)`;
+  `_validate_flag_combo`; `_resolve_paths`; `main(argv,
+  format_lock=...)`.
+  - RTM: [R2] (format-lock), [R4] (input/output), [R5] (sheet
+    selector), [R6] (defaults), [R7] (header-rows + H3 conflict),
+    [R12.d] (multi-table envelope at parse-time), [R12.f]
+    (multi-sheet envelope at parse-time).
+  - Use Cases: UC-01..UC-06 (CLI surface), UC-08/UC-09 (envelope
+    triggers).
+  - Description File: [tasks/task-010-03-cli-argparse.md](tasks/task-010-03-cli-argparse.md)
   - Priority: High.
-  - Dependencies: 009-01, 009-02.
+  - Dependencies: 010-01, 010-02.
 
-- **Task 009-05** [LOGIC IMPLEMENTATION] — `_tables.py` (F4) —
-  3-tier detector (ListObjects + sheet-scope named-ranges + gap-
-  detect), safe lxml parser for `xl/tables/tableN.xml`.
-  - RTM: [R5]
-  - Use Cases: UC-03 (all alternatives).
-  - Description File: [tasks/task-009-05-tables-3tier-detect.md](tasks/task-009-05-tables-3tier-detect.md)
+- **Task 010-04** [LOGIC IMPLEMENTATION] — `dispatch.py`: reader-glue
+  via `xlsx_read.open_workbook`; `iter_table_payloads`;
+  `_resolve_tables_mode` (4-val→3-val with `gap` post-filter, D-A2);
+  `_validate_sheet_path_components` (cross-platform reject list).
+  - RTM: [R8] (merge policy), [R9] (multi-table modes), [R10.a]
+    (hyperlink kwargs to library), [R12.c] (subdir layout
+    path-component check).
+  - Use Cases: UC-03 (multi-table JSON), UC-04 (multi-region CSV),
+    UC-05 (multi-row header).
+  - Description File: [tasks/task-010-04-dispatch-and-reader-glue.md](tasks/task-010-04-dispatch-and-reader-glue.md)
   - Priority: High.
-  - Dependencies: 009-01, 009-02, 009-03.
+  - Dependencies: 010-01, 010-02, 010-03.
 
-- **Task 009-06** [LOGIC IMPLEMENTATION] — `_headers.py` (F5) —
-  multi-row detect, ` › ` flatten, synthetic `col_1..col_N`,
-  `AmbiguousHeaderBoundary` warning.
-  - RTM: [R7]
-  - Use Cases: UC-04 (main, A1, A2, A8).
-  - Description File: [tasks/task-009-06-headers-multi-row-flatten.md](tasks/task-009-06-headers-multi-row-flatten.md)
+- **Task 010-05** [LOGIC IMPLEMENTATION] — `emit_json.py`:
+  `_shape_for_payloads` pure function (4 shape rules); `_row_to_dict`
+  with header-flatten-style + hyperlink dict-shape; `emit_json`
+  driver.
+  - RTM: [R10.b] (JSON hyperlink dict), [R11] (4 JSON shapes
+    a–e), [R7.d] (`--header-flatten-style array` for JSON only).
+  - Use Cases: UC-01, UC-03, UC-05, UC-06 (JSON path).
+  - Description File: [tasks/task-010-05-emit-json.md](tasks/task-010-05-emit-json.md)
   - Priority: High.
-  - Dependencies: 009-01, 009-04.
+  - Dependencies: 010-04.
 
-- **Task 009-07** [LOGIC IMPLEMENTATION] — `_values.py` (F6) —
-  number-format heuristic, datetime conversion, hyperlink, rich-
-  text concat, stale-cache detection.
-  - RTM: [R8]
-  - Use Cases: UC-04 (A3–A6).
-  - Description File: [tasks/task-009-07-values-extract-format.md](tasks/task-009-07-values-extract-format.md)
+- **Task 010-06** [LOGIC IMPLEMENTATION] — `emit_csv.py`:
+  `_emit_single_region`; `_emit_multi_region` with subdirectory
+  layout; `_format_hyperlink_csv` (markdown-link form);
+  path-traversal guard (D-A8).
+  - RTM: [R10.c] (CSV markdown-link), [R12.a–c] (CSV shapes),
+    [R12.f] (multi-sheet envelope at emit-time fallback).
+  - Use Cases: UC-02, UC-04, UC-06 (CSV path).
+  - Description File: [tasks/task-010-06-emit-csv.md](tasks/task-010-06-emit-csv.md)
   - Priority: High.
-  - Dependencies: 009-01.
+  - Dependencies: 010-04.
 
-### Stage 3 — Integration, E2E, Final Gates
+### Stage 3 — Integration, Round-Trip, Final Gates
 
-- **Task 009-08** [LOGIC IMPLEMENTATION + DOCS] — `__init__.py`
-  (F7) wiring: bind `WorkbookReader.read_table` to F3+F5+F6,
-  context-manager (`__enter__`/`__exit__`), full 30-scenario E2E
-  suite (TASK §5.5), closed-API regression test, `SKILL.md §10`
-  finalisation, `validate_skill.py` exit 0, 12-line `diff -q`
-  silent gate.
-  - RTM: [R1] (closure), [R6] (wiring), [R12] (closure), [R13]
-  - Use Cases: UC-01..UC-06 (full integration).
-  - Description File: [tasks/task-009-08-public-api-e2e-and-docs.md](tasks/task-009-08-public-api-e2e-and-docs.md)
-  - Priority: Critical (final gate).
-  - Dependencies: 009-02 … 009-07.
+- **Task 010-07** [LOGIC IMPLEMENTATION] — Round-trip contract +
+  references: flip xlsx-2's `TestRoundTripXlsx8` skipUnless gate;
+  append xlsx-8 read-back shapes section to
+  `references/json-shapes.md`; add the 30-E2E test cluster from TASK
+  §5.5; honest-scope docstring in `xlsx2csv2json/__init__.py`.
+  - RTM: [R13] (round-trip contract), [R18] (honest-scope
+    docstring), [R19] (E2E ≥ 25 — 30 here), [R20] (post-validate
+    env-flag).
+  - Use Cases: UC-10 (round-trip with xlsx-2); locks UC-01..UC-09
+    via the full E2E cluster.
+  - Description File: [tasks/task-010-07-roundtrip-and-references.md](tasks/task-010-07-roundtrip-and-references.md)
+  - Priority: High.
+  - Dependencies: 010-05, 010-06.
+
+- **Task 010-08** [LOGIC IMPLEMENTATION] — Final docs + validation:
+  `SKILL.md` registry rows + §10 note; `.AGENTS.md` xlsx2csv2json
+  section; `validate_skill.py skills/xlsx` exit 0; 12-line `diff -q`
+  silent gate; LOC budget verified (≤ 60 LOC per shim; ≤ 1500 LOC
+  total package).
+  - RTM: [R18] (docs), [R19] (existing test suites green); locks
+    cross-skill replication boundary (TASK §6.1).
+  - Use Cases: locks all UCs via final gate.
+  - Description File: [tasks/task-010-08-final-docs-and-validation.md](tasks/task-010-08-final-docs-and-validation.md)
+  - Priority: Critical (release gate).
+  - Dependencies: 010-07.
 
 ---
 
-## 2. RTM ↔ Plan Coverage (mandatory traceability)
+## 2. Chainlink — Epic → Issue → Bead breakdown
 
-| RTM ID | Requirement (TASK §2) | Task(s) | Stage |
-| --- | --- | --- | --- |
-| **[R1]** Public API surface (closed, openpyxl-types never leak) | 009-01 (contract), 009-08 (closure) | 1 + 3 |
-| **[R2]** Package layout + ruff banned-api + toolchain bring-up | 009-01 | 1 |
-| **[R3]** `open_workbook` + cross-3 + cross-4 + read-only heuristic | 009-02 | 2 |
-| **[R4]** `sheets()` + `SheetInfo` + resolver + `SheetNotFound` | 009-03 | 2 |
-| **[R5]** `detect_tables()` 3-tier + named-range + gap-detect | 009-05 | 2 |
-| **[R6]** `read_table()` dispatch + opts | 009-01 (signature), 009-08 (wiring) | 1 + 3 |
-| **[R7]** Multi-row header detection + flatten + synthetic + ambiguous | 009-06 | 2 |
-| **[R8]** Cell value extraction (num-format, datetime, hyperlink, rich-text, stale-cache) | 009-07 | 2 |
-| **[R9]** Merge resolution + 3 policies + overlapping fail-loud | 009-04 | 2 |
-| **[R10]** Typed exception contract | 009-01 (defined) | 1 |
-| **[R11]** Dataclass returns (frozen outer / mutable inner) | 009-01 (defined) | 1 |
-| **[R12]** Honest-scope + thread-safety doc locks | 009-01 (initial), 009-08 (closure) | 1 + 3 |
-| **[R13]** Test suite (≥ 20 E2E) + validator + diff gate | 009-08 | 3 |
+> **Convention:** Beads are the atomic verifiable sub-issues. Each
+> Bead lives inside exactly one task file (table column "Owner Task").
 
-> **Coverage rule (planner prompt §4-Step 2):** one RTM item = one
-> checklist item. Every RTM ID is named explicitly above. The two
-> rows that span two stages ([R1], [R6], [R12]) are Stub-First
-> artefacts: contract committed in 009-01, finalised in 009-08.
-> This is **not** feature-grouping — it is the deliberate Phase-1 →
-> Phase-2 split that the planner prompt mandates.
+### Epic E1 — Package + Shim Skeleton
+
+- **[R1] Two CLI shims with single package backend**
+  - **B1.1** Create empty package directory with all 6 files (`__init__.py`, `cli.py`, `dispatch.py`, `emit_json.py`, `emit_csv.py`, `exceptions.py`) — Owner: **010-01**
+  - **B1.2** Shim `xlsx2csv.py` (53–60 LOC) with body from ARCH §3.2 C1 — Owner: **010-01**
+  - **B1.3** Shim `xlsx2json.py` (53–60 LOC) with body from ARCH §3.2 C2 — Owner: **010-01**
+  - **B1.4** Public helpers `convert_xlsx_to_csv` + `convert_xlsx_to_json` in `__init__.py` — Owner: **010-01** (stubs) → **010-03** (wired)
+- **[R2] Shim dispatch via `--format` (hard-bound)**
+  - **B2.1** `format_lock` kwarg threaded through `main()` — Owner: **010-03**
+  - **B2.2** `FormatLockedByShim` exception (CODE=2) — Owner: **010-02**
+  - **B2.3** Regression test: `xlsx2csv.py --format json` → exit 2 envelope — Owner: **010-03**
+- **[R3] Package import hygiene**
+  - **B3.1** `sys.path.insert(0, parent)` boilerplate in both shims — Owner: **010-01**
+  - **B3.2** `from xlsx2csv2json import ...` re-export list mirrors json2xlsx pattern — Owner: **010-01**
+  - **B3.3** `ruff check scripts/` green (banned-api from xlsx-10.A respected) — Owner: **010-01**
+
+### Epic E2 — Core CLI Surface
+
+- **[R4] Input + output args**
+  - **B4.1** Positional `INPUT` parsing + `Path` resolution — Owner: **010-03**
+  - **B4.2** `--output OUT` or `-` for stdout; absent → stdout default — Owner: **010-03**
+  - **B4.3** Parent-dir auto-create for `--output` — Owner: **010-03**
+  - **B4.4** Cross-7 H1 same-path guard via `Path.resolve()` — Owner: **010-02**
+- **[R5] Sheet selector**
+  - **B5.1** `--sheet NAME|all` (default `all`) — Owner: **010-03**
+  - **B5.2** Missing sheet → `SheetNotFound` re-mapped to exit 2 envelope — Owner: **010-04**
+  - **B5.3** `--include-hidden` opt-in; default skip — Owner: **010-04**
+- **[R6] Format defaults (backward-compat lock)**
+  - **B6.1** All seven defaults wired into `argparse` — Owner: **010-03**
+  - **B6.2** Regression test: no flags + 5-cell fixture pins shape — Owner: **010-07**
+
+### Epic E3 — Complex Table Support
+
+- **[R7] Multi-row headers**
+  - **B7.1** `--header-rows N|auto` parse + pass-through to library — Owner: **010-03** + **010-04**
+  - **B7.2** Separator U+203A verified at emit-time (library produces; emit preserves) — Owner: **010-05**
+  - **B7.3** `--header-flatten-style string|array` for JSON only — Owner: **010-05**
+  - **B7.4** `HeaderRowsConflict` envelope when `--header-rows N` (int) AND `--tables != whole` — Owner: **010-02** (class) + **010-03** (raise)
+- **[R8] Body merge policy**
+  - **B8.1** `--merge-policy anchor-only|fill|blank` parse + pass-through to library — Owner: **010-03** + **010-04**
+- **[R9] Multi-table-per-sheet**
+  - **B9.1** `--tables whole|listobjects|gap|auto` parse — Owner: **010-03**
+  - **B9.2** `_resolve_tables_mode` 4→3 mapping with `gap` post-filter — Owner: **010-04**
+  - **B9.3** `--gap-rows 2`, `--gap-cols 1` defaults wired — Owner: **010-03**
+- **[R10] Hyperlinks**
+  - **B10.1** `--include-hyperlinks` parse + pass-through to library — Owner: **010-03** + **010-04**
+  - **B10.2** JSON dict-shape `{"value", "href"}` emit — Owner: **010-05**
+  - **B10.3** CSV `[text](url)` markdown emit — Owner: **010-06**
+  - **B10.4** Regression test: no `=HYPERLINK()` formula emission — Owner: **010-06**
+
+### Epic E4 — Output Shapes
+
+- **[R11] JSON shape**
+  - **B11.1** `_shape_for_payloads` pure function (4 rules a–e) — Owner: **010-05**
+  - **B11.2** Region-order determinism (document order from library) — Owner: **010-04** + **010-05**
+- **[R12] CSV shape**
+  - **B12.1** `_emit_single_region` with `QUOTE_MINIMAL` + `\n` lineterminator — Owner: **010-06**
+  - **B12.2** `_emit_multi_region` subdir schema `<output-dir>/<sheet>/<table>.csv` — Owner: **010-06**
+  - **B12.3** `MultiTableRequiresOutputDir` envelope (multi-region without `--output-dir`) — Owner: **010-02** (class) + **010-03** (raise)
+  - **B12.4** `MultiSheetRequiresOutputDir` envelope (`--sheet all` without `--output-dir`) — Owner: **010-02** (class) + **010-03** (raise)
+  - **B12.5** Parent dirs auto-created (csv2xlsx parity) — Owner: **010-06**
+- **[R13] Round-trip contract update**
+  - **B13.1** Append xlsx-8 read-back shapes section to `references/json-shapes.md` — Owner: **010-07**
+  - **B13.2** Document `tables` key as lossy on xlsx-2 v1 consume — Owner: **010-07**
+  - **B13.3** Flip `TestRoundTripXlsx8::test_live_roundtrip` skipUnless gate — Owner: **010-07**
+
+### Epic E5 — Cross-Cutting Parity
+
+- **[R14] Cross-3 — encrypted input**
+  - **B14.1** Catch `EncryptedWorkbookError` → envelope code 3 with basename-only — Owner: **010-02**
+- **[R15] Cross-4 — macro-bearing input**
+  - **B15.1** `warnings.catch_warnings(record=True)` + propagate via `warnings.showwarning` — Owner: **010-02**
+- **[R16] Cross-5 — `--json-errors` envelope**
+  - **B16.1** `add_json_errors_argument(parser)` wired — Owner: **010-02** + **010-03**
+  - **B16.2** All exit paths route through `_errors.report_error` — Owner: **010-02**
+  - **B16.3** Envelope schema v=1, `code` never 0 — Owner: **010-02**
+- **[R17] Cross-7 — same-path guard**
+  - **B17.1** `Path.resolve()` follow-symlinks equality check — Owner: **010-02**
+  - **B17.2** Regression test: symlink `out.xlsx -> input.xlsx` → exit 6 — Owner: **010-02**
+
+### Epic E6 — Honest-Scope + Tests + Final Gates
+
+- **[R18] Honest-scope documentation**
+  - **B18.1** `xlsx2csv2json/__init__.py` docstring mirrors TASK §1.4 — Owner: **010-07**
+  - **B18.2** `.AGENTS.md` xlsx2csv2json section — Owner: **010-08**
+  - **B18.3** `SKILL.md` registry rows + §10 honest-scope note — Owner: **010-08**
+- **[R19] Test suite (≥ 25 E2E + unit per module)**
+  - **B19.1** Unit tests per module — distributed: `test_cli.py` (010-03), `test_dispatch.py` (010-04), `test_emit_json.py` (010-05), `test_emit_csv.py` (010-06), `test_public_api.py` (010-01)
+  - **B19.2** 30-E2E cluster `test_e2e.py` per TASK §5.5 — Owner: **010-07**
+  - **B19.3** `validate_skill.py skills/xlsx` exit 0 — Owner: **010-08**
+- **[R20] Post-validate hook (env-flag opt-in)**
+  - **B20.1** Env-flag `XLSX_XLSX2CSV2JSON_POST_VALIDATE` read in `cli.py` — Owner: **010-07**
+  - **B20.2** JSON `json.loads()` round-trip on emitted file — Owner: **010-07**
+  - **B20.3** `PostValidateFailed` envelope (CODE=7) on failure — Owner: **010-02** (class) + **010-07** (raise)
 
 ---
 
 ## 3. Use Case Coverage
 
-| Use Case (TASK §3) | Task(s) covering it | Verification |
+| Use Case | Tasks |
+| --- | --- |
+| UC-01 (JSON single sheet, happy path) | 010-03 (CLI surface), 010-04 (reader glue), 010-05 (emit), 010-07 (E2E #1) |
+| UC-02 (CSV single sheet, stdout) | 010-03 (CLI surface), 010-04 (reader glue), 010-06 (emit), 010-07 (E2E #7) |
+| UC-03 (JSON multi-table nested) | 010-04 (`_resolve_tables_mode`), 010-05 (`_shape_for_payloads`), 010-07 (E2E #10–#14) |
+| UC-04 (CSV multi-table subdir layout) | 010-04 (path-component validate), 010-06 (`_emit_multi_region`), 010-07 (E2E #15–#17) |
+| UC-05 (multi-row header auto) | 010-03 (`--header-rows`), 010-04 (passthrough), 010-05 (flatten-style), 010-07 (E2E #18–#21) |
+| UC-06 (hyperlinks) | 010-04 (`--include-hyperlinks`), 010-05 (JSON dict-shape), 010-06 (CSV markdown), 010-07 (E2E #22–#23) |
+| UC-07 (encrypted → exit 3) | 010-02 (envelope code 3, basename), 010-07 (E2E #24) |
+| UC-08 (same-path → exit 6) | 010-02 (`_resolve_paths` same-path guard), 010-07 (E2E #25) |
+| UC-09 (`--json-errors` envelope) | 010-02 (envelope plumbing), 010-07 (E2E #26) |
+| UC-10 (round-trip xlsx-2) | 010-07 (flip skipUnless gate + E2E #27) |
+
+---
+
+## 4. Stub-First Compliance Matrix
+
+| Stage | Task ID | Tag | Stub gate | Logic gate |
+| --- | --- | --- | --- | --- |
+| 1 | 010-01 | [STUB CREATION] | Smoke E2E asserts sentinel; `ruff` green; package importable | — |
+| 2 | 010-02 | [LOGIC IMPLEMENTATION] | (stubs from 010-01) | Cross-cutting envelopes live |
+| 2 | 010-03 | [LOGIC IMPLEMENTATION] | (stubs from 010-01) | CLI flags + dispatch live |
+| 2 | 010-04 | [LOGIC IMPLEMENTATION] | (stubs from 010-01) | Reader-glue live |
+| 2 | 010-05 | [LOGIC IMPLEMENTATION] | (stubs from 010-01) | JSON emit live |
+| 2 | 010-06 | [LOGIC IMPLEMENTATION] | (stubs from 010-01) | CSV emit live |
+| 3 | 010-07 | [LOGIC IMPLEMENTATION] | (per-task stubs) | Round-trip + 30 E2E live |
+| 3 | 010-08 | [LOGIC IMPLEMENTATION] | (per-task stubs) | Validate + LOC budget + diff-q silent |
+
+> **Per `tdd-stub-first §2`:** the smoke E2E in 010-01 asserts the
+> hardcoded sentinel; each subsequent task **updates** the E2E to
+> assert the new real behaviour AND adds module-scoped unit tests
+> (per `skill-testing-best-practices`).
+
+---
+
+## 5. Risk register (planner-layer)
+
+| Risk | Mitigation | Owner Task |
 | --- | --- | --- |
-| **UC-01** Open unencrypted workbook (+ encrypted / macro / corrupted alts) | 009-02 main; smoke-stub in 009-01 | TC-E2E-01..-04 in 009-02; TC-E2E in 009-08 |
-| **UC-02** Enumerate sheets (visible + hidden + special names) | 009-03 | TC-E2E-01..-03 in 009-03; TC-E2E in 009-08 |
-| **UC-03** Detect tables (3-tier fallthrough, ListObject overlap, workbook-scope ignore, mode-whole) | 009-05 | TC-E2E-01..-06 in 009-05; TC-E2E in 009-08 |
-| **UC-04** Read table region (merges, multi-row headers, value extraction, all 8 alternatives A1–A8) | 009-04 (merges) + 009-06 (headers) + 009-07 (values) + 009-08 (integration) | Aggregate of all four; 30 scenarios in 009-08 |
-| **UC-05** Thread-safety contract (docs + no-singleton invariant) | 009-01 (docs) + 009-08 (regression test) | Static doc-presence check 009-01; AST regression test in 009-08 |
-| **UC-06** Closed-API enforcement (`ruff` banned-api) | 009-01 | Stub task's `ruff check` and `__all__` membership test |
+| **R-1.** `xlsx_read` library API drift between merge (2026-05-12) and xlsx-8 implementation. | xlsx-10.A `__all__` is frozen; ruff banned-api enforces. Regression in 010-01 imports every symbol; CI fails-loud on any rename. | 010-01 |
+| **R-2.** xlsx-2's `TestRoundTripXlsx8` skipUnless predicate references a non-existent file at flip-time, so the test stays skipped silently. | 010-07 adds an explicit assertion that the test is **not** skipped after flip; CI asserts `unittest.SkipTest` is NOT raised. | 010-07 |
+| **R-3.** `_resolve_tables_mode` post-filter (D-A2) silently swallows Tier-2 named ranges in `--tables listobjects` mode. | TASK §1.4 (l) and ARCH D-A2 both document the intentional bundling. 010-04 has a dedicated unit test asserting Tier-2 regions DO appear in listobjects-mode output. | 010-04 |
+| **R-4.** Sheet/table names with dots (`my.budget`) or trailing spaces produce platform-dependent filesystem behaviour. | 010-04 `_validate_sheet_path_components` rejects path-component characters strictly per TASK §4.2 list; trailing-space and dot are NOT in the reject list (Excel-legal, FS-legal on POSIX). Honest scope: Windows trailing-space behaviour is the caller's problem. | 010-04 |
+| **R-5.** Performance budget (≤ 5 s for 10K × 20 JSON) blown by `json.dumps(indent=2)` on large payloads. | 010-05 includes opt-in perf test gated by `RUN_PERF_TESTS=1` (mirror xlsx-2 D8 pattern). Out-of-budget result is a warning, not a CI failure, in v1. | 010-05 |
 
 ---
 
-## 4. Stub-First Compliance
-
-| Component (F-region) | Phase-1 stub task | Phase-2 logic task | Stub-First gate |
-| --- | --- | --- | --- |
-| F1 `_workbook.py` | 009-01 | 009-02 | After 009-01: `open_workbook(p)` raises `NotImplementedError`; E2E test asserts that. After 009-02: returns real `WorkbookReader`; E2E updated to assert behaviour. |
-| F2 `_sheets.py` | 009-01 | 009-03 | After 009-01: `_sheets.enumerate_sheets()` returns sentinel `[]`. After 009-03: returns real `SheetInfo` list. |
-| F3 `_merges.py` | 009-01 | 009-04 | After 009-01: `parse_merges()` returns `{}`. After 009-04: real merge map + overlap detector live. |
-| F4 `_tables.py` | 009-01 | 009-05 | After 009-01: `detect_tables()` returns `[]`. After 009-05: 3-tier detector live. |
-| F5 `_headers.py` | 009-01 | 009-06 | After 009-01: `detect_header_band()` returns `1`. After 009-06: auto-detect live. |
-| F6 `_values.py` | 009-01 | 009-07 | After 009-01: `extract_cell()` returns `cell.value` verbatim. After 009-07: number-format heuristic + datetime + hyperlink + rich-text live. |
-| F7 `__init__.py` (`WorkbookReader.read_table` dispatch) | 009-01 (signature) | 009-08 (wiring) | After 009-01: returns `TableData(region, headers=[], rows=[], warnings=[])` sentinel. After 009-08: real dispatch through F3 → F5 → F6. |
-| Dataclasses + enums + exceptions | 009-01 (final contract) | — | These are **CONTRACT**, not logic — defined once in 009-01 and immutable thereafter. |
-| Toolchain (`pyproject.toml`, `requirements.txt`, `install.sh`) | 009-01 | — | Configuration / setup → single task per `planning-decision-tree §1`. |
-
----
-
-## 5. Cross-cutting Verification Gates (every task MUST pass)
-
-1. `cd skills/xlsx/scripts && ./.venv/bin/python -m unittest discover -s xlsx_read/tests` → exit 0.
-2. `cd skills/xlsx/scripts && ./.venv/bin/ruff check .` → exit 0 (no banned-api violations).
-3. `python3 .claude/skills/skill-creator/scripts/validate_skill.py skills/xlsx` → exit 0.
-4. Existing xlsx skill E2E suite (xlsx-2 / xlsx-3 / xlsx-4 / xlsx-7) green — no regressions.
-5. **12-line `diff -q` cross-skill silent gate** (CLAUDE.md §2 + ARCHITECTURE §9.4) all silent.
-
----
-
-## 6. Dependency Diagram
+## 6. Dependencies & Execution Order
 
 ```mermaid
-flowchart TB
-    T01["009-01<br/>Skeleton + Toolchain<br/>(Stage 1 — STUBS)"]
-    T02["009-02<br/>F1 _workbook"]
-    T03["009-03<br/>F2 _sheets"]
-    T04["009-04<br/>F3 _merges"]
-    T05["009-05<br/>F4 _tables"]
-    T06["009-06<br/>F5 _headers"]
-    T07["009-07<br/>F6 _values"]
-    T08["009-08<br/>F7 Integration + 30 E2E<br/>(Stage 3 — FINAL GATE)"]
+flowchart LR
+    T01[010-01<br/>STUB CREATION]
+    T02[010-02<br/>cross-cutting]
+    T03[010-03<br/>cli-argparse]
+    T04[010-04<br/>dispatch-reader-glue]
+    T05[010-05<br/>emit-json]
+    T06[010-06<br/>emit-csv]
+    T07[010-07<br/>roundtrip+E2E]
+    T08[010-08<br/>final-docs+validate]
 
     T01 --> T02
     T01 --> T03
-    T01 --> T04
-    T01 --> T05
-    T01 --> T06
-    T01 --> T07
     T02 --> T03
-    T02 --> T05
+    T03 --> T04
+    T04 --> T05
     T04 --> T06
-    T02 --> T08
-    T03 --> T08
-    T04 --> T08
-    T05 --> T08
-    T06 --> T08
+    T05 --> T07
+    T06 --> T07
     T07 --> T08
 ```
 
-> **Parallelism note for the Developer:** 009-04 + 009-07 can run
-> in parallel after 009-02 (independent surfaces). 009-06 unblocks
-> after 009-04. 009-05 unblocks after 009-03. 009-08 is the join.
+**Parallelisation hint:** 010-05 (emit-json) and 010-06 (emit-csv)
+have no inter-dependency — both consume `dispatch.iter_table_payloads`
+output. Could be run by two developers in parallel after 010-04
+merges.
+
+---
+
+## 7. Done-Definition (release gate)
+
+A merge of Task 010 is acceptable iff **all** the following pass on
+the merge commit:
+
+1. **Unit tests:** all per-module test files green (`test_cli.py`,
+   `test_dispatch.py`, `test_emit_json.py`, `test_emit_csv.py`,
+   `test_public_api.py`).
+2. **30 E2E scenarios** (TASK §5.5) live in `test_e2e.py` — all
+   green.
+3. **xlsx-2's `TestRoundTripXlsx8::test_live_roundtrip`** is no
+   longer `@unittest.skipUnless`-skipped AND passes.
+4. **Existing xlsx-* test suites** (xlsx-2 / xlsx-3 / xlsx-6 /
+   xlsx-7 / xlsx-10.A) green — no-behaviour-change gate.
+5. **`ruff check scripts/`** green from `skills/xlsx/scripts/`
+   (xlsx-10.A toolchain inherited).
+6. **`python3 .claude/skills/skill-creator/scripts/validate_skill.py
+   skills/xlsx`** exits 0.
+7. **12-line `diff -q`** silent gate (ARCH §9.4).
+8. **`skills/xlsx/references/json-shapes.md`** updated with xlsx-8
+   read-back section.
+9. **LOC budgets** verified: each shim ≤ 60 LOC; total package ≤ 1500
+   LOC (per TASK §4.5).

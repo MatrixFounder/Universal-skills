@@ -1,323 +1,284 @@
-# ARCHITECTURE: xlsx-10.A — `xlsx_read/` common read-only reader library
+# ARCHITECTURE: xlsx-8 — `xlsx2csv.py` / `xlsx2json.py` read-back CLIs
 
-> **Status:** ✅ **MERGED 2026-05-12** (8 atomic sub-tasks + 3-iteration
-> VDD-multi adversarial cycle). Body below preserves the design-time
-> specification verbatim; the post-merge implementation differs in a
-> small number of documented ways (`keep_formulas` flag, dimension-
-> bbox cap, overlap-check memoization, iter_rows streaming, sanitised
-> number-format heuristic, banner+sublabels header detection, etc.)
-> — see **§13 Post-merge adaptations** at the foot of this document
-> for the full delta.
+> **Status:** DRAFT v1 — pending Architecture-Reviewer approval.
 >
-> Prior `docs/ARCHITECTURE.md` (docx-6 `docx_replace.py` + §12 docx-008
-> relocators) is archived verbatim at
-> [`docs/architectures/architecture-006-docx-replace.md`](architectures/architecture-006-docx-replace.md).
+> Prior `docs/ARCHITECTURE.md` (xlsx-10.A `xlsx_read/`) is archived
+> verbatim at
+> [`docs/architectures/architecture-007-xlsx-read-library.md`](architectures/architecture-007-xlsx-read-library.md).
 >
 > **Template:** `architecture-format-core` with selectively extended
 > §5 (Interfaces) + §6 (Tech stack) + §7 (Security) + §9 (Cross-skill
-> replication boundary) — this is a **new multi-module package** (7
-> modules) added to an existing skill, which is the same trigger that
-> applied to xlsx-2 (json2xlsx), xlsx-3 (md-tables2xlsx), xlsx-7
-> (xlsx_check_rules) and docx-6. Immediately preceding xlsx
-> precedents (consulted while drafting this document):
->
-> - xlsx-7 (`xlsx_check_rules.py`):
->   [`docs/architectures/architecture-002-xlsx-check-rules.md`](architectures/architecture-002-xlsx-check-rules.md)
->   — shim + package layout, §3.2 module split discipline, §8 perf
->   contract.
-> - xlsx-2 (`json2xlsx.py`):
->   [`docs/architectures/architecture-003-json2xlsx.md`](architectures/architecture-003-json2xlsx.md)
->   — shim + package + cross-5/cross-7 pattern.
-> - xlsx-3 (`md_tables2xlsx.py`):
->   [`docs/architectures/architecture-005-md-tables2xlsx.md`](architectures/architecture-005-md-tables2xlsx.md)
->   — atomic-chain cadence; §9 five-file `diff -q` gate.
+> replication boundary) — this is a **new in-skill package** (~7
+> modules) added on top of an existing foundation library
+> (`xlsx_read/` from xlsx-10.A). The selection mirrors the precedent
+> set by xlsx-2 / xlsx-3 / xlsx-10.A.
 
 ---
 
 ## 1. Task Description
 
-- **TASK:** [`docs/TASK.md`](TASK.md) (Task 009, slug
-  `xlsx-read-library`, DRAFT v1).
-- **Brief summary of requirements:** Ship
-  `skills/xlsx/scripts/xlsx_read/` — a **read-only, closed-API,
-  in-skill Python package** that extracts the duplicated reader-
-  logic shared by future xlsx-8 (`xlsx2csv` / `xlsx2json`) and xlsx-9
-  (`xlsx2md`) CLIs. The package replaces no existing code in v1 —
-  duplication of xlsx-7's internal reader is **explicitly accepted**
-  and refactor is deferred to xlsx-10.B (R3-M3 split).
-- **Public surface (R1):** `open_workbook`, `WorkbookReader.sheets`,
-  `WorkbookReader.detect_tables`, `WorkbookReader.read_table`,
-  `WorkbookReader.close`, plus typed exceptions
-  (`EncryptedWorkbookError`, `MacroEnabledWarning`,
-  `OverlappingMerges`, `AmbiguousHeaderBoundary`, `SheetNotFound`)
-  and frozen-outer dataclasses (`SheetInfo`, `TableRegion`,
-  `TableData`).
-- **Decisions inherited from TASK §7.3 (D1–D8)** are reproduced here
-  so this document is self-contained:
+- **TASK:** [`docs/TASK.md`](TASK.md) (Task 010, slug
+  `xlsx-read-back`, DRAFT v1).
+- **Brief summary of requirements:** Ship two thin CLI shims
+  (`xlsx2csv.py`, `xlsx2json.py`) plus a single shared package
+  `skills/xlsx/scripts/xlsx2csv2json/` that converts `.xlsx`
+  workbooks into CSV or JSON. All reader logic (merge resolution,
+  ListObjects, gap-detect, multi-row headers, hyperlinks,
+  stale-cache, encryption probe, macro probe) is **delegated** to
+  the xlsx-10.A `xlsx_read/` library; shim package owns **only**
+  emit-side concerns (CLI parsing, JSON/CSV serialisation,
+  cross-cutting envelopes, filesystem layout).
+- **Public surface:**
+  - Two shims `xlsx2csv.py` (53–60 LOC) and `xlsx2json.py`
+    (53–60 LOC), both re-export from `xlsx2csv2json`.
+  - Package public helpers: `convert_xlsx_to_csv(...)`,
+    `convert_xlsx_to_json(...)`, `main(argv)`, plus shim-level
+    exception types (`SelfOverwriteRefused`,
+    `MultiTableRequiresOutputDir`, `MultiSheetRequiresOutputDir`,
+    `HeaderRowsConflict`, `InvalidSheetNameForFsPath`,
+    `OutputPathTraversal`, `FormatLockedByShim`,
+    `PostValidateFailed`).
+- **Decisions inherited from TASK §7.3 (D1–D10)** are reproduced
+  here so this document is self-contained:
 
   | D | Decision | Rationale |
   | --- | --- | --- |
-  | D1 | `read_table(header_rows="auto", ...)` default | R2-L3 fix — backward-compat with `1` was circular under H3 fix forcing `auto` for multi-table sheets; `auto` reduces caller footguns. |
-  | D2 | `detect_tables(gap_rows=2, gap_cols=1)` defaults | M4 fix — single-empty-row inside a table is a frequent visual separator (totals row, section break); `2` avoids over-splitting. |
-  | D3 | `frozen=True` outer dataclass, mutable inner sequences | M3 + R2-M6 fix — deep-freeze (`tuple[tuple[Cell, ...], ...]`) is **same** O(n) cost as `list`, but forces caller into build-list-then-rebuild pattern. Honest scope: outer immutable, inner mutable, caller responsibility documented. |
-  | D4 | Overlapping merges → fail-loud `OverlappingMerges` | M8 fix — `_overlapping_merges_check(ws.merged_cells.ranges)` runs **before** policy application, regardless of openpyxl's undefined behavior on corrupted workbooks. Pinning openpyxl version is **not** a fix (R2-M5 fix). |
-  | D5 | Closed-API enforcement via `ruff` banned-api in `pyproject.toml` | R2-M2 + R3-M1 separation-of-concerns fix — `validate_skill.py` is a Gold-Standard SKILL.md validator, NOT a code linter. Static toolchain (ruff) is the correct boundary. |
-  | D6 | xlsx-7 refactor deferred to xlsx-10.B (separate ticket) | R3-M3 split — single-row hid realistic likelihood that 10.B might not ship; ownership-bounded honest-scope handoff. |
-  | D7 | `WorkbookReader` documented NOT thread-safe; no locking | L2 fix — openpyxl `Workbook` is not thread-safe; library does not attempt to lock; doc states per-thread instances required. |
-  | D8 | Workbook-scope named ranges ignored in `detect_tables` | Honest scope (d); mirror xlsx-7; ListObjects + sheet-scope `<definedName>` cover 100 % of legitimate consumer use cases. |
+  | D1 | Single shared package `xlsx2csv2json/` | Q-A1 closed — emit-format dispatch in `cli.py:main()` is ~20 LOC; two packages would duplicate the entire CLI surface and force a third shared helper module anyway. |
+  | D2 | `--header-rows 1` default | R6 backward-compat lock; matches single-row-header common case. |
+  | D3 | `--tables whole` default | R6 backward-compat lock; entire sheet = one region. |
+  | D4 | `--header-rows auto` flatten separator = U+203A (` › `) | R7.c; matches xlsx-10.A / xlsx-9 separator; no collision with `"Q1 / Q2 split"`-style headers. |
+  | D5 | Subdirectory schema `<sheet>/<table>.csv`, NOT `<sheet>__<table>.csv` | R12.c, L4 VDD-adversarial fix — sheet names may legally contain `__`. |
+  | D6 | `--gap-rows 2`, `--gap-cols 1` defaults | R9.e–f, M4 fix; single-empty-row inside a table is a frequent visual separator. |
+  | D7 | Hyperlink JSON shape `{"value", "href"}`; CSV `[text](url)` | R10.b–c, R3-L1 fix; never emit `=HYPERLINK()` formula syntax (R4-L2 lock). |
+  | D8 | Same-path guard via `Path.resolve()` (follows symlinks) | R17.a, cross-7 H1; mirror json2xlsx. |
+  | D9 | `--include-formulas` at shim level passes through to `keep_formulas=True` at `open_workbook` AND `include_formulas=True` at `read_table` in lockstep | Q-A5 closed; xlsx-10.A §13.1 dictates the two flags move together. |
+  | D10 | Nested `tables` JSON shape lossy on xlsx-2 v1 consume; full restoration deferred to xlsx-2 v2 `--write-listobjects` | R13.b honest-scope; activates `TestRoundTripXlsx8` skipUnless gate. |
 
 - **Architect-layer decisions added by this document** (locked
   here, not in TASK):
 
   | D | Decision | Rationale |
   | --- | --- | --- |
-  | D-A1 | `WorkbookReader` implements `__enter__` / `__exit__` context-manager protocol | Q-A1 closed — Pythonic; trivial cost; aligns with `open(...)` mental model used in callers. |
-  | D-A2 | `MacroEnabledWarning` subclasses `UserWarning` | Q-A2 closed — standard practice; caller `warnings.filterwarnings("ignore", category=MacroEnabledWarning)` works out of the box. |
-  | D-A3 | `SheetInfo` carries **name handle only** (no openpyxl Worksheet ref) | Q-A3 closed — closed-API purity (R1). Caller re-resolves via `reader._resolve_sheet(name)` internally; opaque to public surface. |
-  | D-A4 | `_headers.py` is a **fresh** implementation, **NOT** an import from xlsx-7 | Q-A4 closed — duplication is the whole point of the 10.A → 10.B split; xlsx-10.B later refactors xlsx-7 to consume `xlsx_read`, not the other way. |
-  | D-A5 | `_values.py` number-format heuristic is a **fresh** implementation; divergences from xlsx-7's heuristic are documented in `_values.py` module docstring | Q-A5 closed — same rationale as D-A4. |
-  | D-A6 | `_workbook.py` chooses `read_only=True` automatically when input file size > 10 MiB; caller-overridable via `read_only_mode: bool \| None` kwarg | Heuristic — xlsx-7 uses the same threshold (verified in `xlsx_check_rules/scope_resolver.py`); below 10 MiB the formula/value/merge surfaces preserved by `read_only=False` are worth the memory cost. |
-  | D-A7 | Library NEVER prints to stdout/stderr; emits warnings via `warnings.warn` only; raises typed exceptions otherwise | Caller (xlsx-8 / xlsx-9 / xlsx-10.B) is solely responsible for cross-5 envelope generation, exit codes, and user-facing log lines. Library is a pure data-producer. |
-  | D-A8 | M8 design-question (openpyxl behavior on overlapping merges) resolved via spike in sub-task **009-01** ("workbook + sheets skeleton") | Empirical answer captured in a single fixture-driven test (`test_overlapping_merges_openpyxl_behavior.py`); regardless of result, library raises `OverlappingMerges` (D4 above). |
+  | D-A1 | Package name `xlsx2csv2json/` | Q-A2 closed — explicit about the two output formats, matches both shim file names; `xlsx_readback` collides nominally with `xlsx_read` foundation. |
+  | D-A2 | `--tables` enum (4-val: `whole\|listobjects\|gap\|auto`) maps to library `TableDetectMode` (3-val) **via post-call filter** for the `gap` case; library API is NOT extended | Q-A6 closed — keeps xlsx-10.A `__all__` frozen surface intact. Filter cost ≤ 4 LOC in `dispatch.py`. xlsx-10.A v2 may later expose granular modes if a third consumer needs them. |
+  | D-A3 | Two separate public helpers `convert_xlsx_to_csv` + `convert_xlsx_to_json`, NOT a single `convert_xlsx_readback(format=...)` | Q-A4 closed — clearer call sites; static type-checkers don't need to narrow on a format-literal param; xlsx-2 / xlsx-3 set the precedent (`convert_json_to_xlsx`, `convert_md_tables_to_xlsx`). |
+  | D-A4 | `cli.py:main()` is the single argparse surface; shims hard-bind `--format` at parse time and reject mismatch with `FormatLockedByShim` envelope (exit 2) | R2.d; prevents user confusion (`xlsx2csv.py --format json` is a category error, not a recoverable arg). |
+  | D-A5 | Shim package depends on `xlsx_read` via `from xlsx_read import open_workbook, WorkbookReader, ...` only — NEVER `from xlsx_read._values import ...` (banned by xlsx-10.A `pyproject.toml`) | xlsx-10.A closed-API contract; xlsx-8 is the **first consumer** of that contract — proof of the abstraction. |
+  | D-A6 | Warnings from `xlsx_read` (e.g. `MacroEnabledWarning`, `AmbiguousHeaderBoundary`) propagate to stderr via Python's default `warnings.showwarning` hook for human inspection. They are **NOT** injected into the JSON output body (would break xlsx-2 v1 round-trip — a `summary` key would be misread as a sheet/key). CSV path drops warnings by-design (no place in `csv.writer` output). Optional sidecar `<output>.warnings.json` deferred to v2 if user request. | TASK §R15.b; library is pure data-producer (xlsx-10.A D-A7), shims own user-facing surface. |
+  | D-A7 | Streaming CSV emit: `csv.writer` writes row-by-row via `iter_rows`-like helper in `emit_csv.py`; JSON emit accumulates and dumps once (no streaming JSON in v1) | TASK §4.1 perf bound; JSON streaming would require `ijson`-style assembler and complicate pretty-printing; deferred. |
+  | D-A8 | Output-path traversal guard: every computed `<output-dir>/<sheet>/<table>.csv` passes `path.resolve().is_relative_to(output_dir.resolve())` BEFORE open-for-write | TASK §4.2 path-traversal mitigation; without this, a sheet named `../../etc/passwd` would write outside `--output-dir`. |
+  | D-A9 | `emit_json.py` uses `json.dumps(..., ensure_ascii=False, indent=2, sort_keys=False)`; `--compact` flag deferred to v2 | Indent-2 is human-readable, matches `xlsx2md` mental model; sort_keys=False preserves source sheet order. |
+  | D-A10 | All shim-level exit codes are listed in `xlsx2csv2json/exceptions.py` as `_AppError` subclasses with a `CODE` class attribute consumed by `report_error`; no `sys.exit(N)` outside that helper | R16.b; uniform exit-code handling; same pattern as `json2xlsx.py`. |
 
 ---
 
 ## 2. Functional Architecture
 
-> **Convention:** F1–F7 are functional regions. Each maps 1:1 to a
-> private module in the `xlsx_read/` package. No region spans more
-> than one module; no module owns more than one region.
+> **Convention:** F1–F6 are functional regions. Each maps to one
+> private module in the `xlsx2csv2json/` package. No region spans
+> more than one module; no module owns more than one region.
 
 ### 2.1. Functional Components
 
-#### F1 — Workbook Open + Cross-Cutting Pre-flight (`_workbook.py`)
+#### F1 — CLI argument parsing + dispatch (`cli.py`)
 
-**Purpose:** The single entry point. Open the workbook, run cross-3
-encryption probe and cross-4 macro probe, decide `read_only` mode,
-return a `WorkbookReader`.
+**Purpose:** Single argparse surface; shim-format binding; dispatch
+to `convert_xlsx_to_csv` or `convert_xlsx_to_json`.
 
 **Functions:**
-- `open_workbook(path: Path, *, read_only_mode: bool | None = None,
-  size_threshold_bytes: int = 10 * 1024 * 1024) -> WorkbookReader`
-  - Input: filesystem path + optional override.
-  - Output: bound `WorkbookReader`.
-  - Raises: `EncryptedWorkbookError` (cross-3), `FileNotFoundError`,
-    `zipfile.BadZipFile` (propagated).
-  - Emits: `MacroEnabledWarning` for `.xlsm` / `.xltm`.
-  - Related Use Cases: UC-01.
-- `_probe_encryption(path: Path) -> None` — raises
-  `EncryptedWorkbookError` when the file is encrypted (heuristic:
-  presence of `EncryptedPackage` stream or magic bytes; identical
-  detection pattern as `office_passwd.py`).
-- `_probe_macros(path: Path) -> bool` — returns `True` when the file
-  carries macros (`vbaProject.bin` in the OPC archive); caller
-  decides to warn.
-- `_decide_read_only(path: Path, override: bool | None,
-  threshold: int) -> bool`.
+- `build_parser(*, format_lock: Literal["csv", "json", None]) ->
+  argparse.ArgumentParser` — constructs the full flag surface;
+  rejects `--format <other>` at parse time when `format_lock` is set.
+  - Input: `format_lock` from the shim entry point.
+  - Output: an `argparse.ArgumentParser` instance.
+  - Related Use Cases: UC-01, UC-02, UC-09.
+- `main(argv: list[str] | None = None, *, format_lock: str |
+  None = None) -> int` — top-level orchestrator; returns exit code.
+- `_validate_flag_combo(args) -> None` — raises envelope exceptions
+  for cross-flag invariants (HeaderRowsConflict,
+  MultiTableRequiresOutputDir, MultiSheetRequiresOutputDir,
+  FormatLockedByShim).
+- `_resolve_paths(args) -> tuple[Path, Path | None]` — canonical
+  resolve of INPUT and `--output` / `--output-dir`; same-path guard;
+  parent-dir auto-create.
 
 **Dependencies:**
-- Depends on: `openpyxl`, `zipfile`, `pathlib`, `warnings`.
-- Depended on by: F2–F6.
+- Depends on: `argparse`, `pathlib`, `_errors` (cross-5 envelope
+  helper).
+- Depended on by: shim entry points (`xlsx2csv.py` / `xlsx2json.py`).
 
 ---
 
-#### F2 — Sheet Enumeration + Resolver (`_sheets.py`)
+#### F2 — Reader-glue / dispatch (`dispatch.py`)
 
-**Purpose:** Enumerate sheets in document order, expose
-`SheetInfo` dataclass, resolve `name | "all" | missing` queries.
+**Purpose:** Open the workbook via `xlsx_read.open_workbook`,
+enumerate sheets, detect regions per `--tables` mode (with the
+post-call filter for `gap`), iterate per region, hand off
+`(TableData, sheet_name, region)` triples to the emitter.
 
 **Functions:**
-- `enumerate_sheets(wb: openpyxl.Workbook) -> list[SheetInfo]` —
-  reads `xl/workbook.xml/<sheets>` element order.
-- `resolve_sheet(wb, query: str) -> str | list[str]` — returns
-  one or many sheet names; raises `SheetNotFound` otherwise.
-- `_state_from_openpyxl(sheet) -> Literal["visible","hidden",
-  "veryHidden"]` — maps openpyxl `sheet_state` to public enum.
-
-**Related Use Cases:** UC-02.
+- `iter_table_payloads(args, reader: WorkbookReader) ->
+  Iterator[tuple[str, TableRegion, TableData]]` — yields
+  `(sheet_name, region, table_data)` per region (already filtered for
+  `--tables gap` case).
+- `_resolve_tables_mode(arg_tables: str) -> tuple[TableDetectMode,
+  Callable[[TableRegion], bool]]` — returns `(library_mode,
+  post_filter_predicate)`. `gap` → `("auto", lambda r:
+  r.source == "gap_detect")`; `listobjects` → `("tables-only",
+  lambda r: True)`; `whole` / `auto` → identity filters.
+- `_validate_sheet_path_components(name: str) -> None` — raises
+  `InvalidSheetNameForFsPath` if any reject-list character is
+  present (used only when CSV output goes to a multi-file layout).
 
 **Dependencies:**
-- Depends on: `openpyxl`.
-- Depended on by: F3, F4 (sheet handle).
+- Depends on: `xlsx_read` public surface.
+- Depended on by: F3, F4.
 
 ---
 
-#### F3 — Merge Resolution (`_merges.py`)
+#### F3 — JSON emitter (`emit_json.py`)
 
-**Purpose:** Parse `<mergeCells>`, build `anchor → spans` map,
-apply policy.
+**Purpose:** Build the JSON shape per TASK §R11 (a–e); write it to
+`--output` or stdout via `json.dumps`.
 
 **Functions:**
-- `parse_merges(ws) -> MergeMap` where `MergeMap = dict[tuple[int,
-  int], tuple[int, int]]` (anchor row/col → bottom-right row/col).
-- `apply_merge_policy(rows: list[list[Any]], merges: MergeMap,
-  policy: MergePolicy) -> list[list[Any]]` — pure function, returns
-  a new row-grid; never mutates input.
-- `_overlapping_merges_check(ranges) -> None` — raises
-  `OverlappingMerges` on first overlap (D4 / M8 fix). Runs **before**
-  policy application.
-
-**Related Use Cases:** UC-04 (Alt-7), UC-04 (main scenario).
+- `emit_json(payloads: Iterator[tuple[str, TableRegion, TableData]],
+  *, output: Path | None, sheet_selector: str, tables_mode: str,
+  header_flatten_style: Literal["string", "array"],
+  include_hyperlinks: bool, datetime_format: DateFmt) -> int` —
+  collects all payloads (single pass), builds the shape, writes the
+  JSON. Returns exit code.
+- `_shape_for_payloads(payloads_list, ...) -> Any` — pure function;
+  given the collected list and the policy flags, builds either flat
+  array-of-objects, dict-of-arrays (per sheet), nested
+  `{Sheet: {tables: {Name: [...]}}}`, or single-sheet
+  `{Name: [...]}`. Pure-function form is unit-testable in isolation.
+- `_row_to_dict(headers: list, row: list, *, header_flatten_style,
+  include_hyperlinks: bool, hyperlink_resolver: Callable) -> dict` —
+  zip headers + row into a dict; applies hyperlink dict-shape rule
+  when `cell.hyperlink.target` is reachable.
 
 **Dependencies:**
-- Depends on: `openpyxl` (only `ws.merged_cells.ranges`).
-- Depended on by: F4, F6.
+- Depends on: `json` (stdlib), `xlsx_read` `TableData` /
+  `TableRegion` shapes only.
+- Depended on by: F1 (`cli.py:main()`).
 
 ---
 
-#### F4 — Table Detection (`_tables.py`)
+#### F4 — CSV emitter (`emit_csv.py`)
 
-**Purpose:** 3-tier table detector. Tier-1 ListObjects; Tier-2
-sheet-scope named ranges; Tier-3 gap-detect.
+**Purpose:** Write CSV per TASK §R12 (a–f); enforce subdirectory
+schema; multi-region / multi-sheet output-dir orchestration; path
+traversal guard.
 
 **Functions:**
-- `detect_tables(wb, sheet_name: str, mode: TableDetectMode,
-  gap_rows: int, gap_cols: int) -> list[TableRegion]`.
-- `_listobjects_for_sheet(wb, sheet_name) -> list[TableRegion]` —
-  parses `xl/tables/tableN.xml` parts bound to the sheet via the
-  worksheet's `_rels` relationships. Re-implements xlsx-7 §4.3
-  schema parse (fresh code per D-A4).
-- `_named_ranges_for_sheet(wb, sheet_name) -> list[TableRegion]` —
-  reads `<definedName>` with `localSheetId` matching the sheet
-  index; skips workbook-scope (D8).
-- `_gap_detect(ws, claimed: list[TableRegion], gap_rows: int,
-  gap_cols: int) -> list[TableRegion]` — splits the remaining sheet
-  area on consecutive empty rows/cols thresholds.
-
-**Related Use Cases:** UC-03.
+- `emit_csv(payloads: Iterator[tuple[str, TableRegion, TableData]],
+  *, output: Path | None, output_dir: Path | None, sheet_selector:
+  str, tables_mode: str, include_hyperlinks: bool, datetime_format:
+  DateFmt) -> int` — drives single-file vs multi-file emission.
+- `_emit_single_region(table_data, *, fp, include_hyperlinks)` —
+  writes one region with `csv.writer(quoting=QUOTE_MINIMAL,
+  lineterminator="\n")`.
+- `_emit_multi_region(payloads, *, output_dir, include_hyperlinks)`
+  — creates `<output-dir>/<sheet>/<table>.csv` per region;
+  path-traversal guard via D-A8.
+- `_format_hyperlink_csv(value, href) -> str` — `[<text>](<url>)`
+  emit; never `=HYPERLINK()`.
 
 **Dependencies:**
-- Depends on: `openpyxl`, `lxml` (only for `xl/tables/tableN.xml`
-  raw parts).
-- Depended on by: F6 (consumes regions).
+- Depends on: `csv` (stdlib), `xlsx_read` types only.
+- Depended on by: F1.
 
 ---
 
-#### F5 — Header Detection + Flatten (`_headers.py`)
+#### F5 — Public-API surface + helpers (`__init__.py`)
 
-**Purpose:** Determine where the header band ends; flatten multi-row
-headers; emit synthetic headers when needed.
+**Purpose:** Re-export `convert_xlsx_to_csv`,
+`convert_xlsx_to_json`, `main`, and all `_AppError` subclasses;
+expose `__all__`; host the honest-scope catalogue (module docstring
+mirrors TASK §1.4).
 
-**Functions:**
-- `detect_header_band(ws, region: TableRegion, hint: int |
-  Literal["auto"]) -> int` — when `hint="auto"`: scans top rows for
-  column-spanning merges; stops at the first row without any merge
-  that spans ≥ 2 columns.
-- `flatten_headers(rows: list[list[Any]], header_rows: int,
-  separator: str = " › ") -> tuple[list[str], list[Warning]]` —
-  joins top→sub keys with U+203A separator.
-- `synthetic_headers(width: int) -> list[str]` — emits
-  `col_1..col_N`.
-- `_ambiguous_boundary_check(merges, header_rows) -> Warning |
-  None` — emits `AmbiguousHeaderBoundary` if a merge straddles the
-  cut.
-
-**Related Use Cases:** UC-04 (main, A1, A2, A8).
-
-**Dependencies:**
-- Depends on: `_merges.py` (anchor info).
-- Depended on by: F6.
-
----
-
-#### F6 — Value Extraction (`_values.py`)
-
-**Purpose:** Convert raw `openpyxl.Cell` content to public Python
-values, applying number-format heuristic, datetime conversion,
-hyperlink extraction, rich-text concat, stale-cache detection.
-
-**Functions:**
-- `extract_cell(cell, *, include_formulas: bool,
-  include_hyperlinks: bool, datetime_format: DateFmt) -> Any` —
-  returns plain Python `str | int | float | bool | datetime |
-  None`.
-- `_apply_number_format(value, number_format: str) -> str | float
-  | int` — heuristic table:
-  - `#,##0.00` / `0.00` → formatted string with thousands separator.
-  - `0%` / `0.0%` → `f"{value*100:.{n}f}%"`.
-  - Date patterns (`yyyy-mm-dd`, `m/d/yyyy`, `[$-409]m/d/yyyy h:mm AM/PM`)
-    → routed to `_apply_datetime_format`.
-  - Leading-zero text formats (`"00000"`) → string-coerce with
-    zero-pad.
-  - Fallback → raw value.
-- `_apply_datetime_format(dt, fmt: DateFmt) -> str | float |
-  datetime` — `ISO` / `excel-serial` / `raw`.
-- `_extract_hyperlink(cell) -> str | None` — returns
-  `cell.hyperlink.target` when present.
-- `_flatten_rich_text(cell) -> str` — concatenates `cell.value`
-  span text.
-- `_stale_cache_warning(cell) -> Warning | None` — when formula
-  exists and `cell.value is None`, returns a warning.
-
-**Related Use Cases:** UC-04 (A3–A6).
-
-**Dependencies:**
-- Depends on: `openpyxl.Cell` only.
-- Depended on by: F7.
-
----
-
-#### F7 — Public API Surface (`__init__.py`)
-
-**Purpose:** Re-export the public surface; bind `WorkbookReader`
-methods; expose `__all__`.
-
-**Public symbols** (full surface — `__all__` lock):
+**Public symbols** (frozen surface):
 ```python
 __all__ = [
-    "open_workbook",
-    "WorkbookReader",
-    "SheetInfo",
-    "TableRegion",
-    "TableData",
-    "MergePolicy",
-    "TableDetectMode",
-    "DateFmt",
-    "EncryptedWorkbookError",
-    "MacroEnabledWarning",
-    "OverlappingMerges",
-    "AmbiguousHeaderBoundary",
-    "SheetNotFound",
+    "main",
+    "convert_xlsx_to_csv",
+    "convert_xlsx_to_json",
+    "_AppError",
+    "SelfOverwriteRefused",
+    "MultiTableRequiresOutputDir",
+    "MultiSheetRequiresOutputDir",
+    "HeaderRowsConflict",
+    "InvalidSheetNameForFsPath",
+    "OutputPathTraversal",
+    "FormatLockedByShim",
+    "PostValidateFailed",
 ]
 ```
 
-**Related Use Cases:** UC-01, UC-06.
+**Functions:**
+- `convert_xlsx_to_csv(input_path: Path, output_path: Path | None =
+  None, **kwargs) -> int` — wraps `main()` with `format_lock="csv"`.
+- `convert_xlsx_to_json(input_path: Path, output_path: Path | None =
+  None, **kwargs) -> int` — wraps `main()` with `format_lock="json"`.
 
 **Dependencies:**
-- Depends on: F1–F6.
-- Depended on by: future xlsx-8 / xlsx-9 / xlsx-10.B callers (out
-  of scope for this task).
+- Depends on: F1, F2, F3, F4, exceptions.
+- Depended on by: `xlsx2csv.py` / `xlsx2json.py` shims; future
+  Python callers using the package as a library.
+
+---
+
+#### F6 — Exceptions catalogue (`exceptions.py`)
+
+**Purpose:** Define all shim-level error types and their exit codes;
+provide a single re-export point for envelope generation in
+`_errors`.
+
+**Functions/classes:**
+- `class _AppError(RuntimeError)` — base; subclasses set `CODE: int`
+  class attribute consumed by `_errors.report_error`.
+- Subclasses (CODE values in parentheses):
+  - `SelfOverwriteRefused (6)` — cross-7 H1 same-path guard.
+  - `MultiTableRequiresOutputDir (2)` — R12.d.
+  - `MultiSheetRequiresOutputDir (2)` — R12.f.
+  - `HeaderRowsConflict (2)` — R7.e.
+  - `InvalidSheetNameForFsPath (2)` — R12 multi-file layout.
+  - `OutputPathTraversal (2)` — D-A8 path-traversal guard.
+  - `FormatLockedByShim (2)` — D-A4 wrong-format-via-shim.
+  - `PostValidateFailed (7)` — R20.c env-flag post-validate.
+
+**Dependencies:** None (leaf module).
+
+---
 
 ### 2.2. Functional Components Diagram
 
 ```mermaid
 flowchart TB
-    Caller[Caller<br/>xlsx-8 / xlsx-9 / xlsx-10.B]
-    API["F7 — __init__.py<br/>(public surface)"]
-    F1["F1 — _workbook.py<br/>open + encryption + macro"]
-    F2["F2 — _sheets.py<br/>enumerate + resolve"]
-    F3["F3 — _merges.py<br/>parse + apply policy"]
-    F4["F4 — _tables.py<br/>3-tier detector"]
-    F5["F5 — _headers.py<br/>multi-row + flatten + synthetic"]
-    F6["F6 — _values.py<br/>num-format + datetime + hyperlink"]
-    OPX[(openpyxl)]
-    LXML[(lxml)]
+    SHIM_CSV[xlsx2csv.py shim]
+    SHIM_JSON[xlsx2json.py shim]
+    API["F5 — __init__.py<br/>(public surface)"]
+    F1["F1 — cli.py<br/>argparse + dispatch"]
+    F2["F2 — dispatch.py<br/>reader-glue"]
+    F3["F3 — emit_json.py"]
+    F4["F4 — emit_csv.py"]
+    F6["F6 — exceptions.py"]
+    XR[(xlsx_read/<br/>foundation lib)]
+    ERR[(_errors.py<br/>cross-5 envelope)]
 
-    Caller --> API
+    SHIM_CSV --> API
+    SHIM_JSON --> API
     API --> F1
-    API --> F2
-    API --> F3
-    API --> F4
-    API --> F5
-    API --> F6
-
-    F1 --> OPX
-    F2 --> OPX
-    F3 --> OPX
-    F4 --> OPX
-    F4 --> LXML
-    F5 --> F3
-    F6 --> OPX
+    F1 --> F2
+    F1 --> F3
+    F1 --> F4
+    F1 --> F6
+    F2 --> XR
+    F3 --> XR
+    F4 --> XR
+    F1 --> ERR
+    F6 -.codes consumed by.-> ERR
 ```
 
 ---
@@ -326,386 +287,446 @@ flowchart TB
 
 ### 3.1. Architectural Style
 
-**Style:** **In-skill Python package** — closed-API library wrapped
-behind a single `__init__.py` re-export. **No CLI shim in this
-task.** (Consumers — xlsx-8 / xlsx-9 / xlsx-10.B — will each ship
-their own shims.)
+**Style:** **Thin shim + in-skill Python package**, layered on top
+of the xlsx-10.A `xlsx_read/` foundation. **No new system tools.**
 
 **Justification:**
-- Mirrors the proven xlsx pattern: `xlsx_check_rules/` (xlsx-7),
-  `xlsx_comment/` (xlsx-4), `json2xlsx/` (xlsx-2), `md_tables2xlsx/`
-  (xlsx-3) — each a single-responsibility-per-module package.
-- Closed-API surface is the **single guarantee** that distinguishes
-  this library from "just helper modules": consumers MUST go through
-  `__init__.py` so the library is refactorable without breaking
-  callers (R2-M2 + R3-M1 fix).
-- Layered Architecture (F1 → F2/F3 → F4/F5/F6 → F7) — each layer
-  depends only on layers below; no cycles.
-- Zero-dependency-above-skill — no new system tools; only `ruff`
-  added at the Python dependency layer.
+- Mirrors the proven xlsx pattern: each script-level CLI in
+  `skills/xlsx/scripts/*.py` is a ≤ 60 LOC re-export shim; the body
+  lives in a sibling `<name>/` package. Reference precedents: xlsx-2
+  (`json2xlsx.py`, 53 LOC + `json2xlsx/` package), xlsx-3
+  (`md_tables2xlsx.py`, 47 LOC + `md_tables2xlsx/` package), xlsx-7
+  (`xlsx_check_rules.py`, 194 LOC + `xlsx_check_rules/` package).
+- Layered Architecture (F1 ← F2 ← F3/F4 ← F6; F5 = aggregator) — each
+  layer depends only on layers below; no cycles. `xlsx_read/` is the
+  bottom-most external dependency.
+- **Zero new deps** above what xlsx-10.A already added (`ruff`,
+  `openpyxl`, `lxml` — all already pinned).
+- **Single source of truth for reader logic** — every reader-related
+  question (merge resolution, ListObjects, gap-detect, multi-row
+  headers, hyperlinks, stale-cache) is forwarded to
+  `xlsx_read.WorkbookReader`. Drift between this package and
+  `xlsx_read` = bug (regression test in §5.3 enforces this).
 
 ### 3.2. System Components
 
-#### C1 — `skills/xlsx/scripts/xlsx_read/` (NEW, 7 files)
+#### C1 — `skills/xlsx/scripts/xlsx2csv.py` (NEW, ≤ 60 LOC)
 
-**Type:** In-skill Python package (`__init__.py` + 6 private modules
-+ `tests/` subdir).
+**Type:** Shell-entry shim.
 
-**Purpose:** Read-only foundation library; closed API.
+**Purpose:** Re-export from `xlsx2csv2json`; hard-bind
+`format_lock="csv"`.
 
-**Implemented functions:** F1–F7 (each module = one functional
-region; `__init__.py` = F7 surface).
+**File body (locked surface):**
+```python
+#!/usr/bin/env python3
+"""xlsx-8: Convert an .xlsx workbook into CSV (per-sheet/per-table).
+
+Thin CLI shim on top of the xlsx-10.A `xlsx_read/` foundation. Body
+lives in `xlsx2csv2json/`. See `--help` for the full flag list.
+"""
+from __future__ import annotations
+
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from xlsx2csv2json import (  # noqa: E402
+    main,
+    convert_xlsx_to_csv,
+    _AppError,
+    SelfOverwriteRefused,
+    MultiTableRequiresOutputDir,
+    MultiSheetRequiresOutputDir,
+    HeaderRowsConflict,
+    InvalidSheetNameForFsPath,
+    OutputPathTraversal,
+    FormatLockedByShim,
+    PostValidateFailed,
+)
+
+
+if __name__ == "__main__":
+    sys.exit(main(format_lock="csv"))
+```
+
+**Technologies:** Python ≥ 3.10.
+
+**Interfaces:**
+- **Inbound:** shell (`python3 xlsx2csv.py ...`).
+- **Outbound:** `xlsx2csv2json.main(format_lock="csv")`.
+
+**Dependencies:** `xlsx2csv2json/` package (sibling).
+
+---
+
+#### C2 — `skills/xlsx/scripts/xlsx2json.py` (NEW, ≤ 60 LOC)
+
+**Type:** Shell-entry shim.
+
+**Purpose:** Symmetric to C1, with `format_lock="json"`.
+
+**File body (locked surface):**
+```python
+#!/usr/bin/env python3
+"""xlsx-8: Convert an .xlsx workbook into JSON (array-of-objects or
+nested dict-per-sheet-per-table).
+
+Thin CLI shim on top of the xlsx-10.A `xlsx_read/` foundation. Body
+lives in `xlsx2csv2json/`. See `--help` for the full flag list.
+"""
+from __future__ import annotations
+
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from xlsx2csv2json import (  # noqa: E402
+    main,
+    convert_xlsx_to_json,
+    _AppError,
+    SelfOverwriteRefused,
+    MultiTableRequiresOutputDir,
+    MultiSheetRequiresOutputDir,
+    HeaderRowsConflict,
+    InvalidSheetNameForFsPath,
+    OutputPathTraversal,
+    FormatLockedByShim,
+    PostValidateFailed,
+)
+
+
+if __name__ == "__main__":
+    sys.exit(main(format_lock="json"))
+```
+
+The re-export list mirrors C1 verbatim except that `convert_xlsx_to_csv`
+is replaced by `convert_xlsx_to_json` (single helper per shim — see
+D-A3). Exception names are byte-identical across both shims; the
+`xlsx2csv2json/__init__.py` `__all__` is the single source of truth.
+
+---
+
+#### C3 — `skills/xlsx/scripts/xlsx2csv2json/` (NEW, package, ~7 files)
+
+**Type:** In-skill Python package.
+
+**Purpose:** Body for both shims; emit-side only.
+
+**Implemented functions:** F1–F6.
 
 **File layout:**
 ```
-skills/xlsx/scripts/xlsx_read/
-  __init__.py          # F7 public surface
-  _workbook.py         # F1
-  _sheets.py           # F2
-  _merges.py           # F3
-  _tables.py           # F4
-  _headers.py          # F5
-  _values.py           # F6
-  py.typed             # PEP 561 marker (typed package)
+skills/xlsx/scripts/xlsx2csv2json/
+  __init__.py        # F5 — public surface + honest-scope docstring
+  cli.py             # F1 — argparse + main() + dispatch
+  dispatch.py        # F2 — reader-glue + iter_table_payloads
+  emit_json.py       # F3 — JSON shape builder + writer
+  emit_csv.py        # F4 — CSV writer + multi-file orchestration
+  exceptions.py      # F6 — _AppError + subclasses
   tests/
     __init__.py
     conftest.py
-    fixtures/           # .xlsx fixtures (≥ 30 files)
-    test_workbook.py
-    test_sheets.py
-    test_merges.py
-    test_tables.py
-    test_headers.py
-    test_values.py
-    test_public_api.py  # closed-API regression
-    test_e2e.py         # ≥ 20 E2E scenarios
+    fixtures/        # .xlsx fixtures (≥ 25 files)
+    test_cli.py
+    test_dispatch.py
+    test_emit_json.py
+    test_emit_csv.py
+    test_public_api.py
+    test_e2e.py      # 30 E2E scenarios from TASK §5.5
 ```
 
-**Technologies:** Python ≥ 3.10, `openpyxl >= 3.1.0`, `lxml`,
-`warnings` (stdlib), `dataclasses` (stdlib), `pathlib` (stdlib).
+**Technologies:** Python ≥ 3.10, `xlsx_read` (xlsx-10.A), `csv`
+(stdlib), `json` (stdlib), `argparse` (stdlib), `pathlib` (stdlib),
+`warnings` (stdlib).
 
 **Interfaces:**
-- **Inbound (Python import):** `from xlsx_read import open_workbook,
-  WorkbookReader, ...` (only symbols in `__all__`).
-- **Outbound:** `openpyxl.load_workbook(...)`,
-  `zipfile.ZipFile(...)` (encryption + macro probes), `lxml.etree`
-  (raw `xl/tables/tableN.xml` parse).
+- **Inbound (Python import):** `from xlsx2csv2json import
+  convert_xlsx_to_csv, convert_xlsx_to_json, main, ...` — only
+  symbols in `__all__`.
+- **Outbound:** `from xlsx_read import open_workbook, WorkbookReader,
+  TableData, TableRegion, MergePolicy, TableDetectMode, DateFmt,
+  EncryptedWorkbookError, MacroEnabledWarning, OverlappingMerges,
+  AmbiguousHeaderBoundary, SheetNotFound`. `from _errors import
+  report_error, add_json_errors_argument`.
 
 **Dependencies:**
-- External libs: `openpyxl >= 3.1.0` (already pinned),
-  `lxml >= 4.9` (transitive via openpyxl, pinned),
-  `ruff >= 0.5.0` (new, dev-time only).
-- Other in-skill components: NONE (deliberate — package is
-  self-contained per CLAUDE.md §2 "Независимость скиллов").
-- System components: `office/`, `_soffice.py`, `_errors.py`,
-  `preview.py`, `office_passwd.py` are **NOT imported** (5-file
-  silent `diff -q` gate stays silent).
+- External libs: NONE new — `xlsx_read` covers the openpyxl /
+  lxml surface; `_errors` covers the envelope; stdlib covers
+  json / csv / argparse.
+- Other in-skill components: `xlsx_read/` (closed-API consumer —
+  first proof of the abstraction).
+- System components (NOT modified): `office/`, `_soffice.py`,
+  `_errors.py`, `preview.py`, `office_passwd.py`. 12-line
+  cross-skill `diff -q` silent gate stays silent.
 
 ---
 
-#### C2 — `skills/xlsx/scripts/pyproject.toml` (NEW)
+#### C4 — `skills/xlsx/scripts/requirements.txt` (UNCHANGED)
 
-**Type:** Toolchain config (Python project metadata).
+No new dependencies. xlsx-10.A already pinned `openpyxl`, `lxml`,
+`ruff`.
 
-**Purpose:** Host `[tool.ruff.lint.flake8-tidy-imports.banned-api]`
-banned-api rule that forbids `xlsx_read._*` imports outside the
-package — the **static** enforcement of the closed-API contract
-(D5).
+#### C5 — `skills/xlsx/scripts/pyproject.toml` (UNCHANGED)
 
-**Content (locked surface):**
-```toml
-[tool.ruff]
-target-version = "py310"
-line-length = 100
+`ruff` banned-api rule from xlsx-10.A continues to enforce that
+external code (incl. this package) imports only `xlsx_read.<public>`,
+never `xlsx_read._*`. No new rule needed.
 
-[tool.ruff.lint]
-select = ["E", "F", "W", "TID"]
+#### C6 — `skills/xlsx/scripts/install.sh` (UNCHANGED)
 
-[tool.ruff.lint.flake8-tidy-imports.banned-api]
-"xlsx_read._workbook".msg = "Use xlsx_read public surface; private modules are closed."
-"xlsx_read._sheets".msg   = "Use xlsx_read public surface; private modules are closed."
-"xlsx_read._merges".msg   = "Use xlsx_read public surface; private modules are closed."
-"xlsx_read._tables".msg   = "Use xlsx_read public surface; private modules are closed."
-"xlsx_read._headers".msg  = "Use xlsx_read public surface; private modules are closed."
-"xlsx_read._values".msg   = "Use xlsx_read public surface; private modules are closed."
-```
+`ruff check scripts/` post-hook from xlsx-10.A continues to gate
+both packages.
 
-**Justification of file location:** `skills/xlsx/scripts/pyproject.
-toml` (not at repo root) — per-skill toolchain isolation aligns with
-the per-skill `requirements.txt` / `install.sh` / `.venv/` model
-already in place (CLAUDE.md §1).
+#### C7 — `skills/xlsx/.AGENTS.md` (MODIFIED)
 
----
+**Change:** add `## xlsx2csv2json` section pointing to TASK §1.4
+honest scope and documenting the `--tables` / `TableDetectMode`
+mapping (D-A2). Add cross-link to `xlsx_read` AGENTS section.
 
-#### C3 — `skills/xlsx/scripts/requirements.txt` (MODIFIED)
+#### C8 — `skills/xlsx/SKILL.md` (MODIFIED)
 
-**Change:** add `ruff>=0.5.0`. No other deltas.
+**Change:** registry table gains rows for `xlsx2csv.py` and
+`xlsx2json.py` (mirror xlsx-2 / xlsx-3 row format). §10 honest-scope
+catalogue gains: *"`xlsx2csv` / `xlsx2json` v1: comments / charts /
+styles / pivots dropped; see TASK 010 §1.4."*
 
-#### C4 — `skills/xlsx/scripts/install.sh` (MODIFIED)
+#### C9 — `skills/xlsx/references/json-shapes.md` (MODIFIED)
 
-**Change:** append post-hook:
-```bash
-"${VENV_BIN}/ruff" check "${SCRIPT_DIR}" || {
-    echo "ruff lint failed — see banned-api errors above"; exit 1;
-}
-```
-
-#### C5 — `skills/xlsx/.AGENTS.md` (MODIFIED)
-
-**Change:** add `## xlsx_read` section documenting:
-- Closed-API contract (do not import `_*` outside the package).
-- Thread-safety contract (per-thread instances; no module-level
-  singletons).
-- Honest-scope catalogue (read-only, no formula eval, no pandas, no
-  workbook-scope named ranges, etc.).
-- Pointer to `xlsx-10.B` in `docs/office-skills-backlog.md` for the
-  pending xlsx-7 refactor.
-
-#### C6 — `skills/xlsx/SKILL.md` (MODIFIED)
-
-**Change:** §10 ("Additional Honest-Scope Items") gains a new
-bullet: *"Known duplication: `xlsx_read/` and `xlsx_check_rules/`
-internal reader logic. Refactor deferred to xlsx-10.B in
-[docs/office-skills-backlog.md](../../docs/office-skills-backlog.md).
-xlsx-9 owner to open within 14 days post-xlsx-9 merge; otherwise
-promoted to permanent technical debt."*
+**Change:** append §"xlsx-8 read-back shape" with the four output
+shapes from TASK §R11 (flat / dict-of-arrays / single-sheet
+multi-table / multi-sheet multi-table). Lock the `tables` key spelling
+(no aliases). Update §"Round-trip with xlsx-2" to note that xlsx-2 v1
+collapses `tables` on consume; full restoration deferred to xlsx-2
+v2 `--write-listobjects`.
 
 ### 3.3. Components Diagram
 
 ```mermaid
 flowchart LR
     subgraph SC[skills/xlsx/scripts]
-        PT[pyproject.toml<br/>banned-api]
-        RT[requirements.txt<br/>+ruff>=0.5.0]
-        IS[install.sh<br/>+ruff check]
-        XR["xlsx_read/<br/>(package)"]
+        SHIM1[xlsx2csv.py]
+        SHIM2[xlsx2json.py]
+        PKG[xlsx2csv2json/<br/>cli + dispatch + emit_json<br/>+ emit_csv + exceptions]
+        XR[xlsx_read/<br/>FOUNDATION — xlsx-10.A]
+        ERR[_errors.py<br/>cross-5 envelope]
+        REF[references/<br/>json-shapes.md]
     end
-    subgraph EX[External]
+    subgraph EX[External — already pinned]
         OPX[openpyxl >=3.1]
         LXML[lxml >=4.9]
-        RUF[ruff >=0.5]
+        STD[stdlib: csv, json, argparse]
     end
+    SHIM1 --> PKG
+    SHIM2 --> PKG
+    PKG --> XR
+    PKG --> ERR
+    PKG --> STD
     XR --> OPX
     XR --> LXML
-    PT -.gates.-> XR
-    IS -.runs.-> RUF
-    RUF -.enforces.-> PT
+    PKG -.contract documented in.-> REF
 ```
 
 ---
 
 ## 4. Data Model (Conceptual)
 
-### 4.1. Entities Overview
+> **Note:** This task introduces NO new dataclasses. Everything
+> consumed (`SheetInfo`, `TableRegion`, `TableData`, `MergePolicy`,
+> `TableDetectMode`, `DateFmt`) is **imported** from `xlsx_read/` and
+> used as-is. The only new "data" is the **JSON shape produced by
+> `emit_json`** — a derived format, not a Python entity.
 
-> All public dataclasses are `frozen=True` at the outer level; inner
-> sequences (`list[...]`) are mutable per D3 (M3 + R2-M6 honest
-> scope).
+### 4.1. Derived shape — JSON output (frozen contract)
 
-#### Entity: `SheetInfo`
+**Description:** Result of `emit_json` materialised through
+`json.dumps`.
 
-**Description:** Metadata about a single worksheet.
+**Shape rules (per TASK §R11):**
 
-**Key attributes:**
-- `name: str` — sheet name, byte-verbatim from `xl/workbook.xml`.
-- `index: int` — 0-based index in document order.
-- `state: Literal["visible","hidden","veryHidden"]`.
+1. **Single sheet, single region:** flat array-of-objects.
+   ```json
+   [{"col_a": "val", "col_b": 42}, ...]
+   ```
+2. **Multi-sheet, single region per sheet:** dict-of-arrays.
+   ```json
+   {"Sheet1": [{...}], "Sheet2": [{...}]}
+   ```
+3. **Multi-sheet, multi-region per sheet:** nested
+   `{Sheet: {tables: {Name: [...]}}}`.
+   ```json
+   {"Sheet1": {"tables": {"RevenueTable": [...], "CostsTable": [...]}},
+    "Sheet2": [{...}]}
+   ```
+   Note: shape varies per sheet — a sheet with a single region uses
+   the flat form (rule 2); a sheet with multiple regions wraps with
+   `tables` key (rule 3). Mixed-shape per sheet IS the contract; the
+   `tables` key is the discriminator.
+4. **Single sheet, multi-region:** `{Name: [...]}` (no enclosing
+   sheet key; backward-compat-style flat).
+5. **Hyperlink cells (when `--include-hyperlinks`):**
+   `{"value": "<text>", "href": "<url>"}` replaces the raw value.
 
-**Relationships:** Returned in lists by `WorkbookReader.sheets()`.
+**Frozen invariants:**
+- The `tables` key string is spelled verbatim `"tables"` (lowercase,
+  ASCII). No aliases.
+- Hyperlink keys are spelled verbatim `"value"` and `"href"`.
+- Sheet names are JSON-escaped per `json.dumps(..., ensure_ascii=
+  False)` defaults — non-ASCII preserved as UTF-8 byte sequences;
+  `\"` and `\\` escaped per RFC 8259.
+- Region order is document-order (deterministic across re-reads).
 
-**Business rules:**
-- `index` matches the element order in `<sheets>`.
-- `state` is **never** filtered by the library; caller decides.
+**Round-trip with xlsx-2:**
+- Shapes 1 and 2 are losslessly consumable by `convert_json_to_xlsx`
+  (xlsx-2 v1).
+- Shapes 3 and 4 are **lossy** on xlsx-2 v1 consume — the `tables`
+  nesting is collapsed and the per-table arrays are concatenated
+  under the sheet key (or first region wins; xlsx-2 implementer
+  picks per data parity). Full reverse-restore deferred to xlsx-2 v2
+  `--write-listobjects` flag (D10).
 
----
+### 4.2. Derived shape — CSV output
 
-#### Entity: `TableRegion`
+**Description:** RFC-4180-ish CSV via `csv.writer(quoting=
+QUOTE_MINIMAL, lineterminator="\n")`.
 
-**Description:** A rectangular region on a sheet that the library
-considers "a table".
+**Shape rules (per TASK §R12):**
 
-**Key attributes:**
-- `sheet: str` — owning sheet name.
-- `top_row: int`, `left_col: int`, `bottom_row: int`,
-  `right_col: int` — inclusive bounds, 1-based to match openpyxl.
-- `source: Literal["listobject","named_range","gap_detect"]` —
-  provenance (drives downstream emit behavior).
-- `name: str | None` — ListObject name or named-range name when
-  `source != "gap_detect"`; for `gap_detect` it is
-  `"Table-N"` (1-based document order).
-- `listobject_header_row_count: int | None` — set only when
-  `source == "listobject"`; preserves the original `headerRowCount`
-  attribute so `read_table` can short-circuit detection (R2-M4
-  fix). `None` for other sources.
+1. **Single region → single file or stdout.**
+2. **Multi-region → directory layout:** `<output-dir>/<sheet>/<table>.csv`.
+3. **Hyperlink cells (when `--include-hyperlinks`):** `[<text>](<url>)`
+   markdown-link-as-text (NEVER `=HYPERLINK()`).
 
-**Relationships:** Returned in lists by
-`WorkbookReader.detect_tables()`; consumed by
-`WorkbookReader.read_table()`.
+**Path-component invariants (D-A8 + TASK §4.2):**
+- `<sheet>` and `<table>` MUST NOT contain `/`, `\\`, `..`, NUL,
+  `:`, `*`, `?`, `<`, `>`, `|`, `"`. Violation → exit 2
+  `InvalidSheetNameForFsPath`.
+- Final write-path MUST resolve under `<output-dir>` (canonical
+  parent inclusion). Violation → exit 2 `OutputPathTraversal`.
 
-**Business rules:**
-- Tier-1 (ListObject) regions win over Tier-2 / Tier-3 on overlap
-  (UC-03 A4).
-- Workbook-scope named ranges are dropped before construction (D8).
-
----
-
-#### Entity: `TableData`
-
-**Description:** The materialised payload of a single region.
-
-**Key attributes:**
-- `region: TableRegion` — back-reference for caller traceability.
-- `headers: list[str]` — flattened header keys (` › `-joined for
-  multi-row) or synthetic `col_1..col_N` for `headerRowCount=0`.
-- `rows: list[list[Any]]` — data rows; values are plain Python
-  (`str | int | float | bool | datetime | None`). Length and
-  shape match `headers` (always rectangular).
-- `warnings: list[str]` — soft-fail messages (stale-cache,
-  ambiguous boundary, synthetic-headers, hyperlinks-skipped, etc.).
-  Plain strings — caller maps to cross-5 envelope.
-
-**Relationships:** Returned by `WorkbookReader.read_table()`.
-
-**Business rules:**
-- Rectangular: every `row` has `len(row) == len(headers)`.
-- `warnings` is **never** `None`; empty list when no warnings.
-- Inner lists are intentionally mutable (D3 — outer frozen, inner
-  mutable; documented caller contract: do not mutate).
-
----
-
-#### Enum: `MergePolicy = Literal["anchor-only","fill","blank"]`
-
-- `"anchor-only"` (default): only the top-left cell of a merge
-  range carries the value; the other cells are `None`.
-- `"fill"`: the anchor value is broadcast to every cell in the
-  range.
-- `"blank"`: only the anchor carries the value; the other cells
-  are `None` **and** the row width is preserved (functionally
-  identical to `anchor-only` in v1; reserved for future divergence
-  if caller wants `""` instead of `None`).
-
-#### Enum: `TableDetectMode = Literal["auto","tables-only","whole"]`
-
-- `"auto"` (default): 1→2→3 fallthrough.
-- `"tables-only"`: Tier-1 + Tier-2 only.
-- `"whole"`: single region spanning the sheet's used range.
-
-#### Enum: `DateFmt = Literal["ISO","excel-serial","raw"]`
-
-- `"ISO"` (default): ISO-8601 string.
-- `"excel-serial"`: float (Excel epoch).
-- `"raw"`: native Python `datetime`.
-
-### 4.2. Schema diagram
+### 4.3. Schema diagram
 
 ```mermaid
 classDiagram
-    class WorkbookReader {
-        +Path path
-        +Workbook _wb
-        +sheets() list~SheetInfo~
-        +detect_tables(sheet, mode, gap_rows, gap_cols) list~TableRegion~
-        +read_table(region, **opts) TableData
-        +close() None
-        +__enter__() WorkbookReader
-        +__exit__() None
-    }
-    class SheetInfo {
-        +str name
-        +int index
-        +Literal state
-    }
-    class TableRegion {
-        +str sheet
-        +int top_row
-        +int left_col
-        +int bottom_row
-        +int right_col
-        +Literal source
-        +Optional~str~ name
-        +Optional~int~ listobject_header_row_count
-    }
     class TableData {
         +TableRegion region
         +list~str~ headers
         +list~list~Any~~ rows
         +list~str~ warnings
     }
-    WorkbookReader --> SheetInfo : returns list of
-    WorkbookReader --> TableRegion : returns list of
-    WorkbookReader --> TableData : returns
-    TableData --> TableRegion : back-references
+    class JSON_Output {
+        +flat_array : list[dict]
+        +dict_of_arrays : dict[sheet, list[dict]]
+        +nested_tables : dict[sheet, dict[tables, dict[name, list[dict]]]]
+        +single_sheet_multi : dict[name, list[dict]]
+    }
+    class CSV_Output {
+        +single_file : Path
+        +multi_subdir : Path[sheet/table.csv]
+    }
+    TableData --> JSON_Output : feeds
+    TableData --> CSV_Output : feeds
+    note for TableData "Imported from xlsx_read.<br/>NOT redefined here."
 ```
 
 ---
 
 ## 5. Interfaces
 
-### 5.1. External (Python import)
+### 5.1. External (CLI)
 
-**Public API (`from xlsx_read import ...`):**
+**`xlsx2csv.py` / `xlsx2json.py` arguments (locked surface):**
+
+| Flag | Default | Notes |
+| --- | --- | --- |
+| `INPUT` (positional) | required | Path to `.xlsx`/`.xlsm`. |
+| `--output OUT` / `OUT` (positional) | stdout | Path or `-` for stdout-explicit. |
+| `--output-dir DIR` | None | Multi-file CSV layout. |
+| `--sheet NAME\|all` | `all` | Sheet selector. |
+| `--include-hidden` | off | Include hidden + veryHidden sheets. |
+| `--header-rows N\|auto` | `1` | Multi-row header policy. |
+| `--header-flatten-style string\|array` | `string` | JSON only. |
+| `--merge-policy anchor-only\|fill\|blank` | `anchor-only` | Body merge handling. |
+| `--tables whole\|listobjects\|gap\|auto` | `whole` | Region detection. |
+| `--gap-rows N` | `2` | Gap-detect threshold (M4 fix). |
+| `--gap-cols N` | `1` | Gap-detect threshold (M4 fix). |
+| `--include-hyperlinks` | off | Emit hyperlink shape. |
+| `--include-formulas` | off | Cached value vs formula string. |
+| `--datetime-format ISO\|excel-serial\|raw` | `ISO` | Datetime rendering. |
+| `--json-errors` | off | Cross-5 envelope on stderr. |
+
+`xlsx2csv.py` does NOT expose `--format`; `xlsx2json.py` does NOT
+expose `--format`. Both hard-bind via `format_lock` (D-A4).
+
+### 5.2. Internal (Python import — for library consumers)
 
 ```python
-def open_workbook(
-    path: Path,
-    *,
-    read_only_mode: bool | None = None,
-    size_threshold_bytes: int = 10 * 1024 * 1024,
-) -> WorkbookReader: ...
+from xlsx2csv2json import (
+    main,                            # entry point (CLI surface)
+    convert_xlsx_to_csv,             # public helper — CSV
+    convert_xlsx_to_json,            # public helper — JSON
+    _AppError,                       # exception base
+    SelfOverwriteRefused,
+    MultiTableRequiresOutputDir,
+    MultiSheetRequiresOutputDir,
+    HeaderRowsConflict,
+    InvalidSheetNameForFsPath,
+    OutputPathTraversal,
+    FormatLockedByShim,
+    PostValidateFailed,
+)
 
-class WorkbookReader:
-    def sheets(self) -> list[SheetInfo]: ...
-    def detect_tables(
-        self,
-        sheet: str,
-        *,
-        mode: TableDetectMode = "auto",
-        gap_rows: int = 2,
-        gap_cols: int = 1,
-    ) -> list[TableRegion]: ...
-    def read_table(
-        self,
-        region: TableRegion,
-        *,
-        header_rows: int | Literal["auto"] = "auto",
-        merge_policy: MergePolicy = "anchor-only",
-        include_hyperlinks: bool = False,
-        include_formulas: bool = False,
-        datetime_format: DateFmt = "ISO",
-    ) -> TableData: ...
-    def close(self) -> None: ...
-    def __enter__(self) -> "WorkbookReader": ...
-    def __exit__(self, *exc) -> None: ...
+# Public helper signature:
+def convert_xlsx_to_csv(
+    input_path: Path,
+    output_path: Path | None = None,
+    *,
+    output_dir: Path | None = None,
+    sheet: str = "all",
+    include_hidden: bool = False,
+    header_rows: int | Literal["auto"] = 1,
+    merge_policy: str = "anchor-only",
+    tables: str = "whole",
+    gap_rows: int = 2,
+    gap_cols: int = 1,
+    include_hyperlinks: bool = False,
+    include_formulas: bool = False,
+    datetime_format: str = "ISO",
+    json_errors: bool = False,
+) -> int: ...
+
+def convert_xlsx_to_json(
+    input_path: Path,
+    output_path: Path | None = None,
+    *,
+    sheet: str = "all",
+    include_hidden: bool = False,
+    header_rows: int | Literal["auto"] = 1,
+    header_flatten_style: Literal["string", "array"] = "string",
+    merge_policy: str = "anchor-only",
+    tables: str = "whole",
+    gap_rows: int = 2,
+    gap_cols: int = 1,
+    include_hyperlinks: bool = False,
+    include_formulas: bool = False,
+    datetime_format: str = "ISO",
+    json_errors: bool = False,
+) -> int: ...
 ```
 
-### 5.2. Internal (private modules — banned for external import)
+### 5.3. Library boundary contract (D-A5 + D-A6)
 
-`_workbook.py`, `_sheets.py`, `_merges.py`, `_tables.py`,
-`_headers.py`, `_values.py` — closed via D5 ruff banned-api.
-Cross-module imports inside the package use sibling-relative form
-(`from ._merges import parse_merges`), which is **allowed** because
-the banned-api rule targets the absolute path `xlsx_read._*` from
-**outside** the package.
-
-### 5.3. Typed exceptions (public, importable, listed in `__all__`)
-
-| Name | Subclass of | When raised |
-| --- | --- | --- |
-| `EncryptedWorkbookError` | `RuntimeError` | F1 detects encryption (cross-3). |
-| `MacroEnabledWarning` | `UserWarning` (D-A2) | F1 detects `.xlsm` / `vbaProject.bin` (cross-4) — **emitted via `warnings.warn`**, not raised. |
-| `OverlappingMerges` | `RuntimeError` | F3 detects intersecting merge ranges (D4 / M8). |
-| `AmbiguousHeaderBoundary` | `UserWarning` | F5 detects a merge straddling the header/body cut — **emitted as a warning** (caller decides). |
-| `SheetNotFound` | `KeyError` | F2 cannot resolve a sheet name. |
-
-### 5.4. Library boundary contract (D-A7)
-
-- The library **never** writes to stdout or stderr directly.
-- Soft failures → `warnings.warn(msg, category=...)`.
-- Hard failures → typed exceptions listed above.
-- Caller responsibilities (out of scope for this task):
-  cross-5 `--json-errors` envelope generation, exit-code mapping,
-  user-facing log lines.
+- The package imports **only** from `xlsx_read.<public>`. Any
+  `from xlsx_read._*` import is BANNED by xlsx-10.A `pyproject.toml`
+  ruff rule; CI fails-loud if attempted.
+- `warnings.catch_warnings(record=True)` is the only legal capture
+  point for `MacroEnabledWarning` and `AmbiguousHeaderBoundary`.
+- `_errors.report_error` is the only legal stderr-emit + exit-code
+  path (D-A10).
+- No direct `openpyxl.*` import inside the package (regression test
+  greps for `openpyxl` outside the test fixture builder).
 
 ---
 
@@ -713,40 +734,38 @@ the banned-api rule targets the absolute path `xlsx_read._*` from
 
 ### 6.1. Runtime
 
-- Python ≥ 3.10 (xlsx skill baseline; uses `Literal`, `match`,
-  dataclasses, type unions `X | Y`).
-- `openpyxl >= 3.1.0` (already pinned in
-  `skills/xlsx/scripts/requirements.txt`).
-- `lxml >= 4.9` (transitive via openpyxl, already pinned).
-- stdlib: `zipfile`, `pathlib`, `dataclasses`, `warnings`,
-  `typing`, `enum`, `datetime`.
+- Python ≥ 3.10 (xlsx skill baseline; uses `Literal`,
+  `match`-statements optional, type unions `X | Y`).
+- `openpyxl >= 3.1.0` (transitively via `xlsx_read/`).
+- `lxml >= 4.9` (transitively via `xlsx_read/`).
+- stdlib: `argparse`, `csv`, `json`, `pathlib`, `warnings`,
+  `typing`, `enum`, `sys`.
 
 ### 6.2. Direct PyPI dependencies (requirements.txt deltas)
 
 | Package | New? | Pin | Use |
 | --- | --- | --- | --- |
-| `ruff` | **NEW** | `>=0.5.0` | Banned-api lint (D5). Dev-time + install.sh post-hook. |
+| _(none)_ | — | — | xlsx-10.A already pinned all deps. |
 
 ### 6.3. Excluded technologies (deliberate)
 
-- **pandas** — A4 lock from xlsx-2 / xlsx-3; library handles its
-  own row→`list[Any]` materialisation.
-- **subprocess / soffice** — read path is pure-Python via openpyxl
-  + lxml; no LibreOffice round-trip needed.
-- **mypy / pyright at install time** — out of scope; type hints
-  ship in source + `py.typed` marker but are not gated. (R2-M2
-  fix: scope locked to ruff banned-api only.)
-- **`validate_skill.py` extension** — explicitly NOT touched (D5);
-  it remains the Gold-Standard SKILL.md validator only.
+- **pandas** — A4 lock; CSV / JSON emit via stdlib `csv` / `json`.
+- **`ijson` / streaming JSON** — out of v1 (D-A7); JSON emit
+  accumulates and dumps once.
+- **`pyyaml`** — N/A; no YAML input/output.
+- **`openpyxl` direct import** — forbidden (D-A5); always via
+  `xlsx_read/`.
 
 ### 6.4. Test stack
 
-- `unittest` (stdlib) — matches existing xlsx skill convention
-  (`skills/xlsx/scripts/xlsx_check_rules/tests/` uses unittest).
+- `unittest` (stdlib) — matches xlsx skill convention (xlsx-2 /
+  xlsx-3 / xlsx-7 / xlsx-10.A all use unittest).
 - Fixtures: hand-built `.xlsx` files in
-  `xlsx_read/tests/fixtures/`, generated once via openpyxl helper
-  script (kept under version control as binary blobs — same pattern
-  as xlsx-7).
+  `xlsx2csv2json/tests/fixtures/`. Use `xlsx_read/tests/fixtures/`
+  as a starting reference (≥ 30 hand-built `.xlsx` already shipped
+  with xlsx-10.A); xlsx-8 creates only NEW fixtures that exercise
+  emit-side concerns (hyperlinks, multi-region CSV, sheet-name
+  edge cases).
 
 ---
 
@@ -754,60 +773,73 @@ the banned-api rule targets the absolute path `xlsx_read._*` from
 
 ### 7.1. Threat model
 
-- **Trust boundary:** the input `.xlsx` file. Everything past
-  `open_workbook(path)` is trusted-output emitted by openpyxl.
-- **Adversary model:** the input file may be hostile (XXE payload,
-  zip-slip, billion-laughs alias chains, oversize merges, macro-
-  bearing).
+- **Trust boundary:** the input `.xlsx` file (delegated to
+  `xlsx_read/`), the `--output` / `--output-dir` paths (this task's
+  concern), and the CLI argv (parsed via stdlib `argparse`).
+- **Adversary model:** hostile workbook (XXE, billion-laughs,
+  zip-bomb, macro-bearing — all mitigated by `xlsx_read/` per its
+  §7.2). **NEW threats at the shim layer:**
+  - Malicious sheet / table name designed to escape `--output-dir`
+    via path traversal (`../`, NUL, etc.).
+  - Same-path overwrite (cross-7 H1 — already standard).
+  - Format-binding bypass (`xlsx2csv.py --format json`).
 
 ### 7.2. Per-threat mitigation
 
 | Threat | Mitigation | Owner |
 | --- | --- | --- |
-| **XXE** in any embedded XML part | `openpyxl` uses `lxml` with `resolve_entities=False` by default; `xlsx_read` does **NOT** parse raw XML outside the openpyxl code path **except** for `xl/tables/tableN.xml`. For that one parse: explicit `lxml.etree.XMLParser(resolve_entities=False, no_network=True, huge_tree=False)`. | F4 (`_tables.py`). |
-| **Billion-laughs / entity expansion** | Same as XXE — explicit `resolve_entities=False`; `huge_tree=False`. | F4. |
-| **Zip-slip** | Library never extracts archive members to disk; only reads in-memory via `zipfile.ZipFile.open(member)`. | F1. |
-| **Macro execution** | `xlsx_read` is read-only; no VBA / OLE evaluation; macros only **detected** and surfaced as `MacroEnabledWarning`. | F1. |
-| **Oversize merge / sparse region DoS** | `read_only=True` auto-mode for files > 10 MiB (D-A6); bounded `read_table(region)` reads only the requested rectangle. `_overlapping_merges_check` fails fast. | F1, F3. |
-| **Encrypted-payload bypass** | `_probe_encryption` checks for `EncryptedPackage` OPC part **before** invoking openpyxl (which may otherwise spend time parsing garbage). | F1. |
-| **Untrusted file path** | Library accepts `pathlib.Path`; **no** shell, **no** subprocess, **no** path concatenation with user-supplied tokens outside `Path` construction. | F1. |
+| **Path traversal via sheet/table name** | D-A8 — every computed `<output-dir>/<sheet>/<table>.csv` passes `path.resolve().is_relative_to(output_dir.resolve())` BEFORE open-for-write. Fail loud `OutputPathTraversal` exit 2. | F4 (`emit_csv.py`). |
+| **Invalid filesystem chars** | TASK §4.2 reject list — `/`, `\\`, `..`, NUL, `:`, `*`, `?`, `<`, `>`, `|`, `"` — checked in F2 (`_validate_sheet_path_components`). Fail loud `InvalidSheetNameForFsPath` exit 2. | F2 (`dispatch.py`). |
+| **Same-path overwrite (cross-7 H1)** | `Path.resolve()` follows symlinks; equality check → `SelfOverwriteRefused` exit 6. | F1 (`cli.py:_resolve_paths`). |
+| **Format-binding bypass** | D-A4 — shims hard-bind via `format_lock`; mismatching `--format` in argv → `FormatLockedByShim` exit 2. | F1 (`cli.py:build_parser`). |
+| **Information leak via error messages** | All shim-level error envelopes use `path.name` (basename), NOT `path.resolve()` full path. Parallel xlsx_read §13.2 fix. | F1 + `_errors`. |
+| **Stale-cache fabrication** | Library surfaces stale-cache via warning; shim relays the warning, NEVER fabricates a value. | F2 → F3 / F4. |
+| **Format-string / template injection** | None — no `str.format` / `string.Template` on user-controlled input; CSV / JSON emit through stdlib only. | All emit paths. |
 
-### 7.3. OWASP Top-10 mapping (subset applicable to a non-network library)
+### 7.3. OWASP Top-10 mapping (subset applicable to a non-network CLI)
 
 | OWASP item | Applies? | Status |
 | --- | --- | --- |
-| A03:2021 Injection (XML / formula) | Yes (XML) | Mitigated (§7.2 XXE row); formula injection N/A — read-only library does not evaluate. |
-| A05:2021 Security Misconfiguration | Yes | `lxml` parser explicitly configured (§7.2). |
-| A08:2021 Software / Data Integrity Failures | Partial | Stale-cache detection (F6) surfaces formula/cached-value drift to caller. |
+| A03:2021 Injection (formula / XML) | Yes (XML inherited); No (formula — read path) | XML mitigated upstream in `xlsx_read/`. Formula injection N/A: read-back CSV emits `[text](url)` for hyperlinks, NEVER `=HYPERLINK()` (D7 / R10.d) — no `=`-prefix emission. |
+| A01:2021 Broken Access Control | Yes (path traversal) | Mitigated (§7.2 path traversal row). |
+| A05:2021 Security Misconfiguration | Yes | `argparse` default-secure; no `--unsafe` flags. |
+| A08:2021 Software / Data Integrity Failures | Partial | Stale-cache warning surfaced; never silently swallowed (R8.f from xlsx_read). |
 
 ### 7.4. Privilege & filesystem boundaries
 
-- No write paths. No temp-file creation. No subprocess. Library is
-  pure-read.
-- The only filesystem op is `open(path, "rb")` (via `zipfile` and
-  `openpyxl`). No side effects.
+- **Reads:** the input `.xlsx` only (delegated to `xlsx_read/`).
+- **Writes:** `--output` file OR `<output-dir>/<sheet>/<table>.csv`
+  files; nothing else. No temp files. No subprocess.
+- **No network.** No `urllib`, no `requests`, no `socket`.
+- **No shell.** No `subprocess.run`, no `os.system`.
 
 ---
 
 ## 8. Scalability and Performance
 
 - **Per-call cost** (TASK §4.1):
-  - Open + sheet enumerate: ≤ 200 ms (1 MiB workbook,
-    `read_only=True`).
-  - `detect_tables` 100-sheet workbook: ≤ 5 s.
-  - `read_table` 10K × 20 region: ≤ 3 s, ≤ 200 MiB RSS.
-- **Caching strategy:** **none** in v1. Each `read_table` call
-  re-reads from openpyxl. Justification: caller (xlsx-8 / xlsx-9)
-  typically reads each region once; caching adds complexity for no
-  hit-rate evidence. Future v2 may add an LRU on `(sheet, region)`
-  if profiling indicates re-reads.
-- **Memory model:** `read_only=True` mode of openpyxl streams rows
-  one at a time; `read_table` materialises only the bounded
-  rectangle into `TableData.rows`. Worst case:
-  `O(rows × cols × cell_size)`.
-- **`detect_tables` complexity:** O(sheet_cells × number_of_lookups)
-  with gap-detect bounded by the sheet's used range
-  (`ws.calculate_dimension()`).
+  - JSON: 10K × 20 sheet, no merges → ≤ 5 s wall-clock, ≤ 250 MiB RSS.
+  - CSV stream: 10K × 20 sheet → ≤ 4 s wall-clock (lower because no
+    JSON accumulation), ≤ 220 MiB RSS.
+  - `--tables auto`, 100-sheet workbook, 2 ListObjects/sheet → ≤ 8 s
+    wall-clock.
+- **Caching strategy:** none. Each region is read fresh from
+  `xlsx_read.read_table`. No per-region or per-sheet memoisation at
+  the shim layer (library has its own overlap-check memo per D-A6 of
+  xlsx-10.A).
+- **Memory model:**
+  - JSON path: accumulates the full shape in memory (deferred
+    streaming per D-A7); RSS dominated by openpyxl + Python object
+    overhead.
+  - CSV path: row-by-row via `csv.writer.writerow(row)` after
+    `read_table` returns `TableData.rows`. Per-region in-memory
+    materialisation is unavoidable given xlsx-10.A's eager
+    `read_table` semantics; per-workbook accumulation is avoided.
+- **`detect_tables` complexity:** delegated to `xlsx_read/`
+  (O(sheet_cells) with M4 dimension-bbox cap = 1 million cells).
+- **Future v2 streaming:** Could expose `iter_rows_stream(region)` on
+  `xlsx_read/` and a new `emit_csv_streaming` shim variant. Deferred
+  until profile evidence demands it.
 
 ---
 
@@ -832,26 +864,37 @@ the banned-api rule targets the absolute path `xlsx_read._*` from
 - `skills/docx/scripts/office_passwd.py`
 - `skills/xlsx/scripts/office_passwd.py`
 - `skills/pptx/scripts/office_passwd.py`
+- `skills/xlsx/scripts/xlsx_read/**` (xlsx-10.A frozen surface; **no
+  modification** in this task — the package is a CONSUMER only).
+- `skills/xlsx/scripts/pyproject.toml` (xlsx-10.A toolchain
+  reused as-is).
+- `skills/xlsx/scripts/requirements.txt` (no new deps).
+- `skills/xlsx/scripts/install.sh` (no new post-hooks).
 
 ### 9.2. New files (xlsx-only, no replication required)
 
-- `skills/xlsx/scripts/xlsx_read/__init__.py`
-- `skills/xlsx/scripts/xlsx_read/_workbook.py`
-- `skills/xlsx/scripts/xlsx_read/_sheets.py`
-- `skills/xlsx/scripts/xlsx_read/_merges.py`
-- `skills/xlsx/scripts/xlsx_read/_tables.py`
-- `skills/xlsx/scripts/xlsx_read/_headers.py`
-- `skills/xlsx/scripts/xlsx_read/_values.py`
-- `skills/xlsx/scripts/xlsx_read/py.typed`
-- `skills/xlsx/scripts/xlsx_read/tests/**`
-- `skills/xlsx/scripts/pyproject.toml`
+- `skills/xlsx/scripts/xlsx2csv.py` (shim)
+- `skills/xlsx/scripts/xlsx2json.py` (shim)
+- `skills/xlsx/scripts/xlsx2csv2json/__init__.py`
+- `skills/xlsx/scripts/xlsx2csv2json/cli.py`
+- `skills/xlsx/scripts/xlsx2csv2json/dispatch.py`
+- `skills/xlsx/scripts/xlsx2csv2json/emit_json.py`
+- `skills/xlsx/scripts/xlsx2csv2json/emit_csv.py`
+- `skills/xlsx/scripts/xlsx2csv2json/exceptions.py`
+- `skills/xlsx/scripts/xlsx2csv2json/tests/**` (≥ 60 unit + 30 E2E +
+  fixtures)
 
 ### 9.3. Modified files (xlsx-only, no replication required)
 
-- `skills/xlsx/scripts/requirements.txt` — `+ruff>=0.5.0`.
-- `skills/xlsx/scripts/install.sh` — `+ruff check scripts/`.
-- `skills/xlsx/.AGENTS.md` — `+## xlsx_read` section.
-- `skills/xlsx/SKILL.md` — `§10` known-duplication marker.
+- `skills/xlsx/.AGENTS.md` — `+## xlsx2csv2json` section.
+- `skills/xlsx/SKILL.md` — registry rows for `xlsx2csv.py` +
+  `xlsx2json.py`; §10 honest-scope note.
+- `skills/xlsx/references/json-shapes.md` — append xlsx-8 read-back
+  section; flip `TestRoundTripXlsx8` activation note.
+- `skills/xlsx/scripts/json2xlsx/tests/test_json2xlsx.py` —
+  `TestRoundTripXlsx8::test_live_roundtrip` `@unittest.skipUnless`
+  predicate adjusted to detect the new `xlsx2json.py` shim presence
+  (or flipped to always-run; chosen at developer judgement).
 
 ### 9.4. Gating check (Developer MUST run before commit)
 
@@ -870,333 +913,110 @@ diff -q  skills/docx/scripts/office_passwd.py skills/xlsx/scripts/office_passwd.
 diff -q  skills/docx/scripts/office_passwd.py skills/pptx/scripts/office_passwd.py
 ```
 
-All twelve must produce **no output**. (If any of them is noisy,
-this task has accidentally touched shared infra and must be
-reverted before merge.)
+All twelve must produce **no output**. (If any of them is noisy, this
+task has accidentally touched shared infra and must be reverted before
+merge.)
 
 ---
 
 ## 10. Additional Honest-Scope Items (Architecture-Layer)
 
-- **HS-1.** No `__getattr__` magic at the package level. Any new
-  public symbol MUST be added to `__all__` explicitly. Otherwise
-  callers might import a private symbol that "happened to be
-  accessible" — eroding D5.
-- **HS-2.** `WorkbookReader.read_table` returns a **new**
-  `TableData` per call; the library never returns a shared
-  reference. Caller is free to mutate `TableData.rows` /
-  `TableData.warnings` without affecting subsequent calls.
-- **HS-3.** No telemetry, no logging at the `WARNING` level via
-  `logging` module — only `warnings.warn`. (Callers may install a
-  `warnings → logging` bridge if they want; library will not do
-  this for them.)
-- **HS-4.** Tests use `unittest`, not `pytest` (matches existing
-  xlsx convention; xlsx-7 / xlsx-2 / xlsx-3 all use unittest).
-- **HS-5.** **No** runtime closed-API enforcement (e.g.
-  `_AccessLog`, runtime `__module__` checks). Static lint
-  (`ruff` banned-api) is the **sole** gate (D5). Runtime checks
-  would add overhead and still be bypassable.
-- **HS-6.** Library is **NOT** distributed as a wheel / sdist.
-  Consumers are co-located in the same skill (and will be in
-  xlsx-10.B for xlsx-7). No `setup.py` / `pyproject.toml`-build
-  section.
+- **HS-1.** No `__getattr__` magic at package level. Any new public
+  symbol MUST be added to `__all__` explicitly. (Mirror xlsx-10.A
+  HS-1.)
+- **HS-2.** `convert_xlsx_to_csv` / `convert_xlsx_to_json` are
+  **wrappers** around `main()` with `format_lock` pre-set; they do
+  NOT independently re-implement argparse. Single source of truth for
+  arg parsing is `cli.py:build_parser`.
+- **HS-3.** Test fixtures may reuse / symlink existing
+  `xlsx_read/tests/fixtures/*.xlsx` for input-side scenarios; emit-
+  side fixtures (multi-region directory layout, hyperlink cells with
+  edge text) are NEW. No fixture duplication required.
+- **HS-4.** **NO** runtime closed-API enforcement at this layer.
+  Static `ruff` lint (xlsx-10.A `pyproject.toml`) is the sole gate.
+- **HS-5.** **NO** package-level mutable singletons. Regression test
+  greps `xlsx2csv2json/*.py` for top-level `=` assigning a mutable
+  container (`list/dict/set`).
+- **HS-6.** **NO** package-level imports of `openpyxl`. Regression
+  test greps; mirror xlsx-10.A `xlsx_read/__init__.py` pattern.
+- **HS-7.** **Warnings handling.** JSON path: warnings are routed to
+  stderr via Python's default `warnings.showwarning` hook (one
+  human-readable line per warning), regardless of `--json-errors`.
+  Warnings are **NOT** promoted to the cross-5 envelope shape (the
+  envelope schema `_errors.py` v=1 requires a non-zero `code` field
+  and is reserved for errors). CSV path: warnings dropped silently
+  (no place in `csv.writer` output). The cross-skill envelope
+  contract (`_errors.py`, 4-skill replicated) is preserved unchanged.
+  Future v2 may introduce a sidecar `<output>.warnings.json` if user
+  request justifies it. This is consistent with D-A6 (above) and Q-3
+  (below).
 
 ---
 
 ## 11. Atomic-Chain Skeleton (Planner handoff)
 
-Recommended sub-task decomposition (8 atomic sub-tasks). Final
-chain is the Planner's responsibility; this list is a hint:
+Recommended sub-task decomposition (8 atomic sub-tasks, mirroring
+xlsx-10.A cadence):
 
 | # | Slug | Scope | Stub-First gate |
 | --- | --- | --- | --- |
-| 009-01 | `pkg-skeleton-and-toolchain` | Create empty `xlsx_read/` package, `pyproject.toml`, add `ruff>=0.5.0` to `requirements.txt`, install.sh post-hook, `.AGENTS.md` section. All modules contain `pass` stubs only. | `python3 -c "import xlsx_read"` works; `ruff check scripts/` is green. |
-| 009-02 | `workbook-open-encrypt-macro` | F1 `_workbook.py` — `open_workbook`, `_probe_encryption`, `_probe_macros`, `_decide_read_only`, `EncryptedWorkbookError`, `MacroEnabledWarning`. M8 spike fixture for openpyxl overlapping-merge behavior (D-A8). | `test_workbook.py` green; M8 spike documented in test file docstring. |
-| 009-03 | `sheets-enumerate-resolve` | F2 `_sheets.py` — `enumerate_sheets`, `resolve_sheet`, `SheetInfo`, `SheetNotFound`. | `test_sheets.py` green. |
-| 009-04 | `merges-policy-overlap` | F3 `_merges.py` — `parse_merges`, `apply_merge_policy` (3 policies), `_overlapping_merges_check`, `OverlappingMerges`. | `test_merges.py` green (3 policies × 3 fixtures = 9 cases + overlap case). |
-| 009-05 | `tables-3tier-detect` | F4 `_tables.py` — Tier-1 ListObjects (re-parse `xl/tables/tableN.xml` via lxml), Tier-2 sheet-scope named ranges, Tier-3 gap-detect (defaults 2/1). | `test_tables.py` green (≥ 7 fixtures). |
-| 009-06 | `headers-multi-row-flatten` | F5 `_headers.py` — `detect_header_band`, `flatten_headers` (` › ` separator), `synthetic_headers`, `_ambiguous_boundary_check`, `AmbiguousHeaderBoundary`. | `test_headers.py` green (single-row, multi-row, ambiguous, synthetic). |
-| 009-07 | `values-extract-format` | F6 `_values.py` — `extract_cell`, `_apply_number_format`, `_apply_datetime_format`, `_extract_hyperlink`, `_flatten_rich_text`, `_stale_cache_warning`. | `test_values.py` green. |
-| 009-08 | `public-api-e2e-and-docs` | F7 `__init__.py` — bind `WorkbookReader`, `__all__`, context-manager protocol, public API regression test (no openpyxl leak), 30 E2E scenarios from TASK §5.5, `SKILL.md §10` marker, `validate_skill.py` exit 0, 12-line `diff -q` gate silent. | All tests green; `ruff check scripts/` green; validator exit 0; cross-skill diff silent. |
+| 010-01 | `pkg-skeleton` | Create `xlsx2csv2json/` package + both shims (`pass` stubs); `__init__.py` `__all__` lock; both shims importable; `--help` works (text mostly placeholder). | `python3 xlsx2csv.py --help` exits 0; `python3 -c "import xlsx2csv2json"` works; `ruff check scripts/` green. |
+| 010-02 | `cli-argparse` | Full argparse surface per §5.1; `build_parser(format_lock=...)`; `_validate_flag_combo` raises envelope exceptions; no business logic yet. | `test_cli.py` covers every bad-flag combo → exit 2. |
+| 010-03 | `cross-cutting` | `_errors.py` integration; cross-3/4/5/7 envelopes; basename-only error messages; `Path.resolve()` same-path guard. | UC-07, UC-08, UC-09 green; envelope shape v1 verified. |
+| 010-04 | `dispatch-and-reader-glue` | `dispatch.py` — `iter_table_payloads`, `_resolve_tables_mode` (D-A2 filter for `gap`), `_validate_sheet_path_components`. Smoke: open + enumerate + detect, no emit yet. | `test_dispatch.py` green. |
+| 010-05 | `emit-json` | `emit_json.py` — `_shape_for_payloads` pure function (unit-testable on synthetic data); flat / dict-of-arrays / nested / single-sheet-multi shapes; `header_flatten_style`; hyperlink dict emission. | UC-01, UC-03, UC-05, UC-06 (JSON) green. |
+| 010-06 | `emit-csv` | `emit_csv.py` — single-file, multi-file directory layout, hyperlink markdown emission, path-traversal guard, `OutputPathTraversal` envelope. | UC-02, UC-04, UC-06 (CSV) green. |
+| 010-07 | `roundtrip-and-references` | Update `references/json-shapes.md` with §4.1 shapes; flip `TestRoundTripXlsx8` skipUnless gate in xlsx-2 tests; add 30 E2E test list per TASK §5.5. | UC-10 + all 30 E2E green. |
+| 010-08 | `final-docs-and-validation` | `SKILL.md` + `.AGENTS.md` updates; `validate_skill.py` exit 0; 12-line `diff -q` silent gate; package LOC budget verified (≤ 1500 total). | All gates green; cross-skill diff silent. |
 
 ---
 
 ## 12. Open Questions (residual, non-blocking)
 
-> **All blocking ambiguities are resolved.** The remaining items
-> are deferred to implementation-time judgement OR to xlsx-10.B and
-> do NOT gate this task.
+> **All blocking ambiguities are resolved.** The remaining items are
+> deferred to implementation-time judgement OR to xlsx-2 v2 and do
+> NOT gate this task.
 
-- **Q-1 (implementation).** `_workbook._probe_encryption` will share
-  detection logic with `office_passwd.py`. **Do not** import from
-  `office_passwd.py` (cross-skill replication concerns). Reimplement
-  the heuristic (a few lines) inline. **Decision:** reimplement;
-  documented in `_workbook.py` module docstring.
-- **Q-2 (implementation).** ListObject XML parsing — re-use
-  `xl/tables/tableN.xml` schema knowledge from xlsx-7's
-  `scope_resolver.py`. Fresh code (D-A4); the schema is ECMA-376,
-  not project-proprietary.
-- **Q-3 (process).** `xlsx-10.B` (xlsx-7 refactor) is gated on this
-  task **AND** on xlsx-9 (R3-M3). Until xlsx-9 ships, xlsx-10.B
-  cannot start. If xlsx-9 ships first → 14-day ownership clock
-  begins. **Action recorded in `SKILL.md §10`.**
-- **Q-4 (future spec).** Number-format heuristic divergence between
-  `xlsx_read._values` and `xlsx_check_rules` is intentional (D-A5);
-  divergences will be enumerated in `_values.py` module docstring
-  during implementation. If a divergence is later determined to be a
-  **bug** in xlsx-7, that's an xlsx-7 ticket, not this one.
+- **Q-1 (implementation).** The `_shape_for_payloads` decision — for
+  a single sheet with multiple regions, should the top-level shape be
+  `{Name: [...]}` (no enclosing sheet key) or `{sheet_name: {tables:
+  {Name: [...]}}}` (consistent with multi-sheet form)?
+  **Decision (locks here):** `{Name: [...]}` per TASK §R11.d
+  (backward-compat-style flat); justification — single-sheet output
+  with `--sheet NAME` is the "I know what I want" case; verbose nesting
+  is friction. Multi-sheet form uses nesting only because the
+  enclosing sheet key is required to disambiguate.
+- **Q-2 (implementation).** Should `--header-flatten-style array` be
+  silently ignored for CSV (TASK UC-05 A1) or rejected at parse time?
+  **Decision (locks here):** silently ignored. CSV has no native dict
+  shape; the flag is a no-op there. UC-05 A1 already documents this.
+  Justification: rejecting at parse-time forces users to remember to
+  drop the flag per-format, which is friction without benefit.
+- **Q-3 (implementation).** `MacroEnabledWarning` is surfaced to
+  stderr via `warnings.warn` by `xlsx_read/`. Should the shim capture
+  it and re-emit as a `summary.warnings` entry in the JSON output, or
+  let it propagate to `sys.stderr` as a Python warning?
+  **Decision (locks here):** let it propagate via Python's default
+  `warnings.showwarning` hook. The JSON output body does NOT carry
+  warnings (would break round-trip with xlsx-2 v1 which would treat
+  a `summary` key as a sheet/region). `--json-errors` does NOT
+  promote warnings to envelope form (the cross-5 envelope schema is
+  reserved for errors with required non-zero `code`; see HS-7).
+  Callers needing programmatic warning capture can wrap their call
+  in `warnings.catch_warnings(record=True)` — Python's standard
+  pattern.
+- **Q-4 (future spec).** `--write-listobjects` flag for xlsx-2 v2 is
+  the long-term round-trip restoration path. Out of scope here;
+  document the contract in `references/json-shapes.md` so the future
+  v2 ticket has a stable target. **Not blocking.**
 
 ---
 
-## 13. Post-merge adaptations
+## 13. Decision-record summary (for downstream readers)
 
-This section documents implementation choices that **deviate from**
-or **extend** the design above. Each is a deliberate trade-off
-captured during the 8-sub-task implementation + 3-iteration VDD-multi
-adversarial cycle. Where a deviation has a `[D-Ax]` ancestor, the
-design lock is re-cited.
-
-### 13.1. `open_workbook` — `keep_formulas` flag (replaces D-A1 single-mode promise)
-
-**Discovered in 009-07.** openpyxl cannot expose **both** formula
-strings AND cached values from a single load — `data_only=True` drops
-formula strings and exposes cached `<v>`; `data_only=False` keeps
-formula strings and discards cached values. The original §5.1
-signature implied callers could toggle via `include_formulas` at
-`read_table` time alone — empirically impossible.
-
-**Resolution:** new kwarg `keep_formulas: bool = False` on
-`open_workbook`. Default false ⇒ openpyxl `data_only=True` ⇒ cached
-values surfaced (matches the xlsx-8 / xlsx-9 emit case). `keep_formulas
-=True` ⇒ `data_only=False` ⇒ formula strings surfaced; `include_formulas`
-becomes meaningful, but cached values are then inaccessible. Documented
-in `_workbook.open_workbook` docstring and `__init__.py` honest-scope
-catalogue.
-
-### 13.2. `_workbook` — basename-only error/warning messages (S-M2 fix)
-
-**Discovered in vdd-multi iter-2 security critique.** Original §5.3
-error messages echoed the **resolved absolute path** (e.g.
-`f"Workbook is encrypted: {resolved}"`). Information-leak vector in
-shared logs / multi-tenant CI.
-
-**Resolution:** `EncryptedWorkbookError` and `MacroEnabledWarning`
-messages now use `path.name` / `resolved.name` (basename only). Full
-path remains in scope for the caller via the original `path` argument.
-
-### 13.3. `_workbook._probe_macros` — suffix-gated (P-H3 fix)
-
-**Discovered in vdd-multi iter-2 performance critique.** OOXML
-macros are **structurally impossible** in a `.xlsx` container — only
-`.xlsm` / `.xltm` can legally carry `xl/vbaProject.bin`. The original
-F1 pipeline ran `_probe_macros` (a third ZIP open) on every input.
-
-**Resolution:** `_probe_macros` is now gated by
-`resolved.suffix.lower() in (".xlsm", ".xltm")`. `.xlsx` files drop
-from 3 ZIP opens (encryption + macros + openpyxl) to 2.
-
-### 13.4. `_tables._gap_detect` — `_GAP_DETECT_MAX_CELLS = 1_000_000` cap (P-C1 fix)
-
-**Discovered in vdd-multi iter-1 performance critique** (also tagged
-as a security DoS handoff). A malformed `<dimension ref="A1:XFD1048576"/>`
-would force the original §2.1 F4 occupancy-grid allocation to ~137 GB.
-
-**Resolution:** new module-level constant `_GAP_DETECT_MAX_CELLS =
-1_000_000`. `_gap_detect` resolves the bbox via a new helper
-`_resolve_dim_bbox(ws)` (parses `ws.dimensions` with
-`openpyxl.utils.cell.range_boundaries`, falls back to
-`(max_row, max_column)`) and raises `ValueError` when
-`n_rows × n_cols > _GAP_DETECT_MAX_CELLS`. Callers facing genuinely
-large sheets must pass `mode="whole"` or `mode="tables-only"`.
-
-### 13.5. `_tables._gap_detect` + `_types.read_table` — `iter_rows` streaming (P-C2 fix)
-
-**Discovered in vdd-multi iter-1 (perf CRITICAL).** The original §2.1
-F4 / F7 pseudocode used `ws.cell(row=r, column=c)` in nested loops.
-In openpyxl `read_only=True` mode this is O(rows²) — each call
-re-walks the sheet XML stream from the beginning. The 10 MiB
-auto-`read_only=True` threshold guaranteed every large workbook hit
-this anti-pattern, breaking the 3 s / 10K × 20 read_table budget.
-
-**Resolution:** both call sites now use
-`ws.iter_rows(min_row, max_row, min_col, max_col, values_only=…)`
-with `values_only=True` for gap-detect (occupancy is bool-only) and
-`values_only=False` for `read_table` (full cell objects needed for
-`number_format` / `hyperlink`). Includes padding for sparse-row
-streaming-mode skips.
-
-### 13.6. `_types.WorkbookReader._overlap_checked` — per-sheet memo (P-H1 / S-L3 / NEW-S-M1)
-
-**Two-stage evolution:**
-
-- **iter-1 (perf H1, sec L3):** O(n²) overlap check ran on every
-  `read_table` call against the whole sheet's merges — wasted O(n²)
-  per region.
-- **iter-2 fix:** added `_overlap_checked: set[str]` on
-  `WorkbookReader` (per-sheet memo). First call on a sheet performed
-  the check on a **region-filtered** subset; subsequent calls
-  skipped. Cleared on `close()`.
-- **iter-3 fix (NEW-S-M1):** the iter-2 region-filter broke the
-  fail-loud contract — region A's clean call would memoize the
-  sheet, then region B's read with overlapping merges in B silently
-  skipped the check. Dropped the region filter; the cold-pass now
-  runs against `list(ws.merged_cells.ranges)` (full sheet). Soundness
-  restored; perf win preserved (one O(n²) pass per sheet per reader
-  lifetime). Regression pinned by
-  `test_merges.py::TestOverlapMemoSoundnessAcrossRegions`.
-
-### 13.7. `_values._apply_number_format` — quoted-literal + escape + section-split sanitisation (L-H3 / L-M5 fix)
-
-**Discovered in vdd-multi iter-1 logic critique.** Original §2.1 F6
-regex pipeline ran `re.sub(r"\[[^\]]*\]", ...)` then matched on the
-result. A number-format like `"Day"` (literal-text containing the
-date placeholder `d`) routed a numeric ID cell through the date
-pipeline, producing fake ISO date strings.
-
-**Resolution:** four-stage strip pipeline in
-`_apply_number_format`:
-
-```python
-stripped = re.sub(r'"[^"]*"', "", number_format)   # quoted literals
-stripped = re.sub(r"\\.", "", stripped)             # \X-escaped chars
-stripped = re.sub(r"\[[^\]]*\]", "", stripped)      # locale/colour brackets
-stripped = stripped.split(";", 1)[0].strip()        # positive section only
-```
-
-The `;`-split addresses L-M5 (positive/negative section formats like
-`"#,##0_);(#,##0)"` now correctly classify on the positive section).
-
-### 13.8. `_values._apply_number_format` — 256-char defensive cap (S-L4 fix)
-
-**Discovered in vdd-multi iter-2 security critique.** OOXML imposes
-no `number_format` length cap. A malicious workbook with a
-multi-megabyte format string would force `re.sub` + four `re.match`
-calls per cell to scan the full string. Per cell, in a 10K × 20
-region.
-
-**Resolution:** `if len(number_format) > 256: number_format = "General"`
-at the top of `_apply_number_format`. Real-world Excel number formats
-are < 64 chars; 256 gives 4× headroom. Acts as defence-in-depth
-against future ReDoS posture drift (S-M1 accepted-risk item).
-
-### 13.9. `_values._apply_datetime_format("excel-serial")` — `timedelta(days=float(value))` (L-H2 fix)
-
-**Discovered in vdd-multi iter-1 logic critique.** Original §2.1 F6
-pseudocode used `_EXCEL_EPOCH.fromordinal(_EXCEL_EPOCH.toordinal() +
-int(value))` — `int(value)` silently truncates the fractional part
-that encodes time-of-day in Excel's serial format. Datetime cells
-with hour:minute components emitted as midnight.
-
-**Resolution:** `dt = _EXCEL_EPOCH + timedelta(days=float(value))`.
-Preserves sub-day precision. `timedelta` is now imported alongside
-`datetime` and `date`.
-
-### 13.10. `_headers.detect_header_band` — banner+sublabels heuristic (L-H1 + design refactor)
-
-**Two findings stacked:**
-
-- **Original §2.1 F5 pseudocode** marked rows containing any column-
-  spanning merge as "header rows". For a workbook with merges on
-  row 1 only (the natural Excel banner pattern), the heuristic
-  returned `header_rows=1`, missing the row 2 sub-labels.
-- **vdd-multi iter-1 L-H1:** the original filter `merge.max_row <
-  region.top_row or merge.min_row > region.bottom_row` admitted
-  merges whose anchor sits **above** the region's first row — a
-  phantom header row inherited from an enclosing super-region.
-
-**Resolution:** new heuristic — *"a column-spanning merge on row K
-implies rows K and K+1 are both header (banner + sublabels
-pattern)"*. Implementation tracks the maximum `merge.max_row` of any
-column-spanning merge **anchored** in the region's top rows
-(`merge.min_row >= region.top_row`); header band runs from
-`region.top_row` through `max_merge_row + 1`, clamped to
-`region.bottom_row`. Default single-row header when no merges found.
-
-### 13.11. `_headers.flatten_headers` — sticky-fill-left + consecutive-repeat dedup
-
-**Design refinement** — original §2.1 F5 left the flatten algorithm
-unspecified. Implementation chose:
-
-- **Sticky-fill-left:** the leftmost non-empty value in each header
-  row propagates rightward through empty cells (Excel's natural
-  anchor-only post-merge pattern).
-- **Consecutive-repeat dedup:** `["X", "X"]` flattens to `"X"`, not
-  `"X › X"` — when a single-cell label gets sticky-filled into both
-  levels, dedup avoids the redundant join.
-
-### 13.12. `_tables._named_ranges_for_sheet` — disambiguation suffix for multi-destination names (L-M3 fix)
-
-**Discovered in vdd-multi iter-1 logic critique.** A defined name
-with comma-separated destinations targeting the same sheet (e.g.
-`Sheet1!A1:B5,Sheet1!D1:E5`) emitted two `TableRegion`s sharing the
-same `name`, causing collisions in downstream dict-keyed consumers.
-
-**Resolution:** track `dest_count` per name in two passes. Single-
-dest names keep their bare form; multi-dest names get `#1`, `#2`, …
-suffixes in iteration order (deterministic across re-reads).
-
-### 13.13. `_merges.apply_merge_policy` — empty-merges short-circuit (P-M1 fix + iter-3 purity hardening)
-
-**Two-stage evolution:**
-
-- **iter-1 P-M1:** original §2.1 F3 always deep-copied the row-grid,
-  wasted ~50–100 ms on the common no-merges case. Added empty-merges
-  short-circuit.
-- **iter-3 L-N1 / L-perf-iter2-1:** the iter-2 short-circuit aliased
-  full-width input rows (`row if len(row) == n_cols else …`),
-  technically violating the purity contract. Hardened to always
-  `list(row)` even on the fast path.
-
-Final form:
-```python
-if not merges:
-    return [list(row) + [None] * (n_cols - len(row)) for row in rows]
-```
-
-### 13.14. Honest-scope addendum in `__init__.py` (delegated to callers)
-
-Five items deliberately delegated to the caller via the public
-module docstring (consistent with this library's "API not
-application" posture):
-
-1. **Path allowlisting** — `open_workbook` follows symlinks via
-   `Path.resolve(strict=True)`; callers exposing this API to
-   untrusted paths must allowlist before passing.
-2. **Zip-bomb defense** — caller is responsible for RLIMIT_AS /
-   container-memory constraints on input archives.
-3. **Downstream sanitisation** — cell values are verbatim;
-   LLM/shell/SQL escaping is the caller's boundary.
-4. **`_GAP_DETECT_MAX_CELLS` cap** — caller passes `mode="whole"`
-   or `mode="tables-only"` for genuinely large sheets.
-5. **Excel 1900 leap-year bug NOT compensated** — `excel-serial`
-   output is true day-count from `1899-12-30`; serials 1–59 (legacy
-   Jan/Feb 1900) are off by one day vs Excel's display.
-
-### 13.15. M8 design-question — empirically resolved (D-A8 followup)
-
-The `_workbook.py` M8 spike test (TC-SPIKE-01 in `test_workbook.py`)
-empirically confirmed:
-
-> **openpyxl 3.1.5 silently accepts overlapping `<mergeCells>`
-> ranges** — `ws.merged_cells.ranges` exposes both ranges; no
-> exception is raised.
-
-Locked behaviour as of 2026-05-12. Consequence for `_merges`:
-`_overlapping_merges_check` performs explicit pairwise box-
-intersection regardless of openpyxl's surface behaviour — implementation
-satisfies D4 unconditionally.
-
-### 13.16. Adaptations explicitly NOT made (accepted-risk items)
-
-- **S-M1 (ReDoS posture drift):** migration to `regex` + `timeout=`
-  deferred; library relies on linear-pattern discipline (the 256-
-  char cap from §13.8 acts as defence-in-depth).
-- **P-H2 (single-helper ZIP-open consolidation):** after §13.3 only
-  `.xlsm` opens twice; marginal value.
-- **L-M4 (`flatten_headers` header/body width mismatch):** caller-
-  mitigable via dict-zip guard.
-- **L-N2 (named-range suffix gap after `_has_overlap` filter):**
-  cosmetic UX nit.
-- **`WorkbookReader.__del__`:** deferred; tests use `with` blocks
-  or explicit `close()`.
-- **Workbook pooling:** explicitly out of v1 scope (HS-3).
+The locked decisions (D1–D10 from TASK; D-A1–D-A10 from this doc)
+form a single contract surface. Future xlsx-9 / xlsx-10.B
+architecture documents MUST reference these by ID when discussing
+shared behaviour (e.g. xlsx-9 reuses the U+203A flatten separator
+from D4; xlsx-10.B may reference the closed-API consumer pattern from
+D-A5).
