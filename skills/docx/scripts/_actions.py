@@ -78,6 +78,7 @@ def _fallback_glob_parts(
 
 def _iter_searchable_parts(
     tree_root: Path,
+    scope: "set[str] | None" = None,
 ) -> Iterator[tuple[Path, etree._Element]]:
     """Yield (part_path, root_element) for every searchable XML part
     in tree_root, in deterministic order (R5.g):
@@ -86,6 +87,12 @@ def _iter_searchable_parts(
     Primary enumeration source = [Content_Types].xml Override entries
     (ARCH MIN-3). Filesystem glob is a fallback only if Content_Types
     is missing or malformed (stderr warning).
+
+    `scope` (docx-6.7) restricts which roles are yielded. `None` = all
+    roles (back-compat with pre-docx-6.7 callers). Otherwise must be a
+    subset of {"document", "header", "footer", "footnotes", "endnotes"};
+    parts whose role is not in the set are silently skipped. Order WITHIN
+    the requested set is preserved.
     """
     ct_path = tree_root / "[Content_Types].xml"
     parts_by_role: dict[str, list[Path]] = {
@@ -134,6 +141,8 @@ def _iter_searchable_parts(
     parts_by_role["footer"].sort(key=lambda p: p.name)
 
     for role in ("document", "header", "footer", "footnotes", "endnotes"):
+        if scope is not None and role not in scope:
+            continue  # docx-6.7: skip roles not in --scope set
         for p in parts_by_role[role]:
             if not p.is_file():
                 continue  # corrupt-package tolerance
@@ -151,13 +160,17 @@ def _do_replace(
     replacement: str,
     *,
     anchor_all: bool,
+    scope: "set[str] | None" = None,
 ) -> int:
     """Walk every searchable part; in each paragraph run
     _merge_adjacent_runs + _replace_in_run. Returns total replacement
     count. Without --all, stops after first matched part is written.
+
+    `scope` (docx-6.7): if not None, restrict parts to the given role
+    subset (see `_iter_searchable_parts`).
     """
     total = 0
-    for part_path, part_root in _iter_searchable_parts(tree_root):
+    for part_path, part_root in _iter_searchable_parts(tree_root, scope=scope):
         modified = False
         part_count = 0
         for p in part_root.iter(qn("w:p")):
@@ -305,15 +318,19 @@ def _do_insert_after(
     insert_paragraphs: "list[etree._Element]",
     *,
     anchor_all: bool,
+    scope: "set[str] | None" = None,
 ) -> int:
     """Locate matching paragraphs in every searchable part; insert
     deep-cloned `insert_paragraphs` immediately after each match.
 
     Without --all, stops at first match across all parts. Returns the
     count of anchor paragraphs after which content was inserted.
+
+    `scope` (docx-6.7): if not None, restrict parts to the given role
+    subset (see `_iter_searchable_parts`).
     """
     match_count = 0
-    for part_path, part_root in _iter_searchable_parts(tree_root):
+    for part_path, part_root in _iter_searchable_parts(tree_root, scope=scope):
         matches = _find_paragraphs_containing_anchor(part_root, anchor)
         if not matches:
             continue
@@ -381,13 +398,18 @@ def _do_delete_paragraph(
     anchor: str,
     *,
     anchor_all: bool,
+    scope: "set[str] | None" = None,
 ) -> int:
     """Walk parts; remove every (or first) <w:p> containing `anchor`.
 
     Returns paragraph-deletion count. Snapshot prevents iterator
-    invalidation when --all is set."""
+    invalidation when --all is set.
+
+    `scope` (docx-6.7): if not None, restrict parts to the given role
+    subset (see `_iter_searchable_parts`).
+    """
     deleted = 0
-    for part_path, part_root in _iter_searchable_parts(tree_root):
+    for part_path, part_root in _iter_searchable_parts(tree_root, scope=scope):
         matches = _find_paragraphs_containing_anchor(part_root, anchor)
         if not matches:
             continue

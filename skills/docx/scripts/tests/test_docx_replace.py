@@ -39,6 +39,7 @@ try:
         _extract_insert_paragraphs,
         _iter_searchable_parts,
         _materialise_md_source,
+        _parse_scope,
         _post_validate_enabled,
         _run_post_validate,
         _read_stdin_capped,
@@ -462,6 +463,152 @@ class TestPartWalker(unittest.TestCase):
             self.assertIn("document.xml", names)
             self.assertIn("footer1.xml", names)
             self.assertNotIn("header2.xml", names)
+
+
+# ── TestScopeFilter (docx-6.7) ──────────────────────────────────────────────
+
+
+@unittest.skipUnless(_DOCX_REPLACE_AVAILABLE, "docx_replace not yet importable")
+class TestScopeFilter(unittest.TestCase):
+    """``--scope`` filter for `_iter_searchable_parts` (docx-6.7).
+
+    R1 / R2 coverage — locks the parse + filter contract. Default
+    (`scope=None` or `--scope=all`) must be byte-identical to v1.
+    """
+
+    def test_parse_scope_default_all_expands_to_full_set(self):
+        """`_parse_scope("all")` yields the 5 internal role names."""
+        result = _parse_scope("all")
+        self.assertEqual(
+            result,
+            {"document", "header", "footer", "footnotes", "endnotes"},
+        )
+
+    def test_parse_scope_body_only_maps_to_document(self):
+        """CLI plural `body` maps to internal `document` role."""
+        result = _parse_scope("body")
+        self.assertEqual(result, {"document"})
+
+    def test_parse_scope_comma_separated_case_insensitive(self):
+        """`--scope=Body,Headers` is case-insensitive + dedup'd."""
+        result = _parse_scope("Body,Headers,body,HEADERS,FOOTERS")
+        self.assertEqual(result, {"document", "header", "footer"})
+
+    def test_parse_scope_invalid_value_raises_usage_error(self):
+        """Unknown value → `_AppError(UsageError)` exit 2 with envelope."""
+        from docx_replace import _AppError
+        with self.assertRaises(_AppError) as ctx:
+            _parse_scope("body,not_a_role,headers")
+        exc = ctx.exception
+        self.assertEqual(exc.code, 2)
+        self.assertEqual(exc.error_type, "UsageError")
+        self.assertIn("not_a_role", exc.details["invalid"])
+        self.assertIn("body", exc.details["valid"])
+
+    def test_parse_scope_empty_raises_usage_error(self):
+        """`--scope=` (empty / whitespace-only) → UsageError."""
+        from docx_replace import _AppError
+        with self.assertRaises(_AppError):
+            _parse_scope("")
+        with self.assertRaises(_AppError):
+            _parse_scope("   ,  ,")
+
+    def test_iter_searchable_parts_scope_body_only_yields_document(self):
+        """`scope={"document"}` drops headers/footers/notes from walk.
+
+        Build a tree with all 6 parts; filter to body only; assert ONE
+        part yielded and it's `word/document.xml`.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            tree_root = Path(tmp)
+            word_dir = tree_root / "word"
+            word_dir.mkdir()
+            parts = [
+                "document.xml", "header1.xml", "header2.xml",
+                "footer1.xml", "footnotes.xml", "endnotes.xml",
+            ]
+            for name in parts:
+                (word_dir / name).write_bytes(_make_word_part())
+            ct_overrides = [
+                ("/word/document.xml", _WP_DOC_CT),
+                ("/word/header1.xml",  _WP_HDR_CT),
+                ("/word/header2.xml",  _WP_HDR_CT),
+                ("/word/footer1.xml",  _WP_FTR_CT),
+                ("/word/footnotes.xml", _WP_FN_CT),
+                ("/word/endnotes.xml",  _WP_EN_CT),
+            ]
+            (tree_root / "[Content_Types].xml").write_bytes(
+                _make_ct_xml(ct_overrides)
+            )
+            result = list(_iter_searchable_parts(tree_root, scope={"document"}))
+            names = [p.name for p, _ in result]
+            self.assertEqual(names, ["document.xml"])
+
+    def test_iter_searchable_parts_scope_none_back_compat(self):
+        """`scope=None` (default) preserves pre-docx-6.7 behavior:
+        ALL 5 roles yielded in deterministic order. R3.a regression lock.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            tree_root = Path(tmp)
+            word_dir = tree_root / "word"
+            word_dir.mkdir()
+            parts = ["document.xml", "header1.xml", "footer1.xml",
+                     "footnotes.xml", "endnotes.xml"]
+            for name in parts:
+                (word_dir / name).write_bytes(_make_word_part())
+            ct_overrides = [
+                ("/word/document.xml", _WP_DOC_CT),
+                ("/word/header1.xml",  _WP_HDR_CT),
+                ("/word/footer1.xml",  _WP_FTR_CT),
+                ("/word/footnotes.xml", _WP_FN_CT),
+                ("/word/endnotes.xml",  _WP_EN_CT),
+            ]
+            (tree_root / "[Content_Types].xml").write_bytes(
+                _make_ct_xml(ct_overrides)
+            )
+            # No scope arg = back-compat call (must match pre-docx-6.7).
+            v1_result = list(_iter_searchable_parts(tree_root))
+            # Explicit scope=None must match too.
+            v2_explicit = list(_iter_searchable_parts(tree_root, scope=None))
+            self.assertEqual(
+                [p.name for p, _ in v1_result],
+                [p.name for p, _ in v2_explicit],
+            )
+            self.assertEqual(
+                [p.name for p, _ in v1_result],
+                ["document.xml", "header1.xml", "footer1.xml",
+                 "footnotes.xml", "endnotes.xml"],
+            )
+
+    def test_iter_searchable_parts_scope_filter_preserves_order(self):
+        """Order WITHIN the requested set follows R5.g deterministic
+        order (document → headers → footers → footnotes → endnotes),
+        even when only a subset is requested."""
+        with tempfile.TemporaryDirectory() as tmp:
+            tree_root = Path(tmp)
+            word_dir = tree_root / "word"
+            word_dir.mkdir()
+            parts = ["document.xml", "header1.xml", "footer1.xml",
+                     "footnotes.xml", "endnotes.xml"]
+            for name in parts:
+                (word_dir / name).write_bytes(_make_word_part())
+            ct_overrides = [
+                ("/word/document.xml", _WP_DOC_CT),
+                ("/word/header1.xml",  _WP_HDR_CT),
+                ("/word/footer1.xml",  _WP_FTR_CT),
+                ("/word/footnotes.xml", _WP_FN_CT),
+                ("/word/endnotes.xml",  _WP_EN_CT),
+            ]
+            (tree_root / "[Content_Types].xml").write_bytes(
+                _make_ct_xml(ct_overrides)
+            )
+            # Request body + footnotes — NOT in CLI input order, but
+            # output must follow R5.g (document before footnotes).
+            result = list(_iter_searchable_parts(
+                tree_root, scope={"footnotes", "document"},
+            ))
+            names = [p.name for p, _ in result]
+            self.assertEqual(names, ["document.xml", "footnotes.xml"])
 
 
 # ── TestReplaceAction ────────────────────────────────────────────────────────

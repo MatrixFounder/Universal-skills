@@ -102,6 +102,52 @@ def _tempdir(prefix: str = "docx_replace-") -> Iterator[Path]:
 
 
 # ---------------------------------------------------------------------------
+# docx-6.7: --scope filter (Task 007 [LIGHT])
+# ---------------------------------------------------------------------------
+
+_VALID_SCOPES = {"body", "headers", "footers", "footnotes", "endnotes", "all"}
+
+
+def _parse_scope(raw: str) -> set[str]:
+    """Parse --scope value: comma-separated, case-insensitive, dedup'd.
+
+    Returns a set of role names matching the keys used by
+    `_iter_searchable_parts` (`document`, `header`, `footer`,
+    `footnotes`, `endnotes`). The CLI surface uses friendlier plurals
+    (`body`, `headers`, `footers`) — this function maps them to the
+    internal role names. `all` expands to the full set.
+
+    Raises `_AppError(UsageError, code=2)` on invalid input.
+    """
+    items = {v.strip().lower() for v in raw.split(",") if v.strip()}
+    if not items:
+        raise _AppError(
+            "--scope must specify at least one value",
+            code=2, error_type="UsageError",
+            details={"valid": sorted(_VALID_SCOPES)},
+        )
+    invalid = items - _VALID_SCOPES
+    if invalid:
+        raise _AppError(
+            f"--scope: unknown value(s): {sorted(invalid)}",
+            code=2, error_type="UsageError",
+            details={"invalid": sorted(invalid),
+                     "valid": sorted(_VALID_SCOPES)},
+        )
+    if "all" in items:
+        items = _VALID_SCOPES - {"all"}
+    # Map CLI plurals to internal role names used by _iter_searchable_parts.
+    cli_to_role = {
+        "body": "document",
+        "headers": "header",
+        "footers": "footer",
+        "footnotes": "footnotes",
+        "endnotes": "endnotes",
+    }
+    return {cli_to_role[v] for v in items}
+
+
+# ---------------------------------------------------------------------------
 # F8: post-validate hook
 # ---------------------------------------------------------------------------
 
@@ -177,9 +223,13 @@ def _dispatch_action(
     scripts_dir: Path,
 ) -> tuple[int, str]:
     """Dispatch to the chosen action; return (count, summary)."""
+    # docx-6.7: parse --scope once per invocation. Default "all" expands
+    # to the full role set (back-compat: identical to v1 behavior).
+    scope = _parse_scope(getattr(args, "scope", "all"))
     if args.replace is not None:
         count = _do_replace(
             tree_root, args.anchor, args.replace, anchor_all=args.all,
+            scope=scope,
         )
         return count, (
             f"replaced {count} anchor(s) "
@@ -216,7 +266,7 @@ def _dispatch_action(
         )
         count = _do_insert_after(
             tree_root, args.anchor, insert_paragraphs,
-            anchor_all=args.all,
+            anchor_all=args.all, scope=scope,
         )
         return count, (
             f"inserted {len(insert_paragraphs)} paragraph(s) after "
@@ -224,7 +274,7 @@ def _dispatch_action(
         )
     if args.delete_paragraph:
         count = _do_delete_paragraph(
-            tree_root, args.anchor, anchor_all=args.all,
+            tree_root, args.anchor, anchor_all=args.all, scope=scope,
         )
         return count, (
             f"deleted {count} paragraph(s) (anchor={args.anchor!r})"
@@ -275,6 +325,13 @@ def _run(args: argparse.Namespace) -> int:
             code=2, error_type="UsageError",
             details={"anchor": args.anchor},
         )
+
+    # docx-6.7: validate --scope EARLY so bad values fail before any I/O
+    # (otherwise the user sees `Not a ZIP-based OOXML container` after a
+    # fruitless unpack attempt). The parsed set is discarded here and
+    # re-parsed inside _dispatch_action; cost is negligible and avoids
+    # threading the parsed set through library-mode / _dispatch.
+    _parse_scope(getattr(args, "scope", "all"))
 
     # Step 1: Library-mode dispatch (FIRST per ARCH §F7 MAJ-1 fix).
     if args.unpacked_dir is not None:
@@ -395,6 +452,15 @@ def build_parser() -> argparse.ArgumentParser:
                         help="Apply action to all matching paragraphs (default: first only).")
     parser.add_argument("--unpacked-dir", metavar="DIR", type=Path, default=None,
                         help="Library mode: operate on an unpacked OOXML tree (UC-4; task-006-07b).")
+    parser.add_argument(
+        "--scope", metavar="LIST", default="all",
+        help=("Comma-separated parts to search: "
+              "body, headers, footers, footnotes, endnotes, all "
+              "(default: all). Example: --scope=body,headers to skip "
+              "notes; --scope=body to limit edits to word/document.xml. "
+              "Order within the requested set is preserved (document → "
+              "headers → footers → footnotes → endnotes). [docx-6.7]"),
+    )
     add_json_errors_argument(parser)
     return parser
 

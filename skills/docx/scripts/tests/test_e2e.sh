@@ -2323,6 +2323,84 @@ else
     nok "T-docx-del-content-not-matched" "fixture docx_replace_tracked_del.docx not found; run build_tracked_change_fixture.py"
 fi
 
+# 25. T-docx-scope-body-only (docx-6.7; GREEN in task-007 [LIGHT])
+#     --scope=body must NOT find anchor that lives only in a header part.
+#     Approach (library mode for simplicity):
+#       1. Pre-unpack examples/docx_replace_body.docx to a tmp tree.
+#       2. Splice word/header1.xml with HEADER_ONLY_ANCHOR + add a
+#          ContentTypes Override entry so _iter_searchable_parts picks it up.
+#       3. Default scope (no --scope): library mode finds the anchor in the
+#          header (rc=0 if R3.a back-compat holds).
+#       4. Re-unpack to a fresh tree, run with --scope=body → AnchorNotFound
+#          rc=2 (R2.a scope filter).
+mkdir -p "$TMP/scope_unp_all" "$TMP/scope_unp_body"
+set +e
+"$PY" -c "
+import sys
+from pathlib import Path
+sys.path.insert(0, '.')
+from office.unpack import unpack
+src = Path('../examples/docx_replace_body.docx')
+for dst_name in ('$TMP/scope_unp_all', '$TMP/scope_unp_body'):
+    dst = Path(dst_name)
+    unpack(src, dst)
+    # Splice header1.xml with anchor.
+    hdr = dst / 'word' / 'header1.xml'
+    hdr.write_text(
+        '<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n'
+        '<w:hdr xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\">\n'
+        '  <w:p><w:r><w:t>HEADER_ONLY_ANCHOR boilerplate</w:t></w:r></w:p>\n'
+        '</w:hdr>\n'
+    )
+    ct = (dst / '[Content_Types].xml').read_text()
+    hdr_ct = 'application/vnd.openxmlformats-officedocument.wordprocessingml.header+xml'
+    override = f'<Override PartName=\"/word/header1.xml\" ContentType=\"{hdr_ct}\"/>'
+    if override not in ct:
+        ct = ct.replace('</Types>', override + '</Types>')
+        (dst / '[Content_Types].xml').write_text(ct)
+"
+scope_setup_rc=$?
+set -e
+if [ "$scope_setup_rc" -ne 0 ]; then
+    nok "T-docx-scope-body-only" "fixture setup failed (rc=$scope_setup_rc)"
+else
+    # (a) default scope: anchor found in header → rc=0
+    set +e
+    "$PY" docx_replace.py --unpacked-dir "$TMP/scope_unp_all" \
+        --anchor "HEADER_ONLY_ANCHOR" --replace "REPLACED_HDR" >/dev/null 2>&1
+    scope_all_rc=$?
+    # (b) scope=body: anchor NOT in body → rc=2 AnchorNotFound
+    scope_body_out=$("$PY" docx_replace.py --unpacked-dir "$TMP/scope_unp_body" \
+        --anchor "HEADER_ONLY_ANCHOR" --replace "REPLACED_BODY" --scope=body --json-errors 2>&1 >/dev/null)
+    scope_body_rc=$?
+    set -e
+    if [ "$scope_all_rc" -eq 0 ] && [ "$scope_body_rc" -eq 2 ] \
+        && echo "$scope_body_out" | "$PY" -c "import sys, json; d=json.loads(sys.stdin.read()); assert d.get('type')=='AnchorNotFound'" 2>/dev/null; then
+        ok "T-docx-scope-body-only (--scope=body skips header where anchor lives)"
+    else
+        nok "T-docx-scope-body-only" "all_rc=$scope_all_rc body_rc=$scope_body_rc body_out=$scope_body_out"
+    fi
+fi
+
+# 26. T-docx-scope-invalid-value (docx-6.7; --scope=garbage → exit 2)
+set +e
+inv_out=$("$PY" docx_replace.py examples/docx_replace_body.docx "$TMP/inv.docx" \
+    --anchor "May 2024" --replace "X" --scope="garbage_role" --json-errors 2>&1 >/dev/null)
+inv_rc=$?
+set -e
+if [ "$inv_rc" -eq 2 ] \
+    && echo "$inv_out" | "$PY" -c "
+import sys, json
+d = json.loads(sys.stdin.read())
+assert d.get('type') == 'UsageError', f'wrong type: {d.get(\"type\")}'
+assert 'garbage_role' in d.get('details', {}).get('invalid', []), f'invalid missing: {d}'
+assert 'body' in d.get('details', {}).get('valid', []), f'valid missing: {d}'
+" 2>/dev/null; then
+    ok "T-docx-scope-invalid-value (envelope lists invalid + valid scope values)"
+else
+    nok "T-docx-scope-invalid-value" "rc=$inv_rc out=$inv_out"
+fi
+
 echo
 echo "$pass passed, $fail failed"
 [ "$fail" -eq 0 ]
