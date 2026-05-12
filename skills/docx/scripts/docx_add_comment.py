@@ -95,6 +95,14 @@ from docx.oxml.ns import qn  # type: ignore
 from lxml import etree  # type: ignore
 
 from _errors import add_json_errors_argument, report_error
+
+# Hardened XML parser — mirrors office/validators/base.py; defangs XXE /
+# external-entity expansion + DTD-based attacks (CWE-611). Used for every
+# etree.parse() call on caller-supplied XML in this module.
+_SAFE_PARSER = etree.XMLParser(
+    resolve_entities=False, no_network=True, load_dtd=False,
+)
+from docx_anchor import _is_simple_text_run, _merge_adjacent_runs, _rpr_key
 from office._encryption import EncryptedFileError, assert_not_encrypted
 from office._macros import warn_if_macros_will_be_dropped
 from office.pack import pack
@@ -150,55 +158,6 @@ COMMENTS_CEX_CT = (
 def _initials_from_author(author: str) -> str:
     parts = re.findall(r"\w+", author)
     return ("".join(p[:1] for p in parts) or "R").upper()[:8]
-
-
-def _rpr_key(run: etree._Element) -> bytes:
-    rpr = run.find(qn("w:rPr"))
-    return b"" if rpr is None else etree.tostring(rpr, method="c14n")
-
-
-def _is_simple_text_run(run: etree._Element) -> bool:
-    """A run is "simple" enough to safely split around an anchor when it
-    contains only formatting (`<w:rPr>`), text (`<w:t>`), and Word's
-    visual-empty render-cache markers. `<w:lastRenderedPageBreak>` is
-    Word's hint for the position of the last page break it computed —
-    purely a paginator cache, no glyph rendered, and re-emitted on
-    every save. Real-world headings (e.g. "PURPOSE" right after a
-    heading-induced page break) routinely look like
-    `[rPr, lastRenderedPageBreak, t]` and were silently treated as
-    non-simple by an earlier overly-strict filter."""
-    for child in run:
-        tag = etree.QName(child).localname
-        if tag not in {"rPr", "t", "lastRenderedPageBreak"}:
-            return False
-    return True
-
-
-def _merge_adjacent_runs(paragraph: etree._Element) -> None:
-    """Same trick docx_fill_template.py uses — merge adjacent runs that
-    share identical `<w:rPr>` so a substring split across runs by
-    Word's autocorrect/spell-check gets reunited before we search."""
-    runs = paragraph.findall(qn("w:r"))
-    i = 0
-    while i < len(runs) - 1:
-        a, b = runs[i], runs[i + 1]
-        if not (_is_simple_text_run(a) and _is_simple_text_run(b)):
-            i += 1
-            continue
-        if _rpr_key(a) != _rpr_key(b):
-            i += 1
-            continue
-        a_t, b_t = a.find(qn("w:t")), b.find(qn("w:t"))
-        if a_t is None or b_t is None:
-            i += 1
-            continue
-        a_t.text = (a_t.text or "") + (b_t.text or "")
-        if " " in (a_t.text or ""):
-            a_t.set(
-                "{http://www.w3.org/XML/1998/namespace}space", "preserve"
-            )
-        b.getparent().remove(b)
-        runs = paragraph.findall(qn("w:r"))
 
 
 def _next_comment_id(comments_root: etree._Element) -> int:
@@ -291,7 +250,7 @@ def _ensure_comments_part(
     if the document doesn't have comments yet."""
     path = tree_root / "word" / "comments.xml"
     if path.is_file():
-        return path, etree.parse(str(path))
+        return path, etree.parse(str(path), _SAFE_PARSER)
 
     path.parent.mkdir(parents=True, exist_ok=True)
     root = etree.Element(qn("w:comments"), nsmap={"w": W_NS, "w14": W14_NS})
@@ -316,7 +275,7 @@ def _ensure_extra_part(
     relationship + content-type override."""
     path = tree_root / part_name.lstrip("/")
     if path.is_file():
-        tree = etree.parse(str(path))
+        tree = etree.parse(str(path), _SAFE_PARSER)
     else:
         path.parent.mkdir(parents=True, exist_ok=True)
         root = etree.Element(root_qname, nsmap=nsmap)
@@ -382,7 +341,7 @@ def _ensure_relationship(
     at the given target. Idempotent."""
     if not rels_path.is_file():
         raise RuntimeError(f"missing relationships file: {rels_path}")
-    tree = etree.parse(str(rels_path))
+    tree = etree.parse(str(rels_path), _SAFE_PARSER)
     root = tree.getroot()
     for rel in root.findall(f"{{{PR_NS}}}Relationship"):
         if rel.get("Type") == rel_type and rel.get("Target") == target:
@@ -406,7 +365,7 @@ def _ensure_content_type(
     content_types_path: Path, *, part_name: str, content_type: str,
 ) -> None:
     """Make sure [Content_Types].xml has an Override for the given part."""
-    tree = etree.parse(str(content_types_path))
+    tree = etree.parse(str(content_types_path), _SAFE_PARSER)
     root = tree.getroot()
     for ovr in root.findall(f"{{{CT_NS}}}Override"):
         if ovr.get("PartName") == part_name:
@@ -680,7 +639,7 @@ def _add_top_level_comment(
             "input is not a wordprocessing document (missing "
             "word/document.xml)"
         )
-    doc_tree = etree.parse(str(doc_path))
+    doc_tree = etree.parse(str(doc_path), _SAFE_PARSER)
 
     comments_path, comments_tree = _ensure_comments_part(tree_root)
     comments_root = comments_tree.getroot()
@@ -781,7 +740,7 @@ def _add_reply(
             "input is not a wordprocessing document (missing "
             "word/document.xml)"
         )
-    doc_tree = etree.parse(str(doc_path))
+    doc_tree = etree.parse(str(doc_path), _SAFE_PARSER)
     doc_root = doc_tree.getroot()
 
     comments_path, comments_tree = _ensure_comments_part(tree_root)

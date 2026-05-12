@@ -1754,4 +1754,575 @@ fi
 
 echo
 echo "$pass passed, $fail failed"
+
+# ---------- docx-6 / docx_replace ----------
+# Plan-review MAJ-2 fix: stub cases gated by DOCX6_STUBS_ENABLED.
+# Default (unset/0) → echo SKIP; suite stays exit-0 in CI.
+# DOCX6_STUBS_ENABLED=1 → run case, expect-fail (nok if rc != expected).
+# Each Phase-2 sub-task removes its gate as the region lands GREEN.
+: "${DOCX6_STUBS_ENABLED:=0}"
+
+echo "docx-6 docx_replace (DOCX6_STUBS_ENABLED=$DOCX6_STUBS_ENABLED):"
+
+# Define a small helper for the expect-fail cadence:
+run_expect_fail() {
+    # usage: run_expect_fail <name> <expected_rc> <cmd...>
+    local name="$1" expected="$2"; shift 2
+    set +e
+    "$@" >/dev/null 2>&1
+    local rc=$?
+    set -e
+    if [ "$rc" = "$expected" ]; then
+        ok "$name (Stub-First Red: rc=$rc as expected)"
+    else
+        nok "$name" "expected rc=$expected, got rc=$rc"
+    fi
+}
+
+# 1. T-docx-replace-happy (UC-1; GREEN in 006-04)
+# Anchor "May 2024" present in a single run → replaced, exit 0.
+set +e
+rh_stderr=$("$PY" docx_replace.py ../examples/docx_replace_body.docx "$TMP/replace_happy.docx" \
+    --anchor "May 2024" --replace "April 2025" 2>&1 >/dev/null)
+rh_rc=$?
+set -e
+if [ "$rh_rc" -eq 0 ] \
+    && echo "$rh_stderr" | grep -q "replaced" \
+    && "$PY" -m office.validate "$TMP/replace_happy.docx" >/dev/null 2>&1; then
+    ok "T-docx-replace-happy (rc=0, 'replaced' in stderr, output validates)"
+else
+    nok "T-docx-replace-happy" "rc=$rh_rc stderr=$rh_stderr"
+fi
+
+# 2. T-docx-replace-empty-replacement (UC-1 strip; GREEN in 006-04)
+# --replace "" strips the anchor; output validates.
+set +e
+re_stderr=$("$PY" docx_replace.py ../examples/docx_replace_body.docx "$TMP/replace_empty.docx" \
+    --anchor "May 2024" --replace "" 2>&1 >/dev/null)
+re_rc=$?
+set -e
+if [ "$re_rc" -eq 0 ] && "$PY" -m office.validate "$TMP/replace_empty.docx" >/dev/null 2>&1; then
+    # Verify "May 2024" is gone from the output document text.
+    if "$PY" -c "
+from docx import Document
+d = Document('$TMP/replace_empty.docx')
+text = '\n'.join(p.text for p in d.paragraphs)
+assert 'May 2024' not in text, 'anchor still present: ' + text
+" 2>/dev/null; then
+        ok "T-docx-replace-empty-replacement (rc=0, anchor stripped)"
+    else
+        nok "T-docx-replace-empty-replacement" "anchor still present in output"
+    fi
+else
+    nok "T-docx-replace-empty-replacement" "rc=$re_rc stderr=$re_stderr"
+fi
+
+# 3. T-docx-replace-all-multiple (--all; GREEN in 006-04)
+# Anchor "the" with --all; at least 1 replacement made (rc=0).
+set +e
+ra_stderr=$("$PY" docx_replace.py ../examples/docx_replace_body.docx "$TMP/replace_all.docx" \
+    --anchor "the" --replace "THE" --all 2>&1 >/dev/null)
+ra_rc=$?
+set -e
+if [ "$ra_rc" -eq 0 ] \
+    && echo "$ra_stderr" | grep -q "replaced" \
+    && "$PY" -m office.validate "$TMP/replace_all.docx" >/dev/null 2>&1; then
+    ok "T-docx-replace-all-multiple (rc=0, replaced reported, output validates)"
+else
+    nok "T-docx-replace-all-multiple" "rc=$ra_rc stderr=$ra_stderr"
+fi
+
+# 4. T-docx-replace-anchor-not-found (exit 2 AnchorNotFound; GREEN in 006-04)
+set +e
+rnf_stderr=$("$PY" docx_replace.py ../examples/docx_replace_body.docx "$TMP/replace_nf.docx" \
+    --anchor "ZZZNOTPRESENTZZZ" --replace "x" --json-errors 2>&1 >/dev/null)
+rnf_rc=$?
+set -e
+if [ "$rnf_rc" -eq 2 ] && echo "$rnf_stderr" | "$PY" -c "
+import sys, json
+d = json.loads(sys.stdin.read())
+assert d.get('type') == 'AnchorNotFound', d
+" 2>/dev/null; then
+    ok "T-docx-replace-anchor-not-found (rc=2, type=AnchorNotFound)"
+else
+    nok "T-docx-replace-anchor-not-found" "rc=$rnf_rc stderr=$rnf_stderr"
+fi
+
+# 5. T-docx-replace-cross-run-anchor-fails (R10.a honest-scope; GREEN in 006-04)
+# Generate a fixture where "May 2024" is split across rPr-different runs:
+# Markdown "**May** 2024" → bold "May" run + plain " 2024" run → different rPr → merge skips.
+# _merge_adjacent_runs won't coalesce because rPr differs (bold vs plain).
+cat > "$TMP/cross_run.md" <<'MDEOF'
+**May** 2024
+MDEOF
+node md2docx.js "$TMP/cross_run.md" "$TMP/cross_run.docx" >/dev/null 2>&1
+set +e
+rc_cross=$?
+set -e
+if [ "$rc_cross" -eq 0 ] && [ -s "$TMP/cross_run.docx" ]; then
+    set +e
+    cr_stderr=$("$PY" docx_replace.py "$TMP/cross_run.docx" "$TMP/replace_cross.docx" \
+        --anchor "May 2024" --replace "April 2025" --json-errors 2>&1 >/dev/null)
+    cr_rc=$?
+    set -e
+    if [ "$cr_rc" -eq 2 ] && echo "$cr_stderr" | "$PY" -c "
+import sys, json
+d = json.loads(sys.stdin.read())
+assert d.get('type') == 'AnchorNotFound', d
+" 2>/dev/null; then
+        ok "T-docx-replace-cross-run-anchor-fails (rc=2, AnchorNotFound as expected)"
+    else
+        nok "T-docx-replace-cross-run-anchor-fails" "rc=$cr_rc stderr=$cr_stderr"
+    fi
+else
+    nok "T-docx-replace-cross-run-anchor-fails" "md2docx failed to build cross-run fixture (rc=$rc_cross)"
+fi
+
+# 6. T-docx-insert-after-file (UC-2 file; GREEN in 006-05)
+set +e
+ia_file_stderr=$("$PY" docx_replace.py ../examples/docx_replace_body.docx "$TMP/insert_file.docx" \
+    --anchor "Article 5." --insert-after ../examples/docx_replace_insert_source.md 2>&1 >/dev/null)
+ia_file_rc=$?
+set -e
+if [ "$ia_file_rc" -eq 0 ] \
+    && echo "$ia_file_stderr" | grep -q "inserted" \
+    && "$PY" -m office.validate "$TMP/insert_file.docx" >/dev/null 2>&1; then
+    # Post-check: at least 1 paragraph containing "Inserted heading" in output.
+    if "$PY" -c "
+from docx import Document
+d = Document('$TMP/insert_file.docx')
+text = '\n'.join(p.text for p in d.paragraphs)
+assert 'Inserted heading' in text, 'Inserted heading not found in: ' + text[:500]
+" 2>/dev/null; then
+        ok "T-docx-insert-after-file (rc=0, inserted in stderr, validates, heading present)"
+    else
+        nok "T-docx-insert-after-file" "output missing 'Inserted heading'"
+    fi
+else
+    nok "T-docx-insert-after-file" "rc=$ia_file_rc stderr=$ia_file_stderr"
+fi
+
+# 7. T-docx-insert-after-stdin (UC-2 stdin; GREEN in 006-05)
+set +e
+ia_stdin_stderr=$(cat ../examples/docx_replace_insert_source.md \
+    | "$PY" docx_replace.py ../examples/docx_replace_body.docx "$TMP/insert_stdin.docx" \
+        --anchor "Article 5." --insert-after - 2>&1 >/dev/null)
+ia_stdin_rc=$?
+set -e
+if [ "$ia_stdin_rc" -eq 0 ] \
+    && "$PY" -m office.validate "$TMP/insert_stdin.docx" >/dev/null 2>&1; then
+    ok "T-docx-insert-after-stdin (rc=0, output validates)"
+else
+    nok "T-docx-insert-after-stdin" "rc=$ia_stdin_rc stderr=$ia_stdin_stderr"
+fi
+
+# 8. T-docx-insert-after-empty-stdin (EmptyInsertSource; GREEN in 006-05)
+set +e
+ia_empty_stderr=$(printf "" \
+    | "$PY" docx_replace.py ../examples/docx_replace_body.docx "$TMP/insert_empty.docx" \
+        --anchor "Article 5." --insert-after - --json-errors 2>&1 >/dev/null)
+ia_empty_rc=$?
+set -e
+if [ "$ia_empty_rc" -eq 2 ] && echo "$ia_empty_stderr" | "$PY" -c "
+import sys, json
+d = json.loads(sys.stdin.read())
+assert d.get('type') == 'EmptyInsertSource', d
+" 2>/dev/null; then
+    ok "T-docx-insert-after-empty-stdin (rc=2, type=EmptyInsertSource)"
+else
+    nok "T-docx-insert-after-empty-stdin" "rc=$ia_empty_rc stderr=$ia_empty_stderr"
+fi
+
+# 9. T-docx-insert-after-all-duplicates (--all N-fold insert; GREEN in 006-05)
+# Generate a tmp fixture with "Article 5." appearing in 2 paragraphs.
+cat > "$TMP/all_dup.md" <<'ALLEOF'
+Article 5. First occurrence.
+
+Article 5. Second occurrence.
+ALLEOF
+node md2docx.js "$TMP/all_dup.md" "$TMP/all_dup_fixture.docx" >/dev/null 2>&1
+set +e
+ia_all_rc=0
+if [ -s "$TMP/all_dup_fixture.docx" ]; then
+    ia_all_stderr=$("$PY" docx_replace.py "$TMP/all_dup_fixture.docx" "$TMP/insert_all.docx" \
+        --anchor "Article 5." --insert-after ../examples/docx_replace_insert_source.md --all 2>&1 >/dev/null)
+    ia_all_rc=$?
+fi
+set -e
+if [ "$ia_all_rc" -eq 0 ] && [ -s "$TMP/insert_all.docx" ]; then
+    # Count paragraphs containing "Inserted heading" — should be ≥ 2 (2 matches × 1 heading para).
+    ia_all_count=$("$PY" -c "
+from docx import Document
+d = Document('$TMP/insert_all.docx')
+count = sum(1 for p in d.paragraphs if 'Inserted heading' in p.text)
+print(count)
+" 2>/dev/null || echo 0)
+    if [ "$ia_all_count" -ge 2 ]; then
+        ok "T-docx-insert-after-all-duplicates (rc=0, ${ia_all_count}x inserted paragraphs)"
+    else
+        nok "T-docx-insert-after-all-duplicates" "expected ≥2 inserted headings, found $ia_all_count"
+    fi
+else
+    nok "T-docx-insert-after-all-duplicates" "rc=$ia_all_rc or no output"
+fi
+
+# 10. T-docx-insert-after-image-warns (R10.b no live r:embed; GREEN in 006-05)
+# Create a real 1×1 PNG image so md2docx.js can produce a docx with r:embed.
+"$PY" -c "
+from PIL import Image
+img = Image.new('RGB', (8, 8), color=(255,0,0))
+img.save('$TMP/warn_test_img.png')
+" 2>/dev/null || "$PY" -c "
+# Fallback: write a minimal 1×1 PNG by hand (no PIL needed).
+import struct, zlib
+def png_chunk(tag, data):
+    c = zlib.crc32(tag + data) & 0xffffffff
+    return struct.pack('>I', len(data)) + tag + data + struct.pack('>I', c)
+sig = b'\x89PNG\r\n\x1a\n'
+ihdr = png_chunk(b'IHDR', struct.pack('>IIBBBBB', 1, 1, 8, 2, 0, 0, 0))
+raw = b'\x00\xff\x00\x00'
+idat = png_chunk(b'IDAT', zlib.compress(raw))
+iend = png_chunk(b'IEND', b'')
+open('$TMP/warn_test_img.png', 'wb').write(sig + ihdr + idat + iend)
+"
+cat > "$TMP/warn_img.md" <<WARNMDEOF
+# Image heading
+
+![test image]($TMP/warn_test_img.png)
+WARNMDEOF
+set +e
+ia_img_output=$("$PY" docx_replace.py ../examples/docx_replace_body.docx "$TMP/insert_img.docx" \
+    --anchor "Article 5." --insert-after "$TMP/warn_img.md" 2>&1 >/dev/null)
+ia_img_rc=$?
+set -e
+if [ "$ia_img_rc" -eq 0 ] \
+    && echo "$ia_img_output" | grep -q "WARNING" \
+    && "$PY" -m office.validate "$TMP/insert_img.docx" >/dev/null 2>&1; then
+    ok "T-docx-insert-after-image-warns (rc=0, WARNING in stderr, output validates)"
+else
+    nok "T-docx-insert-after-image-warns" "rc=$ia_img_rc output=$ia_img_output"
+fi
+
+# 11. T-docx-delete-paragraph (UC-3 happy path; GREEN in 006-06)
+# Anchor "DEPRECATED CLAUSE" in body → exit 0; stderr contains "deleted 1 paragraph".
+set +e
+dp_stderr=$("$PY" docx_replace.py ../examples/docx_replace_body.docx "$TMP/delete_para.docx" \
+    --anchor "DEPRECATED CLAUSE" --delete-paragraph 2>&1 >/dev/null)
+dp_rc=$?
+set -e
+if [ "$dp_rc" -eq 0 ] \
+    && echo "$dp_stderr" | grep -q "deleted 1 paragraph" \
+    && "$PY" -m office.validate "$TMP/delete_para.docx" >/dev/null 2>&1; then
+    ok "T-docx-delete-paragraph (rc=0, 'deleted 1 paragraph' in stderr, output validates)"
+else
+    nok "T-docx-delete-paragraph" "rc=$dp_rc stderr=$dp_stderr"
+fi
+
+# 12. T-docx-delete-paragraph-table-cell-placeholder (Q-A5; GREEN in 006-06)
+# Generate fixture with table cell containing DEPRECATED_CELL.
+# After delete: cell has exactly one empty <w:p/> placeholder.
+cat > "$TMP/cell_fixture.md" << 'CELLMDEOF'
+Body paragraph above table.
+
+| col |
+|-----|
+| DEPRECATED_CELL |
+CELLMDEOF
+node md2docx.js "$TMP/cell_fixture.md" "$TMP/cell_fixture.docx" >/dev/null 2>&1
+set +e
+"$PY" docx_replace.py "$TMP/cell_fixture.docx" "$TMP/delete_cell.docx" \
+    --anchor "DEPRECATED_CELL" --delete-paragraph >/dev/null 2>&1
+dc_rc=$?
+set -e
+if [ "$dc_rc" -eq 0 ] && "$PY" -c "
+import sys, zipfile
+from lxml import etree
+W = 'http://schemas.openxmlformats.org/wordprocessingml/2006/main'
+with zipfile.ZipFile('$TMP/delete_cell.docx') as z:
+    root = etree.fromstring(z.read('word/document.xml'))
+tcs = root.findall(f'.//{{{W}}}tc')
+# Find the tc that had DEPRECATED_CELL (now placeholder)
+placeholder_tc = [tc for tc in tcs if
+    len(tc.findall(f'{{{W}}}p')) == 1 and
+    len(list(tc.findall(f'{{{W}}}p')[0])) == 0]
+assert len(placeholder_tc) >= 1, f'No placeholder tc found; tcs={len(tcs)}'
+" 2>/dev/null; then
+    ok "T-docx-delete-paragraph-table-cell-placeholder (rc=0, <w:p/> placeholder in cell)"
+else
+    nok "T-docx-delete-paragraph-table-cell-placeholder" "rc=$dc_rc"
+fi
+
+# 13. T-docx-delete-paragraph-last-body-refused (R10.c; GREEN in 006-06)
+# Single-paragraph body → exit 2 LastParagraphCannotBeDeleted; output NOT written.
+cat > "$TMP/single_para.md" << 'SINGLEMDEOF'
+ONLY PARAGRAPH HERE
+SINGLEMDEOF
+node md2docx.js "$TMP/single_para.md" "$TMP/single_para.docx" >/dev/null 2>&1
+set +e
+dl_stderr=$("$PY" docx_replace.py "$TMP/single_para.docx" "$TMP/delete_last.docx" \
+    --anchor "ONLY PARAGRAPH" --delete-paragraph --json-errors 2>&1 >/dev/null)
+dl_rc=$?
+set -e
+if [ "$dl_rc" -eq 2 ] \
+    && echo "$dl_stderr" | "$PY" -c "import sys,json; d=json.loads(sys.stdin.read()); assert d.get('type')=='LastParagraphCannotBeDeleted'" 2>/dev/null \
+    && [ ! -f "$TMP/delete_last.docx" ]; then
+    ok "T-docx-delete-paragraph-last-body-refused (rc=2, LastParagraphCannotBeDeleted, no output file)"
+else
+    nok "T-docx-delete-paragraph-last-body-refused" "rc=$dl_rc stderr=$dl_stderr output_exists=$([ -f \"$TMP/delete_last.docx\" ] && echo yes || echo no)"
+fi
+
+# 14. T-docx-delete-paragraph-all-common-word (R10.d; GREEN in 006-06)
+# Fixture: every body paragraph contains "the"; --all --delete-paragraph trips
+# last-paragraph guard mid-loop (exit 2 LastParagraphCannotBeDeleted).
+cat > "$TMP/the_fixture.md" << 'THEMDEOF'
+This is the first paragraph.
+
+This is the second paragraph.
+
+This is the third paragraph.
+THEMDEOF
+node md2docx.js "$TMP/the_fixture.md" "$TMP/the_fixture.docx" >/dev/null 2>&1
+set +e
+cw_stderr=$("$PY" docx_replace.py "$TMP/the_fixture.docx" "$TMP/delete_all_cw.docx" \
+    --anchor "the" --delete-paragraph --all --json-errors 2>&1 >/dev/null)
+cw_rc=$?
+set -e
+if [ "$cw_rc" -eq 2 ] \
+    && echo "$cw_stderr" | "$PY" -c "import sys,json; d=json.loads(sys.stdin.read()); assert d.get('type')=='LastParagraphCannotBeDeleted'" 2>/dev/null \
+    && [ ! -f "$TMP/delete_all_cw.docx" ]; then
+    ok "T-docx-delete-paragraph-all-common-word (rc=2, guard trips mid-loop, no output file)"
+else
+    nok "T-docx-delete-paragraph-all-common-word" "rc=$cw_rc stderr=$cw_stderr output_exists=$([ -f \"$TMP/delete_all_cw.docx\" ] && echo yes || echo no)"
+fi
+
+# 15. T-docx-replace-same-path (cross-7; GREEN in 006-03)
+# INPUT == OUTPUT → exit 6 with SelfOverwriteRefused JSON envelope.
+cp ../examples/docx_replace_body.docx "$TMP/same_path_src.docx"
+set +e
+sp_stderr=$("$PY" docx_replace.py "$TMP/same_path_src.docx" "$TMP/same_path_src.docx" \
+    --anchor "May 2024" --delete-paragraph --json-errors 2>&1 >/dev/null)
+sp_rc=$?
+set -e
+if [ "$sp_rc" = "6" ] && echo "$sp_stderr" | "$PY" -c "import sys,json; d=json.loads(sys.stdin.read()); assert d.get('type')=='SelfOverwriteRefused'" 2>/dev/null; then
+    ok "T-docx-replace-same-path (rc=6, type=SelfOverwriteRefused)"
+else
+    nok "T-docx-replace-same-path" "expected rc=6+SelfOverwriteRefused envelope, got rc=$sp_rc stderr=$sp_stderr"
+fi
+
+# 16. T-docx-replace-encrypted (cross-3; GREEN in 006-03)
+# Encrypted input → exit 3 with EncryptedFileError JSON envelope.
+"$PY" office_passwd.py ../examples/docx_replace_body.docx "$TMP/enc_src.docx" --encrypt test123 >/dev/null 2>&1
+set +e
+enc_stderr=$("$PY" docx_replace.py "$TMP/enc_src.docx" "$TMP/enc_out.docx" \
+    --anchor "May 2024" --replace "April 2025" --json-errors 2>&1 >/dev/null)
+enc_rc=$?
+set -e
+if [ "$enc_rc" = "3" ] && echo "$enc_stderr" | "$PY" -c "import sys,json; d=json.loads(sys.stdin.read()); assert d.get('type')=='EncryptedFileError'" 2>/dev/null; then
+    ok "T-docx-replace-encrypted (rc=3, type=EncryptedFileError)"
+else
+    nok "T-docx-replace-encrypted" "expected rc=3+EncryptedFileError envelope, got rc=$enc_rc stderr=$enc_stderr"
+fi
+
+# 17. T-docx-replace-macro-warning (cross-4 .docm; GREEN in 006-03)
+# .docm input → stderr contains "macro" warning (cross-4 helper fires before stub).
+# Uses examples/docx_replace_body.docm which has macroEnabled content-type.
+# .docm→.docx triggers the loss warning; exit code is 1 (NotImplemented stub).
+set +e
+mw_stderr=$("$PY" docx_replace.py ../examples/docx_replace_body.docm "$TMP/macro_out.docx" \
+    --anchor "May 2024" --replace "April 2025" 2>&1 >/dev/null)
+mw_rc=$?
+set -e
+if echo "$mw_stderr" | grep -qi "macro"; then
+    ok "T-docx-replace-macro-warning (macro warning on stderr, rc=$mw_rc)"
+else
+    nok "T-docx-replace-macro-warning" "expected 'macro' in stderr, got: $mw_stderr"
+fi
+
+# 18. T-docx-replace-envelope-shape (cross-5 --json-errors; GREEN in 006-03)
+# Any failure with --json-errors → single-line JSON on stderr with keys v,error,code,type,details.
+set +e
+ev_stderr=$("$PY" docx_replace.py ../examples/docx_replace_body.docx "$TMP/envelope.docx" \
+    --anchor "ZZZNOTPRESENTZZZ" --replace "x" --json-errors 2>&1 >/dev/null)
+set -e
+if echo "$ev_stderr" | "$PY" -c "
+import sys, json
+line = sys.stdin.read().strip()
+d = json.loads(line)
+for k in ('v','error','code','type','details'):
+    assert k in d, f'missing key: {k}'
+" 2>/dev/null; then
+    ok "T-docx-replace-envelope-shape (valid JSON with all required keys)"
+else
+    nok "T-docx-replace-envelope-shape" "envelope missing required keys or not valid JSON: $ev_stderr"
+fi
+
+# 19. T-docx-replace-action-mutex (R4.a UsageError; GREEN in 006-03)
+# Two action flags → argparse exits 2.
+set +e
+"$PY" docx_replace.py ../examples/docx_replace_body.docx "$TMP/mutex.docx" \
+    --anchor "May 2024" --replace "April 2025" --delete-paragraph >/dev/null 2>&1
+mx_rc=$?
+set -e
+if [ "$mx_rc" = "2" ]; then
+    ok "T-docx-replace-action-mutex (rc=2 on two-action mutex violation)"
+else
+    nok "T-docx-replace-action-mutex" "expected rc=2, got rc=$mx_rc"
+fi
+
+# 20. T-docx-replace-help-honest-scope (R8.j; GREEN in 006-03)
+# --help exits 0 AND stdout contains four honest-scope substrings.
+set +e
+hs_stdout=$("$PY" docx_replace.py --help 2>/dev/null)
+hs_rc=$?
+set -e
+hs_ok=1
+for substr in "single-run" "image" "last paragraph" "blast-radius"; do
+    if ! echo "$hs_stdout" | grep -q "$substr"; then
+        nok "T-docx-replace-help-honest-scope" "missing substring in --help: '$substr'"
+        hs_ok=0
+        break
+    fi
+done
+if [ "$hs_ok" = "1" ] && [ "$hs_rc" = "0" ]; then
+    ok "T-docx-replace-help-honest-scope (rc=0, all 4 honest-scope substrings present)"
+elif [ "$hs_ok" = "1" ]; then
+    nok "T-docx-replace-help-honest-scope" "expected rc=0, got rc=$hs_rc"
+fi
+
+# 21. T-docx-unpacked-dir (UC-4 / R8.g — 006-07b)
+# Pre-unpack fixture → run library-mode delete → re-pack → verify output.
+mkdir -p "$TMP/unpacked"
+set +e
+"$PY" -c "
+import sys
+from pathlib import Path
+sys.path.insert(0, '.')
+from office.unpack import unpack
+unpack(Path('../examples/docx_replace_body.docx'), Path('$TMP/unpacked'))
+" 2>&1
+unpack_rc=$?
+set -e
+if [ "$unpack_rc" -ne 0 ]; then
+    nok "T-docx-unpacked-dir" "office.unpack failed (rc=$unpack_rc)"
+else
+    set +e
+    ud_stderr=$("$PY" docx_replace.py \
+        --unpacked-dir "$TMP/unpacked" \
+        --anchor "May 2024" \
+        --delete-paragraph 2>&1 >/dev/null)
+    ud_rc=$?
+    set -e
+    if [ "$ud_rc" -eq 0 ]; then
+        ok "T-docx-unpacked-dir UC-4 happy (rc=0, library mode delete)"
+    else
+        nok "T-docx-unpacked-dir" "rc=$ud_rc stderr=$ud_stderr"
+    fi
+
+    # Re-pack and verify the output docx is non-empty.
+    set +e
+    "$PY" -c "
+import sys
+from pathlib import Path
+sys.path.insert(0, '.')
+from office.pack import pack
+pack(Path('$TMP/unpacked'), Path('$TMP/repacked.docx'))
+" 2>&1
+    pack_rc=$?
+    set -e
+    if [ "$pack_rc" -eq 0 ] && [ -s "$TMP/repacked.docx" ]; then
+        ok "T-docx-unpacked-dir post-pack (repacked.docx non-empty)"
+    else
+        nok "T-docx-unpacked-dir pack" "pack_rc=$pack_rc or no output file"
+    fi
+fi
+
+# 22. T-docx-numid-survives-warning (R10.e; GREEN in 006-08)
+# UC-2 with list-producing markdown + base doc that has no numbering.xml.
+# stderr must contain <w:numId> warning; exit 0; output contains <w:numId>.
+cat > "$TMP/numid_insert.md" << 'NUMIDEOF'
+1. list item
+NUMIDEOF
+# Build a base docx without word/numbering.xml (strip it from body.docx)
+"$PY" - ../examples/docx_replace_body.docx "$TMP/base_no_num.docx" << 'PYEOF'
+import sys, zipfile, re
+src, dst = sys.argv[1], sys.argv[2]
+with zipfile.ZipFile(src, 'r') as zin:
+    parts = {n: zin.read(n) for n in zin.namelist()}
+parts.pop('word/numbering.xml', None)
+ct = parts.get('[Content_Types].xml', b'').decode('utf-8')
+ct = re.sub(r'<Override[^>]*numbering\.xml[^/]*/>', '', ct)
+parts['[Content_Types].xml'] = ct.encode('utf-8')
+rels_key = 'word/_rels/document.xml.rels'
+if rels_key in parts:
+    rels = parts[rels_key].decode('utf-8')
+    rels = re.sub(r'<Relationship[^>]*numbering\.xml[^/]*/>', '', rels)
+    parts[rels_key] = rels.encode('utf-8')
+with zipfile.ZipFile(dst, 'w', zipfile.ZIP_DEFLATED) as zout:
+    for n, d in parts.items():
+        zout.writestr(n, d)
+PYEOF
+set +e
+numid_output=$("$PY" docx_replace.py "$TMP/base_no_num.docx" "$TMP/numid_result.docx" \
+    --anchor "Article 5." --insert-after "$TMP/numid_insert.md" 2>&1 >/dev/null)
+numid_rc=$?
+set -e
+if [ "$numid_rc" -eq 0 ] \
+    && echo "$numid_output" | grep -q "<w:numId>" \
+    && "$PY" -m office.validate "$TMP/numid_result.docx" >/dev/null 2>&1 \
+    && "$PY" -c "
+import zipfile
+from lxml import etree
+W = 'http://schemas.openxmlformats.org/wordprocessingml/2006/main'
+with zipfile.ZipFile('$TMP/numid_result.docx') as z:
+    root = etree.fromstring(z.read('word/document.xml'))
+numid_els = root.findall(f'.//{{{W}}}numId')
+assert len(numid_els) >= 1, f'numId not found in output'
+" 2>/dev/null; then
+    ok "T-docx-numid-survives-warning (rc=0, WARNING in stderr, <w:numId> in output)"
+else
+    nok "T-docx-numid-survives-warning" "rc=$numid_rc output=$numid_output"
+fi
+
+# 23. T-docx-ins-content-matches (Q-U1 ins; GREEN in 006-08)
+# Fixture with <w:ins><w:r><w:t>FOO</w:t></w:r></w:ins>; --anchor "FOO" --replace "BAR"
+# _concat_paragraph_text INCLUDES <w:ins> content → exit 0.
+if [ -f ../examples/docx_replace_tracked_ins.docx ]; then
+    set +e
+    ins_output=$("$PY" docx_replace.py ../examples/docx_replace_tracked_ins.docx \
+        "$TMP/ins_replaced.docx" --anchor "FOO" --replace "BAR" 2>&1 >/dev/null)
+    ins_rc=$?
+    set -e
+    if [ "$ins_rc" -eq 0 ] && [ -s "$TMP/ins_replaced.docx" ]; then
+        ok "T-docx-ins-content-matches (exit 0; <w:ins> content visible to anchor search)"
+    else
+        nok "T-docx-ins-content-matches" "rc=$ins_rc stderr=$ins_output"
+    fi
+else
+    nok "T-docx-ins-content-matches" "fixture docx_replace_tracked_ins.docx not found; run build_tracked_change_fixture.py"
+fi
+
+# 24. T-docx-del-content-not-matched (Q-U1 del; GREEN in 006-08)
+# Fixture with <w:del><w:r><w:delText>FOO</w:delText></w:r></w:del>;
+# --anchor "FOO" --delete-paragraph → AnchorNotFound (exit 2).
+# _concat_paragraph_text EXCLUDES <w:del> content.
+if [ -f ../examples/docx_replace_tracked_del.docx ]; then
+    set +e
+    del_output=$("$PY" docx_replace.py ../examples/docx_replace_tracked_del.docx \
+        "$TMP/del_result.docx" --anchor "FOO" --delete-paragraph \
+        --json-errors 2>&1 >/dev/null)
+    del_rc=$?
+    set -e
+    if [ "$del_rc" -eq 2 ] \
+        && echo "$del_output" | "$PY" -c "import sys, json; d=json.loads(sys.stdin.read()); assert d.get('type')=='AnchorNotFound'" 2>/dev/null \
+        && [ ! -f "$TMP/del_result.docx" ]; then
+        ok "T-docx-del-content-not-matched (exit 2 AnchorNotFound; <w:del> invisible to search)"
+    else
+        nok "T-docx-del-content-not-matched" "rc=$del_rc stderr=$del_output output_exists=$([ -f \"$TMP/del_result.docx\" ] && echo yes || echo no)"
+    fi
+else
+    nok "T-docx-del-content-not-matched" "fixture docx_replace_tracked_del.docx not found; run build_tracked_change_fixture.py"
+fi
+
+echo
+echo "$pass passed, $fail failed"
 [ "$fail" -eq 0 ]

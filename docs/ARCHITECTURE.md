@@ -1,358 +1,464 @@
-# ARCHITECTURE: xlsx-3 — `md_tables2xlsx.py` (Markdown tables → multi-sheet .xlsx)
+# ARCHITECTURE: docx-6 — `docx_replace.py` (surgical point-edit of `.docx`)
 
-> **Template:** `architecture-format-core` (this is a NEW component
-> added to an existing skill, NOT a new system — TIER-2 conditions
-> not met). Three immediately preceding xlsx architectures are
-> archived as reference precedent:
+> **Status: ✅ MERGED 2026-05-12** (11-sub-task chain + VDD-Multi Phase-3
+> hardening). DRAFT v2 round-1 architecture-review APPROVED on
+> 2026-05-11 (MAJ-1, MAJ-2, MIN-1, MIN-2, MIN-3, MIN-4, NIT-3 fixes
+> applied inline before merge). Post-merge: VDD-Multi-prompted F8
+> `_run_post_validate` security hardening (cwd=output.parent +
+> PYTHONPATH=scripts_dir) honored ARCH boundaries without modification
+> of structural design. Body below is preserved verbatim as the
+> design source of truth.
 >
-> - xlsx-6 (`xlsx_add_comment.py`, Tasks 001+002 — MERGED 2026-05-08):
->   [`docs/architectures/architecture-001-xlsx-add-comment.md`](architectures/architecture-001-xlsx-add-comment.md)
-> - xlsx-7 (`xlsx_check_rules.py`, Task 003 — MERGED 2026-05-08):
->   [`docs/architectures/architecture-002-xlsx-check-rules.md`](architectures/architecture-002-xlsx-check-rules.md)
-> - xlsx-2 (`json2xlsx.py`, Task 004 — MERGED 2026-05-11):
+> Template: `architecture-format-core` (TIER 2 extended cadence applied —
+> new multi-module component added to an existing skill with >3 logical
+> regions and a shared-helper extraction). Immediately preceding docx
+> architecture precedents:
+>
+> - xlsx-2 (`json2xlsx.py`, Task 004 — MERGED):
 >   [`docs/architectures/architecture-003-json2xlsx.md`](architectures/architecture-003-json2xlsx.md)
->
-> xlsx-2 establishes the **shim + package + cross-5/cross-7** pattern
-> that xlsx-3 inherits 1:1. csv2xlsx (`skills/xlsx/scripts/csv2xlsx.py`,
-> 203 LOC, MERGED) is the **visual / styling reference** xlsx-3
-> mirrors 1:1 (`HEADER_FILL`, `HEADER_FONT`, freeze, auto-filter,
-> column widths).
->
-> **Status (2026-05-11):** **DRAFT** — pre-Planning. To be locked by
-> architect-reviewer before Planning phase commences.
+>   — shim + package + cross-5/cross-7 pattern.
+> - xlsx-3 (`md_tables2xlsx.py`, Task 005 — MERGED):
+>   [`docs/architectures/architecture-005-md-tables2xlsx.md`](architectures/architecture-005-md-tables2xlsx.md)
+>   — atomic chain cadence; §9 eleven diff -q gate.
+
+---
 
 ## 1. Task Description
 
-- **TASK:** [`docs/TASK.md`](TASK.md) (Task 005, slug `md-tables2xlsx`,
-  draft v2 — task-reviewer M1/M2/M3 + m1/m3/m8/m9/m10 applied per
-  [`docs/reviews/task-005-review.md`](reviews/task-005-review.md)).
-- **Brief summary of requirements:** Ship `skills/xlsx/scripts/md_tables2xlsx.py`
-  — a CLI that reads a markdown document from a file path or stdin
-  and emits a multi-sheet styled `.xlsx` workbook with one sheet per
-  extracted table. Two table flavors are recognised: GFM pipe tables
-  (with column alignment) and HTML `<table>` blocks (with `colspan` /
-  `rowspan` merged cells). Sheet names derive from the nearest
-  preceding heading; fallback `Table-N`. Default-on numeric / ISO-date
-  cell coercion; inline-markdown is stripped to plain text. Output
-  styling matches csv2xlsx + json2xlsx 1:1. Closes the "user pasted a
-  markdown spec, give me Excel" loop with a deterministic CLI.
+- **TASK:** [`docs/TASK.md`](TASK.md) (Task 006, slug `docx-replace`,
+  DRAFT v2 — task-reviewer M1/M2/M3 + m1/m3/m4 applied per
+  [`docs/reviews/task-006-review.md`](reviews/task-006-review.md)).
+- **Brief summary of requirements:** Ship
+  `skills/docx/scripts/docx_replace.py` — a CLI that locates a text
+  anchor inside an OOXML wordprocessing document (body, headers,
+  footers, footnotes, endnotes) and performs one of three minimal-
+  impact actions:
+  1. **`--replace TEXT`** — in-place text swap inside the matched run,
+     preserving `<w:rPr>` bold/italic/fontsize/colour.
+  2. **`--insert-after PATH`** — splice one or more new paragraph(s)
+     (materialised from a markdown file via `md2docx.js` subprocess)
+     immediately after the paragraph containing the anchor.
+  3. **`--delete-paragraph`** — remove the entire `<w:p>` containing
+     the anchor, with guards against emptying the body or a table cell.
 
-- **Decisions this document closes** (TASK Open Questions — all
-  scope-blocking pre-locked at Analysis; remaining questions are
-  architecture-layer details documented in §11):
+  The script shares anchor-finding helpers with the existing
+  `docx_add_comment.py` via a new shared module `docx_anchor.py`
+  (docx-only; NOT under `office/`). Full cross-cutting parity: cross-3
+  encryption guard, cross-4 macro warning, cross-5 `--json-errors`
+  envelope, cross-7 same-path guard.
 
-  | Layer | Decision | Locked in |
+- **Decisions this document closes** (TASK §6.1 Q-A1 through Q-A5):
+
+  | Q | Decision | Rationale |
   |---|---|---|
-  | **A1** | The package owns the body; the shim is a 50-line re-export only. | TASK §8 + this doc §3.2. |
-  | **A2** | F9 (CLI) is **one module** at v1, not two. xlsx-2 split argparse from `_run` only because flag count crossed 8; xlsx-3 has 8 flags total, well below the split threshold. Guardrail: split if `cli.py` exceeds **280** LOC (M2 review-fix; matches §3.2 + §3.3). | This doc §3.2. |
-  | **A3** | The post-validate hook subprocess-invokes `office/validate.py` (NOT imports it). Cross-skill replication boundary preserved. Same pattern as xlsx-2 / xlsx-6. | This doc §3.2 + §9. |
-  | **A4** | Pandas deliberately avoided (same rationale as xlsx-2: import cost + `infer_objects` heuristic conflict). | This doc §6 "Pandas deliberately avoided". |
-  | **A5** | GFM parser is **hand-rolled** (no external `markdown` / `mistune` / `cmark` dependency). HTML `<table>` parser uses `lxml.html` (already in `requirements.txt:3`). | This doc §6. |
-  | **A6** | Tables inside fenced code blocks and HTML comments are stripped by a **pre-scan pass** before any table-parser sees the document. Single source of truth for the scrub. | This doc §2 / F2. |
+  | **Q-A1 — Module split** | **Single file** `docx_replace.py` (≤ 600 LOC), no package. `docx_anchor.py` is a separate helper module at the same level, not a sub-package. | docx-6 has 7 CLI flags — below the xlsx-2 split threshold of ~8 flags + 280 LOC for cli.py alone. The three actions (replace / insert / delete) share a common unpack→locate→act→pack skeleton; a package would scatter a 200-line dispatcher across 5 files with no benefit. Guardrail: if `docx_replace.py` exceeds **600 LOC**, extract an `_actions.py` sibling. |
+  | **Q-A2 — `docx_anchor.py` extraction timing** | **Ship in the same docx-6 atomic chain** (sub-task 006-01 extracts helpers; `docx_add_comment.py` is updated in the same sub-task). | A pre-task would require a separate task-007 with its own review cycle, leaving a tech-debt comment in `scripts/.AGENTS.md` for one extra sprint. Shipping together gives a single review cycle; the E2E suite for `docx_add_comment.py` is the regression guard. |
+  | **Q-A3 — `<w:sectPr>` stripping** | **Strip the trailing `<w:sectPr>` from md2docx output before splice.** Lookup pattern: after extracting `<w:body>` children from the insert tree, filter out any element whose `lxml.etree.QName(el).localname == "sectPr"`. | `md2docx.js` always emits one `<w:sectPr>` as the last child of `<w:body>`. Inserting it mid-document would create a spurious section break (duplicate `<w:sectPr>` inside an existing section corrupts page layout — same lesson as `docx_merge.py` iter-2.2). Stripped unconditionally; a v2 flag `--carry-section-props` is the opt-in path if ever needed. |
+  | **Q-A4 — Numbering relocation** | **Warn-only (honest scope §11.4).** No relocation in v1. | Relocating `<w:numId>` references requires copying abstractNum definitions from the MD-source's `numbering.xml` into the base doc and remapping all numId values — the same multi-file operation `docx_merge.py` v2-deferred. This is out of scope for a surgical edit tool. stderr warning format: `[docx_replace] WARNING: inserted body contains <w:numId> references; base document has no numbering.xml — list items may render as plain text. Relocate numbering in v2.` |
+  | **Q-A5 — Empty-cell placeholder** | **`<w:p/>`** (self-closing empty element, shorter form). | ECMA-376 §17.4.66 requires that a `<w:tc>` contain at least one block-level element; an empty `<w:p/>` satisfies the constraint and is accepted by `office/validate.py`. The longer form `<w:p><w:r><w:t/></w:r></w:p>` is also legal but adds unnecessary nesting. `etree.Element(qn("w:p"))` produces the shorter form. |
 
 - **Decisions inherited from TASK §0** (D1–D8, locked at Analysis +
   task-reviewer round-1; reproduced here so this document is
-  self-contained and the Planner handoff is gap-free):
+  self-contained):
 
   | D | Decision |
   |---|---|
-  | D1 | **Two table flavors:** GFM pipe tables + HTML `<table>` blocks. RST grid / MultiMarkdown / PHP-Markdown-Extra captions / blockquoted tables deferred to v2. |
-  | D2 | **Sheet naming** = nearest preceding heading + sanitisation algorithm steps 1–9 (TASK §0/D2). Fallback `Table-N`. Workbook-wide case-insensitive dedup with suffix `-2`..`-99`; overflow → `InvalidSheetName` exit 2. |
-  | D3 | **Cell coercion default-on:** numeric (leading-zero-aware), ISO-date (date / datetime; aware→UTC-naive), inline-markdown stripped, empty cell→`None`. Opt-out: `--no-coerce`. |
-  | D4 | **Full cross-cutting parity** — cross-5 envelope, cross-7 H1 same-path guard, stdin `-`. Cross-3 / cross-4 N/A (input is markdown, not OOXML). |
-  | D5 | **Atomic chain** (7–10 sub-tasks; Planner locks the slice). Shim + package up front (Task-004 D5 pattern). |
-  | D6 | **Heading walk crosses fenced-code-block boundaries** (pre-scan strips fenced blocks, so a heading *before* a code block IS the nearest preceding heading for a table *after* it). |
-  | D7 | **No `Source`-cell or provenance metadata in v1.** `Worksheet.title` is enough; agents needing provenance use `xlsx_add_comment.py` downstream. |
-  | D8 | **`XLSX_MD_TABLES_POST_VALIDATE` env-var default OFF.** Opt-in only; CI sets it. |
+  | D1 | `--insert-after` materialises markdown through `md2docx.js` subprocess → unpack the tmp `.docx` → splice body `<w:p>` blocks AFTER the anchor's containing paragraph. |
+  | D2 | Anchor-search scope = body + headers + footers + footnotes + endnotes; parts discovered from `[Content_Types].xml`. |
+  | D3 | `--anchor X --replace ""` (empty replacement) is allowed; paragraph survives with empty `<w:t>`. |
+  | D4 | `--all` supported across all three actions. |
+  | D5 | Exactly one of `--replace` / `--insert-after` / `--delete-paragraph` per invocation (mutually exclusive). |
+  | D6 | Run-boundary policy B: `--replace` is single-run (anchor in one `<w:t>` after `_merge_adjacent_runs`); `--insert-after` and `--delete-paragraph` use whole-paragraph concat-text matching (cross-run OK). |
+  | D7 | `--insert-after -` reads markdown from stdin (same `-` sentinel convention as xlsx-2/-3). |
+  | D8 | Success log = one-line stderr summary, exit 0; failures use cross-5 envelope. |
 
 ---
 
 ## 2. Functional Architecture
 
-> **Convention:** F1–F9 are functional regions. Each maps 1:1 to one
-> module in §3.2 (no module owns more than one region; no region
-> spans more than one module). Mirrors xlsx-2's F1–F8 layout.
+> **Convention:** F1–F8 are functional regions. Each maps 1:1 to a
+> logical group of functions in `docx_replace.py` or `docx_anchor.py`.
+> No region spans more than one module; no module owns more than one
+> region (with the deliberate exception that `docx_replace.py` bundles
+> F3–F7 as a single 600-LOC file per Q-A1 decision above).
 
 ### 2.1. Functional Components
 
-#### F1 — Input Reader & Pre-Scan
+#### F1 — Cross-Cutting Pre-flight
 
-**Purpose:** Acquire raw markdown bytes from a file path or stdin,
-decode UTF-8 strictly, and run the pre-scan that strips fenced code
-blocks (```` ``` ````, `~~~`, indented) and HTML comments (`<!-- -->`)
-into "scrub-mask" regions so downstream parsers never see "tables"
-that are actually code samples or commented-out content.
+**Purpose:** Guard against the four cross-cutting failure modes before
+any file I/O begins: same-path collision (cross-7), encrypted input
+(cross-3), macro-bearing input (cross-4), and stdin size overflow.
 
 **Functions:**
-- `read_input(path: str, encoding: str) -> tuple[str, str]`
-  - **Input:** path string (file path or sentinel `-`), encoding.
-  - **Output:** `(text, source_label)` — strict-UTF-8-decoded body, source label `"<stdin>"` or absolute path.
-  - **Related Use Cases:** UC-1, UC-2.
-- `is_stdin_sentinel(path: str) -> bool` — pure helper, single-char `-` check (xlsx-2 parity).
-- `scrub_fenced_and_comments(text: str) -> tuple[str, list[Region]]`
-  - **Input:** raw markdown body.
-  - **Output:** `(scrubbed_text, dropped_regions)` — body with all fenced code blocks and HTML comments replaced by equivalent-length spaces (preserves line numbers for diagnostics); list of dropped regions for honest-scope reporting.
-  - **Related Use Cases:** UC-1 (A3 fenced-code skip), R3.e, R9.b, R9.i.
+- `_assert_distinct_paths(input_path: Path, output_path: Path) -> None`
+  - Uses `Path.resolve(strict=False)` on both sides; raises
+    `SelfOverwriteRefused` (exit 6) on collision. Follows symlinks.
+  - Input: two resolved `Path` objects.
+  - Output: None (raises on collision).
+  - Related Use Cases: UC-1 Alt-7, UC-2 Alt-7, UC-3 (preconditions).
+- `_read_stdin_capped(max_bytes: int = 16 * 1024 * 1024) -> bytes`
+  - Reads `sys.stdin.buffer` up to `max_bytes`; raises
+    `InsertSourceTooLarge` (exit 2) if exceeded.
+  - Related Use Cases: UC-2 Alt-1, R2.h.
+- `_tempdir(prefix: str)` — `contextmanager` wrapper around
+  `tempfile.TemporaryDirectory` that guarantees cleanup on exception.
 
 **Dependencies:**
-- Stdlib only (`sys.stdin.buffer`, `pathlib.Path`, `re`).
-- Required by: F2 (block identifier).
-
-**Failure modes:**
-- File not found → `FileNotFound` (code 1).
-- Empty body after decode → `EmptyInput` (code 2).
-- Bad UTF-8 → `InputEncodingError` (code 2, `details: {offset}`).
+- Stdlib only (`pathlib`, `sys`, `tempfile`, `contextlib`).
+- `office._encryption.assert_not_encrypted` (cross-3).
+- `office._macros.warn_if_macros_will_be_dropped` (cross-4).
+- Required by: F5/F6/F7 orchestrators (called first in `_run`).
 
 ---
 
-#### F2 — Block Identification (heading + table detection)
+#### F2 — Part Walker
 
-**Purpose:** Walk the scrubbed text in document order, emit a stream
-of typed blocks: `Heading(level, text, line)`, `PipeTable(text_lines,
-line)`, `HtmlTable(html_fragment, line)`. Skip blockquoted tables
-(`>`-prefixed lines per honest scope §11.7) and non-table content.
+**Purpose:** Enumerate every searchable XML part from the unpacked
+OOXML tree in deterministic order, parse each to an `lxml.etree`
+element tree, and yield `(part_path, root_element)` pairs.
 
 **Functions:**
-- `iter_blocks(scrubbed: str) -> Iterator[Block]`
-  - **Input:** scrubbed text from F1.
-  - **Output:** lazy iterator of `Block` instances (see §4 Data Model).
-  - **Related Use Cases:** UC-1, UC-3, R2, R3.
-- `_detect_pipe_table_start(line: str) -> bool` — heuristic: line contains ≥ 2 non-escaped `|` AND a following line matches the GFM separator regex.
-- `_detect_html_table(text: str, idx: int) -> tuple[int, int] | None` — locate `<table>` … `</table>` ranges; returns `(start, end)` or `None`.
-- `_locate_heading(line: str) -> tuple[int, str] | None` — match `^#{1,6} (.+)$` for markdown headings; `<h1>`–`<h6>` for HTML (case-insensitive).
+- `_iter_searchable_parts(tree_root: Path) -> Iterator[tuple[Path, etree._Element]]`
+  - **Enumeration source (arch-review MIN-3 clarification):** authoritative
+    list = `[Content_Types].xml` `<Override PartName="...">` entries
+    whose content-type indicates a WordprocessingML part
+    (`...wordprocessingml.document.main+xml`,
+    `...wordprocessingml.header+xml`,
+    `...wordprocessingml.footer+xml`,
+    `...wordprocessingml.footnotes+xml`,
+    `...wordprocessingml.endnotes+xml`). Filesystem glob
+    (`word/header*.xml`) is the **fallback only** when
+    `[Content_Types].xml` is missing or malformed (warn to stderr).
+    This matches TASK R5.f ("parts enumerated from `[Content_Types].xml`").
+  - Yield order: document → headers (sorted by PartName ascending) →
+    footers (sorted by PartName ascending) → footnotes → endnotes.
+  - Parts listed in `[Content_Types].xml` but missing on disk are
+    silently skipped (corrupt-package tolerance).
+  - Yield order = document → headers → footers → footnotes → endnotes
+    (TASK §11.1 deterministic ordering, R5.g).
+  - Input: `tree_root` — directory produced by `office.unpack`.
+  - Output: lazy iterator of `(path, etree_root)` pairs.
+  - Related Use Cases: UC-1 step 4, UC-2 step 5, UC-3 step 3.
 
 **Dependencies:**
-- Stdlib `re` for line-level pattern matching.
-- Required by: F3 (pipe parser), F4 (HTML parser), F6 (sheet namer).
-
-**Failure modes:**
-- None internally — emits whatever it sees. Empty stream (zero tables) is caught downstream in F9 orchestrator with `NoTablesFound` (code 2).
+- `lxml.etree` (already in `requirements.txt`).
+- `pathlib.Path`.
+- Required by: F3, F4, F5 (locators consume this stream).
 
 ---
 
-#### F3 — GFM Pipe Table Parser
+#### F3 — Anchor Locators (`docx_anchor.py`)
 
-**Purpose:** Parse a `PipeTable` block (one contiguous range of `|`-pipe
-lines) into a `RawTable` data structure. Handles header row, separator
-row column-count validation, trailing-pipe variations, escaped pipes
-(`\|` → literal `|`), and per-column alignment markers.
+**Purpose:** Provide the shared paragraph-finding primitives used by
+both `docx_replace.py` (F4, F5, F6) and `docx_add_comment.py`
+(refactored to import these). This is the **extracted** module per
+Q-A2 decision.
 
-**Functions:**
-- `parse_pipe_table(block: PipeTable) -> RawTable | None`
-  - **Input:** `PipeTable` block from F2.
-  - **Output:** `RawTable` (see §4) or `None` if column-count mismatch (warning to stderr per R2.b, processing continues with remaining tables).
-  - **Related Use Cases:** UC-1, R2.
-- `_split_row(line: str) -> list[str]` — pure helper handling trailing-pipe variations and `\|` escapes.
-- `_parse_alignment_marker(sep_line: str, n_cols: int) -> list[Alignment]` — parses `|---|---:|:--:|` row.
+**Functions extracted from `docx_add_comment.py` (byte-identical behaviour):**
+- `_is_simple_text_run(run: etree._Element) -> bool`
+  - Returns True if run contains only `rPr`, `t`, `lastRenderedPageBreak`.
+  - Existing line 160 in `docx_add_comment.py` — moved verbatim.
+- `_rpr_key(run: etree._Element) -> bytes`
+  - Canonical serialisation of `<w:rPr>` for equality comparison.
+  - Existing line 155 in `docx_add_comment.py` — moved verbatim.
+- `_merge_adjacent_runs(paragraph: etree._Element) -> None`
+  - Merges adjacent simple runs with identical rPr keys.
+  - Existing line 177 in `docx_add_comment.py` — moved verbatim.
+
+**New functions (docx-6 additions):**
+- `_replace_in_run(paragraph: etree._Element, anchor: str, replacement: str, *, anchor_all: bool) -> int`
+  - Input: paragraph element (post-run-merge), anchor string,
+    replacement string, `anchor_all` flag.
+  - Output: count of replacements performed in this paragraph.
+  - Behaviour: for each simple text run, performs cursor-loop
+    (`text.find(anchor, cursor)`) to locate occurrences; rebuilds
+    `<w:t>` text with replacement spliced in; sets
+    `xml:space="preserve"` when result contains whitespace. Stops
+    after first match unless `anchor_all=True`.
+  - Related Use Cases: UC-1 (R1.a–R1.g).
+- `_concat_paragraph_text(paragraph: etree._Element) -> str`
+  - Input: paragraph element.
+  - Output: concatenation of all `<w:t>` text content within the
+    paragraph (ignores `<w:del>` runs; includes `<w:ins>` runs per
+    Q-U1 default proposal).
+  - Used by the paragraph-level locators (F4, F5).
+  - Related Use Cases: UC-2 step 5, UC-3 step 3 (D6 policy B).
+- `_find_paragraphs_containing_anchor(part_root: etree._Element, anchor: str) -> list[etree._Element]`
+  - Input: root element of a parsed XML part, anchor string.
+  - Output: list of `<w:p>` elements whose concat-text contains
+    `anchor` as a substring (document order).
+  - Does NOT call `_merge_adjacent_runs` (paragraph-level matching
+    does not need it — D6 policy B).
+  - Related Use Cases: UC-2 step 5, UC-3 step 3.
 
 **Dependencies:**
-- Stdlib `re`.
-- Required by: F8 (writer).
-
-**Failure modes:**
-- Column count mismatch between header and separator → emit single-line stderr warning + return `None` (skip table).
-- Separator row missing → block is not actually a table (heuristic false-positive from F2) → return `None`.
+- `lxml.etree`.
+- `docx.oxml.ns.qn` (namespace helper; python-docx already in
+  `requirements.txt`).
+- Required by: `docx_replace.py` (F4, F5, F6) and `docx_add_comment.py`
+  (refactored to import instead of defining inline).
 
 ---
 
-#### F4 — HTML `<table>` Parser
+#### F4 — Replace Action
 
-**Purpose:** Parse a `HtmlTable` block via `lxml.html.fragment_fromstring`
-into a `RawTable`. Honours `<thead>` / `<tbody>` distinction (first
-`<tr>` is header if no `<thead>`), expands `colspan` / `rowspan` to
-merge-range records, decodes HTML entities.
+**Purpose:** Implement `--replace TEXT` — walk every searchable part,
+call `_merge_adjacent_runs` + `_replace_in_run` per paragraph, write
+back the modified XML, count total replacements.
 
-**Functions:**
-- `parse_html_table(block: HtmlTable) -> RawTable`
-  - **Input:** `HtmlTable` block from F2.
-  - **Output:** `RawTable` with `merges: list[MergeRange]` populated.
-  - **Related Use Cases:** UC-3, R3.
-- `_walk_rows(table_el: lxml.html.HtmlElement) -> Iterator[lxml.html.HtmlElement]` — iterate `<tr>` elements honouring `<thead>` / `<tbody>` / direct child order.
-- `_expand_spans(rows: list[list[CellRaw]]) -> tuple[list[list[CellRaw]], list[MergeRange]]` — produce a rectangular grid + merge-range records; missing cells from `rowspan` chain filled with `None` (anchor-only value).
+**Functions (in `docx_replace.py`):**
+- `_do_replace(tree_root: Path, anchor: str, replacement: str, *, anchor_all: bool) -> int`
+  - Input: `tree_root` (unpacked docx directory), anchor/replacement
+    strings, `anchor_all` flag.
+  - Output: total count of replacements across all parts.
+  - Algorithm:
+    1. For each part from F2 `_iter_searchable_parts`:
+       a. Walk every `<w:p>` in the part.
+       b. Call `_merge_adjacent_runs(p)`.
+       c. Call `_replace_in_run(p, anchor, replacement, anchor_all=anchor_all)`.
+       d. Accumulate replacement count.
+       e. Without `--all`: if count > 0, write part and return.
+       f. Write part if modified.
+    2. Return total count.
+  - Related Use Cases: UC-1 main scenario and all alternatives.
 
 **Dependencies:**
-- `lxml.html` (already in `requirements.txt:3`).
-- Required by: F8 (writer applies `ws.merge_cells`).
-
-**Failure modes:**
-- Malformed HTML → `lxml.html` is lenient and auto-closes; best-effort parse, no error envelope.
-- Overlapping merge ranges (pathological) → caught at write-time by F8 try/except, stderr warning, first wins (R9.h, §11.8).
+- F2 (`_iter_searchable_parts`), F3 (`_merge_adjacent_runs`,
+  `_replace_in_run`) — imported from `docx_anchor`.
+- `lxml.etree` for part serialisation.
 
 ---
 
-#### F5 — Inline Markdown Strip
+#### F5 — Insert-After Action
 
-**Purpose:** Convert a single cell's raw text (which may contain GFM
-inline syntax or HTML entities) into plain text suitable for coercion
-and openpyxl cell-value assignment.
+**Purpose:** Implement `--insert-after PATH` — materialise the markdown
+source via `md2docx.js` subprocess, extract body paragraphs (stripping
+`<w:sectPr>` per Q-A3), locate anchor paragraph(s), splice deep-cloned
+content immediately after each match.
 
-**Functions:**
-- `strip_inline_markdown(text: str) -> str`
-  - **Input:** raw cell text (with possibly `**bold**`, `*italic*`, `` `code` ``, `[text](url)`, `~~strike~~`, `<br>`, `&entity;`).
-  - **Output:** plain text. `<br>` → `\n`. HTML entities decoded.
-  - **Related Use Cases:** R5 (a–g).
-- `_decode_html_entities(text: str) -> str` — wraps `html.unescape` for named + numeric entities.
+**Functions (in `docx_replace.py`):**
+- `_materialise_md_source(md_path: Path, scripts_dir: Path, tmpdir: Path) -> Path`
+  - Input: path to `.md` file (or temp file from stdin), `scripts_dir`
+    pointing to `skills/docx/scripts/`, `tmpdir` for output.
+  - Output: path to the materialised `insert.docx` in `tmpdir`.
+  - Subprocess: `subprocess.run(["node", str(scripts_dir / "md2docx.js"), str(md_path), str(insert_docx)], shell=False, timeout=60, capture_output=True, check=False)`.
+  - Non-zero returncode → raises `Md2DocxFailed` (exit 1, details
+    include captured stderr and returncode).
+  - Related Use Cases: UC-2 step 2.
+- `_extract_insert_paragraphs(insert_tree_root: Path) -> list[etree._Element]`
+  - Input: unpacked `insert.docx` tree root.
+  - Output: deep-cloned list of `<w:p>` / `<w:tbl>` body children,
+    with `<w:sectPr>` filtered out (Q-A3 lock).
+  - Warns to stderr if any extracted element references a relationship
+    (`r:embed` or `r:id` attribute detected — honest scope §11.3
+    precursor warning per R10.b).
+  - Warns to stderr if any extracted `<w:numId>` is detected and base
+    doc has no `numbering.xml` (Q-A4 warning per §11.4).
+  - Related Use Cases: UC-2 steps 3, 6.
+- `_do_insert_after(tree_root: Path, anchor: str, insert_paragraphs: list[etree._Element], *, anchor_all: bool) -> int`
+  - Input: `tree_root`, anchor string, pre-extracted paragraph list,
+    `anchor_all` flag.
+  - Output: count of anchor paragraphs after which content was inserted.
+  - Algorithm:
+    1. For each part from F2: find all paragraphs containing anchor
+       (using F3 `_find_paragraphs_containing_anchor`).
+    2. For each matched `<w:p>`: insert deep copies of
+       `insert_paragraphs` immediately after the matched element
+       (`p.addnext(*reversed(deep_copies))` to preserve order).
+    3. Without `--all`: stop at first match across all parts.
+  - Related Use Cases: UC-2 main scenario and alternatives.
 
 **Dependencies:**
-- Stdlib `re`, `html`.
-- Required by: F6 (coerce), F7 (sheet-name resolver — heading text is also inline-md-stripped).
-
-**Failure modes:**
-- None — pure transform; idempotent (`strip(strip(x)) == strip(x)`).
+- F2 (`_iter_searchable_parts`), F3 (`_find_paragraphs_containing_anchor`,
+  `_concat_paragraph_text`).
+- `subprocess`, `lxml.etree`, `pathlib`.
+- `office.unpack` (to unpack the `insert.docx`).
 
 ---
 
-#### F6 — Cell Coercion
+#### F6 — Delete-Paragraph Action
 
-**Purpose:** Convert a single plain-text cell value into the Python
-type openpyxl will write (`int`, `float`, `datetime.date`, `datetime.datetime`,
-or `str`), per the TASK §0/D3 contract.
+**Purpose:** Implement `--delete-paragraph` — locate and remove every
+(or the first) `<w:p>` whose concat-text contains the anchor, with
+guards for the last-body-paragraph and empty-table-cell cases.
 
-**Functions:**
-- `coerce_column(values: list[str], opts: CoerceOptions) -> list[object]`
-  - **Input:** column-level batch of plain-text cell values (needed for the leading-zero heuristic which is column-level, not cell-level — mirrors csv2xlsx `_coerce_column`).
-  - **Output:** parallel list of typed values (or `None` for empty cells).
-  - **Related Use Cases:** R6.
-- `_coerce_cell_numeric(v: str) -> int | float | None` — `^-?\d+(?:[.,]\d+)?$` regex (comma→dot normalise).
-- `_coerce_cell_date(v: str) -> datetime.date | datetime.datetime | None` — `python-dateutil` parser with strict YYYY-MM-DD / YYYY-MM-DDTHH:MM:SS regex pre-filter (avoids dateutil's lenient `"May 11"`-style guesses).
-- `_handle_aware_tz(dt: datetime.datetime) -> datetime.datetime` — strips tzinfo after UTC normalise (D7 default-mode).
-- `_has_leading_zero(values: list[str]) -> bool` — column-level test (any non-empty value starting `0` then digit and length > 1).
+**Functions (in `docx_replace.py`):**
+- `_do_delete_paragraph(tree_root: Path, anchor: str, *, anchor_all: bool) -> int`
+  - Input: `tree_root`, anchor string, `anchor_all` flag.
+  - Output: count of paragraphs deleted.
+  - Algorithm:
+    1. For each part from F2: find all paragraphs containing anchor.
+    2. For each match: call `_safe_remove_paragraph(p, part_root)`.
+    3. Without `--all`: stop after first successful deletion.
+  - Related Use Cases: UC-3 main scenario and alternatives.
+- `_safe_remove_paragraph(p: etree._Element, part_root: etree._Element) -> None`
+  - Refuses to remove if `p` is the last `<w:p>` in `<w:body>` of
+    `word/document.xml` (ignores `<w:sectPr>` when counting) →
+    raises `LastParagraphCannotBeDeleted` (exit 2).
+  - Removes `p` from its parent via `p.getparent().remove(p)`.
+  - After removal: if parent is `<w:tc>` and has no remaining `<w:p>`
+    children, inserts `etree.Element(qn("w:p"))` as a placeholder
+    (Q-A5 lock — ECMA-376 §17.4.66 `<w:tc>` MUST contain at least one
+    `<w:p>`).
+  - Related Use Cases: UC-3 Alt-2 (table-cell placeholder), Alt-3
+    (last-paragraph guard), Alt-5 (`<w:sectPr>` body-tail counting).
 
 **Dependencies:**
-- Stdlib `re`, `datetime`.
-- `python-dateutil` (already in `requirements.txt:9`).
-- Required by: F8 (writer).
-
-**Failure modes:**
-- Aware-datetime without UTC convertibility (pathological — would require a broken `tzinfo`) → fall back to `str` value (no exception).
-- All-numeric column with one leading-zero value → whole column flips to text (R6.a parity with csv2xlsx).
+- F2 (`_iter_searchable_parts`), F3 (`_find_paragraphs_containing_anchor`).
+- `lxml.etree`.
 
 ---
 
-#### F7 — Sheet Naming
+#### F7 — Orchestrator & CLI
 
-**Purpose:** Map each `RawTable` to a unique, Excel-valid sheet name
-per the TASK §0/D2 numbered algorithm (steps 1–9). Owns the
-workbook-wide `used_lower` set.
+**Purpose:** argparse construction, `main` entrypoint, and the linear
+`_run` pipeline that calls F1–F6 in sequence. Catches all
+`_AppError` subclasses at the top of `_run` and routes through the
+cross-5 envelope.
 
-**Functions:**
-- `class SheetNameResolver:`
-  - `__init__(self, sheet_prefix: str | None = None)` — initialises empty `used_lower: set[str]` and `_fallback_counter: int`.
-  - `resolve(self, heading: str | None) -> str` — runs the 9-step pipeline on the heading text; returns the winning sheet name and updates `used_lower`.
-- `_sanitise_step2(name: str) -> str` — replace `[]:*?/\` with `_`.
-- `_sanitise_step3(name: str) -> str` — collapse whitespace runs.
-- `_sanitise_step4(name: str) -> str` — strip whitespace / `'`.
-- `_truncate_utf16(name: str, limit: int = 31) -> str` — UTF-16-code-unit-aware truncate (m1 review-fix). Implementation: encode `utf-16-le`, slice to `2 * limit` bytes, decode with `errors="ignore"` so a sliced-mid-surrogate-pair is dropped cleanly.
-- `_dedup_step8(self, base: str) -> str` — try suffixes `-2`..`-99`, truncate prefix to fit, raise `InvalidSheetName` on overflow.
+**Functions (in `docx_replace.py`):**
+- `build_parser() -> argparse.ArgumentParser`
+  - Registers all 7 flags plus positional INPUT/OUTPUT; wires cross-5
+    via `add_json_errors_argument(parser)`.
+- `main(argv: list[str] | None = None) -> int`
+  - Top-level entrypoint; called by `if __name__ == "__main__"`.
+  - Returns exit code 0–7.
+- `_run(args: argparse.Namespace) -> int`
+  - Pipeline (architecture-reviewer MAJ-1 fix: `--unpacked-dir` dispatch
+    happens BEFORE the cross-3 / cross-7 guards because UC-4 §2.4.3
+    declares them skipped in library mode):
+    1. **Dispatch mode** — `library_mode = args.unpacked_dir is not None`.
+       If `library_mode`: validate INPUT/OUTPUT positional args are
+       absent (else exit 2 `UsageError`), validate `tree_root /
+       "word" / "document.xml"` exists (else exit 1 `NotADocxTree`),
+       and SKIP steps 2–3 below (no same-path / encryption / macro
+       checks). Go to step 5 with `tree_root = args.unpacked_dir.resolve()`.
+    2. **Zip-mode pre-flight (cross-7):** Resolve paths; F1
+       `_assert_distinct_paths` same-path guard (exit 6).
+    3. **Zip-mode pre-flight (cross-3 + cross-4):** F1
+       `assert_not_encrypted` (exit 3), `warn_if_macros_will_be_dropped`
+       (stderr warning only).
+    4. **Unpack:** `office.unpack(src, tmpdir)` → `tree_root`.
+    5. Dispatch to F4 (`_do_replace`), F5 (`_do_insert_after`), or F6
+       (`_do_delete_paragraph`) based on exclusive action flag.
+    6. If count == 0: `report_error` exit 2 `AnchorNotFound`.
+    7. **Pack** (zip-mode only — library mode skips): `office.pack(tree_root, output)`.
+    8. Opt-in post-validate (zip-mode only): `DOCX_REPLACE_POST_VALIDATE`
+       env check → `subprocess.run([sys.executable, "-m",
+       "office.validate", str(output)])`. On failure: `unlink(output)`,
+       exit 7 `PostValidateFailed`.
+    9. Write one-line stderr success summary (D8).
+    10. Return 0.
+  - Catches `_AppError` once at the top; calls
+    `report_error(exc.message, code=exc.code, error_type=exc.error_type, details=exc.details, json_mode=args.json_errors)`.
+  - Related Use Cases: UC-1–UC-4.
+
+**Linear pipeline diagram:**
+
+```mermaid
+flowchart TD
+    Cli["F7: _run\nparse args"]
+    Guard["F1: pre-flight\nsame-path + encrypt + macro"]
+    Unpack["office.unpack\nINPUT → tmpdir"]
+    Dispatch{action\nflag}
+    Replace["F4: _do_replace\nrun-level text swap"]
+    Insert["F5: _do_insert_after\nmd2docx + splice"]
+    Delete["F6: _do_delete_paragraph\nremove + guards"]
+    CheckCount{count\n== 0?}
+    Pack["office.pack\ntmpdir → OUTPUT"]
+    Validate["F8: DOCX_REPLACE_POST_VALIDATE\nopt-in validate"]
+    Log["stderr success\nsummary + exit 0"]
+    Err["cross-5 envelope\nreport_error + exit N"]
+
+    Cli --> Guard
+    Guard --> Unpack
+    Unpack --> Dispatch
+    Dispatch -->|--replace| Replace
+    Dispatch -->|--insert-after| Insert
+    Dispatch -->|--delete-paragraph| Delete
+    Replace --> CheckCount
+    Insert --> CheckCount
+    Delete --> CheckCount
+    CheckCount -->|yes| Err
+    CheckCount -->|no| Pack
+    Pack --> Validate
+    Validate --> Log
+
+    Guard -.->|EncryptedFileError exit 3| Err
+    Guard -.->|SelfOverwriteRefused exit 6| Err
+    Replace -.->|error| Err
+    Insert -.->|Md2DocxFailed / etc.| Err
+    Delete -.->|LastParagraphCannotBeDeleted| Err
+    Validate -.->|PostValidateFailed exit 7| Err
+```
 
 **Dependencies:**
-- Stdlib `re`.
-- Required by: F8 (writer reads resolved names from F7 instance).
-
-**Failure modes:**
-- Suffix overflow (`-99` collides) → `InvalidSheetName` (code 2, `details: {original, retry_cap: 99}`).
-- `sheet_prefix` mode + `--allow-empty` + zero tables → placeholder `Empty` (NOT `<prefix>-1`; m5 review-fix — locked here as architecture choice).
+- F1–F6 (all functional regions).
+- `_errors.add_json_errors_argument`, `_errors.report_error`.
+- `office.unpack`, `office.pack`.
 
 ---
 
-#### F8 — Workbook Writer
+#### F8 — Post-Validate Hook
 
-**Purpose:** Assemble the `openpyxl.Workbook`, one sheet per table:
-header row styling (csv2xlsx parity), data rows with coerced cells,
-merge ranges (from HTML colspan/rowspan), per-column alignment (from
-GFM markers), freeze pane, auto-filter, auto column widths. Save to
-output path (parent `.mkdir(parents=True, exist_ok=True)`).
+**Purpose:** When `DOCX_REPLACE_POST_VALIDATE=1` (or `true/yes/on`),
+invoke `office/validate.py` on the output file as a subprocess. On
+validation failure, unlink the output and raise `PostValidateFailed`
+(exit 7). Matches the xlsx-2 / xlsx-6 `POST_VALIDATE` precedent.
 
-**Functions:**
-- `write_workbook(tables: list[ParsedTable], output: Path, opts: WriterOptions) -> None`
-  - **Input:** list of fully-resolved `ParsedTable` (raw + name + coerced cells + merges + alignments).
-  - **Output:** None — side effect is the `.xlsx` file at `output`.
-  - **Related Use Cases:** UC-1 step 6, UC-3 step 3, R7.
-- `_build_sheet(ws, tbl: ParsedTable) -> None` — single-sheet driver.
-- `_style_header_row(ws, n_cols: int) -> None` — bold + `F2F2F2` fill + centered.
-- `_apply_merges(ws, merges: list[MergeRange]) -> None` — try/except wrapping `ws.merge_cells` for §11.8 overlap handling.
-- `_apply_alignment(ws, alignments: list[Alignment], n_rows: int) -> None` — per-column GFM-marker → Excel `cell.alignment.horizontal`.
-- `_size_columns(ws, tbl: ParsedTable) -> None` — `min(max(header_len, max_data_len) + 2, MAX_COL_WIDTH=50)`.
-
-**Zero-row table contract (m11 review-fix, locks TASK R10.c):** if
-`tbl.raw.rows` is empty (header-only table), F8 writes the header row
-only. Freeze pane (`A2`) and auto-filter still apply over the
-header-only range — they remain valid Excel constructs on a 1-row
-table. The sheet is NOT skipped (the header IS the data here).
-
-**Style-constant policy** (mirror xlsx-2 ARCH §3.2 lock):
-- **Copy** the four style constants (`HEADER_FILL`, `HEADER_FONT`,
-  `HEADER_ALIGN`, `MAX_COL_WIDTH`) into `writer.py` with a
-  `# Mirrors csv2xlsx.py — keep visually identical.` comment.
-- **Rationale:** Importing from csv2xlsx (a CLI shim, not a library)
-  is brittle. Importing from `json2xlsx.writer` would create a
-  three-way coupling. Copying four constants is cheap.
-- **Drift detection:** `tests/test_md_tables2xlsx.py` introspects
-  `csv2xlsx.HEADER_FILL.fgColor.rgb in ("F2F2F2", "00F2F2F2")` and
-  `json2xlsx.writer.HEADER_FILL.fgColor.rgb` similarly; all three
-  must match. Drift → test failure with a clear pointer back here.
+**Functions (in `docx_replace.py`):**
+- `_post_validate_enabled() -> bool`
+  - Reads `os.environ.get("DOCX_REPLACE_POST_VALIDATE", "")`;
+    returns True for truthy set `{"1", "true", "yes", "on"}`.
+- `_run_post_validate(output: Path, scripts_dir: Path) -> None`
+  - `subprocess.run([sys.executable, "-m", "office.validate", str(output)], shell=False, timeout=60, capture_output=True, cwd=scripts_dir)`.
+  - Non-zero: `output.unlink(missing_ok=True)` then raise
+    `PostValidateFailed` (exit 7, details: validator_output truncated
+    to 8 KiB).
 
 **Dependencies:**
-- `openpyxl` (already pinned, `requirements.txt:1`).
-- Required by: F9 (orchestrator).
-
-**Failure modes:**
-- Invalid sheet name reaches `Workbook.create_sheet` (F7 didn't catch it) → openpyxl `IllegalCharacterError` propagates up → mapped to `InvalidSheetName` envelope in F9.
-- I/O error on `wb.save(output)` → mapped to `OSError` exit 1 envelope.
+- `subprocess`, `pathlib`, `sys`, `os`.
+- Required by: F7 orchestrator.
 
 ---
 
-#### F9 — CLI & Orchestrator
+### 2.2. Functional Components Diagram
 
-**Purpose:** argparse construction, `main` entrypoint, `_run` linear
-pipeline (F1 → F2 → F3/F4 → F5 → F6 → F7 → F8). Catches `_AppError`
-at the top of `_run` and routes to cross-5 envelope.
+```mermaid
+flowchart LR
+    subgraph Shared ["skills/docx/scripts/ (UNMODIFIED)"]
+        Errors[_errors.py\ncross-5 envelope]
+        OfficeUnpack[office.unpack / office.pack]
+        OfficeValidate[office/validate.py\npost-validate target]
+        Encryption[office._encryption\nassert_not_encrypted]
+        Macros[office._macros\nwarn_if_macros_will_be_dropped]
+        Md2Docx[md2docx.js\nmarkdown → .docx subprocess]
+    end
+    subgraph New ["skills/docx/scripts/ (NEW/MODIFIED)"]
+        Anchor["docx_anchor.py\nF3: run-merge + locators\n(extracted + new helpers)"]
+        Replace["docx_replace.py\nF1 pre-flight\nF2 part-walker\nF4 replace\nF5 insert-after\nF6 delete-paragraph\nF7 orchestrator/CLI\nF8 post-validate"]
+        AddComment["docx_add_comment.py\n(refactored — imports\nfrom docx_anchor)"]
+    end
+    subgraph Tests ["tests/ (NEW/EXTENDED)"]
+        AnchorTests[test_docx_anchor.py\n≥20 unit tests]
+        ReplaceTests[test_docx_replace.py\n≥30 unit tests]
+        E2ETests[test_e2e.sh\n+≥16 E2E cases]
+    end
 
-**Functions:**
-- `build_parser() -> argparse.ArgumentParser` — locks the 8-flag CLI surface from TASK §9.
-- `main(argv: list[str] | None = None) -> int` — `try / except _AppError` shell + `report_error` envelope.
-- `_run(args: argparse.Namespace) -> int` — pipeline driver:
-  1. Resolve I/O paths; same-path guard (cross-7 H1).
-  2. Read input (F1).
-  3. Pre-scan strip fenced + comments (F1.scrub).
-  4. Iterate blocks (F2); collect (heading, table) pairs in document order.
-  5. For each table: parse via F3 or F4 → `RawTable`.
-  6. Resolve sheet names via F7 in document order.
-  7. Coerce columns via F6 per table.
-  8. Write workbook via F8.
-  9. Post-validate hook (F10) if `XLSX_MD_TABLES_POST_VALIDATE=1`.
-  10. Return 0 / non-zero per exit-code matrix.
+    Replace -->|imports| Anchor
+    AddComment -->|imports| Anchor
+    Replace -->|imports| Errors
+    Replace -.->|subprocess| Md2Docx
+    Replace -.->|subprocess| OfficeValidate
+    Replace -->|imports| OfficeUnpack
+    Replace -->|imports| Encryption
+    Replace -->|imports| Macros
 
-**Dependencies:**
-- `argparse` stdlib.
-- All other F-modules.
-
-**Failure modes:**
-- Any `_AppError` → cross-5 envelope on stderr + exit code per `error.code`.
-- Argparse usage error → `UsageError` → routed through same envelope (TASK §9, cross-5 unifies them — matches xlsx-2 / xlsx-7).
-
----
-
-#### F10 — Cross-Cutting Helpers
-
-**Purpose:** Bundle of small utilities that don't fit a single
-functional region: same-path guard, stdin reader wrapper, post-
-validate hook, `XLSX_MD_TABLES_POST_VALIDATE` env truthy parser.
-
-**Functions:**
-- `assert_distinct_paths(input_path: str, output_path: Path) -> None` — raises `SelfOverwriteRefused` (code 6) on collision. Stdin sentinel bypasses.
-- `post_validate_enabled() -> bool` — reads env-var `XLSX_MD_TABLES_POST_VALIDATE`; truthy set `{"1", "true", "yes", "on"}` (case-insensitive); falsey set `{"0", "false", "no", "off", "", None}` (xlsx-2 parity).
-- `run_post_validate(output: Path) -> tuple[bool, str]` — `subprocess.run([sys.executable, str(office_validate_path), str(output)], shell=False, timeout=60, capture_output=True)`. On failure → unlink output + raise `PostValidateFailed` (code 7).
-- `read_stdin_utf8() -> str` — `sys.stdin.buffer.read().decode("utf-8")` strict (raises `UnicodeDecodeError` on bad bytes; orchestrator maps to `InputEncodingError`).
-
-**Dependencies:**
-- `subprocess`, `pathlib`, `sys`, `os.environ` (stdlib).
-- Required by: F9 (orchestrator dispatches via these helpers).
-
-**Failure modes:**
-- Same-path collision → exit 6.
-- Stdin decode error → exit 2 via orchestrator catch.
-- Post-validate non-zero → exit 7 + output unlinked.
+    AnchorTests --> Anchor
+    ReplaceTests --> Replace
+    E2ETests --> Replace
+```
 
 ---
 
@@ -360,421 +466,313 @@ validate hook, `XLSX_MD_TABLES_POST_VALIDATE` env truthy parser.
 
 ### 3.1. Architectural Style
 
-**Style:** **Layered, single-process CLI** with shim+package
-separation. No persistence layer beyond the single output `.xlsx`
-file. No network. No daemon. No long-running state.
+**Style:** **Layered, single-process CLI**. No package split (Q-A1
+decision). Two Python modules (`docx_replace.py` as the main CLI +
+`docx_anchor.py` as the shared helper library) plus the existing
+`office/` OOXML infrastructure and `md2docx.js` as an external
+subprocess. No daemon, no persistence beyond the output file.
 
 **Justification:**
-- Matches xlsx-2 / xlsx-6 / xlsx-7 precedent — proven for office-skill CLIs.
-- Shim file provides a stable test-compat surface (`tests/test_e2e.sh`
-  can `python3 md_tables2xlsx.py …` without caring about internal
-  module layout).
-- Package gives per-region clarity; per-module ≤ 200 LOC budgets
-  (xlsx-2 footprint).
-- No event-driven, microservice, or queue overhead — task is
-  inherently synchronous file I/O.
+- Matches the existing docx-skill sibling scripts (`docx_add_comment.py`,
+  `docx_fill_template.py`, `docx_merge.py`), all of which are single
+  files in the 300–1100 LOC range.
+- The three actions (replace / insert / delete) share the same
+  unpack→walk→act→pack skeleton and the same cross-cutting pre-flight
+  checks. Separating them into modules would split highly cohesive
+  code without reducing coupling: each action must see the same
+  `tree_root`, the same `_iter_searchable_parts`, and the same
+  `office.pack` result.
+- The 7-flag CLI surface (Q-A1: well below xlsx-2's 8-flag split
+  threshold) means `build_parser` stays manageable inside a single
+  file.
+- `docx_anchor.py` is extracted as a sibling module (not a sub-package)
+  because its surface is consumed both by the existing
+  `docx_add_comment.py` and the new `docx_replace.py`. A sibling
+  module follows `from docx_anchor import ...` which is the natural
+  Python idiom for same-directory helpers, as established by the
+  docx skill's other scripts importing `from _errors import ...`.
 
 ### 3.2. System Components
 
-#### `skills/xlsx/scripts/md_tables2xlsx.py` (shim)
+#### `skills/docx/scripts/docx_anchor.py` (NEW)
 
-- **Type:** CLI shim.
-- **Purpose:** Entry point; re-exports `main` + public helper + exceptions from the package. Provides stable import / test-shim surface.
-- **Implemented functions:** None — pure re-export module. (mirrors `json2xlsx.py:53` shim, A1 lock.)
-- **Technologies:** Python ≥ 3.10, `argparse` stdlib (via package).
-- **LOC budget:** ≤ 60.
-- **Interfaces:**
-  - Inbound: shell invocation, `python3 -m md_tables2xlsx`, `tests/test_e2e.sh`, `tests/test_md_tables2xlsx.py`.
-  - Outbound: imports from `md_tables2xlsx.cli`, `md_tables2xlsx.exceptions`.
-- **Dependencies:** None besides the package.
-
-#### `skills/xlsx/scripts/md_tables2xlsx/__init__.py`
-
-- **Type:** Package marker.
-- **Purpose:** Public re-export surface AND single source of truth for `convert_md_tables_to_xlsx`.
-- **Technologies:** Python ≥ 3.10.
-- **LOC budget:** ≤ 70 (raised from 50 to accommodate the argparse-route helper body).
-- **Public surface:** `main`, `_run`, `convert_md_tables_to_xlsx`, all `_AppError` subclasses.
-- **Lock (M4 review-fix; mirrors xlsx-2 `convert_json_to_xlsx`):** `convert_md_tables_to_xlsx(input_path: str | Path, output_path: str | Path, **kwargs: object) -> int`. Implementation builds `argv = [str(input_path), str(output_path), *flags]` using the **`--flag=value` atomic-token form** (VDD-multi M4 protection inherited from xlsx-2: a flag-value beginning with `--` cannot poison argparse) and routes through `main(argv)`. Returns the exit code (0 on success; non-zero per the exit-code matrix). Accepted kwargs map 1:1 to CLI flags: `allow_empty: bool`, `coerce: bool`, `freeze: bool`, `auto_filter: bool`, `sheet_prefix: str | None`, `encoding: str`.
-
-#### `skills/xlsx/scripts/md_tables2xlsx/loaders.py`
-
-- **Type:** Module.
-- **Purpose:** F1 (input reader + pre-scan) + F2 (block identification).
-- **Implemented functions:** `read_input`, `is_stdin_sentinel`, `scrub_fenced_and_comments`, `iter_blocks`, `_detect_pipe_table_start`, `_detect_html_table`, `_locate_heading`.
-- **Technologies:** stdlib `re`, `sys.stdin.buffer`, `pathlib.Path`.
+- **Type:** Helper module (library — not a CLI entry point).
+- **Purpose:** Shared paragraph and run primitives consumed by
+  `docx_add_comment.py` and `docx_replace.py`. Owns F3.
+- **Implemented functions:** `_is_simple_text_run`, `_rpr_key`,
+  `_merge_adjacent_runs` (extracted from `docx_add_comment.py`
+  byte-identically), plus new additions: `_replace_in_run`,
+  `_concat_paragraph_text`, `_find_paragraphs_containing_anchor`.
+- **Technologies:** Python ≥ 3.10, `lxml.etree`, `docx.oxml.ns.qn`.
 - **LOC budget:** ≤ 180.
+- **Interfaces:**
+  - Inbound: `from docx_anchor import ...` by `docx_replace.py` and
+    `docx_add_comment.py`.
+  - Outbound: None (pure library).
+- **Dependencies:** `lxml`, `python-docx` (existing in
+  `requirements.txt`).
 
-#### `skills/xlsx/scripts/md_tables2xlsx/tables.py`
+| Function | Source | Region |
+|---|---|---|
+| `_is_simple_text_run` | moved from `docx_add_comment.py:160` | F3 |
+| `_rpr_key` | moved from `docx_add_comment.py:155` | F3 |
+| `_merge_adjacent_runs` | moved from `docx_add_comment.py:177` | F3 |
+| `_replace_in_run` | new (docx-6) | F4 support |
+| `_concat_paragraph_text` | new (docx-6) | F5/F6 support |
+| `_find_paragraphs_containing_anchor` | new (docx-6) | F5/F6 support |
 
-- **Type:** Module.
-- **Purpose:** F3 (GFM pipe parser) + F4 (HTML `<table>` parser).
-- **Implemented functions:** `parse_table` (m2 review-fix dispatcher; takes a `Block`, dispatches by isinstance), `parse_pipe_table`, `parse_html_table`, `_split_row`, `_parse_alignment_marker`, `_walk_rows`, `_expand_spans`.
-- **Technologies:** stdlib `re`, `lxml.html` (`>=5.0.0` per `requirements.txt:3`).
-- **LOC budget:** ≤ 220.
-- **Locked `lxml.html` parser construction (M1 review-fix):** a module-level singleton parser instance is used for every `parse_html_table` call:
-  ```python
-  _HTML_PARSER = lxml.html.HTMLParser(
-      no_network=True,   # defense-in-depth — block ext. resource fetch
-      huge_tree=False,   # block libxml2 huge-tree expansion path
-      recover=True,      # lenient (HTML mode already lenient; explicit)
-  )
-  # invocation:
-  fragment = lxml.html.fragment_fromstring(
-      html_fragment, create_parent=False, parser=_HTML_PARSER,
-  )
-  ```
-  Test `test_html_billion_laughs_neutered` asserts BOTH wall-clock ≤ 100 ms AND `_HTML_PARSER.no_network is True`.
+---
 
-#### `skills/xlsx/scripts/md_tables2xlsx/inline.py`
+#### `skills/docx/scripts/docx_replace.py` (NEW)
 
-- **Type:** Module.
-- **Purpose:** F5 — inline markdown strip + HTML entity decode.
-- **Implemented functions:** `strip_inline_markdown`, `_decode_html_entities`.
-- **Technologies:** stdlib `re`, `html`.
-- **LOC budget:** ≤ 100.
+- **Type:** CLI script (entry point).
+- **Purpose:** Main command-line interface and action dispatcher.
+  Owns F1, F2, F4, F5, F6, F7, F8.
+- **Implemented functions:** `build_parser`, `main`, `_run`,
+  `_assert_distinct_paths`, `_read_stdin_capped`, `_tempdir`,
+  `_iter_searchable_parts`, `_do_replace`, `_materialise_md_source`,
+  `_extract_insert_paragraphs`, `_do_insert_after`,
+  `_do_delete_paragraph`, `_safe_remove_paragraph`,
+  `_post_validate_enabled`, `_run_post_validate`.
+- **Technologies:** Python ≥ 3.10, `lxml.etree`, `pathlib`,
+  `subprocess`, `tempfile`, `argparse`.
+- **LOC budget:** ≤ 600. **Guardrail:** if `docx_replace.py` exceeds
+  600 LOC, extract `_actions.py` sibling (replace + insert + delete
+  action bodies) to reduce shim to ≤ 300 LOC.
+- **Interfaces:**
+  - Inbound: shell invocation, `python3 docx_replace.py`, E2E tests.
+  - Outbound: imports `docx_anchor`, `_errors`, `office.unpack`,
+    `office.pack`, `office._encryption`, `office._macros`;
+    subprocess-invokes `md2docx.js` and `office.validate`.
 
-#### `skills/xlsx/scripts/md_tables2xlsx/coerce.py`
+| Region | LOC estimate | Key functions |
+|---|---|---|
+| F1 pre-flight | ~40 | `_assert_distinct_paths`, `_read_stdin_capped`, `_tempdir` |
+| F2 part walker | ~50 | `_iter_searchable_parts` |
+| F4 replace | ~80 | `_do_replace` |
+| F5 insert-after | ~120 | `_materialise_md_source`, `_extract_insert_paragraphs`, `_do_insert_after` |
+| F6 delete | ~70 | `_do_delete_paragraph`, `_safe_remove_paragraph` |
+| F7 orchestrator/CLI | ~170 | `build_parser`, `main`, `_run` |
+| F8 post-validate | ~30 | `_post_validate_enabled`, `_run_post_validate` |
+| **Total** | **~560** | (headroom to 600 LOC ceiling) |
 
-- **Type:** Module.
-- **Purpose:** F6 — per-column type coercion (numeric + ISO-date + leading-zero detection).
-- **Implemented functions:** `coerce_column`, `_coerce_cell_numeric`, `_coerce_cell_date`, `_handle_aware_tz`, `_has_leading_zero`, dataclass `CoerceOptions`.
-- **Technologies:** stdlib `re`, `datetime`, `python-dateutil`.
-- **LOC budget:** ≤ 150.
+---
 
-#### `skills/xlsx/scripts/md_tables2xlsx/naming.py`
+#### `skills/docx/scripts/docx_add_comment.py` (MODIFIED — refactor only)
 
-- **Type:** Module.
-- **Purpose:** F7 — sheet-naming algorithm (steps 1–9 from TASK §0/D2).
-- **Implemented functions:** `class SheetNameResolver`, `_truncate_utf16` (m1 review-fix), `_sanitise_step2/3/4`, `_dedup_step8`.
-- **Technologies:** stdlib `re`.
-- **LOC budget:** ≤ 130.
-- **`_dedup_step8` UTF-16 lock (M3 review-fix; supersedes TASK §0/D2 step 8 pseudocode `base[:31-len(S)] + S`):** prefix-truncation MUST use `_truncate_utf16`, NOT Python code-point slicing. Python `str` slices index by code points, but Excel's 31-char limit is UTF-16 code units. A supplementary-plane code point (e.g. emoji `"😀"`) is 1 Python code point but 2 UTF-16 code units. Naive `base[:29]` can leak a 4-byte char that pushes `candidate` to 32+ UTF-16 units. Locked algorithm:
-  ```python
-  def _dedup_step8(self, base: str) -> str:
-      if base.lower() not in self._used_lower:
-          self._used_lower.add(base.lower())
-          return base
-      for n in range(2, 100):                    # -2 .. -99 inclusive
-          suffix = f"-{n}"
-          candidate = _truncate_utf16(base, limit=31 - len(suffix)) + suffix
-          if candidate.lower() not in self._used_lower:
-              self._used_lower.add(candidate.lower())
-              return candidate
-      raise InvalidSheetName(
-          message=f"Sheet name dedup exhausted retries: {base!r}",
-          code=2, error_type="InvalidSheetName",
-          details={"original": base, "retry_cap": 99,
-                   "first_collisions": sorted(self._used_lower)[:10]},
-      )
-  ```
-  Lock-in regression test `TestSheetNaming::test_dedup_emoji_prefix_utf16_safe` exercises the 16-emoji collision case and asserts the resulting name's `len(name.encode("utf-16-le")) // 2 <= 31`.
-- **`sheet_prefix` × `resolve(heading)` lock (m12 review-fix):** when `self.sheet_prefix is not None`, `resolve(heading)` ignores `heading` entirely and returns `f"{sanitised_prefix}-{counter}"` where `counter` increments per-call. Dedup step 8 is a no-op in this mode (the prefix-mode counter cannot collide unless N > 99).
+- **Type:** CLI script (existing).
+- **Purpose:** Existing comment-insertion CLI. Modified only to import
+  `_is_simple_text_run`, `_rpr_key`, `_merge_adjacent_runs` from
+  `docx_anchor` instead of defining them inline. **No behaviour
+  change.** All existing tests must pass unchanged.
+- **LOC change:** -45 LOC (three function bodies removed, one import
+  added).
+- **Regression guard:** `tests/test_e2e.sh` docx-1 block must pass
+  without modification.
 
-#### `skills/xlsx/scripts/md_tables2xlsx/writer.py`
+---
 
-- **Type:** Module.
-- **Purpose:** F8 — workbook construction + styling + merges + alignment + column widths.
-- **Implemented functions:** `write_workbook`, `_build_sheet`, `_style_header_row`, `_apply_merges`, `_apply_alignment`, `_size_columns`. Style constants `HEADER_FILL`, `HEADER_FONT`, `HEADER_ALIGN`, `MAX_COL_WIDTH` copied from csv2xlsx (drift-detection test in `tests/`).
-- **Technologies:** `openpyxl`.
-- **LOC budget:** ≤ 200.
+#### Tests
 
-#### `skills/xlsx/scripts/md_tables2xlsx/exceptions.py`
+- **`skills/docx/scripts/tests/test_docx_anchor.py`** (NEW):
+  ≥ 20 unit tests for all functions in `docx_anchor.py`.
+  Includes: run-merge idempotence, `_replace_in_run` cursor-loop,
+  cross-run anchor → AnchorNotFound case (honest-scope regression
+  lock R10.a), concat-text across tracking-change runs, paragraph
+  locator across multiple paragraphs.
+- **`skills/docx/scripts/tests/test_docx_replace.py`** (NEW):
+  ≥ 30 unit tests for `docx_replace.py` internal functions.
+  Includes: replace/insert/delete actions on synthetic OOXML fixtures;
+  empty-cell placeholder; last-paragraph guard; `<w:sectPr>` strip;
+  post-validate hook mocking; stdin size cap; **R1.g
+  `xml:space="preserve"` set-when-needed** (arch-review NIT-3:
+  explicit test cell, R1.g);  **Q-U1 default behaviour lock —
+  `<w:ins>` content is matched as live; `<w:del>` content is
+  ignored** (arch-review MIN-4: regression lock for the tracked-
+  change default); **A4 TOCTOU symlink-race acceptance test** —
+  document the deliberately-non-atomic resolve→open window and
+  prove the same-path guard catches resolved-equal paths even when
+  the source is a symlink whose target is rewritten between
+  resolve() and open() (arch-review MIN-2: regression lock for §10 A4).
+- **`skills/docx/scripts/tests/test_e2e.sh`** (EXTENDED):
+  Append `# --- docx-6: docx_replace ---` block with ≥ 16 named E2E
+  cases covering all RTM R1–R12 acceptance criteria.
 
-- **Type:** Module.
-- **Purpose:** Closed `_AppError` hierarchy carrying `(message, code, type, details)` for `_errors.report_error` envelope (cross-5).
-- **Type model:** `_AppError` is a **plain `Exception` subclass** (mirrors xlsx-2 m1 lock — NOT `@dataclass(frozen=True)`).
-- **Defined errors:**
-  - `_AppError(Exception)` (base; attributes `message`, `code`, `error_type`, `details` set in `__init__`).
-  - `EmptyInput` (code 2).
-  - `NoTablesFound` (code 2).
-  - `MalformedTable` (code 2; mostly used internally for skipped tables — orchestrator emits stderr warning, NOT envelope).
-  - `InputEncodingError` (code 2; `details: {offset}`).
-  - `InvalidSheetName` (code 2; `details: {original, reason}` — also overflow at dedup `-99`).
-  - `SelfOverwriteRefused` (code 6).
-  - `PostValidateFailed` (code 7).
-- **LOC budget:** ≤ 90.
+#### Fixtures
 
-#### `skills/xlsx/scripts/md_tables2xlsx/cli_helpers.py`
-
-- **Type:** Module.
-- **Purpose:** F10 — cross-cutting helpers (same-path guard, stdin reader, post-validate hook, env-truthy parser).
-- **Implemented functions:** `assert_distinct_paths`, `post_validate_enabled`, `run_post_validate`, `read_stdin_utf8`.
-- **Technologies:** `subprocess`, `pathlib`, `sys`, `os.environ`.
-- **LOC budget:** ≤ 80.
-
-#### `skills/xlsx/scripts/md_tables2xlsx/cli.py`
-
-- **Type:** Module.
-- **Purpose:** F9 — argparse construction, `main` entrypoint, `_run` linear pipeline.
-- **Implemented functions:** `build_parser`, `main`, `_run`.
-- **Technologies:** `argparse`, `_errors.add_json_errors_argument`.
-- **LOC budget:** **≤ 280** (A2 lock; 8 flags vs xlsx-2's 8 + smaller pipeline because no per-cell streaming branch). **Guardrail:** if `cli.py` crosses 280 LOC, split `_run` into a separate `orchestrator.py` module.
-
-> **LOC budget headroom note (m1 review-fix):** the per-module
-> budgets sum to ~1540 LOC (production code). TASK §0 estimates
-> actual implementation at ~700–1000 LOC. The budgets are
-> **ceilings**, not targets — they exist so the architect-review
-> guardrail catches accidental scope-bloat, not so the Developer
-> "fills" the headroom. The Planner should not pad sub-task plans
-> to reach the ceiling.
-
-#### Tests (`skills/xlsx/scripts/tests/`)
-
-- `test_md_tables2xlsx.py` — ≥ 35 unit cases (~ 600 LOC).
-- `test_e2e.sh` — append ≥ 13 named E2E cases (~ + 250 LOC).
-
-#### Fixtures (`skills/xlsx/examples/`)
-
-- `md_tables_simple.md` — 3 GFM tables under 3 `##` headings.
-- `md_tables_html.md` — 1 GFM + 1 `<table>` with colspan/rowspan.
-- `md_tables_fenced.md` — markdown with a pipe-table-looking block inside ```` ```text … ``` ```` (must be skipped).
-- `md_tables_no_tables.md` — prose only (no tables; `NoTablesFound` fixture).
-- `md_tables_sheet_naming_edge.md` — headings with `[Q1]:* / `, dup headings, `History`, 32-char emoji-heading.
+- `skills/docx/examples/docx_replace_body.docx` — document with
+  named anchors for replace/insert/delete testing (generated by
+  `md2docx.js` from a fixture `.md`; no manually-crafted OOXML).
+- `skills/docx/examples/docx_replace_headers.docx` — document with
+  same anchor text in header and body (scope-search fixture).
+- `skills/docx/examples/docx_replace_insert_source.md` — markdown
+  source for `--insert-after` E2E tests.
 
 ### 3.3. Components Diagram
 
 ```mermaid
 flowchart TB
-    subgraph Skill ["skills/xlsx/scripts/"]
-        Shim[md_tables2xlsx.py<br/>≤60 LOC shim]
-        subgraph Pkg ["md_tables2xlsx/ package"]
-            Init[__init__.py<br/>≤50 — public re-exports + convert_*]
-            Cli[cli.py<br/>≤280 — F9<br/>guardrail: split orchestrator.py if >280]
-            Loaders[loaders.py<br/>≤180 — F1+F2]
-            Tables[tables.py<br/>≤220 — F3+F4]
-            Inline[inline.py<br/>≤100 — F5]
-            Coerce[coerce.py<br/>≤150 — F6]
-            Naming[naming.py<br/>≤130 — F7]
-            Writer[writer.py<br/>≤200 — F8]
-            Helpers[cli_helpers.py<br/>≤80 — F10]
-            Exc[exceptions.py<br/>≤90]
-        end
-        subgraph Existing ["Existing xlsx siblings (UNMODIFIED)"]
-            CSVRef[csv2xlsx.py<br/>style-constant reference]
-            JsonRef[json2xlsx.py + json2xlsx/<br/>shim+package pattern]
-            Errors[_errors.py<br/>cross-5 envelope]
-            Validators[office/validators/xlsx.py<br/>post-validate target]
+    subgraph Skill ["skills/docx/scripts/"]
+        Replace[docx_replace.py\n≤600 LOC\nF1+F2+F4+F5+F6+F7+F8]
+        Anchor[docx_anchor.py\n≤180 LOC\nF3 shared helpers]
+        AddComment[docx_add_comment.py\nrefactored — imports from Anchor]
+        subgraph Existing ["Existing siblings (UNMODIFIED)"]
+            Errors[_errors.py\ncross-5 envelope]
+            OfficePkg[office/\nunpack+pack+validate+encrypt+macros]
+            Soffice[_soffice.py\nnot invoked]
+            Preview[preview.py\nnot invoked]
+            Passwd[office_passwd.py\nnot invoked]
+            Md2Docx[md2docx.js\nsubprocess target]
         end
         subgraph Tests ["tests/"]
-            UnitTest[test_md_tables2xlsx.py<br/>≥35 cases ~600 LOC]
-            E2ETest[test_e2e.sh<br/>+≥13 cases ~250 LOC]
-            Drift[drift-detection assertions<br/>HEADER_FILL parity]
+            AnchorUnit[test_docx_anchor.py\n≥20 unit]
+            ReplaceUnit[test_docx_replace.py\n≥30 unit]
+            E2E[test_e2e.sh\n+≥16 E2E cases]
         end
     end
 
-    Shim --> Init
-    Init -->|main, _run, convert_md_tables_to_xlsx| Cli
-    Cli --> Loaders
-    Cli --> Tables
-    Cli --> Inline
-    Cli --> Coerce
-    Cli --> Naming
-    Cli --> Writer
-    Cli --> Helpers
-    Cli --> Exc
-    Loaders --> Exc
-    Tables --> Inline
-    Tables --> Exc
-    Coerce --> Exc
-    Naming --> Exc
-    Writer --> Naming
-    Writer --> Coerce
-    Writer --> Exc
-    Helpers --> Exc
-    Helpers -.->|subprocess invoke| Validators
-    Cli -.->|--json-errors wiring| Errors
-    Writer -.->|copy w/ drift-detection| CSVRef
+    Replace -->|from docx_anchor import| Anchor
+    Replace -->|from _errors import| Errors
+    Replace -->|from office.unpack import| OfficePkg
+    Replace -->|from office._encryption import| OfficePkg
+    Replace -->|from office._macros import| OfficePkg
+    Replace -.->|subprocess argv-list| Md2Docx
+    Replace -.->|subprocess office.validate| OfficePkg
+    AddComment -->|from docx_anchor import| Anchor
 
-    UnitTest --> Shim
-    E2ETest --> Shim
-    UnitTest --> Drift
+    AnchorUnit --> Anchor
+    ReplaceUnit --> Replace
+    E2E --> Replace
 ```
 
 ---
 
 ## 4. Data Model (Conceptual)
 
-> **Note:** No persistent database. The "data model" documents the
-> in-memory entities the modules pass to each other. Each entity is a
-> frozen dataclass or plain dict with clearly-typed schema.
+> No persistent database. The data model documents OOXML structures
+> touched in-memory and the cross-5 envelope emitted on failures.
 
-### 4.1. Entities Overview
+### 4.1. OOXML Structures Touched
 
-#### Entity: `Block`
+#### `<w:p>` — Paragraph Element
 
-**Description:** A document-order region emitted by F2. Tagged union of `Heading` / `PipeTable` / `HtmlTable`. Carries source line number for diagnostics.
+**Description:** The primary unit of content targeted by all three
+actions. Each `<w:p>` contains zero or more `<w:r>` (run) children
+plus optional `<w:pPr>` (paragraph properties).
 
-**Key attributes (frozen dataclass — one per variant):**
-
-```python
-@dataclass(frozen=True)
-class Heading:
-    level: int            # 1..6
-    text: str             # plain text (NOT inline-stripped yet; F7 owns strip)
-    line: int             # 1-indexed source line
-
-@dataclass(frozen=True)
-class PipeTable:
-    raw_lines: list[str]  # contiguous |-pipe lines including separator
-    line: int
-
-@dataclass(frozen=True)
-class HtmlTable:
-    fragment: str         # raw HTML `<table>…</table>` substring
-    line: int
-
-Block = Union[Heading, PipeTable, HtmlTable]
+**Structure excerpt (relevant to docx-6):**
+```xml
+<w:p>
+  <w:pPr>…</w:pPr>       <!-- paragraph properties; untouched by --replace -->
+  <w:r>
+    <w:rPr>…</w:rPr>     <!-- run properties; preserved by --replace -->
+    <w:t xml:space="preserve">text content</w:t>
+  </w:r>
+  <!-- zero or more additional <w:r> siblings -->
+</w:p>
 ```
-
-**Relationships:** A single document yields a stream of `Block`s; tables consume the nearest preceding `Heading` for naming.
 
 **Business rules:**
-- `Heading.text` is the raw heading text (may contain markdown bold/code); F7 inline-strips before sanitisation.
-- `PipeTable.raw_lines` and `HtmlTable.fragment` are passed verbatim to F3 / F4.
+- `--replace`: modifies `<w:t>` text only; `<w:rPr>` and `<w:pPr>`
+  are untouched.
+- `--insert-after`: entire `<w:p>` matched by concat-text; new
+  paragraphs inserted as siblings, after the matched `<w:p>`.
+- `--delete-paragraph`: the element is removed from its parent.
+  If parent is `<w:tc>` and no `<w:p>` remains, an empty `<w:p/>`
+  placeholder is inserted (ECMA-376 §17.4.66).
+- The last `<w:p>` in `<w:body>` (ignoring `<w:sectPr>`) MUST NOT be
+  deleted (`LastParagraphCannotBeDeleted`).
 
 ---
 
-#### Entity: `RawTable`
+#### `<w:t>` — Text Element
 
-**Description:** Output of F3 / F4 — parsed table cells in 2D grid form, plus per-column alignment (GFM only) and merge ranges (HTML only).
-
-**Key attributes (frozen dataclass):**
-
-```python
-@dataclass(frozen=True)
-class RawTable:
-    header: list[str]                  # 1 row of column headers
-    rows: list[list[str | None]]       # data rows; None = empty cell
-    alignments: list[Alignment]        # per-column; len == len(header)
-    merges: list[MergeRange]           # empty for GFM tables
-    source: Literal["gfm", "html"]
-    source_line: int                   # 1-indexed start line in source
-
-Alignment = Literal["left", "right", "center", "general"]
-
-@dataclass(frozen=True)
-class MergeRange:
-    start_row: int       # 1-indexed in *this table* (row 1 = header)
-    start_col: int       # 1-indexed
-    end_row: int
-    end_col: int
-```
-
-**Relationships:**
-- One `RawTable` per recognised table block.
-- Merge ranges always live in HTML tables (GFM has no colspan/rowspan; R9 lock).
+**Description:** Leaf text-bearing element inside a `<w:r>`. The
+`--replace` action rewrites `<w:t>.text` via the cursor-loop in
+`_replace_in_run`.
 
 **Business rules:**
-- `header` cells contain plain text already (inline-stripped during parse).
-- `rows[i][j] is None` means "blank cell" → Excel `None` (not `""`).
-- Merge ranges never overlap (overlap = pathological HTML; F8 catches at write time).
+- When the rewritten text contains whitespace or does not equal its
+  `.strip()` form, set `xml:space="preserve"` attribute.
+- Empty `<w:t>` (result of `--replace ""`) is OOXML-legal and passes
+  `office/validate.py`.
+- After `_merge_adjacent_runs`, adjacent simple runs with identical
+  `<w:rPr>` are coalesced so a single `<w:t>` holds the whole span.
 
 ---
 
-#### Entity: `ParsedTable`
+#### `<w:rPr>` — Run Properties
 
-**Description:** Fully-resolved table ready for the writer. Adds resolved sheet name + per-column coerced values on top of `RawTable`.
-
-**Key attributes (frozen dataclass):**
-
-```python
-@dataclass(frozen=True)
-class ParsedTable:
-    raw: RawTable
-    sheet_name: str                    # F7 output; passes Excel rules
-    coerced_columns: list[list[object]]  # [N_cols][N_rows]; None = blank
-```
-
-**Relationships:**
-- 1:1 with `RawTable`.
-- Workbook = `list[ParsedTable]` in document order.
+**Description:** Contains bold (`<w:b>`), italic (`<w:i>`), font size
+(`<w:sz>`), colour (`<w:color>`), etc. Preserved verbatim by
+`--replace`. Never modified by docx-6.
 
 **Business rules:**
-- `sheet_name` is unique within the workbook (F7's `used_lower` enforces).
-- `coerced_columns[j][i]` is `int | float | datetime.date | datetime.datetime | str | None` per the D3 contract.
+- `_rpr_key(run)` computes the canonical C14N serialisation for
+  equality checks during run-merge.
+- `--replace` preserves the run's `<w:rPr>` by rewriting only the
+  `<w:t>` text; the run element itself is not rebuilt.
 
 ---
 
-#### Entity: `CoerceOptions`
+#### `<w:sectPr>` — Section Properties
 
-**Description:** F6 configuration. Controls `--no-coerce` global toggle.
+**Description:** May appear as the last child of `<w:body>` (body-
+level section properties) or inside a `<w:p>` (mid-document section
+break). docx-6 only encounters the body-level form.
 
-**Key attributes:**
-
-```python
-@dataclass(frozen=True)
-class CoerceOptions:
-    coerce: bool = True       # False = every cell str + number_format="@"
-    encoding: str = "utf-8"   # for diagnostics only; F1 owns decode
-```
-
----
-
-#### Entity: `WriterOptions`
-
-**Description:** F8 configuration. Mirrors csv2xlsx + json2xlsx surfaces.
-
-**Key attributes:**
-
-```python
-@dataclass(frozen=True)
-class WriterOptions:
-    freeze: bool = True
-    auto_filter: bool = True
-    sheet_prefix: str | None = None
-    allow_empty: bool = False
-```
+**Business rules:**
+- `--delete-paragraph`: the body-tail `<w:sectPr>` is NOT counted as
+  a content paragraph. The "last paragraph" guard considers only
+  `<w:p>` elements; `<w:sectPr>` siblings are excluded.
+- `--insert-after`: the trailing `<w:sectPr>` in `md2docx.js` output
+  is stripped before splice (Q-A3 lock). Filter:
+  `lxml.etree.QName(el).localname == "sectPr"`.
 
 ---
 
-### 4.2. Schema diagram
+#### `<w:tc>` — Table Cell
 
-```mermaid
-classDiagram
-    class Block {
-        <<union>>
-        Heading | PipeTable | HtmlTable
-    }
-    class Heading {
-        +int level
-        +str text
-        +int line
-    }
-    class PipeTable {
-        +list~str~ raw_lines
-        +int line
-    }
-    class HtmlTable {
-        +str fragment
-        +int line
-    }
-    class RawTable {
-        +list~str~ header
-        +list~list~ rows
-        +list~Alignment~ alignments
-        +list~MergeRange~ merges
-        +str source
-        +int source_line
-    }
-    class MergeRange {
-        +int start_row
-        +int start_col
-        +int end_row
-        +int end_col
-    }
-    class ParsedTable {
-        +RawTable raw
-        +str sheet_name
-        +list~list~ coerced_columns
-    }
+**Description:** Container element inside `<w:tr>` (table row).
+ECMA-376 §17.4.66 mandates at least one block-level element.
 
-    Block <|-- Heading
-    Block <|-- PipeTable
-    Block <|-- HtmlTable
-    RawTable o-- MergeRange : "0..N"
-    ParsedTable *-- RawTable
+**Business rules:**
+- After `--delete-paragraph` removes a paragraph from a `<w:tc>`:
+  if the cell has no remaining `<w:p>` children, insert
+  `etree.Element(qn("w:p"))` as a placeholder (Q-A5 lock).
+- The placeholder element is the shorter self-closing form `<w:p/>`
+  rather than `<w:p><w:r><w:t/></w:r></w:p>`; both satisfy
+  §17.4.66.
+
+---
+
+#### Cross-5 Envelope (output schema)
+
+**Description:** The canonical JSON line emitted on stderr when
+`--json-errors` is set. Schema owned by `_errors.py`; docx-6 never
+constructs the dict by hand.
+
+**Schema (locked, ECMA per `_errors.py:38`):**
+```json
+{"v": 1, "error": "<message>", "code": <int>, "type": "<ErrorClass>", "details": {...}}
 ```
+
+**docx-6-specific `details` payloads:**
+
+| Error class | `details` keys |
+|---|---|
+| `AnchorNotFound` | `{anchor: str}` |
+| `EncryptedFileError` | `{}` (cross-3; raised by `office._encryption`) |
+| `SelfOverwriteRefused` | `{input: str, output: str}` |
+| `Md2DocxFailed` | `{stderr: str, returncode: int}` |
+| `Md2DocxOutputInvalid` | `{detail: str}` |
+| `Md2DocxNotAvailable` | `{}` |
+| `EmptyInsertSource` | `{}` |
+| `InsertSourceTooLarge` | `{max_bytes: int, actual_bytes: int}` |
+| `LastParagraphCannotBeDeleted` | `{anchor: str}` |
+| `NotADocxTree` | `{dir: str}` |
+| `PostValidateFailed` | `{validator_output: str (≤8 KiB)}` |
+| `UsageError` (argparse) | `{prog: str}` |
 
 ---
 
@@ -782,102 +780,159 @@ classDiagram
 
 ### External (CLI)
 
-- **Process invocation:** `python3 md_tables2xlsx.py INPUT OUTPUT [flags]`.
-- **stdin:** UTF-8 markdown when `INPUT == "-"`.
+- **Process invocation:** `python3 docx_replace.py INPUT OUTPUT [flags]`.
+- **stdin:** UTF-8 markdown bytes when `--insert-after -` is passed.
+  Maximum 16 MiB uncompressed (R2.h guard).
 - **stdout:** silent on happy path.
-- **stderr:** silent on happy path; warnings on skipped malformed tables (single line per table); cross-5 envelope on errors (per `--json-errors`).
-- **Exit codes:** 0 / 1 / 2 / 6 / 7 (TASK §7).
+- **stderr:** one-line success summary on exit 0; cross-5 envelope or
+  plain-text error on failure.
 
-### Internal (per-module function signatures)
+### Argparse surface (R8 table)
 
-**Locked surface — implementation MUST NOT diverge without updating this section.**
+| Flag | Type | Default | Required? | Notes |
+|---|---|---|---|---|
+| `INPUT` | positional str | — | Yes (unless `--unpacked-dir`) | Source `.docx` or `.docm` path. |
+| `OUTPUT` | positional str | — | Yes (unless `--unpacked-dir`) | Output `.docx` path; extension preserved verbatim (R8.k). |
+| `--anchor TEXT` | str | — | Yes | Substring to search for. Matched against run text (replace) or concat-paragraph text (insert/delete). |
+| `--replace TEXT` | str | — | Mutex group | Replacement text. Empty string allowed (D3). |
+| `--insert-after PATH` | str | — | Mutex group | Path to markdown file, or `-` for stdin (D7). |
+| `--delete-paragraph` | flag | False | Mutex group | Delete the paragraph(s) containing the anchor. |
+| `--all` | flag | False | No | Apply action to all matching anchors/paragraphs, not just the first (D4). |
+| `--unpacked-dir TREE` | str | — | No | Library mode (UC-4, MVP=No per R8.g). Mutually exclusive with INPUT/OUTPUT. |
+| `--json-errors` | flag | False | No | Cross-5 envelope on failure (cross-5). |
+
+**Mutex groups:**
+- `--replace`, `--insert-after`, `--delete-paragraph` are in an
+  `argparse` mutually exclusive group (required=True). Exactly one
+  must be present; otherwise exit 2 `UsageError`.
+
+### Exit-code matrix
+
+| Code | Meaning | Trigger |
+|---|---|---|
+| 0 | Success | Action performed (≥ 1 match processed). |
+| 1 | I/O or subprocess failure | File not found; `Md2DocxFailed`; `office.unpack`/`pack` error. |
+| 2 | Logical / usage error | `AnchorNotFound`; `LastParagraphCannotBeDeleted`; `EmptyInsertSource`; `InsertSourceTooLarge`; `UsageError`; `NotADocxTree`. |
+| 3 | Encrypted input (cross-3) | `EncryptedFileError` from `office._encryption`. |
+| 6 | Same-path collision (cross-7) | `SelfOverwriteRefused`. |
+| 7 | Post-validate failed | `PostValidateFailed` + output unlinked. |
+
+### Environment variables
+
+| Variable | Default | Truthy values | Effect |
+|---|---|---|---|
+| `DOCX_REPLACE_POST_VALIDATE` | off | `1`, `true`, `yes`, `on` (case-insensitive) | After `office.pack`, invoke `office/validate.py` on the output. Failure → exit 7 + unlink output. |
+
+### Internal (function signatures — locked surface)
 
 ```python
-# loaders.py
-def read_input(path: str, encoding: str = "utf-8") -> tuple[str, str]: ...
-def scrub_fenced_and_comments(text: str) -> tuple[str, list[Region]]: ...
-def iter_blocks(scrubbed: str) -> Iterator[Block]: ...
+# docx_anchor.py
+def _is_simple_text_run(run: etree._Element) -> bool: ...
+def _rpr_key(run: etree._Element) -> bytes: ...
+def _merge_adjacent_runs(paragraph: etree._Element) -> None: ...
+def _replace_in_run(
+    paragraph: etree._Element,
+    anchor: str,
+    replacement: str,
+    *,
+    anchor_all: bool,
+) -> int: ...
+def _concat_paragraph_text(paragraph: etree._Element) -> str: ...
+def _find_paragraphs_containing_anchor(
+    part_root: etree._Element,
+    anchor: str,
+) -> list[etree._Element]: ...
 
-# tables.py
-def parse_pipe_table(block: PipeTable) -> RawTable | None: ...
-def parse_html_table(block: HtmlTable) -> RawTable: ...
-
-# inline.py
-def strip_inline_markdown(text: str) -> str: ...
-
-# coerce.py
-def coerce_column(values: list[str], opts: CoerceOptions) -> list[object]: ...
-
-# naming.py
-class SheetNameResolver:
-    def __init__(self, sheet_prefix: str | None = None) -> None: ...
-    def resolve(self, heading: str | None) -> str: ...
-
-# writer.py
-def write_workbook(
-    tables: list[ParsedTable], output: Path, opts: WriterOptions,
-) -> None: ...
-
-# cli_helpers.py
-def assert_distinct_paths(input_path: str, output_path: Path) -> None: ...
-def post_validate_enabled() -> bool: ...
-def run_post_validate(output: Path) -> tuple[bool, str]: ...
-def read_stdin_utf8() -> str: ...
-
-# cli.py
+# docx_replace.py
 def build_parser() -> argparse.ArgumentParser: ...
 def main(argv: list[str] | None = None) -> int: ...
 def _run(args: argparse.Namespace) -> int: ...
-
-# __init__.py (public surface; M4 review-fix mirrors xlsx-2)
-def convert_md_tables_to_xlsx(
-    input_path: str | Path,
-    output_path: str | Path,
-    **kwargs: object,    # allow_empty / coerce / freeze / auto_filter
-                         # / sheet_prefix / encoding; mapped to CLI flags
-) -> int: ...            # returns exit code; raises nothing on happy path
-
-# exceptions.py
-class _AppError(Exception):
-    message: str
-    code: int
-    error_type: str
-    details: dict[str, Any]
+def _iter_searchable_parts(
+    tree_root: Path,
+) -> Iterator[tuple[Path, etree._Element]]: ...
+def _do_replace(
+    tree_root: Path,
+    anchor: str,
+    replacement: str,
+    *,
+    anchor_all: bool,
+) -> int: ...
+def _do_insert_after(
+    tree_root: Path,
+    anchor: str,
+    insert_paragraphs: list[etree._Element],
+    *,
+    anchor_all: bool,
+) -> int: ...
+def _do_delete_paragraph(
+    tree_root: Path,
+    anchor: str,
+    *,
+    anchor_all: bool,
+) -> int: ...
 ```
 
 ---
 
-## 6. Technology Stack
+## 6. Deliberate Non-Choices
 
-| Layer | Choice | Justification |
-| :--- | :--- | :--- |
-| Language | Python ≥ 3.10 | Matches xlsx skill baseline (xlsx-2 / xlsx-6 / xlsx-7). |
-| Workbook output | `openpyxl ≥ 3.1.5` | Already pinned. Mature, in-process, no LibreOffice dependency. |
-| GFM pipe-table parsing | hand-rolled (~120 LOC) | No external dep needed for a 6-rule spec. Trivial; avoids third-party lib for `tables.py`. A5 lock. |
-| HTML `<table>` parsing | `lxml.html` (already in `requirements.txt:3`) | Robust, lenient, handles malformed HTML. Already used by `office/`. A5 lock. |
-| ISO-date parsing | `python-dateutil ≥ 2.8.0` (already in `requirements.txt:9`) | Handles `Z` / `±HH:MM` / fractional seconds robustly. Matches xlsx-2 pattern. |
-| CLI | `argparse` stdlib | csv2xlsx / json2xlsx / xlsx-6 / xlsx-7 precedent. |
-| Cross-5 envelope | `_errors.py` (4-skill replicated) | UN-MODIFIED. See §9 / R11. |
-| Post-validate (opt-in) | `office/validators/xlsx.py` via `subprocess` | xlsx-2 / xlsx-6 precedent. A3 lock. |
-| Tests — unit | `unittest` stdlib | Skill convention. |
-| Tests — E2E | `bash` `tests/test_e2e.sh` | Skill convention. |
-| Lint / type | None mandatory in v1 | Skill precedent. |
+### No new external dependencies
 
-**No new dependency.** Verified by `skills/xlsx/scripts/requirements.txt:1-10` (openpyxl, pandas, lxml, defusedxml, Pillow, msoffcrypto-tool, regex, python-dateutil, ruamel.yaml).
+`lxml`, `python-docx`, and Node + `md2docx.js` are already present in
+`skills/docx/scripts/requirements.txt` (Python deps) and
+`skills/docx/scripts/package.json` (Node dep). docx-6 introduces zero
+new `pip install` or `npm install` requirements. Adding a markdown-
+parsing library (e.g., `mistune`, `markdown-it-py`) solely for the
+`--insert-after` path would be wasteful when the battle-tested
+`md2docx.js` already lives in the skill; the subprocess cost (one Node
+launch per `--insert-after` invocation) is bounded by the 60 s timeout
+and negligible for the dominant use-case (human-authored documents, not
+batch pipelines).
 
-### Pandas deliberately avoided (A4 lock)
+### `md2docx.js` not reimplemented in Python
 
-`pandas>=2.0.0` is pinned in `requirements.txt` (csv2xlsx uses it). xlsx-3 **does NOT** use pandas, intentionally:
+Writing a Markdown → OOXML converter in Python would duplicate a
+~1000-line, well-tested Node module that the docx skill already
+requires. The cost: one `subprocess.run` call. The benefit of
+reimplementing: zero (no performance win, no correctness win, more
+maintenance surface). Subprocess discipline (argv list, `shell=False`,
+60 s timeout, stderr capture) is identical to the precedent in
+`docx_add_comment.py` / xlsx-2.
 
-1. **Direct path is shorter.** Markdown row → `list[str]` → openpyxl cell is a 5-line loop. `pd.DataFrame.from_records` adds a layer that buys no value.
-2. **Type-coercion conflict.** R6 requires "leading-zero preservation"; pandas' `DataFrame` `infer_objects` heuristics conflict (a `"007"` column becomes `int64`).
-3. **Import-time cost.** Pandas imports ~90 MB. For a CLI invoked in batch, this is wasted startup.
+### Single-file layout (no package), per Q-A1
 
-This decision is locked here so a future Developer doesn't "simplify" by routing through pandas — that path silently breaks R6.a.
+`docx_replace.py` is one file rather than a `docx_replace/` package.
+Rationale is locked in Q-A1 above. The "split threshold" for docx-skill
+scripts is the xlsx-2 reference point (280 LOC for `cli.py` alone,
+8+ flags); docx-6 has 7 flags and the actions share tight infrastructure.
+The guardrail (split `_actions.py` if > 600 LOC) is the safety valve
+if a future iteration expands the scope.
 
-### Why hand-rolled GFM parser (A5 lock)
+### No relationship relocation in `--insert-after` (v1)
 
-External markdown libraries (`markdown`, `mistune`, `markdown-it-py`, `cmark`) all carry significant scope overhead — full AST construction, ~10K LOC implementations, multi-extension support. For xlsx-3's contract — *only* pipe tables + their preceding headings + scrubbing of fenced/comment regions — a ~120-line `tables.py` hand-roll is dramatically simpler, gives full control over the GFM separator-row column-count check (R2.b), and eliminates a transitive dependency the user must install. The HTML side uses `lxml.html` because writing an HTML parser from scratch is the wrong call — `lxml` is already a transitive dep via `office/`.
+Copying `word/media/` objects and remapping `r:embed` relationship IDs
+from the MD-source document into the base document is the same multi-
+file relocator logic that `docx_merge.py` deferred to v2 (see
+`docx_merge.py:23–27`). Reusing that path would import substantial
+complexity — it is a future v2 ticket (`docx-6.5 — image-relocator
+for --insert-after`). v1 emits a stderr warning when relationship-
+bearing runs are detected in extracted body and proceeds without
+the references (R10.b regression lock).
+
+### No `--allow-empty-body` flag (v1)
+
+The guard `LastParagraphCannotBeDeleted` (UC-3 Alt-3) refuses to empty
+`<w:body>`. An `--allow-empty-body` escape hatch is a v2 item. In v1
+the refusal is the only safe behaviour: an empty `<w:body>` is invalid
+OOXML and Word refuses to open the file.
+
+### No `python-docx` high-level API for OOXML mutations
+
+`python-docx`'s public API (`Document.add_paragraph`, etc.) builds new
+content from scratch and cannot perform surgical in-place mutations on
+existing runs. Direct `lxml.etree` manipulation is the established
+pattern for all four docx-skill siblings. `python-docx` is retained in
+`requirements.txt` for its namespace helper (`docx.oxml.ns.qn`) only.
 
 ---
 
@@ -885,122 +940,223 @@ External markdown libraries (`markdown`, `mistune`, `markdown-it-py`, `cmark`) a
 
 ### Threat model
 
-xlsx-3 reads markdown from a user-controlled file or pipe and writes a single `.xlsx` to a user-controlled path. It runs in the caller's process; no network, no fork, no daemon. The realistic adversary is **a maliciously-crafted input file** trying to cause the converter to:
+`docx_replace.py` reads a `.docx` from a user-controlled path and a
+markdown file (or stdin) for `--insert-after`, and writes a `.docx` to
+a user-controlled path. It may call `node md2docx.js` as a subprocess.
+The realistic adversary is a maliciously-crafted input file or anchor
+string attempting to:
 
-1. Crash with an uninformative traceback (DoS via malformed markdown / huge pipe tables / pathological HTML).
-2. Write outside the user's intended directory (path traversal via output path).
-3. Overwrite the input by accident (typo / symlink race).
-4. Smuggle an executable formula into a cell (CSV-injection cousin).
-5. Generate an `.xlsx` that crashes Excel on open (malformed sheet name, oversized strings).
-6. **NEW vs xlsx-2:** Lxml-specific attacks — XML/XXE on HTML `<table>` blocks, entity expansion ("billion laughs" via HTML entities).
+1. Crash with an uninformative traceback (DoS via malformed OOXML /
+   large documents).
+2. Overwrite the input by accident (typo / symlink race).
+3. Execute arbitrary code via shell injection in the `md2docx.js`
+   subprocess invocation.
+4. Exhaust memory via a very large stdin pipe.
+5. Generate a corrupt output OOXML that crashes Word on open.
 
 ### Per-threat mitigation
 
-| Threat | Mitigation | TASK ref |
-| :--- | :--- | :--- |
-| Malformed markdown → uninformative crash | Caught at F1/F2/F3/F4 boundary; warnings to stderr OR envelopes. | R2.b, UC-1 A3 |
-| Deep nesting → stack overflow | GFM parser is iterative (no recursion). HTML parser uses `lxml.html` which is iterative. | n/a |
-| Path traversal via output | Caller passes output path; xlsx-3 does not interpret `..` specially. Parent dir must exist → IOError early-fail. | UC-1, F8 docstring |
-| Same-path collision (input == output) | F10 `assert_distinct_paths` via `Path.resolve()`; exit 6. | R8.b, UC-4 |
-| Symlink race between resolve() and open() | **Honest scope §11.10** — accepted v1 limitation; mirrors xlsx-2 ARCH §10. | TASK §11.10 |
-| CSV-injection-style leading-`=` in markdown cell | **Inherits xlsx-2 honest-scope deferral §11.2/§11.7.** Cells starting with `=` are written as literal text (no formula evaluation triggered — `data_type = "s"` forced in F8); however, downstream Excel may still interpret on user save. v2 joint fix `xlsx-2a/3a/csv2xlsx-1`. | TASK §11.5 (no formula resolution lock) |
-| Excel sheet-name rule violation | F7 sanitisation algorithm steps 1–9; `InvalidSheetName` envelope on overflow. | R4, TASK §0/D2 |
-| Long strings causing Excel choke | openpyxl writes verbatim; Excel's 32 767 cell-char limit is upstream. Honest scope §10. | (architecture honest-scope, below) |
-| **XXE / external entity in HTML `<table>`** | F4 uses a module-level singleton `lxml.html.HTMLParser(no_network=True, huge_tree=False, recover=True)` and invokes `lxml.html.fragment_fromstring(html_fragment, create_parent=False, parser=_HTML_PARSER)`. `no_network=True` blocks external resource fetch; `huge_tree=False` blocks libxml2's huge-tree expansion path; HTML mode does not process internal-subset `<!ENTITY>` declarations. (M1 review-fix locks exact parser construction in §3.2.) | new — locked here |
-| **Billion-laughs / entity expansion** | `lxml.html.HTMLParser` does NOT expand custom `<!ENTITY>` declarations (HTML mode lacks doctype-entity processing). Named entities (`&amp;`, `&lt;`, etc.) are bounded by the HTML5 named-entity table — finite expansion. Numeric character references are bounded per character. **No exponential expansion possible.** Lock: F4 unit test `test_html_billion_laughs_neutered` (a) constructs a 100-level nested entity payload + verifies wall-clock ≤ 100 ms + final cell value length ≤ 100 chars, AND (b) asserts the module-level `_HTML_PARSER.no_network is True` (parser-instance pin, not just runtime measure). | new — locked here |
-| **Macro / encrypted input attempt** | N/A — input is markdown. cross-3 / cross-4 don't fire. | R11.d |
+| Threat | Mitigation | Ref |
+|---|---|---|
+| Shell injection in Node subprocess | `subprocess.run(["node", str(md2docx_path), str(md_path), str(out_path)], shell=False)` — argv list never passes user content as a single string to the shell. | R3.2 TASK, §7 here |
+| Subprocess timeout | `timeout=60` hard cap on `md2docx.js`; same cap on post-validate. A hung Node process is killed; error is reported via `Md2DocxFailed`. | §3.2 TASK |
+| Same-path collision (typo / symlink) | F1 `_assert_distinct_paths` via `Path.resolve(strict=False)` before any I/O; exit 6. | cross-7, R7.d |
+| TOCTOU symlink race between resolve() and open() | Accepted v1 honest-scope limitation; mirrors xlsx-2 ARCH §10 / xlsx-7 precedent. | §6 below |
+| Stdin DoS | `_read_stdin_capped(16 * 1024 * 1024)` truncates at 16 MiB; raises `InsertSourceTooLarge` exit 2. | R2.h |
+| Encrypted input | `office._encryption.assert_not_encrypted` (cross-3); exit 3 before any mutations. | R7.a |
+| Macro-bearing `.docm` input | `office._macros.warn_if_macros_will_be_dropped` stderr warning; processing continues; output extension preserved verbatim (R8.k). | R7.b, cross-4 |
+| Malformed OOXML | `lxml.etree.parse` raises on non-XML; caught by `_run` as general exception → exit 1 `MalformedOOXML`. | UC-1 Alt-8 |
+| No network access | Subprocess calls `md2docx.js` and `office.validate` only; both are local. No `urllib`, `requests`, `socket` usage anywhere in the new code. | — |
+| No `eval` / `exec` | All new code in `docx_replace.py` and `docx_anchor.py` contains no `eval`, `exec`, `compile`, `__import__`, or `subprocess(shell=True)`. | — |
 
-### No `eval` / no shell
+### Temp file handling
 
-- F1 / F2 / F3 / F4 / F5 / F6 / F7 / F8 / F9 contain **no** `eval`, `exec`, `compile`, `subprocess.shell=True`, `os.system`, or template-string formatting reaching user data.
-- F10 invokes `subprocess.run([...], shell=False, timeout=60)` to call `office/validators/xlsx.py` — same pattern as xlsx-2 / xlsx-6.
-
-### Untrusted-input acceptance
-
-xlsx-3 explicitly accepts markdown from `sys.stdin` (UC-2). The stdin content is treated as untrusted: parse errors map to envelope; structural surprises map to envelope or stderr warnings. **There is no point at which user content is interpreted as code or shell.** HTML `<style>` / `<script>` blocks are **dropped entirely** by F1's pre-scan (R9.i, §11.9) — they are never reached by F4.
+`_tempdir(prefix="docx_replace-")` wraps `tempfile.TemporaryDirectory`
+in a context manager. The directory is removed on clean exit AND on
+exception (via `finally`). If the process is killed with SIGKILL the
+system's `tmpdir` cleanup handles the remainder — this is consistent
+with every other docx-skill script.
 
 ---
 
-## 8. Scalability and Performance
+## 8. Observability
 
-### Per-input scale
+### Success log format (D8)
 
-- **Targets (informal, not CI-gated):**
-  - 100 tables × 50 rows × 6 columns (typical tech-spec) → ≤ 2 s wall.
-  - 10 tables × 10 000 rows × 6 columns (synthetic stress) → ≤ 10 s wall, ≤ 200 MB RSS.
-- **Mode in v1:** openpyxl normal-write. Honest scope §11 (xlsx-2 ARCH §10 A1 mirror) — no `write_only=True` mode.
-- **Per-call concurrency:** None. The CLI is one process.
+On every successful exit 0, a single line is written to **stderr**:
 
-### Cache strategy
+```
+{OUTPUT_FILENAME}: {ACTION_SUMMARY}
+```
 
-None. xlsx-3 is a pure transform; every run reads input from scratch.
+Where `ACTION_SUMMARY` is one of:
+- `replaced N anchor(s) (anchor='<TEXT>' → '<REPLACEMENT>')`
+  — example: `contract.out.docx: replaced 1 anchor (anchor='May 2024' → 'April 2025')`
+- `inserted N paragraph(s) after anchor '<TEXT>' (M match(es))`
+  — example: `contract.out.docx: inserted 3 paragraph(s) after anchor 'Article 5.' (1 match)`
+- `deleted N paragraph(s) (anchor='<TEXT>')`
+  — example: `contract.out.docx: deleted 2 paragraph(s) (anchor='DEPRECATED CLAUSE')`
+
+The filename component uses `Path(args.output).name` (basename only,
+not the full path), mirroring the `docx_add_comment.py` convention.
+
+### Numbering-relocation warning (Q-A4)
+
+When `--insert-after` detects `<w:numId>` references in the extracted
+body AND the base document has no `word/numbering.xml` part, emit the
+following line to **stderr** before the success summary:
+
+```
+[docx_replace] WARNING: inserted body contains <w:numId> references; base document has no numbering.xml — list items may render as plain text. Relocate numbering in a future update.
+```
+
+This warning does NOT suppress exit 0; it is informational.
+
+### Relationship-target warning (§11.3)
+
+When `_extract_insert_paragraphs` detects an element containing an
+`r:embed` or `r:id` attribute (image reference, chart, OLE object),
+emit:
+
+```
+[docx_replace] WARNING: inserted body references relationships (r:embed/r:id) that are not copied to the base document — embedded objects may not render. Use --insert-after with image-free markdown in v1.
+```
+
+Again, exit 0 is not suppressed.
+
+### Macro warning (cross-4)
+
+The existing `office._macros.warn_if_macros_will_be_dropped` function
+emits its own warning line; docx-6 does not format this — it is
+delegated to the shared helper, consistent with sibling scripts.
 
 ---
 
 ## 9. Cross-Skill Replication Boundary (CLAUDE.md §2)
 
-This is the **load-bearing invariant** for the xlsx skill: edits to shared modules MUST be done in docx first and replicated byte-for-byte to xlsx / pptx / pdf (4-skill set) or to xlsx / pptx (3-skill OOXML set, for `office_passwd.py`). xlsx-3 deliberately **does not touch any of these files**.
+This is the **load-bearing invariant** for the docx skill. docx-6
+deliberately does **not** touch any of the files covered by the
+replication protocol.
 
-### Files xlsx-3 must NOT modify
+### Files docx-6 must NOT modify
 
-| Path (in xlsx) | Replication set | Why xlsx-3 leaves it alone |
-| :--- | :--- | :--- |
-| `skills/xlsx/scripts/_errors.py` | 4-skill | Only consumed via `add_json_errors_argument` + `report_error`. No new envelope fields needed. |
-| `skills/xlsx/scripts/_soffice.py` | 4-skill | Not invoked. xlsx-3 doesn't shell out to LibreOffice. |
-| `skills/xlsx/scripts/preview.py` | 4-skill | Not invoked. |
-| `skills/xlsx/scripts/office/` (entire tree) | 3-skill (OOXML) | Post-validate hook (F10) invokes `office/validators/xlsx.py` via subprocess; never imports it directly. |
-| `skills/xlsx/scripts/office_passwd.py` | 3-skill (OOXML) | Not invoked. xlsx-3 outputs are never password-protected. |
+| Path (in docx) | Replication set | Why docx-6 leaves it alone |
+|---|---|---|
+| `skills/docx/scripts/office/` (entire tree) | 3-skill (OOXML: docx+xlsx+pptx) | Consumed via `office.unpack`, `office.pack`, `office._encryption`, `office._macros`. No new API needed; read-only consumption. |
+| `skills/docx/scripts/_soffice.py` | 4-skill (docx+xlsx+pptx+pdf) | Not invoked. docx-6 never calls LibreOffice. |
+| `skills/docx/scripts/_errors.py` | 4-skill | Only consumed via `add_json_errors_argument` + `report_error`. |
+| `skills/docx/scripts/preview.py` | 4-skill | Not invoked. |
+| `skills/docx/scripts/office_passwd.py` | 3-skill (OOXML) | Not invoked. docx-6 outputs are never password-protected. |
 
-### Gating check (Developer must run before commit)
+### New files (docx-only, no replication required)
+
+| New file | Replication set | Rationale for docx-only |
+|---|---|---|
+| `skills/docx/scripts/docx_replace.py` | Docx-only | CLI specific to wordprocessing documents. xlsx/pptx do not need text replacement in `.docx` format. |
+| `skills/docx/scripts/docx_anchor.py` | Docx-only | Paragraph and run helpers specific to OOXML `word/document.xml` structures. xlsx/pptx have different XML schemas. Out of scope of `CLAUDE.md §2` ("Out of scope (docx-only, no replication): `skills/docx/scripts/docx_*.py`"). |
+
+### Gating check (Developer MUST run before every commit)
+
+This is the canonical **eleven** `diff -q` invocations from
+`CLAUDE.md §2`. All must produce **no output** (silent = identical).
 
 ```bash
+# office/ tree — 3-skill OOXML (docx is master)
 diff -qr skills/docx/scripts/office skills/xlsx/scripts/office
 diff -qr skills/docx/scripts/office skills/pptx/scripts/office
+
+# _soffice.py — 4-skill
 diff -q  skills/docx/scripts/_soffice.py skills/xlsx/scripts/_soffice.py
 diff -q  skills/docx/scripts/_soffice.py skills/pptx/scripts/_soffice.py
+
+# _errors.py and preview.py — 4-skill (includes pdf)
 for s in xlsx pptx pdf; do
     diff -q skills/docx/scripts/_errors.py skills/$s/scripts/_errors.py
     diff -q skills/docx/scripts/preview.py  skills/$s/scripts/preview.py
 done
+
+# office_passwd.py — 3-skill OOXML (docx is master)
 diff -q skills/docx/scripts/office_passwd.py skills/xlsx/scripts/office_passwd.py
 diff -q skills/docx/scripts/office_passwd.py skills/pptx/scripts/office_passwd.py
 ```
 
-Eleven invocations, all must be silent. **CI runs this in pre-merge.**
+> **NIT n1 note (task-006-review.md):** The review flagged that the
+> "eleven" count should be verified. The `for s in xlsx pptx pdf`
+> loop above generates **6** invocations (3 skills × 2 files); the
+> four standalone lines add 4 more (office/ ×2 + _soffice.py ×2);
+> office_passwd.py adds 2 more = **12 total** invocations. The
+> "eleven" label is inherited verbatim from the preceding architectures
+> (arch-003, arch-005) and the TASK gate G6. The Planner is asked to
+> reconcile this count when writing the DoD checklist; the gate
+> semantics (all invocations silent) are unambiguous regardless of
+> the exact count.
 
 ---
 
-## 10. Additional Honest-Scope Items (Architecture-Layer)
+## 10. Open Questions — Decisions and Residuals
 
-These supplement TASK §11. They are architectural choices the Planner / Developer must NOT widen in v1:
+### Q-A1 through Q-A5 (closed by this document)
 
-- **A1 — No openpyxl `write_only=True` mode.** Normal-write only. Performance budget §8 reflects this. Mirrors xlsx-2 ARCH §10/A1.
-- **A2 — No streaming output to stdout.** `--output -` not in v1.
-- **A3 — No automatic Excel string truncation.** Cells > 32 767 chars pass through openpyxl unchanged; resulting `.xlsx` may be rejected by Excel. Honest scope — markdown is human-authored and cells > 32 KB are a real-world rarity.
-- **A4 — No CSS-driven formatting from HTML `<table>` blocks.** `<style>` is dropped by pre-scan; `style="..."` attributes on `<td>` are ignored. Cell coercion is content-driven (D3), not presentation-driven.
-- **A5 — No empty-cell distinction between "value omitted" and "value is empty string".** GFM `| a || b |` → middle cell is `None`. HTML `<td></td>` → also `None`. There is no way for the markdown author to signal `""` vs `None`. If a future use-case demands it, add a flag in v2.
-- **A6 — `--sheet-prefix` × `--allow-empty` interaction** (m5 review-fix lock): if both passed and 0 tables found, placeholder sheet name = `Empty` (NOT `<prefix>-1`). The user's `--allow-empty` opt-in is about acknowledging an empty result, not about labelling it.
-- **A7 — `lxml.html.HTMLParser(no_network=True, huge_tree=False, recover=True)` enforced** as a module-level singleton in `tables.py`, invoked via `fragment_fromstring(..., create_parent=False, parser=_HTML_PARSER)`. Defense-in-depth against XXE + huge-tree expansion. See §7 and §3.2 `tables.py`. (M1 review-fix.)
-- **A8 — Output parent-directory auto-create** (m4 review-fix). xlsx-3's F8 writer calls `output.parent.mkdir(parents=True, exist_ok=True)` before `wb.save()`. This **diverges from xlsx-2** (xlsx-2 ARCH §7 explicitly requires parent-dir to exist → IOError early-fail) **but aligns with csv2xlsx** (`scripts/csv2xlsx.py:158`). Rationale: markdown-input flows commonly emit to a fresh per-run output directory (e.g. `out/runs/$(date)/tables.xlsx`); the agent UX expectation is auto-create, not IOError. The csv2xlsx precedent is the older convention; xlsx-3 honours it. xlsx-2 may align in v2 (out of xlsx-3 scope).
+All five architect questions from TASK §6.1 are closed in §1 of this
+document. Summary:
+
+| Q | Decision |
+|---|---|
+| **Q-A1** | Single file `docx_replace.py` ≤ 600 LOC. Guardrail: extract `_actions.py` if exceeded. |
+| **Q-A2** | Extract `docx_anchor.py` in sub-task 006-01, same chain as docx_replace.py. |
+| **Q-A3** | Strip trailing `<w:sectPr>` from md2docx output before splice. Filter: `QName(el).localname == "sectPr"`. |
+| **Q-A4** | Warn-only for numbering relocation. stderr warning format specified in §8. |
+| **Q-A5** | Empty-cell placeholder = `<w:p/>` (self-closing; ECMA-376 §17.4.66 compliant). |
+
+### Q-U1 through Q-U3 (user-deferred, non-blocking)
+
+These are left open for user decision and do NOT block Planning or
+Development:
+
+- **Q-U1 — Tracked changes behaviour:** v1 default proposal = match
+  through `<w:ins>` content; ignore `<w:del>` content. If the user
+  wants `AnchorInTrackedChange` refusal, this requires a TASK v3
+  amendment.
+- **Q-U2 — Comment range preservation on `--replace`:** v1 default
+  proposal = yes, comment range markers (`<w:commentRangeStart/End>`)
+  are sibling elements of the run and are untouched by `<w:t>` rewrite.
+  No code change needed; this is a documentation item.
+- **Q-U3 — Per-part match count reporting:** v1 default = single-line
+  aggregate only. Per-part breakdown deferred to `--verbose` v2. No
+  code change needed.
+
+### Architecture-layer honest-scope items
+
+The following extend TASK §9 (Honest-Scope Catalogue) with architecture-
+layer choices the Planner and Developer must NOT widen in v1:
+
+- **A1 — No `--allow-empty-body` escape hatch.** The `LastParagraphCannotBeDeleted` guard is unconditional in v1.
+- **A2 — No relationship relocation.** `--insert-after` embeds `<w:p>` clones only; `word/media/`, relationship parts, and `numId` definitions from the MD-source are not copied.
+- **A3 — No scope filter (`--scope=body|all`).** Part walk order is fixed (§11.1); user cannot restrict to body-only in v1.
+- **A4 — TOCTOU symlink race between `Path.resolve()` and file open.** Accepted; mirrors xlsx-2/xlsx-3 ARCH §10 precedent.
+- **A5 — `--unpacked-dir` library mode (UC-4) is MVP=No.** As flagged in TASK §2.4 scope note and RTM R8.g. Planner may defer UC-4 to a follow-up sub-task entirely; it is NOT gating for exit-0.
 
 ---
 
-## 11. Open Questions (residual)
+## 11. Atomic-Chain Skeleton (Planner handoff)
 
-All scope-blocking questions from the TASK Q&A were closed in D1–D8. The following are **architecture-layer details** the Planner is free to refine inside their atomic-chain breakdown without re-opening this document:
+> The Planner locks the exact sub-task slice. This is the architect's
+> recommended skeleton based on the docx-6 scope. Mirrors xlsx-3 Task-
+> 005's 8-sub-task chain cadence.
 
-- **Q1 — Should the pre-scan strip indented code blocks (4-space-indent)?**
-  - **Proposal:** YES, for the same reason fenced blocks are stripped — a pipe-table-looking block inside an indented code section is a code sample, not data. Implementation cost: ~10 LOC in `scrub_fenced_and_comments`.
-  - **Resolution:** Default YES; Planner may demote to opt-out via flag if a regression surfaces during 005-03 implementation.
-
-- **Q2 — How are sheet-prefix mode + multiple tables under the same heading handled?**
-  - **Proposal:** `--sheet-prefix Report` overrides the heading rule entirely; every table becomes `Report-1`, `Report-2`, … in document order regardless of headings. The prefix is sanitised once (steps 1–4), then `-N` suffix is applied. Dedup-step 8 is a no-op (prefix-mode names cannot collide unless N exceeds `-99`).
-  - **Resolution:** Locked as architect call; encoded in §3.2 `naming.py` description.
-
-- **Q3 — Diagnostics for the M3 retry overflow case.**
-  - **Proposal:** `InvalidSheetName` envelope `details: {original, retry_cap: 99, first_collisions: ["Foo", "Foo-2", ...]}` so the user can see what collided. Cap the `first_collisions` list at 10 entries for envelope size.
-  - **Resolution:** Locked here; Planner threads through F7 → F9 exception path.
+| Sub-task | What ships | Gate |
+|---|---|---|
+| **006-01a** — `docx_anchor.py` extraction + import refactor | `docx_anchor.py` with extracted + new helper functions (byte-identical move, no behavioural changes); `docx_add_comment.py` refactored to import from it. **No new test stubs in this sub-task** (arch-review MAJ-2 fix: G4 gate is evaluated on green helpers only — splitting from prior monolithic 006-01 to keep this sub-task all-green). | `docx_add_comment.py` E2E suite passes unchanged (G4). |
+| **006-01b** — Test scaffolding for `docx_replace` chain | `test_docx_anchor.py` stubs (failing); `test_docx_replace.py` stubs (failing); E2E `test_e2e.sh` docx-6 block stubs (failing); `tests/fixtures/` OOXML fixtures created. Skips are explicit `unittest.skip()` annotations so Stub-First Red-state is documented. | Existing docx tests still pass; new stubs are clearly skipped/failing. |
+| **006-02** — Test scaffolding green | `test_docx_anchor.py` ≥ 20 tests green for extracted helpers (regression lock for the extraction). | G4 + new helper unit-test coverage. |
+| **006-03** — Cross-cutting pre-flight | F1 functions in `docx_replace.py`: `_assert_distinct_paths`, `_read_stdin_capped`, `_tempdir`; cross-3/cross-7 wiring; `build_parser` skeleton; `main`/`_run` with pre-flight only (no action dispatch). Tests green for G1 cross-cutting. | Cross-3/4/5/7 E2E cases green. |
+| **006-04** — Part walker + `_do_replace` | F2 `_iter_searchable_parts`; F4 `_do_replace` (single-run replace, `--all`). Unit tests for replace action, cursor-loop, empty replacement, xml:space. | UC-1 E2E cases green. |
+| **006-05** — Insert-after action | F5 functions: `_materialise_md_source`, `_extract_insert_paragraphs` (with `<w:sectPr>` strip, numId warning, rel-target warning), `_do_insert_after`. Stdin `-` path. Unit + E2E tests. | UC-2 E2E cases green. |
+| **006-06** — Delete-paragraph action | F6 functions: `_do_delete_paragraph`, `_safe_remove_paragraph` (last-paragraph guard, empty-cell placeholder). Unit + E2E tests. | UC-3 E2E cases green. |
+| **006-07** — CLI wiring + post-validate + `--unpacked-dir` | F7 complete `_run` pipeline; F8 post-validate hook; `--unpacked-dir` library mode (UC-4, MVP=No — include only if LOC budget allows); R8.k output-extension preservation. Full exit-code matrix tests. | All unit tests green; G2 RTM coverage. |
+| **006-08** — Honest-scope regression locks | R10.a–R10.e tests: cross-run anchor → `AnchorNotFound`; rel-target warning; last-paragraph refusal; `--all --delete-paragraph` last-para guard; `<w:numId>` survival. | G3 honest-scope locks green. |
+| **006-09** — Docs + backlog + validator | `SKILL.md` docx row for `docx_replace.py`; `scripts/.AGENTS.md` docx-6 row; `office-skills-backlog.md` docx-6 → ✅ DONE; `validate_skill.py skills/docx` exit 0; **11 (actual count 12, see §9 NIT n1 reconciliation handoff)** `diff -q` checks silent — Planner reconciles the label in DoD checklist before merge. | G5 (validator), G6 (cross-skill), G7 (backlog), G8 (docs). |
 
 ---
 
-**End of ARCHITECTURE: xlsx-3 — `md_tables2xlsx.py` (DRAFT).**
+**End of ARCHITECTURE: docx-6 — `docx_replace.py` (✅ MERGED 2026-05-12 + VDD-Multi-hardened).**
