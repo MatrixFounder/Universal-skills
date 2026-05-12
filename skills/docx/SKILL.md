@@ -33,7 +33,7 @@ practical knowledge and make the common operations a single command.
 - Fill `.docx` templates containing `{{placeholder}}` or `{{nested.key}}` markers from a JSON payload with safe run-merging.
 - Accept all tracked changes in a `.docx` via headless LibreOffice without leaving artefacts in the user's profile.
 - Unpack and repack `.docx` archives for raw OOXML editing, with smart-quote entity round-tripping and run canonicalisation.
-- Structurally validate a `.docx`: relationships, content types, tracked-change/`<w:delText>` integrity, comment marker pairing, and optional XSD binding.
+- Structurally validate a `.docx`: relationships, content types, tracked-change/`<w:delText>` integrity, comment marker pairing, **package-layout allow-list** (every ZIP entry must live under `[Content_Types].xml`, `_rels/`, `word/`, `docProps/`, or `customXml/` per ECMA-376 §11.3.10 — catches scratch-file leaks that Word refuses to open while LibreOffice silently tolerates), and optional XSD binding. With `--strict`, the package-layout warning is promoted to exit 1.
 - Reject password-protected and legacy `.doc` (CFB-container) inputs early with a clear remediation message (exit 3) instead of a `BadZipFile` traceback.
 - Detect macro-enabled inputs (`.docm`, with `vbaProject.bin`) and warn when the chosen output extension would silently drop the macros (`docm` → `docx`).
 - Render any `.docx`/`.docm`/`.pdf` (or peer-skill `.xlsx`/`.pptx`) into a single PNG-grid preview via `preview.py` (LibreOffice + Poppler).

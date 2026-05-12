@@ -1604,6 +1604,57 @@ class TestLibraryMode(unittest.TestCase):
                 f"details['dir'] should contain the tree_root path, got: {exc.details}",
             )
 
+    def test_library_mode_insert_after_does_not_pollute_user_tree(self):
+        """2026-05-12 scratch-leak regression-lock for library mode.
+
+        `_run_library_mode` passes the user's `tree_root` and an internal
+        `_tempdir()` as two SEPARATE directories to `_dispatch_action`.
+        This is structurally correct (no alias), but a careless future
+        refactor could re-introduce the alias. Lock the invariant: after
+        a successful `--unpacked-dir` + `--insert-after` call, the
+        user's tree must contain NO scratch artefacts at the top level.
+        """
+        import argparse
+        examples_dir = self._get_examples_dir()
+        fixture = examples_dir / "docx_replace_body.docx"
+        if not fixture.is_file():
+            self.skipTest(f"Fixture not found: {fixture}")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            tree_root = Path(tmp)
+            from office.unpack import unpack as _unpack  # type: ignore
+            _unpack(fixture, tree_root)
+            # Snapshot top-level entries before the call.
+            before = {p.name for p in tree_root.iterdir()}
+
+            md_path = tree_root.parent / "lib_insert.md"
+            md_path.write_text("Library-mode insert.\n", encoding="utf-8")
+
+            args = argparse.Namespace(
+                unpacked_dir=str(tree_root),
+                input=None, output=None,
+                anchor="Article 5.",
+                replace=None,
+                insert_after=str(md_path),
+                delete_paragraph=False,
+                all=False,
+                json_errors=False,
+            )
+            rc = _run(args)
+            self.assertEqual(rc, 0, "Library-mode insert-after must succeed")
+
+            after = {p.name for p in tree_root.iterdir()}
+            new_entries = after - before
+            # The action mutates word/document.xml in place; no top-level
+            # entries should appear (insert.docx / insert_unpacked /
+            # stdin.md must land in the internal _tempdir(), not here).
+            self.assertEqual(
+                new_entries, set(),
+                f"Library mode polluted user tree: new top-level "
+                f"entries {new_entries} appeared. The tempdir alias bug "
+                "from zip-mode must not creep into library mode.",
+            )
+
 
 # ── TestHonestScopeLocks ──────────────────────────────────────────────────────
 
@@ -1967,6 +2018,67 @@ class TestHonestScopeLocks(unittest.TestCase):
                 doc_xml,
                 "<w:numId> must be present in output (not stripped)",
             )
+
+    # ── 2026-05-12 scratch-leak fix: ZIP must contain only OOXML parts ───────
+
+    @unittest.skipUnless(_DOCX_REPLACE_AVAILABLE, "docx_replace not yet importable")
+    def test_insert_after_zip_contains_only_ooxml_parts(self):
+        """2026-05-12 scratch-leak regression-lock: --insert-after must
+        not pack scratch artefacts into the final OOXML container.
+
+        Real-world reproducer: inserting an image via --insert-after on a
+        plain docx produced a package with `insert.docx` and
+        `insert_unpacked/` at the archive root. Microsoft Word refuses
+        to open such packages ("содержимое не удалось прочитать");
+        LibreOffice and `office.validate` both tolerated them silently.
+
+        Whitelist-based assertion: every ZIP entry MUST start with one of
+        the canonical OOXML package prefixes. Black-listing known scratch
+        filenames would silently miss any future scratch artefact whose
+        name happens to be different.
+        """
+        import zipfile
+        examples = self._examples_dir()
+        base_docx = examples / "docx_replace_body.docx"
+        if not base_docx.is_file():
+            self.skipTest(f"Base fixture not found: {base_docx}")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            t = Path(tmp)
+            md_path = t / "insert.md"
+            md_path.write_text("New paragraph.\n", encoding="utf-8")
+            out_docx = t / "result.docx"
+            rc = main([
+                str(base_docx), str(out_docx),
+                "--anchor", "Article 5.",
+                "--insert-after", str(md_path),
+            ])
+            self.assertEqual(rc, 0, f"Expected exit 0, got {rc}")
+            self.assertTrue(out_docx.exists(), "Output docx must be created")
+
+            # ECMA-376 §11.3.10: package members MUST live under the
+            # canonical part hierarchy. Top-level admits only
+            # `[Content_Types].xml` and the package-rels file
+            # `_rels/.rels`; all other parts MUST be under `_rels/`,
+            # `word/` (or peer `xl/`, `ppt/`), `docProps/`, or
+            # `customXml/`. Any other entry is a scratch leak.
+            allowed_prefixes = (
+                "[Content_Types].xml",
+                "_rels/",
+                "word/",
+                "docProps/",
+                "customXml/",
+            )
+            with zipfile.ZipFile(str(out_docx), "r") as zf:
+                names = zf.namelist()
+            for name in names:
+                self.assertTrue(
+                    any(name.startswith(p) for p in allowed_prefixes),
+                    f"Non-OOXML entry leaked into ZIP: {name!r}. "
+                    f"Allowed prefixes: {allowed_prefixes}. "
+                    "This breaks Word's open-time integrity check "
+                    "(2026-05-12 scratch-leak regression).",
+                )
 
     # ── Q-U1: tracked insertion matched, tracked deletion ignored ────────────
 

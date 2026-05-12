@@ -23,6 +23,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import zipfile
 from pathlib import Path
 
 if __package__ in (None, ""):
@@ -47,6 +48,39 @@ _VALIDATOR_BY_EXT = {
     ".xlsx": XlsxValidator,
     ".pptx": PptxValidator,
 }
+
+
+# 2026-05-12 scratch-leak follow-up: package members MUST live under the
+# canonical OOXML hierarchy (ECMA-376 §11.3.10). Any other entry is a
+# scratch artefact that some writers may emit by accident (real-world
+# repro: docx_replace.py --insert-after leaked `insert.docx` and
+# `insert_unpacked/` into the ZIP, which Microsoft Word refused to open
+# while LibreOffice silently tolerated). Whitelist per format:
+_ALLOWED_PREFIXES_BY_EXT = {
+    ".docx": ("[Content_Types].xml", "_rels/", "word/", "docProps/", "customXml/"),
+    ".xlsx": ("[Content_Types].xml", "_rels/", "xl/", "docProps/", "customXml/"),
+    ".pptx": ("[Content_Types].xml", "_rels/", "ppt/", "docProps/", "customXml/"),
+}
+
+
+def _check_package_structure(
+    path: Path, allowed_prefixes: tuple[str, ...],
+) -> list[str]:
+    """Return one warning per ZIP entry that is NOT under an allowed
+    OOXML prefix. Empty list means the package is structurally clean.
+
+    Failure modes are silenced: a non-ZIP / corrupt file is the per-format
+    validator's job to diagnose, not ours.
+    """
+    leaks: list[str] = []
+    try:
+        with zipfile.ZipFile(str(path), "r") as zf:
+            for name in zf.namelist():
+                if not any(name.startswith(p) for p in allowed_prefixes):
+                    leaks.append(name)
+    except (zipfile.BadZipFile, OSError):
+        return []
+    return leaks
 
 
 def _resolve_schemas_dir(cli_value: Path | None) -> Path | None:
@@ -102,6 +136,18 @@ def main(argv: list[str] | None = None) -> int:
     schemas_dir = _resolve_schemas_dir(args.schemas_dir)
     validator = cls(schemas_dir=schemas_dir, strict=args.strict)
     report: ValidationReport = validator.validate(args.input)
+
+    # 2026-05-12 scratch-leak follow-up: structural package check.
+    # Adds one warning per ZIP entry not under the canonical OOXML
+    # hierarchy. With --strict, warnings become errors (exit 1).
+    pkg_leaks = _check_package_structure(
+        args.input, _ALLOWED_PREFIXES_BY_EXT[ext],
+    )
+    for leak in pkg_leaks:
+        report.warnings.append(
+            f"non-OOXML package member: {leak!r} "
+            "(not under any allowed prefix; likely scratch-file leak)"
+        )
 
     if args.compare_to is not None:
         if ext != ".docx":

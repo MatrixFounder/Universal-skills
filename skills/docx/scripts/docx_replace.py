@@ -373,19 +373,35 @@ def _run(args: argparse.Namespace) -> int:
     # Step 5: cross-4 macro warning.
     warn_if_macros_will_be_dropped(input_path, output_path, sys.stderr)
     # Step 6: unpack → dispatch → pack → post-validate → atomic move.
-    with _tempdir() as tmpdir:
-        unpack(input_path, tmpdir)
-        tree_root = tmpdir
-        count, action_summary = _dispatch_action(args, tree_root, tmpdir, scripts_dir)
+    # 2026-05-12 scratch-leak fix: tree_root MUST be a dedicated
+    # sub-directory, not the tempdir root itself. Previously
+    # `tree_root = tmpdir` aliased both; `_dispatch_action` then wrote
+    # `tmpdir/insert.docx` and `tmpdir/insert_unpacked/` into the same
+    # directory that `pack()` walks. `pack()` archives every file under
+    # the tree root, so those scratch artefacts ended up INSIDE the
+    # final .docx ZIP. Microsoft Word's open-time check refuses
+    # packages with extra members ("не удалось прочитать");
+    # LibreOffice and our validator both tolerated them silently.
+    # Solution: scratch / { base/, work/, packed.docx }.
+    with _tempdir() as scratch:
+        base_dir = scratch / "base"
+        base_dir.mkdir()
+        unpack(input_path, base_dir)
+        tree_root = base_dir
+        work_dir = scratch / "work"
+        work_dir.mkdir()
+        count, action_summary = _dispatch_action(
+            args, tree_root, work_dir, scripts_dir,
+        )
         if count == 0:
             raise AnchorNotFound(
                 f"Anchor not found: {args.anchor!r}",
                 code=2, error_type="AnchorNotFound",
                 details={"anchor": args.anchor},
             )
-        # Step 7: pack to a tmp path inside tmpdir (not the final output)
-        # to close the unlink-race window between pack and post-validate.
-        tmp_out = tmpdir / "packed.docx"
+        # Step 7: pack to a tmp path OUTSIDE the base tree so the output
+        # path is never seen by pack()'s directory walk.
+        tmp_out = scratch / "packed.docx"
         pack(tree_root, tmp_out)
         # Step 8: opt-in post-validate (operates on tmp file).
         if _post_validate_enabled():

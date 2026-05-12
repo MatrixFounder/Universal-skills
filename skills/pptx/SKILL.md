@@ -29,7 +29,7 @@ removes that variance.
 - Produce a labelled thumbnail grid (JPEG) for rapid visual QA of all slides at once.
 - Drop orphan slides / media / charts / themes after manual editing or template substitution (`pptx_clean.py`, BFS over the `.rels` graph; `--dry-run` previews without writing).
 - Unpack, patch, and repack raw OOXML for changes not covered by high-level APIs (theme swaps, master edits, custom XML parts).
-- Structurally validate a `.pptx` (relationships, content types, required parts) via the shared `office/` module.
+- Structurally validate a `.pptx` (relationships, content types, required parts, **package-layout allow-list** — every ZIP entry must live under `[Content_Types].xml`, `_rels/`, `ppt/`, `docProps/`, or `customXml/` per ECMA-376 §11.3.10; catches scratch-file leaks that PowerPoint refuses to open. With `--strict`, the package-layout warning is promoted to exit 1) via the shared `office/` module.
 - Reject password-protected and legacy `.ppt` (CFB-container) inputs early with a clear remediation message (exit 3) instead of a `BadZipFile` traceback.
 - Detect macro-enabled inputs (`.pptm`, with `ppt/vbaProject.bin`) and warn when the chosen output extension would silently drop the macros (`pptm` → `pptx`).
 - Render any `.pptx`/`.pptm`/`.pdf` (or peer-skill `.docx`/`.xlsx`) into a single PNG-grid preview via `preview.py` (LibreOffice + Poppler).

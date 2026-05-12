@@ -416,6 +416,18 @@ invoke `office/validate.py` on the output file as a subprocess. On
 validation failure, unlink the output and raise `PostValidateFailed`
 (exit 7). Matches the xlsx-2 / xlsx-6 `POST_VALIDATE` precedent.
 
+**Package-layout check (2026-05-12 hotfix):** `office/validate.py`
+runs an additional structural pass against the ZIP `namelist()`. Every
+entry must start with one of the per-extension allow-list prefixes
+(`[Content_Types].xml`, `_rels/`, `word/`/`xl/`/`ppt/`, `docProps/`,
+`customXml/` — see ECMA-376 §11.3.10). Non-canonical entries surface
+as `WARN: non-OOXML package member: …`; with `--strict`, the warning
+is promoted to exit 1. This catches scratch-file leaks that
+Microsoft Word silently refuses to open while LibreOffice tolerates
+them — the F7 orchestrator's `scratch/{base,work,packed.docx}` split
+prevents the leak at write-time; this check is the read-time
+backstop.
+
 **Functions (in `docx_replace.py`):**
 - `_post_validate_enabled() -> bool`
   - Reads `os.environ.get("DOCX_REPLACE_POST_VALIDATE", "")`;

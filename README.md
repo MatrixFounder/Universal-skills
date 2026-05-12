@@ -221,6 +221,14 @@ strict replication protocol in
   support: bytes survive through unpack/pack, but Office apps respect the
   content-type, so renaming an output to a non-macro extension is treated
   as data loss.
+- `office/validate.py` package-layout allow-list (2026-05-12) — every
+  ZIP entry must live under the canonical OOXML prefix set
+  (`[Content_Types].xml`, `_rels/`, `word/`/`xl/`/`ppt/`, `docProps/`,
+  `customXml/` per ECMA-376 §11.3.10). Non-canonical entries surface
+  as warnings; with `--strict`, they fail validation (exit 1). Catches
+  scratch-file leaks (e.g. temp files accidentally packed into the
+  container) that Microsoft Word silently refuses to open while
+  LibreOffice tolerates.
 
 **Cross-skill helpers** (byte-identical at `scripts/` level across all
 four office skills, including pdf):
