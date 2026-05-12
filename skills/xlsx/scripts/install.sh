@@ -68,6 +68,17 @@ fi
 say "Installing Python requirements into scripts/.venv/ ..."
 ./.venv/bin/pip install --quiet -r requirements.txt
 
+# xlsx-10.A closed-API gate (D5): banned-api lint via ruff.
+# Fail-loud if any tracked code imports xlsx_read._* directly.
+if [ -x ".venv/bin/ruff" ]; then
+    say "Running ruff banned-api lint (xlsx_read closed-API gate)..."
+    if ! ./.venv/bin/ruff check . ; then
+        die "ruff banned-api lint failed — see violations above (xlsx-10.A D5)."
+    fi
+else
+    warn "ruff not found in venv; closed-API lint skipped (expected after first install)."
+fi
+
 echo ""
 if [ "$missing_host" -eq 0 ]; then
     say "All dependencies installed and verified."

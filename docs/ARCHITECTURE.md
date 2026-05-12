@@ -1,8 +1,16 @@
 # ARCHITECTURE: xlsx-10.A — `xlsx_read/` common read-only reader library
 
-> **Status:** DRAFT v1 (pre-review). Prior `docs/ARCHITECTURE.md`
-> (docx-6 `docx_replace.py` + §12 docx-008 relocators) is archived
-> verbatim at
+> **Status:** ✅ **MERGED 2026-05-12** (8 atomic sub-tasks + 3-iteration
+> VDD-multi adversarial cycle). Body below preserves the design-time
+> specification verbatim; the post-merge implementation differs in a
+> small number of documented ways (`keep_formulas` flag, dimension-
+> bbox cap, overlap-check memoization, iter_rows streaming, sanitised
+> number-format heuristic, banner+sublabels header detection, etc.)
+> — see **§13 Post-merge adaptations** at the foot of this document
+> for the full delta.
+>
+> Prior `docs/ARCHITECTURE.md` (docx-6 `docx_replace.py` + §12 docx-008
+> relocators) is archived verbatim at
 > [`docs/architectures/architecture-006-docx-replace.md`](architectures/architecture-006-docx-replace.md).
 >
 > **Template:** `architecture-format-core` with selectively extended
@@ -937,3 +945,258 @@ chain is the Planner's responsibility; this list is a hint:
   divergences will be enumerated in `_values.py` module docstring
   during implementation. If a divergence is later determined to be a
   **bug** in xlsx-7, that's an xlsx-7 ticket, not this one.
+
+---
+
+## 13. Post-merge adaptations
+
+This section documents implementation choices that **deviate from**
+or **extend** the design above. Each is a deliberate trade-off
+captured during the 8-sub-task implementation + 3-iteration VDD-multi
+adversarial cycle. Where a deviation has a `[D-Ax]` ancestor, the
+design lock is re-cited.
+
+### 13.1. `open_workbook` — `keep_formulas` flag (replaces D-A1 single-mode promise)
+
+**Discovered in 009-07.** openpyxl cannot expose **both** formula
+strings AND cached values from a single load — `data_only=True` drops
+formula strings and exposes cached `<v>`; `data_only=False` keeps
+formula strings and discards cached values. The original §5.1
+signature implied callers could toggle via `include_formulas` at
+`read_table` time alone — empirically impossible.
+
+**Resolution:** new kwarg `keep_formulas: bool = False` on
+`open_workbook`. Default false ⇒ openpyxl `data_only=True` ⇒ cached
+values surfaced (matches the xlsx-8 / xlsx-9 emit case). `keep_formulas
+=True` ⇒ `data_only=False` ⇒ formula strings surfaced; `include_formulas`
+becomes meaningful, but cached values are then inaccessible. Documented
+in `_workbook.open_workbook` docstring and `__init__.py` honest-scope
+catalogue.
+
+### 13.2. `_workbook` — basename-only error/warning messages (S-M2 fix)
+
+**Discovered in vdd-multi iter-2 security critique.** Original §5.3
+error messages echoed the **resolved absolute path** (e.g.
+`f"Workbook is encrypted: {resolved}"`). Information-leak vector in
+shared logs / multi-tenant CI.
+
+**Resolution:** `EncryptedWorkbookError` and `MacroEnabledWarning`
+messages now use `path.name` / `resolved.name` (basename only). Full
+path remains in scope for the caller via the original `path` argument.
+
+### 13.3. `_workbook._probe_macros` — suffix-gated (P-H3 fix)
+
+**Discovered in vdd-multi iter-2 performance critique.** OOXML
+macros are **structurally impossible** in a `.xlsx` container — only
+`.xlsm` / `.xltm` can legally carry `xl/vbaProject.bin`. The original
+F1 pipeline ran `_probe_macros` (a third ZIP open) on every input.
+
+**Resolution:** `_probe_macros` is now gated by
+`resolved.suffix.lower() in (".xlsm", ".xltm")`. `.xlsx` files drop
+from 3 ZIP opens (encryption + macros + openpyxl) to 2.
+
+### 13.4. `_tables._gap_detect` — `_GAP_DETECT_MAX_CELLS = 1_000_000` cap (P-C1 fix)
+
+**Discovered in vdd-multi iter-1 performance critique** (also tagged
+as a security DoS handoff). A malformed `<dimension ref="A1:XFD1048576"/>`
+would force the original §2.1 F4 occupancy-grid allocation to ~137 GB.
+
+**Resolution:** new module-level constant `_GAP_DETECT_MAX_CELLS =
+1_000_000`. `_gap_detect` resolves the bbox via a new helper
+`_resolve_dim_bbox(ws)` (parses `ws.dimensions` with
+`openpyxl.utils.cell.range_boundaries`, falls back to
+`(max_row, max_column)`) and raises `ValueError` when
+`n_rows × n_cols > _GAP_DETECT_MAX_CELLS`. Callers facing genuinely
+large sheets must pass `mode="whole"` or `mode="tables-only"`.
+
+### 13.5. `_tables._gap_detect` + `_types.read_table` — `iter_rows` streaming (P-C2 fix)
+
+**Discovered in vdd-multi iter-1 (perf CRITICAL).** The original §2.1
+F4 / F7 pseudocode used `ws.cell(row=r, column=c)` in nested loops.
+In openpyxl `read_only=True` mode this is O(rows²) — each call
+re-walks the sheet XML stream from the beginning. The 10 MiB
+auto-`read_only=True` threshold guaranteed every large workbook hit
+this anti-pattern, breaking the 3 s / 10K × 20 read_table budget.
+
+**Resolution:** both call sites now use
+`ws.iter_rows(min_row, max_row, min_col, max_col, values_only=…)`
+with `values_only=True` for gap-detect (occupancy is bool-only) and
+`values_only=False` for `read_table` (full cell objects needed for
+`number_format` / `hyperlink`). Includes padding for sparse-row
+streaming-mode skips.
+
+### 13.6. `_types.WorkbookReader._overlap_checked` — per-sheet memo (P-H1 / S-L3 / NEW-S-M1)
+
+**Two-stage evolution:**
+
+- **iter-1 (perf H1, sec L3):** O(n²) overlap check ran on every
+  `read_table` call against the whole sheet's merges — wasted O(n²)
+  per region.
+- **iter-2 fix:** added `_overlap_checked: set[str]` on
+  `WorkbookReader` (per-sheet memo). First call on a sheet performed
+  the check on a **region-filtered** subset; subsequent calls
+  skipped. Cleared on `close()`.
+- **iter-3 fix (NEW-S-M1):** the iter-2 region-filter broke the
+  fail-loud contract — region A's clean call would memoize the
+  sheet, then region B's read with overlapping merges in B silently
+  skipped the check. Dropped the region filter; the cold-pass now
+  runs against `list(ws.merged_cells.ranges)` (full sheet). Soundness
+  restored; perf win preserved (one O(n²) pass per sheet per reader
+  lifetime). Regression pinned by
+  `test_merges.py::TestOverlapMemoSoundnessAcrossRegions`.
+
+### 13.7. `_values._apply_number_format` — quoted-literal + escape + section-split sanitisation (L-H3 / L-M5 fix)
+
+**Discovered in vdd-multi iter-1 logic critique.** Original §2.1 F6
+regex pipeline ran `re.sub(r"\[[^\]]*\]", ...)` then matched on the
+result. A number-format like `"Day"` (literal-text containing the
+date placeholder `d`) routed a numeric ID cell through the date
+pipeline, producing fake ISO date strings.
+
+**Resolution:** four-stage strip pipeline in
+`_apply_number_format`:
+
+```python
+stripped = re.sub(r'"[^"]*"', "", number_format)   # quoted literals
+stripped = re.sub(r"\\.", "", stripped)             # \X-escaped chars
+stripped = re.sub(r"\[[^\]]*\]", "", stripped)      # locale/colour brackets
+stripped = stripped.split(";", 1)[0].strip()        # positive section only
+```
+
+The `;`-split addresses L-M5 (positive/negative section formats like
+`"#,##0_);(#,##0)"` now correctly classify on the positive section).
+
+### 13.8. `_values._apply_number_format` — 256-char defensive cap (S-L4 fix)
+
+**Discovered in vdd-multi iter-2 security critique.** OOXML imposes
+no `number_format` length cap. A malicious workbook with a
+multi-megabyte format string would force `re.sub` + four `re.match`
+calls per cell to scan the full string. Per cell, in a 10K × 20
+region.
+
+**Resolution:** `if len(number_format) > 256: number_format = "General"`
+at the top of `_apply_number_format`. Real-world Excel number formats
+are < 64 chars; 256 gives 4× headroom. Acts as defence-in-depth
+against future ReDoS posture drift (S-M1 accepted-risk item).
+
+### 13.9. `_values._apply_datetime_format("excel-serial")` — `timedelta(days=float(value))` (L-H2 fix)
+
+**Discovered in vdd-multi iter-1 logic critique.** Original §2.1 F6
+pseudocode used `_EXCEL_EPOCH.fromordinal(_EXCEL_EPOCH.toordinal() +
+int(value))` — `int(value)` silently truncates the fractional part
+that encodes time-of-day in Excel's serial format. Datetime cells
+with hour:minute components emitted as midnight.
+
+**Resolution:** `dt = _EXCEL_EPOCH + timedelta(days=float(value))`.
+Preserves sub-day precision. `timedelta` is now imported alongside
+`datetime` and `date`.
+
+### 13.10. `_headers.detect_header_band` — banner+sublabels heuristic (L-H1 + design refactor)
+
+**Two findings stacked:**
+
+- **Original §2.1 F5 pseudocode** marked rows containing any column-
+  spanning merge as "header rows". For a workbook with merges on
+  row 1 only (the natural Excel banner pattern), the heuristic
+  returned `header_rows=1`, missing the row 2 sub-labels.
+- **vdd-multi iter-1 L-H1:** the original filter `merge.max_row <
+  region.top_row or merge.min_row > region.bottom_row` admitted
+  merges whose anchor sits **above** the region's first row — a
+  phantom header row inherited from an enclosing super-region.
+
+**Resolution:** new heuristic — *"a column-spanning merge on row K
+implies rows K and K+1 are both header (banner + sublabels
+pattern)"*. Implementation tracks the maximum `merge.max_row` of any
+column-spanning merge **anchored** in the region's top rows
+(`merge.min_row >= region.top_row`); header band runs from
+`region.top_row` through `max_merge_row + 1`, clamped to
+`region.bottom_row`. Default single-row header when no merges found.
+
+### 13.11. `_headers.flatten_headers` — sticky-fill-left + consecutive-repeat dedup
+
+**Design refinement** — original §2.1 F5 left the flatten algorithm
+unspecified. Implementation chose:
+
+- **Sticky-fill-left:** the leftmost non-empty value in each header
+  row propagates rightward through empty cells (Excel's natural
+  anchor-only post-merge pattern).
+- **Consecutive-repeat dedup:** `["X", "X"]` flattens to `"X"`, not
+  `"X › X"` — when a single-cell label gets sticky-filled into both
+  levels, dedup avoids the redundant join.
+
+### 13.12. `_tables._named_ranges_for_sheet` — disambiguation suffix for multi-destination names (L-M3 fix)
+
+**Discovered in vdd-multi iter-1 logic critique.** A defined name
+with comma-separated destinations targeting the same sheet (e.g.
+`Sheet1!A1:B5,Sheet1!D1:E5`) emitted two `TableRegion`s sharing the
+same `name`, causing collisions in downstream dict-keyed consumers.
+
+**Resolution:** track `dest_count` per name in two passes. Single-
+dest names keep their bare form; multi-dest names get `#1`, `#2`, …
+suffixes in iteration order (deterministic across re-reads).
+
+### 13.13. `_merges.apply_merge_policy` — empty-merges short-circuit (P-M1 fix + iter-3 purity hardening)
+
+**Two-stage evolution:**
+
+- **iter-1 P-M1:** original §2.1 F3 always deep-copied the row-grid,
+  wasted ~50–100 ms on the common no-merges case. Added empty-merges
+  short-circuit.
+- **iter-3 L-N1 / L-perf-iter2-1:** the iter-2 short-circuit aliased
+  full-width input rows (`row if len(row) == n_cols else …`),
+  technically violating the purity contract. Hardened to always
+  `list(row)` even on the fast path.
+
+Final form:
+```python
+if not merges:
+    return [list(row) + [None] * (n_cols - len(row)) for row in rows]
+```
+
+### 13.14. Honest-scope addendum in `__init__.py` (delegated to callers)
+
+Five items deliberately delegated to the caller via the public
+module docstring (consistent with this library's "API not
+application" posture):
+
+1. **Path allowlisting** — `open_workbook` follows symlinks via
+   `Path.resolve(strict=True)`; callers exposing this API to
+   untrusted paths must allowlist before passing.
+2. **Zip-bomb defense** — caller is responsible for RLIMIT_AS /
+   container-memory constraints on input archives.
+3. **Downstream sanitisation** — cell values are verbatim;
+   LLM/shell/SQL escaping is the caller's boundary.
+4. **`_GAP_DETECT_MAX_CELLS` cap** — caller passes `mode="whole"`
+   or `mode="tables-only"` for genuinely large sheets.
+5. **Excel 1900 leap-year bug NOT compensated** — `excel-serial`
+   output is true day-count from `1899-12-30`; serials 1–59 (legacy
+   Jan/Feb 1900) are off by one day vs Excel's display.
+
+### 13.15. M8 design-question — empirically resolved (D-A8 followup)
+
+The `_workbook.py` M8 spike test (TC-SPIKE-01 in `test_workbook.py`)
+empirically confirmed:
+
+> **openpyxl 3.1.5 silently accepts overlapping `<mergeCells>`
+> ranges** — `ws.merged_cells.ranges` exposes both ranges; no
+> exception is raised.
+
+Locked behaviour as of 2026-05-12. Consequence for `_merges`:
+`_overlapping_merges_check` performs explicit pairwise box-
+intersection regardless of openpyxl's surface behaviour — implementation
+satisfies D4 unconditionally.
+
+### 13.16. Adaptations explicitly NOT made (accepted-risk items)
+
+- **S-M1 (ReDoS posture drift):** migration to `regex` + `timeout=`
+  deferred; library relies on linear-pattern discipline (the 256-
+  char cap from §13.8 acts as defence-in-depth).
+- **P-H2 (single-helper ZIP-open consolidation):** after §13.3 only
+  `.xlsm` opens twice; marginal value.
+- **L-M4 (`flatten_headers` header/body width mismatch):** caller-
+  mitigable via dict-zip guard.
+- **L-N2 (named-range suffix gap after `_has_overlap` filter):**
+  cosmetic UX nit.
+- **`WorkbookReader.__del__`:** deferred; tests use `with` blocks
+  or explicit `close()`.
+- **Workbook pooling:** explicitly out of v1 scope (HS-3).

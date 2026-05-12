@@ -1,0 +1,68 @@
+# Per-skill toolchain config for the xlsx skill (CLAUDE.md §1 — per-skill
+# isolation). This file is consumed ONLY by `ruff` at install / pre-commit
+# time. It is NOT a packaging manifest — the skill is not distributed as a
+# wheel.
+#
+# Introduced by task 009-01 (xlsx-10.A foundation library) to host the
+# `flake8-tidy-imports.banned-api` block that enforces the closed-API
+# contract of `skills/xlsx/scripts/xlsx_read/` (D5 / R2-M2 + R3-M1 fix).
+# Static-lint enforcement is the chosen mechanism; runtime enforcement
+# (HS-5) was deliberately rejected.
+
+[tool.ruff]
+target-version = "py310"
+line-length = 100
+extend-exclude = [
+    ".venv",
+    # Pre-xlsx-10.A code is out of scope for this lint gate. Each of those
+    # CLIs / packages has its own merge battery and style baseline; the
+    # closed-API banned-api rule only targets `xlsx_read/`. Including them
+    # here would be drive-by refactoring (developer-guidelines §1).
+    "office",          # cross-skill replicated copy from docx; do not lint here
+    "xlsx_check_rules",  # xlsx-7 package
+    "xlsx_comment",      # xlsx-6 package
+    "json2xlsx",         # xlsx-2 package
+    "md_tables2xlsx",    # xlsx-3 package
+    "tests",             # legacy test tree (pre-xlsx-10.A)
+    # Pre-xlsx-10.A shim scripts at scripts/ root — same rationale as above.
+    "csv2xlsx.py",
+    "json2xlsx.py",
+    "md_tables2xlsx.py",
+    "office_passwd.py",
+    "preview.py",
+    "xlsx_add_chart.py",
+    "xlsx_add_comment.py",
+    "xlsx_check_rules.py",
+    "xlsx_recalc.py",
+    "xlsx_validate.py",
+    "_errors.py",
+    "_soffice.py",
+]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "TID"]
+ignore = [
+    "E501",  # line length handled by `line-length` only; long-string literals allowed
+]
+
+# The banned-api rule below is intended to gate **external** imports of
+# `xlsx_read._*` private modules. The package itself legitimately imports
+# its own privates via sibling-relative form (`from ._merges import ...`)
+# and the test suite inside `xlsx_read/tests/` does the same to assert the
+# stub sentinel returns. Both resolve to the absolute name `xlsx_read._*`
+# which the banned-api rule would otherwise flag — so we whitelist the
+# package itself here. Lint elsewhere in `scripts/` still fails on a leaky
+# import (the live regression test TC-UNIT-05 places its probe **outside**
+# the whitelisted tree to verify the gate is still hot).
+[tool.ruff.lint.per-file-ignores]
+"xlsx_read/**/*.py" = ["TID251"]
+
+[tool.ruff.lint.flake8-tidy-imports.banned-api]
+"xlsx_read._workbook".msg   = "Import via the xlsx_read public surface; private modules are closed (D5)."
+"xlsx_read._sheets".msg     = "Import via the xlsx_read public surface; private modules are closed (D5)."
+"xlsx_read._merges".msg     = "Import via the xlsx_read public surface; private modules are closed (D5)."
+"xlsx_read._tables".msg     = "Import via the xlsx_read public surface; private modules are closed (D5)."
+"xlsx_read._headers".msg    = "Import via the xlsx_read public surface; private modules are closed (D5)."
+"xlsx_read._values".msg     = "Import via the xlsx_read public surface; private modules are closed (D5)."
+"xlsx_read._types".msg      = "Import via the xlsx_read public surface; private modules are closed (D5)."
+"xlsx_read._exceptions".msg = "Import via the xlsx_read public surface; private modules are closed (D5)."

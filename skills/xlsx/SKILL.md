@@ -255,3 +255,7 @@ comments as Excel-365 threaded comments instead of legacy bubbles, add
 - [scripts/_errors.py](scripts/_errors.py) — `--json-errors` envelope helper (schema `v=1`).
 - [scripts/_soffice.py](scripts/_soffice.py) — LibreOffice subprocess wrapper.
 - [scripts/office/](scripts/office/) — OOXML unpack/pack/validate, byte-identical copy from the docx skill (master — see CLAUDE.md §2). Includes deep `XlsxValidator` (sheet chain, sst+styles index bounds, sheet-name uniqueness, orphan parts).
+
+## 13. Known Limitations & Deferred Refactors
+
+- **`xlsx_read/` ↔ `xlsx_check_rules/` reader duplication** (xlsx-10.A, 2026-05-12). The xlsx-10.A foundation library (`scripts/xlsx_read/`) re-implements a portion of the reader logic also present in xlsx-7's `xlsx_check_rules/` package (merge resolution, header detection, value extraction). This is **intentional v1 scope** to unblock xlsx-8 and xlsx-9 without re-validating xlsx-7's 311-unit / 113-E2E regression battery. The follow-up refactor (xlsx-7 consumes `xlsx_read/`) is tracked as **xlsx-10.B** in [docs/office-skills-backlog.md](../../docs/office-skills-backlog.md). The xlsx-9 owner opens xlsx-10.B within 14 calendar days post-xlsx-9 merge; if missed, the duplication is promoted to permanent technical debt and this bullet is updated accordingly.

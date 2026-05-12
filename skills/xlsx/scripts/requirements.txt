@@ -8,3 +8,5 @@ msoffcrypto-tool>=5.4.0
 regex>=2024.0
 python-dateutil>=2.8.0
 ruamel.yaml>=0.18.0
+# xlsx-10.A (xlsx_read library) toolchain: closed-API banned-api lint.
+ruff>=0.5.0
