@@ -119,7 +119,7 @@ OOXML tree in deterministic order, parse each to an `lxml.etree`
 element tree, and yield `(part_path, root_element)` pairs.
 
 **Functions:**
-- `_iter_searchable_parts(tree_root: Path) -> Iterator[tuple[Path, etree._Element]]`
+- `_iter_searchable_parts(tree_root: Path, scope: set[str] | None = None) -> Iterator[tuple[Path, etree._Element]]`
   - **Enumeration source (arch-review MIN-3 clarification):** authoritative
     list = `[Content_Types].xml` `<Override PartName="...">` entries
     whose content-type indicates a WordprocessingML part
@@ -137,7 +137,16 @@ element tree, and yield `(part_path, root_element)` pairs.
     silently skipped (corrupt-package tolerance).
   - Yield order = document → headers → footers → footnotes → endnotes
     (TASK §11.1 deterministic ordering, R5.g).
-  - Input: `tree_root` — directory produced by `office.unpack`.
+  - **`scope` parameter (docx-6.7, post-merge addition):** `None`
+    (default) = all roles yielded — back-compat with pre-6.7 callers.
+    A `set` subset of `{"document", "header", "footer", "footnotes",
+    "endnotes"}` drops roles not in the set BEFORE the yield loop,
+    AFTER the parts_by_role dict is populated and sorted — preserves
+    R5.g order within the requested subset. Parsed from `--scope=LIST`
+    CLI flag via `_parse_scope` helper in `docx_replace.py`; validated
+    early in `_run` (before unpack) to fail fast on bad values.
+  - Input: `tree_root` — directory produced by `office.unpack`;
+    optional `scope` — role subset.
   - Output: lazy iterator of `(path, etree_root)` pairs.
   - Related Use Cases: UC-1 step 4, UC-2 step 5, UC-3 step 3.
 
@@ -1132,7 +1141,7 @@ layer choices the Planner and Developer must NOT widen in v1:
 
 - **A1 — No `--allow-empty-body` escape hatch.** The `LastParagraphCannotBeDeleted` guard is unconditional in v1.
 - **A2 — No relationship relocation.** `--insert-after` embeds `<w:p>` clones only; `word/media/`, relationship parts, and `numId` definitions from the MD-source are not copied.
-- **A3 — No scope filter (`--scope=body|all`).** Part walk order is fixed (§11.1); user cannot restrict to body-only in v1.
+- **A3 — ~~No scope filter~~ Scope filter SHIPPED in docx-6.7 (task-007 [LIGHT], 2026-05-12).** Part walk **order** is still fixed (§11.1; document → headers → footers → footnotes → endnotes), but the user can now restrict the **set** of walked parts via `--scope=body|headers|footers|footnotes|endnotes|all` (default `all` = back-compat). See F2 `_iter_searchable_parts(tree_root, scope=...)` signature above. v1 honest-scope item closed.
 - **A4 — TOCTOU symlink race between `Path.resolve()` and file open.** Accepted; mirrors xlsx-2/xlsx-3 ARCH §10 precedent.
 - **A5 — `--unpacked-dir` library mode (UC-4) is MVP=No.** As flagged in TASK §2.4 scope note and RTM R8.g. Planner may defer UC-4 to a follow-up sub-task entirely; it is NOT gating for exit-0.
 
