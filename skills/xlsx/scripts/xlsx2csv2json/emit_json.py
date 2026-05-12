@@ -70,6 +70,7 @@ def emit_json(
     header_flatten_style: str,
     include_hyperlinks: bool,
     datetime_format: str,  # noqa: ARG001  -- reserved for future shape switches
+    drop_empty_rows: bool = False,
 ) -> int:
     """Materialise payloads into JSON and write to ``output`` or stdout.
 
@@ -82,6 +83,7 @@ def emit_json(
         tables_mode=tables_mode,
         header_flatten_style=header_flatten_style,
         include_hyperlinks=include_hyperlinks,
+        drop_empty_rows=drop_empty_rows,
     )
 
     text = json.dumps(
@@ -104,6 +106,7 @@ def _shape_for_payloads(
     tables_mode: str,
     header_flatten_style: str,
     include_hyperlinks: bool,
+    drop_empty_rows: bool = False,
 ) -> Any:
     """Pure function — build the JSON shape from payloads.
 
@@ -128,12 +131,12 @@ def _shape_for_payloads(
         if is_multi_region[only_sheet]:
             # Rule 4: single-sheet, multi-region → flat {Name: [...]}.
             return {
-                _region_key(r): _rows_to_dicts(td, hl, header_flatten_style, include_hyperlinks)
+                _region_key(r): _rows_to_dicts(td, hl, header_flatten_style, include_hyperlinks, drop_empty_rows)
                 for r, td, hl in regions
             }
         # Rule 1: single-sheet, single-region → flat array.
         r, td, hl = regions[0]
-        return _rows_to_dicts(td, hl, header_flatten_style, include_hyperlinks)
+        return _rows_to_dicts(td, hl, header_flatten_style, include_hyperlinks, drop_empty_rows)
 
     # Multi-sheet — Rule 2 or Rule 3 (mixed per sheet).
     out: dict[str, Any] = {}
@@ -143,7 +146,7 @@ def _shape_for_payloads(
             out[sheet_name] = {
                 "tables": {
                     _region_key(r): _rows_to_dicts(
-                        td, hl, header_flatten_style, include_hyperlinks
+                        td, hl, header_flatten_style, include_hyperlinks, drop_empty_rows
                     )
                     for r, td, hl in regions
                 }
@@ -152,7 +155,7 @@ def _shape_for_payloads(
             # Rule 2 per-sheet: flat [...]
             r, td, hl = regions[0]
             out[sheet_name] = _rows_to_dicts(
-                td, hl, header_flatten_style, include_hyperlinks
+                td, hl, header_flatten_style, include_hyperlinks, drop_empty_rows
             )
     return out
 
@@ -171,6 +174,7 @@ def _rows_to_dicts(
     hl_map: dict[tuple[int, int], str] | None,
     header_flatten_style: str,
     include_hyperlinks: bool,
+    drop_empty_rows: bool = False,
 ) -> list[Any]:
     """Convert ``TableData`` rows to a list of dicts (or list of {key,value}
     pairs in ``"array"`` style).
@@ -195,10 +199,12 @@ def _rows_to_dicts(
 
     if header_flatten_style == "array":
         return _rows_to_array_style(
-            headers, rows, hl_map, header_band, include_hyperlinks
+            headers, rows, hl_map, header_band, include_hyperlinks,
+            drop_empty_rows=drop_empty_rows,
         )
     return _rows_to_string_style(
-        headers, rows, hl_map, header_band, include_hyperlinks
+        headers, rows, hl_map, header_band, include_hyperlinks,
+        drop_empty_rows=drop_empty_rows,
     )
 
 
@@ -208,12 +214,27 @@ def _rows_to_string_style(
     hl_map: dict[tuple[int, int], str] | None,
     header_band: int,
     include_hyperlinks: bool,
+    *,
+    drop_empty_rows: bool = False,
 ) -> list[dict[str, Any]]:
-    """Default JSON shape: ``[{header: value, ...}, ...]``."""
+    """Default JSON shape: ``[{header: value, ...}, ...]``.
+
+    **vdd-adversarial follow-up (R27):** when two or more headers
+    collide (e.g. a wide title merge sticky-fills the same value
+    across N columns of a layout-heavy report), naive
+    ``d[header] = value`` silently overwrites earlier columns —
+    JSON dict-of-row data loss. On the masterdata fixture this
+    dropped 5 of 7 columns per Timesheet row. The fix disambiguates
+    duplicate headers by appending ``__2``, ``__3``, ... to the 2nd-
+    and-later occurrences (mirrors the M2 vdd-multi precedent set
+    by ``_emit_multi_region`` for colliding per-region file paths).
+    """
+    dedup_headers = _disambiguate_duplicate_headers(headers)
+
     out: list[dict[str, Any]] = []
     for r_idx, row in enumerate(rows):
         d: dict[str, Any] = {}
-        for c_idx, header in enumerate(headers):
+        for c_idx, header in enumerate(dedup_headers):
             value = row[c_idx] if c_idx < len(row) else None
             if include_hyperlinks and hl_map is not None:
                 # Position in the region is (header_band + r_idx, c_idx).
@@ -222,7 +243,47 @@ def _rows_to_string_style(
                     d[header] = {"value": value, "href": href}
                     continue
             d[header] = value
+        # **TASK 010 §11.7 R28 fix:** drop rows where every value is
+        # None/"" — layout-heavy reports (gap rows, trailing empties
+        # left by Excel) produce noisy mostly-null dict blobs by
+        # default. Conservative: a row with even one non-null cell
+        # is kept. Hyperlink-wrapper dicts (`{"value": V, "href":...}`)
+        # count as non-empty (the href payload is real content).
+        if drop_empty_rows and _is_dict_row_empty(d):
+            continue
         out.append(d)
+    return out
+
+
+def _is_dict_row_empty(d: dict[str, Any]) -> bool:
+    """A row-dict is "empty" iff every value is None or empty string.
+
+    Hyperlink-wrapper cells (`{"value": V, "href": ...}`) are treated
+    as non-empty because the `href` payload is real content even
+    when `value` is None / "".
+    """
+    for v in d.values():
+        if isinstance(v, dict) and "href" in v:
+            return False
+        if v not in (None, ""):
+            return False
+    return True
+
+
+def _disambiguate_duplicate_headers(headers: list[str]) -> list[str]:
+    """Append ``__2``, ``__3``, ... to repeated entries in ``headers``.
+
+    First occurrence keeps its bare name; subsequent occurrences get
+    a numeric suffix. Cost: O(n_cols) once per region. Caller is
+    responsible for using the returned list for ALL row-build passes
+    so the suffix scheme is consistent across the emitted dataset.
+    """
+    seen: dict[str, int] = {}
+    out: list[str] = []
+    for h in headers:
+        count = seen.get(h, 0) + 1
+        seen[h] = count
+        out.append(h if count == 1 else f"{h}__{count}")
     return out
 
 
@@ -232,6 +293,8 @@ def _rows_to_array_style(
     hl_map: dict[tuple[int, int], str] | None,
     header_band: int,
     include_hyperlinks: bool,
+    *,
+    drop_empty_rows: bool = False,
 ) -> list[list[dict[str, Any]]]:
     """Array-style: ``[ [ {"key": [parts...], "value": v}, ... ], ... ]``.
 
@@ -250,5 +313,22 @@ def _rows_to_array_style(
                 if href is not None:
                     cell["value"] = {"value": value, "href": href}
             cells.append(cell)
+        if drop_empty_rows and _is_array_row_empty(cells):
+            continue
         out.append(cells)
     return out
+
+
+def _is_array_row_empty(cells: list[dict[str, Any]]) -> bool:
+    """Array-style row is empty iff every cell's `value` is None/"".
+
+    Hyperlink-wrapper cells (`{"value": {"value": V, "href": ...}}`)
+    are treated as non-empty (the `href` payload is real content).
+    """
+    for cell in cells:
+        v = cell.get("value")
+        if isinstance(v, dict) and "href" in v:
+            return False
+        if v not in (None, ""):
+            return False
+    return True

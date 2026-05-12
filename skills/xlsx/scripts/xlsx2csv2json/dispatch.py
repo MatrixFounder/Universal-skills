@@ -198,10 +198,15 @@ def iter_table_payloads(
             pass
         selected = matching
 
-    # Resolve header_rows for `read_table`. `1` (default) and `"auto"`
-    # are both legal; `int` other than 1 was guarded by `cli._validate_flag_combo`
-    # against multi-table mode.
-    header_rows_arg = args.header_rows
+    # Resolve header_rows for `read_table`. `1` (default), `"auto"`,
+    # and `"leaf"` are all legal CLI values; `int` other than 1 was
+    # guarded by `cli._validate_flag_combo` against multi-table mode.
+    # **`"leaf"` is a shim-level extension**: the library only knows
+    # `int | "auto"`. We translate `"leaf"` → `"auto"` for the library
+    # call and remember the leaf intent so the emit layer can trim the
+    # multi-level concatenated keys to their deepest level per column.
+    leaf_mode = (args.header_rows == "leaf")
+    header_rows_arg = "auto" if leaf_mode else args.header_rows
 
     for sheet_info in selected:
         sheet_name = sheet_info.name
@@ -260,4 +265,47 @@ def iter_table_payloads(
             for msg in getattr(table_data, "warnings", None) or ():
                 warnings.warn(msg, UserWarning, stacklevel=2)
 
+            # `--header-rows leaf` post-process: rewrite the multi-level
+            # concatenated keys to their deepest non-empty level per
+            # column. Reuses the empty-level skipping that flatten_headers
+            # already did, so any column whose deepest level was empty
+            # falls back to the next-deepest non-empty automatically.
+            if leaf_mode and getattr(table_data, "headers", None):
+                table_data = _replace_table_data_headers(
+                    table_data,
+                    [_keys_leaf_only(h) for h in table_data.headers],
+                )
+
             yield (sheet_name, region, table_data, hyperlinks_map)
+
+
+def _keys_leaf_only(header: str, separator: str = " › ") -> str:
+    """Return only the deepest (last) segment of a `separator`-joined
+    multi-level header key. Used by `--header-rows leaf` to discard
+    metadata-banner levels above the real column-name row.
+    """
+    return header.rsplit(separator, 1)[-1] if separator in header else header
+
+
+def _replace_table_data_headers(table_data: Any, new_headers: list[str]) -> Any:
+    """Return a copy of ``table_data`` with `.headers` replaced.
+
+    The library's `TableData` may be a dataclass / NamedTuple / plain
+    namespace — we use `dataclasses.replace` when applicable and fall
+    back to a SimpleNamespace mirror otherwise. Callers downstream
+    (`emit_csv`, `emit_json`) only read `.region`, `.headers`, `.rows`,
+    `.warnings`, so the namespace-fallback path is contract-safe.
+    """
+    import dataclasses
+    from types import SimpleNamespace
+    try:
+        if dataclasses.is_dataclass(table_data):
+            return dataclasses.replace(table_data, headers=new_headers)
+    except (TypeError, ValueError):
+        pass
+    return SimpleNamespace(
+        region=table_data.region,
+        headers=new_headers,
+        rows=table_data.rows,
+        warnings=getattr(table_data, "warnings", []),
+    )

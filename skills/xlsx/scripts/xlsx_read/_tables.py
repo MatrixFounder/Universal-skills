@@ -99,6 +99,18 @@ def _load_reserved_name_matchers() -> tuple[re.Pattern[str], ...]:
 _RESERVED_NAME_MATCHERS: tuple[re.Pattern[str], ...] = _load_reserved_name_matchers()
 
 
+# OOXML §18.2.6 caps defined-name length at 255 chars. Anything beyond
+# this is either malformed or an attacker probe. Bounding input length
+# kills the unbounded-per-name regex-match cost surfaced by
+# /vdd-multi-3 security review (HIGH — without this, a workbook with
+# 50K names × 100KB each → ~15 GB regex work).
+_MAX_DEFINED_NAME_LEN: int = 255
+
+# Zero-width and BOM characters that some workbook tools emit (and that
+# attackers use to bypass naive filters). Stripped before matching.
+_ZERO_WIDTH_CHARS: str = "​‌‍﻿"
+
+
 def _is_reserved_name(name: str) -> bool:
     """Return True if `name` is an Excel-reserved defined name.
 
@@ -106,10 +118,37 @@ def _is_reserved_name(name: str) -> bool:
     artefacts, Custom-View state) and must be excluded from user-facing
     table detection. See `_reserved_names.json` for the canonical
     pattern list and provenance. Comparison is case-insensitive and
-    whitespace-tolerant (strips leading/trailing whitespace before
-    matching) to catch malformed or third-party-emitter variants.
+    whitespace-tolerant (strips ASCII whitespace AND zero-width
+    characters before matching) to catch malformed or third-party-
+    emitter variants.
+
+    **/vdd-multi-3 hardening:**
+    - Input length bounded at `_MAX_DEFINED_NAME_LEN` (255 chars per
+      OOXML §18.2.6) — names exceeding this are NOT reserved
+      (matching skipped entirely, no regex cost on hostile input).
+    - Zero-width characters (`U+200B`/`U+200C`/`U+200D`/`U+FEFF`)
+      stripped alongside ASCII whitespace — closes the filter-bypass
+      vector where attackers prepend ZWSP to a reserved name.
+
+    **Conservative scope on length-cap-then-strip ordering:** the
+    length cap fires BEFORE the strip, so a 300-char input with
+    ZWSP padding wrapping a 16-char reserved payload is rejected
+    (returns False, name surfaces as user-table). This matches OOXML
+    §18.2.6 — the spec limit applies to the literal bytes the writer
+    emitted, padding included. A 256-byte name is spec-illegal and
+    therefore cannot be a built-in reserved name; an attacker who
+    pads ZWSP to evade detection is denying themselves the filter,
+    not bypassing security. Documented expected behaviour, locked
+    by `test_long_input_not_matched_no_redos_surface`.
     """
-    stripped = name.strip()
+    if not name:
+        return False
+    if len(name) > _MAX_DEFINED_NAME_LEN:
+        # Spec-illegal length → cannot be a reserved built-in.
+        return False
+    stripped = name.strip().strip(_ZERO_WIDTH_CHARS)
+    if not stripped:
+        return False
     return any(m.match(stripped) for m in _RESERVED_NAME_MATCHERS)
 
 
@@ -518,8 +557,12 @@ def _whole_sheet_region(ws: Any, sheet_name: str) -> TableRegion:
     1×1 region (so downstream emit code doesn't choke on
     bottom_row < top_row).
     """
-    dim_max_row = max(ws.max_row, 1)
-    dim_max_col = max(ws.max_column, 1)
+    # **vdd-multi-3 MED-Logic-2 fix:** `ws.max_row` / `ws.max_column`
+    # can be `None` in `read_only=True` streaming mode when the
+    # `<dimension>` ref is absent or unparseable. `max(None, 1)`
+    # raises `TypeError`; coalesce to 0 first.
+    dim_max_row = max(ws.max_row or 0, 1)
+    dim_max_col = max(ws.max_column or 0, 1)
 
     cells_scanned = 0
     last_row = 0
@@ -535,6 +578,27 @@ def _whole_sheet_region(ws: Any, sheet_name: str) -> TableRegion:
         for c_idx, v in enumerate(row, start=1):
             cells_scanned += 1
             if cells_scanned > _GAP_DETECT_MAX_CELLS:
+                # **vdd-multi-3 HIGH (3-critic convergence) fix:**
+                # emit a soft warning so downstream callers (and the
+                # shim's `_emit_warnings_to_stderr`) can surface the
+                # truncation. Without this the region silently shrinks
+                # to whatever the scan reached, which on hostile input
+                # (sparse data at row ≥ 1M with inflated `<dimension>`)
+                # produces silent data loss. Sibling `_gap_detect`
+                # raises on the same condition; here we degrade
+                # gracefully because `mode="whole"` is the default and
+                # raising would break legitimate large-but-valid
+                # workbooks. Soft warning is the documented middle path.
+                import warnings as _warnings
+                _warnings.warn(
+                    f"_whole_sheet_region: cell-scan cap "
+                    f"({_GAP_DETECT_MAX_CELLS} cells) fired before "
+                    f"reaching dim bbox end; data beyond "
+                    f"row {last_row}/col {last_col} dropped. "
+                    f"Switch to --tables auto for explicit handling.",
+                    UserWarning,
+                    stacklevel=2,
+                )
                 # In-loop cap fires: emit the best-effort trimmed
                 # bbox seen so far (NEVER the inflated dim bbox; that
                 # would produce 1M-row CSV garbage on hostile input).

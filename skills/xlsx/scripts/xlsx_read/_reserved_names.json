@@ -14,9 +14,9 @@
       "notes": "Auto-generated when a user saves a Custom View with autofilter / column-hide / print-area state. Suffix can be FilterData, Cols, Rows, PrintArea, PrintTitles. The GUID-like middle segment is the Custom-View identifier; one name per saved view per artefact. Always sheet-scoped."
     },
     {
-      "regex": "^(?:Print_Area|Print_Titles|_FilterDatabase|Criteria|Extract|Database|Sheet_Title|Consolidate_Area|Auto_Open|Auto_Close)$",
+      "regex": "^(?:Print_Area|Print_Titles|_FilterDatabase|Criteria|Extract|Database|Sheet_Title|Consolidate_Area|Auto_Open|Auto_Close|Disable_Reset|Data_Form)$",
       "source": "OOXML §18.2.6 (legacy bare-form)",
-      "notes": "Some older Excel writers and third-party tools emit reserved names without the _xlnm. prefix. Match the exact bare names for defence-in-depth."
+      "notes": "Some older Excel writers and third-party tools emit reserved names without the _xlnm. prefix. Match the exact bare names for defence-in-depth. List parity with the _xlnm.* notes above: Disable_Reset / Data_Form added 2026-05-13 per /vdd-multi-3 Logic-LOW-5."
     }
   ]
 }

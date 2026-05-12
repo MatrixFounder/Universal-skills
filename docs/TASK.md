@@ -1083,6 +1083,192 @@ Acceptance:
   Verified by
   `test_encoding_utf8_sig_multi_region_each_file_has_bom`.
 
+### R26 — `--delimiter {,|;|tab|pipe}` CSV field separator (Excel-RU/EU compat)
+
+`--encoding utf-8-sig` alone is **half** of the Excel-double-click
+fix: BOM lets Excel detect UTF-8 encoding, but on RU / EU locales
+(where `,` is the decimal separator) Excel still expects `;` as
+the field separator. A comma-delimited CSV opened via double-click
+on RU Excel lands every row in column A as one string. New CLI flag
+`--delimiter {,|;|tab|pipe}` (default `,`, preserving pandas / jq
+compat). Plumbed through `emit_csv.emit_csv(..., delimiter=...)` →
+`_emit_single_region` / `_emit_multi_region` → `_write_region_csv`
+→ `csv.writer(..., delimiter=delimiter)`. Symbolic aliases `tab` /
+`pipe` map to `\t` / `|`. Full Excel-RU recipe:
+`xlsx2csv.py IN.xlsx --output-dir OUT --encoding utf-8-sig --delimiter ';'`.
+Acceptance:
+
+- **AC-26.1** `delimiter=';'` produces `;`-separated rows.
+  Verified by `test_delimiter_semicolon_writes_semi_separated`.
+- **AC-26.2** `delimiter='\t'` produces TSV-style output. Verified
+  by `test_delimiter_tab_writes_tsv_format`.
+- **AC-26.3** Default (no kwarg) is `,` (backward-compat).
+  Verified by `test_delimiter_default_is_comma`.
+- **AC-26.4** Multi-region emit applies the delimiter to **every**
+  per-region file. Verified by
+  `test_delimiter_multi_region_each_file_gets_delimiter`.
+- **AC-26.5** Argparse rejects values outside `{,, ;, tab, \t, pipe}`.
+  Verified by `TestCliDelimiterRejection::test_cli_rejects_unknown_delimiter`
+  + `test_cli_rejects_multi_char_delimiter`
+  + `test_delimiter_type_helper_raises_argument_type_error`.
+
+### R26 — vdd-adversarial post-merge polish (2026-05-12 same-day)
+
+- **AC-26.6** CLI-level alias resolution (`tab` → `\t`, `pipe` → `|`,
+  `\t` 2-char escape → `\t`) drives the actual `cli.main(...)` pipeline,
+  not just the internal `emit_csv` API. Verified by
+  `TestCliDelimiterAliasResolution` (4 tests:
+  `test_cli_e2e_delimiter_tab_alias_writes_tsv`,
+  `test_cli_e2e_delimiter_pipe_alias_writes_pipe_separated`,
+  `test_cli_e2e_delimiter_backslash_t_escape_writes_tsv`,
+  `test_cli_e2e_delimiter_semicolon_literal_excel_ru_recipe`).
+  Translation now lives in `_delimiter_type` argparse type-callable,
+  not a post-parse `{"tab": "\t", "pipe": "|"}.get(...)` block.
+- **AC-26.7** `xlsx2json.py --delimiter ';'` emits a stderr warning
+  (`"--delimiter has no effect on JSON output (JSON uses its own
+  structural separators)."`) — mirrors the R25 `--encoding utf-8-sig`
+  warning. Default `--delimiter ','` stays silent. Verified by
+  `TestJsonDelimiterWarning::test_xlsx2json_with_semicolon_delimiter_warns`
+  + `test_xlsx2json_default_delimiter_is_silent`.
+### R27 — JSON dict silent data loss on duplicate headers
+
+**vdd-adversarial post-merge polish (2026-05-12 same-day, second
+round):** `_rows_to_string_style` did naive `d[header] = value`
+in a loop. On the masterdata Timesheet fixture — where a title
+merge `A1:F1` sticky-fills 6 columns with the same key — this
+**silently dropped 5 of 7 values per row** (later `d[]=` writes
+overwrote earlier ones). JSON dict-of-row data loss, no warning,
+no error. Fix: `_disambiguate_duplicate_headers(headers)` appends
+`__2`, `__3`, ... to repeated entries (mirrors the M2 vdd-multi
+precedent set by `_emit_multi_region` for colliding per-region
+file paths). CSV emit path is unaffected (csv.writer emits all N
+columns regardless of header text). Acceptance:
+
+- **AC-27.1** Two duplicate `title` headers yield keys `title` and
+  `title__2`; both values survive in the dict. Verified by
+  `TestDuplicateHeaderDisambiguation::test_duplicate_headers_get_numeric_suffix_preserving_all_data`.
+- **AC-27.2** Six duplicate headers + one distinct (masterdata
+  worst case) yield 7 keys with 5 distinct suffixes, no value
+  dropped. Verified by
+  `test_six_duplicate_headers_get_2_through_6_suffix`.
+- **AC-27.3** Already-unique headers are emitted unchanged — no
+  surprise `__2` on user-disambiguated data. Verified by
+  `test_unique_headers_emitted_unchanged`.
+- **AC-27.4** The `_disambiguate_duplicate_headers` helper is
+  unit-testable in isolation (mixed-position duplicates, empty
+  list, all-empty-string). Verified by
+  `test_disambiguate_helper_isolated`.
+- **AC-27.5** Array-style emit (`--header-flatten-style array`)
+  is unaffected — it already emits `[{key, value}, ...]` per
+  cell, so duplicate keys do not collide. No code change there.
+
+### R28 — `--drop-empty-rows` skip all-null rows
+
+**Iterative follow-up to R27 (2026-05-13):** R27 stopped silent
+data loss but exposed how many layout-decoration rows the default
+`--tables whole --header-rows 1` produces on layout-heavy reports.
+On masterdata Timesheet: 9 entirely-empty rows (gap separators)
+out of 119 total. New flag `--drop-empty-rows` (default off, opt-in)
+filters those out in both CSV and JSON emit. Conservative semantics:
+a row is "empty" iff EVERY value is `None` or `""`. Partial-null
+rows (e.g. signature row `A="Подпись", F="Подпись"`) are preserved.
+Hyperlink-wrapper cells (`{"value": V, "href": ...}`) count as
+non-empty regardless of `value` — the `href` payload is real
+content. Applies symmetrically to both `_rows_to_string_style`
+(default JSON shape) and `_rows_to_array_style`
+(`--header-flatten-style array`). Python helper kwarg name:
+`drop_empty_rows=True`. Acceptance:
+
+- **AC-28.1** Default off — output is byte-identical to pre-R28
+  for any caller not passing the flag (backward compat).
+  Verified by `test_string_style_off_by_default_keeps_all` +
+  `test_drop_empty_rows_off_by_default` (csv).
+- **AC-28.2** `--drop-empty-rows` skips rows of all `None`/`""`
+  values; partial-null rows survive. Verified by
+  `TestDropEmptyRows::test_string_style_drops_all_null_row`
+  + `test_drop_empty_rows_skips_all_null_lines` (csv).
+- **AC-28.3** Array-style emit (`--header-flatten-style array`)
+  honours the flag. Verified by `test_array_style_drops_all_null_row`.
+- **AC-28.4** A row with `value=None` BUT a hyperlink `href` is
+  NOT dropped (href = real content). Verified by
+  `test_hyperlink_in_otherwise_empty_row_keeps_row`.
+
+### Honest scope (R28)
+
+`--drop-empty-rows` removes entirely-blank rows (9 of 119 on
+masterdata Timesheet) but does NOT remove "mostly-blank" layout
+rows like the bottom-of-page signature row
+(`{title: "Подпись", title__2..__6: null, "": null}` — 2 non-null
+of 7). Those rows have real semantic content (2 signature
+labels); a threshold-based skip (`drop rows with < N non-null`)
+would be a lossy heuristic. For full data-table extraction on a
+layout-heavy report the user should compose with `--tables auto`
+(post-§11.4 reserved-name filter + contiguous-from-top header
+detection) or pre-trim the workbook to the data range.
+
+### R29 — `--header-rows leaf` for layout-heavy reports
+
+**Iterative follow-up to R27 + R28 (2026-05-13):** the masterdata
+Timesheet fixture exposed a deeper problem. With `--header-rows auto`,
+the band-detection correctly identifies rows 1-7 as the header
+band (per R22 contiguous-from-top), and `flatten_headers` produces
+` › `-concatenated multi-level keys like `"\n   Отчет об
+оказанных услугах/Service provision report › Наименование
+Заказчика: ... › ... › Дата"`. The keys are FUNCTIONALLY correct
+(real column names ARE at the end) but unusable as dict keys —
+the user opens the JSON and sees 60-char banner-text prefixes
+that obscure the real column names.
+
+This is NOT a `--skip-rows N` job (the user shouldn't have to
+count metadata rows manually). New CLI value `--header-rows leaf`:
+
+1. Detects the header band via `xlsx_read.detect_header_band(...,
+   "auto")` (R22 contiguous-from-top semantics, unchanged).
+2. After `flatten_headers` produces the multi-level concatenated
+   keys, the dispatch layer rewrites each key to its deepest
+   non-empty level via `key.rsplit(" › ", 1)[-1]`.
+3. Empty levels were already skipped during the flatten join, so a
+   column whose row-K cell is None falls back to the next-deepest
+   non-empty value automatically (no special-case needed).
+
+**Result on masterdata Timesheet** with
+`--tables auto --header-rows leaf --drop-empty-rows`:
+keys become `["Дата", "Затраченные часы", "Количество дней",
+"Специалист Исполнителя", "Должность", "Номер задачи",
+"Выполненные работы/оказанные услуги (описание)"]` — file size
+drops from 126 KB to 75 KB (40% smaller because keys are short).
+
+Library `xlsx_read` is **not changed** — `read_table` still gets
+`header_rows="auto"` (library knows only `int | "auto"`). The
+`leaf` semantic lives in the shim's dispatch + emit layer.
+Acceptance:
+
+- **AC-29.1** `--header-rows leaf` on `multi_row_header.xlsx`
+  (A1:C1 merge + Q1/Q2/Q3 sub-labels + 2 data rows) yields keys
+  `["Q1", "Q2", "Q3"]` (banner dropped). Verified by
+  `TestE2EReadBack::test_header_rows_leaf_keeps_only_deepest_level_per_column`.
+- **AC-29.2** `--header-rows auto` continues to emit the full
+  ` › `-concatenated multi-level keys (R7 backwards-compat lock).
+  Verified by `test_header_rows_auto_still_emits_multi_level_concat`.
+- **AC-29.3** Recipe `--tables auto --header-rows leaf
+  --drop-empty-rows` produces a usable JSON for layout-heavy
+  reports: real column names as keys, real data preserved, no
+  silent loss.
+
+Python helper kwarg: `convert_xlsx_to_json(..., header_rows="leaf")`.
+
+- **AC-26.8** Python public helper
+  `convert_xlsx_to_csv(input, output, delimiter=';')` works end-to-end
+  (previously raised `TypeError: Unknown kwarg: 'delimiter'` because
+  the `_KWARG_TO_FLAG` mapping in `xlsx2csv2json/__init__.py` was not
+  updated alongside the CLI flag). Added `"delimiter"` + `"encoding"`
+  to the mapping (R25's `--encoding` had the same hole; fixed
+  retroactively). Verified by
+  `TestPublicHelperAcceptsDelimiterKwarg` (3 tests:
+  `test_convert_xlsx_to_csv_accepts_delimiter_kwarg`,
+  `test_convert_xlsx_to_csv_accepts_encoding_kwarg`,
+  `test_convert_xlsx_to_csv_rejects_unknown_kwarg`).
+
 ### R25 — `--encoding {utf-8,utf-8-sig}` flag (CSV only)
 
 `emit_csv` previously hardcoded `encoding="utf-8"`. Excel on Windows

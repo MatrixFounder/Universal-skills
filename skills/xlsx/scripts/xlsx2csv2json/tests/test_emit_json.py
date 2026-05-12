@@ -129,6 +129,142 @@ class TestShapeForPayloads(unittest.TestCase):
 # ===========================================================================
 # Header-flatten styles
 # ===========================================================================
+class TestDuplicateHeaderDisambiguation(unittest.TestCase):
+    """**vdd-adversarial R27 fix:** `_rows_to_string_style` previously
+    did naive ``d[header] = value`` which silently dropped data when
+    two columns had the same header (the natural consequence of a
+    wide title-merge sticky-fill on layout-heavy reports — `A1:F1`
+    merge produces 6 columns with identical keys). 5 of 7 columns
+    were lost per Timesheet row on the masterdata fixture.
+    """
+
+    def test_duplicate_headers_get_numeric_suffix_preserving_all_data(self) -> None:
+        """Two columns with header 'title' should produce keys
+        'title' and 'title__2' — neither value lost.
+        """
+        from xlsx2csv2json.emit_json import _rows_to_string_style
+        result = _rows_to_string_style(
+            headers=["title", "title", ""],
+            rows=[["A1", "B1", "C1"], ["A2", "B2", "C2"]],
+            hl_map=None, header_band=1, include_hyperlinks=False,
+        )
+        self.assertEqual(len(result), 2)
+        # Row 0: all 3 values preserved across 3 distinct keys.
+        self.assertEqual(result[0]["title"], "A1")
+        self.assertEqual(result[0]["title__2"], "B1")
+        self.assertEqual(result[0][""], "C1")
+        # Row 1: same disambiguation scheme.
+        self.assertEqual(result[1]["title"], "A2")
+        self.assertEqual(result[1]["title__2"], "B2")
+
+    def test_six_duplicate_headers_get_2_through_6_suffix(self) -> None:
+        """Worst-case from masterdata Timesheet: 6 columns sticky-filled
+        from a single title merge `A1:F1`. Must produce
+        ['title', 'title__2', 'title__3', 'title__4', 'title__5', 'title__6'].
+        """
+        from xlsx2csv2json.emit_json import _rows_to_string_style
+        result = _rows_to_string_style(
+            headers=["title"] * 6 + [""],
+            rows=[["v1", "v2", "v3", "v4", "v5", "v6", "v7"]],
+            hl_map=None, header_band=1, include_hyperlinks=False,
+        )
+        row = result[0]
+        self.assertEqual(row["title"], "v1")
+        for i in range(2, 7):
+            self.assertEqual(row[f"title__{i}"], f"v{i}")
+        self.assertEqual(row[""], "v7")
+        # CRITICAL: no value silently dropped.
+        self.assertEqual(len(row), 7)
+
+    def test_unique_headers_emitted_unchanged(self) -> None:
+        """Regression guard: when headers are already unique, the
+        disambiguation step is a no-op (no surprise __2 suffix).
+        """
+        from xlsx2csv2json.emit_json import _rows_to_string_style
+        result = _rows_to_string_style(
+            headers=["Дата", "Часы", "Описание"],
+            rows=[["2026-04-01", 8, "task"]],
+            hl_map=None, header_band=1, include_hyperlinks=False,
+        )
+        self.assertEqual(
+            result[0],
+            {"Дата": "2026-04-01", "Часы": 8, "Описание": "task"},
+        )
+
+    def test_disambiguate_helper_isolated(self) -> None:
+        from xlsx2csv2json.emit_json import _disambiguate_duplicate_headers
+        self.assertEqual(
+            _disambiguate_duplicate_headers(["a", "a", "b", "a", "b"]),
+            ["a", "a__2", "b", "a__3", "b__2"],
+        )
+        self.assertEqual(
+            _disambiguate_duplicate_headers([]), []
+        )
+        self.assertEqual(
+            _disambiguate_duplicate_headers(["", "", ""]),
+            ["", "__2", "__3"],
+        )
+
+
+class TestDropEmptyRows(unittest.TestCase):
+    """**TASK 010 §11.7 R28:** `--drop-empty-rows` skips rows where
+    every value is None or empty string. Conservative — rows with at
+    least one non-null cell survive.
+    """
+
+    def test_string_style_drops_all_null_row(self) -> None:
+        from xlsx2csv2json.emit_json import _rows_to_string_style
+        result = _rows_to_string_style(
+            headers=["a", "b", "c"],
+            rows=[
+                ["x", 1, "y"],     # full row → kept
+                [None, None, None],  # all-null → DROPPED
+                ["", "", ""],       # all-empty-string → DROPPED
+                [None, "kept", None],  # partial → kept
+            ],
+            hl_map=None, header_band=1, include_hyperlinks=False,
+            drop_empty_rows=True,
+        )
+        self.assertEqual(len(result), 2)
+        self.assertEqual(result[0], {"a": "x", "b": 1, "c": "y"})
+        self.assertEqual(result[1], {"a": None, "b": "kept", "c": None})
+
+    def test_string_style_off_by_default_keeps_all(self) -> None:
+        from xlsx2csv2json.emit_json import _rows_to_string_style
+        result = _rows_to_string_style(
+            headers=["a"],
+            rows=[["x"], [None], ["y"]],
+            hl_map=None, header_band=1, include_hyperlinks=False,
+        )
+        self.assertEqual(len(result), 3)  # default: keep all
+
+    def test_array_style_drops_all_null_row(self) -> None:
+        from xlsx2csv2json.emit_json import _rows_to_array_style
+        result = _rows_to_array_style(
+            headers=["a", "b"],
+            rows=[["x", 1], [None, None]],
+            hl_map=None, header_band=1, include_hyperlinks=False,
+            drop_empty_rows=True,
+        )
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0][0]["value"], "x")
+
+    def test_hyperlink_in_otherwise_empty_row_keeps_row(self) -> None:
+        """A row with all None values BUT a hyperlink href IS NOT empty
+        — the href payload is real content. Verifies the conservative
+        predicate honours hyperlink presence.
+        """
+        from xlsx2csv2json.emit_json import _rows_to_string_style
+        result = _rows_to_string_style(
+            headers=["a", "b"],
+            rows=[[None, None]],
+            hl_map={(1, 0): "https://example.com"},
+            header_band=1, include_hyperlinks=True,
+            drop_empty_rows=True,
+        )
+        self.assertEqual(len(result), 1)  # NOT dropped
+
+
 class TestHeaderFlattenStyle(unittest.TestCase):
 
     def test_string_style_flat_keys(self) -> None:

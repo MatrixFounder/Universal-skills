@@ -83,6 +83,59 @@ class TestReservedNameFilter(unittest.TestCase):
         # Z_-prefixed but not the canonical GUID layout
         self.assertFalse(_is_reserved_name("Z_NotAGuid_.wvu.FilterData"))
 
+    def test_long_input_not_matched_no_redos_surface(self) -> None:
+        """**/vdd-multi-3 HIGH-Sec-2 fix:** input length is bounded
+        at `_MAX_DEFINED_NAME_LEN=255` (OOXML §18.2.6 max defined-
+        name length). Names exceeding this skip the regex entirely
+        — no per-pattern match cost on hostile input. Caps the
+        ReDoS-via-length attack surface where a 50K-names × 100KB-
+        each workbook would otherwise burn ~15 GB of regex work.
+        """
+        from xlsx_read._tables import _is_reserved_name, _MAX_DEFINED_NAME_LEN
+        # 256+ chars: not matched (early return False).
+        long_name = "_xlnm.Print_Area" + "A" * (_MAX_DEFINED_NAME_LEN + 10)
+        self.assertFalse(_is_reserved_name(long_name))
+        # 1 MB hostile probe: also not matched, instantly.
+        huge_name = "_xlnm." + "X" * 1_000_000
+        import time
+        t0 = time.monotonic()
+        self.assertFalse(_is_reserved_name(huge_name))
+        elapsed = time.monotonic() - t0
+        # Sanity perf bound: should be sub-millisecond (len-check only).
+        self.assertLess(elapsed, 0.05,
+                        f"_is_reserved_name on 1MB input took {elapsed:.3f}s "
+                        f"— length cap is not short-circuiting")
+
+    def test_zero_width_chars_stripped_before_match(self) -> None:
+        """**/vdd-multi-3 MED-Sec-4 fix:** zero-width characters
+        (U+200B/200C/200D/FEFF) are stripped alongside ASCII
+        whitespace. Closes the filter-bypass vector where an
+        attacker prepends a ZWSP to a reserved name to slip past
+        the regex anchor.
+        """
+        from xlsx_read._tables import _is_reserved_name
+        # ZWSP + reserved name still classified as reserved.
+        self.assertTrue(_is_reserved_name("​_xlnm.Print_Area"))
+        self.assertTrue(_is_reserved_name("﻿_xlnm._FilterDatabase​"))
+        # Embedded ZWSP between _xlnm and . — NOT stripped (only
+        # leading/trailing). Documents the conservative scope.
+        self.assertFalse(_is_reserved_name("_xlnm​.Print_Area"))
+
+    def test_legacy_bare_form_includes_disable_reset_and_data_form(self) -> None:
+        """**/vdd-multi-3 Logic-LOW-5 fix:** the legacy bare-form
+        pattern now covers `Disable_Reset` and `Data_Form` (parity
+        with the documented `_xlnm.*` notes in `_reserved_names.json`).
+        """
+        from xlsx_read._tables import _is_reserved_name
+        self.assertTrue(_is_reserved_name("Disable_Reset"))
+        self.assertTrue(_is_reserved_name("Data_Form"))
+
+    def test_empty_name_not_matched(self) -> None:
+        from xlsx_read._tables import _is_reserved_name
+        self.assertFalse(_is_reserved_name(""))
+        self.assertFalse(_is_reserved_name("   "))
+        self.assertFalse(_is_reserved_name("​‌"))
+
     def test_case_insensitive_match(self) -> None:
         """OOXML §18.2.5: defined names are case-insensitive in Excel.
         The filter must match `_XLNM.Print_Area`, `PRINT_AREA`, etc.
@@ -249,6 +302,57 @@ class TestWholeSheetRegionTrim(unittest.TestCase):
         )
         region = _whole_sheet_region(ws, "Sheet")
         self.assertEqual(region.right_col, 2)
+
+    def test_whole_sheet_region_handles_none_max_row(self) -> None:
+        """**/vdd-multi-3 MED-Logic-2 fix:** in `read_only=True` mode
+        with a missing/unparseable `<dimension>` XML element,
+        openpyxl's `ReadOnlyWorksheet` returns `None` for `max_row`
+        / `max_column`. `max(None, 1)` raises `TypeError`; the fix
+        coalesces to 0 first via `max(... or 0, 1)`.
+        """
+        from types import SimpleNamespace
+        from xlsx_read._tables import _whole_sheet_region
+        # Stub ws with .max_row/.max_column = None (read_only quirk).
+        fake_ws = SimpleNamespace(
+            max_row=None, max_column=None,
+            iter_rows=lambda **kw: iter(()),
+        )
+        region = _whole_sheet_region(fake_ws, "Sheet")
+        # Empty sheet → degenerate 1×1 region (not TypeError crash).
+        self.assertEqual(
+            (region.top_row, region.left_col, region.bottom_row, region.right_col),
+            (1, 1, 1, 1),
+        )
+
+    def test_in_loop_cap_emits_warning(self) -> None:
+        """**/vdd-multi-3 HIGH (3-critic) fix:** when the in-loop
+        cell-scan cap fires, emit a `UserWarning` so downstream
+        callers (and the shim's `_emit_warnings_to_stderr`) can
+        surface the truncation. Without this, hostile input
+        (sparse data at row ≥ 1M with inflated `<dimension>`)
+        silently produced a tiny region with no diagnostic.
+        """
+        import warnings as _warnings
+        import openpyxl
+        from unittest.mock import patch
+        from xlsx_read import _tables
+        from xlsx_read._tables import _whole_sheet_region
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws["A1"] = "x"
+        with patch.object(
+            type(ws), "max_row", new_callable=lambda: property(lambda self: 1_048_576)
+        ), patch.object(
+            type(ws), "max_column", new_callable=lambda: property(lambda self: 16_384)
+        ), patch.object(_tables, "_GAP_DETECT_MAX_CELLS", 100), \
+             _warnings.catch_warnings(record=True) as caught:
+            _warnings.simplefilter("always")
+            _whole_sheet_region(ws, "Sheet")
+        cap_warnings = [w for w in caught
+                        if "cell-scan cap" in str(w.message)]
+        self.assertEqual(len(cap_warnings), 1,
+                         f"expected 1 cap-fire warning, got: {caught}")
+        self.assertIn("data beyond", str(cap_warnings[0].message))
 
     def test_in_loop_cap_does_not_emit_inflated_region(self) -> None:
         """**vdd-multi-2 HIGH fix:** when the in-loop cell-scan

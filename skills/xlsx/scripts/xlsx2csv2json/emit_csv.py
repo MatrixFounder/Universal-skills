@@ -41,6 +41,8 @@ def emit_csv(
     include_hyperlinks: bool,
     datetime_format: str,  # noqa: ARG001  -- library handles datetime emit
     encoding: str = "utf-8",
+    delimiter: str = ",",
+    drop_empty_rows: bool = False,
 ) -> int:
     """Drive single-file or multi-file CSV emission.
 
@@ -67,6 +69,8 @@ def emit_csv(
             output=output,
             include_hyperlinks=include_hyperlinks,
             encoding=encoding,
+            delimiter=delimiter,
+            drop_empty_rows=drop_empty_rows,
         )
         return 0
 
@@ -84,6 +88,8 @@ def emit_csv(
         output_dir=output_dir,
         include_hyperlinks=include_hyperlinks,
         encoding=encoding,
+        delimiter=delimiter,
+        drop_empty_rows=drop_empty_rows,
     )
     return 0
 
@@ -94,24 +100,31 @@ def _emit_single_region(
     output: Path | None,
     include_hyperlinks: bool,
     encoding: str = "utf-8",
+    delimiter: str = ",",
+    drop_empty_rows: bool = False,
 ) -> None:
     """Write one region to ``output`` (or stdout if None).
 
     ``encoding`` applies to file output only. stdout retains its
     process-wide encoding (sys.stdout configuration) because injecting
     a BOM into a pipe is almost always a bug at the consumer side.
+    ``delimiter`` is the CSV field separator (default ``,``).
     """
     _, _, table_data, hl_map = payload
     if output is None:
         _write_region_csv(
             sys.stdout, table_data, hl_map=hl_map,
             include_hyperlinks=include_hyperlinks,
+            delimiter=delimiter,
+            drop_empty_rows=drop_empty_rows,
         )
     else:
         with output.open("w", encoding=encoding, newline="") as fp:
             _write_region_csv(
                 fp, table_data, hl_map=hl_map,
                 include_hyperlinks=include_hyperlinks,
+                delimiter=delimiter,
+                drop_empty_rows=drop_empty_rows,
             )
 
 
@@ -121,6 +134,8 @@ def _emit_multi_region(
     output_dir: Path,
     include_hyperlinks: bool,
     encoding: str = "utf-8",
+    delimiter: str = ",",
+    drop_empty_rows: bool = False,
 ) -> None:
     """Write each region to ``<output_dir>/<sheet>/<table>.csv``.
 
@@ -161,6 +176,8 @@ def _emit_multi_region(
             _write_region_csv(
                 fp, table_data, hl_map=hl_map,
                 include_hyperlinks=include_hyperlinks,
+                delimiter=delimiter,
+                drop_empty_rows=drop_empty_rows,
             )
 
 
@@ -170,9 +187,13 @@ def _write_region_csv(
     *,
     hl_map: dict[tuple[int, int], str] | None,
     include_hyperlinks: bool,
+    delimiter: str = ",",
+    drop_empty_rows: bool = False,
 ) -> None:
     """Common writer body — emit header row + data rows."""
-    writer = csv.writer(fp, quoting=csv.QUOTE_MINIMAL, lineterminator="\n")
+    writer = csv.writer(
+        fp, quoting=csv.QUOTE_MINIMAL, lineterminator="\n", delimiter=delimiter,
+    )
     headers = list(table_data.headers)
     writer.writerow(headers)
 
@@ -190,6 +211,10 @@ def _write_region_csv(
                     out_row.append(_format_hyperlink_csv(value, href))
                     continue
             out_row.append(value)
+        # **TASK 010 §11.7 R28 fix:** drop rows where every cell is
+        # None/"" — matches the JSON path semantics.
+        if drop_empty_rows and all(v in (None, "") for v in out_row):
+            continue
         writer.writerow(out_row)
 
 

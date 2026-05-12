@@ -56,6 +56,85 @@ class TestE2EReadBack(unittest.TestCase):
                 ],
             )
 
+    # ----- header-rows=leaf semantics (TASK §11.7 R29) -----
+    def test_header_rows_leaf_keeps_only_deepest_level_per_column(self) -> None:
+        """**R29 fix:** `--header-rows leaf` auto-detects the header
+        band (same as ``--header-rows auto``) but uses ONLY the deepest
+        non-empty level per column as the JSON key. Solves the
+        layout-heavy-report key bloat where rows 1..K-1 are merged
+        metadata banners and the real column names sit on row K.
+        """
+        from xlsx2csv2json import convert_xlsx_to_json
+        with tempfile.TemporaryDirectory() as td:
+            out = Path(td) / "out.json"
+            rc = convert_xlsx_to_json(
+                _FIX / "multi_row_header.xlsx", out,
+                tables="whole", header_rows="leaf",
+            )
+            self.assertEqual(rc, 0)
+            data = json.loads(out.read_text("utf-8"))
+            # Fixture: A1:C1 merge "2026 plan" + A2/B2/C2 = Q1/Q2/Q3 +
+            # 2 data rows. With --header-rows leaf, the "2026 plan"
+            # banner level is dropped; keys = ["Q1", "Q2", "Q3"].
+            self.assertEqual(list(data[0].keys()), ["Q1", "Q2", "Q3"])
+            self.assertEqual(data[0], {"Q1": 100, "Q2": 200, "Q3": 300})
+            self.assertEqual(data[1], {"Q1": 110, "Q2": 210, "Q3": 310})
+
+    def test_header_rows_auto_still_emits_multi_level_concat(self) -> None:
+        """Regression guard: `--header-rows auto` continues to emit
+        the full ` › `-concatenated multi-level keys (R7 behaviour
+        unchanged). Only the new `leaf` value short-circuits to the
+        deepest level.
+        """
+        from xlsx2csv2json import convert_xlsx_to_json
+        with tempfile.TemporaryDirectory() as td:
+            out = Path(td) / "out.json"
+            convert_xlsx_to_json(
+                _FIX / "multi_row_header.xlsx", out,
+                tables="whole", header_rows="auto",
+            )
+            data = json.loads(out.read_text("utf-8"))
+            # "2026 plan" banner preserved as level-0 prefix.
+            self.assertTrue(any("2026 plan" in k for k in data[0]))
+            self.assertTrue(any(" › " in k for k in data[0]))
+
+    def test_header_rows_leaf_with_array_style(self) -> None:
+        """**/vdd-multi-3 Logic-LOW-2 fix:** `--header-rows leaf`
+        combined with `--header-flatten-style array` is unverified
+        in the original R29 test set. Leaf trims headers to e.g.
+        "Q1" (no separator); array style then splits each header
+        on " › " — which produces a single-element ["Q1"] tuple.
+        Lock this interaction so a future refactor can't silently
+        merge the two paths and break the leaf shape.
+        """
+        from xlsx2csv2json import convert_xlsx_to_json
+        with tempfile.TemporaryDirectory() as td:
+            out = Path(td) / "out.json"
+            rc = convert_xlsx_to_json(
+                _FIX / "multi_row_header.xlsx", out,
+                tables="whole", header_rows="leaf",
+                header_flatten_style="array",
+            )
+            self.assertEqual(rc, 0)
+            data = json.loads(out.read_text("utf-8"))
+            # Array style produces [[{key:[...], value:V}, ...], ...]
+            self.assertIsInstance(data, list)
+            self.assertIsInstance(data[0], list)
+            # Each cell's key is a 1-element list (leaf collapsed the
+            # banner level — no " › " separator survives).
+            for cell in data[0]:
+                self.assertEqual(len(cell["key"]), 1)
+            # Values come through correctly: row 0 = 100, 200, 300.
+            self.assertEqual(
+                [c["value"] for c in data[0]],
+                [100, 200, 300],
+            )
+            # Keys at row 0 are exactly the Q1/Q2/Q3 sub-labels.
+            self.assertEqual(
+                [c["key"][0] for c in data[0]],
+                ["Q1", "Q2", "Q3"],
+            )
+
     # ----- 2. json_stdout_when_output_omitted -----
     def test_02_json_stdout_when_output_omitted(self) -> None:
         result = subprocess.run(

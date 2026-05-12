@@ -115,6 +115,130 @@ class TestEmitCsvSingleRegion(unittest.TestCase):
                     f"missing BOM in {f}",
                 )
 
+    def test_delimiter_semicolon_writes_semi_separated(self) -> None:
+        """**TASK 010 §11.7 R26:** `--delimiter ;` (passed to emit_csv
+        as `delimiter=";"`) emits semicolon-separated rows. Excel on
+        RU / EU locales (where ',' is the decimal separator) needs
+        ';' to parse the file into columns on double-click open.
+        """
+        from xlsx2csv2json.emit_csv import emit_csv
+        r, t = _td(["Дата", "Часы"], [["2026-04-01", 8]], sheet="S")
+        with tempfile.TemporaryDirectory() as td:
+            out = Path(td) / "out.csv"
+            emit_csv(
+                iter([("S", r, t, None)]),
+                output=out, output_dir=None,
+                sheet_selector="S", tables_mode="whole",
+                include_hyperlinks=False, datetime_format="ISO",
+                delimiter=";",
+            )
+            text = out.read_text(encoding="utf-8")
+            self.assertIn("Дата;Часы", text)
+            self.assertIn("2026-04-01;8", text)
+            self.assertNotIn("Дата,Часы", text)
+
+    def test_emit_csv_with_literal_tab_delimiter_writes_tsv(self) -> None:
+        """`delimiter='\\t'` (raw char, not the 'tab' alias) produces
+        TSV-style output. This is the **internal API** layer test —
+        it bypasses the CLI alias-resolution at `_delimiter_type`; for
+        the CLI-level path see
+        `test_cli.py::TestCliDelimiterAliasResolution`.
+        """
+        from xlsx2csv2json.emit_csv import emit_csv
+        r, t = _td(["a", "b"], [[1, 2]], sheet="S")
+        with tempfile.TemporaryDirectory() as td:
+            out = Path(td) / "out.tsv"
+            emit_csv(
+                iter([("S", r, t, None)]),
+                output=out, output_dir=None,
+                sheet_selector="S", tables_mode="whole",
+                include_hyperlinks=False, datetime_format="ISO",
+                delimiter="\t",
+            )
+            text = out.read_text(encoding="utf-8")
+            self.assertIn("a\tb", text)
+            self.assertIn("1\t2", text)
+
+    def test_delimiter_default_is_comma(self) -> None:
+        """Default delimiter when not passed is `,` (backward-compat)."""
+        from xlsx2csv2json.emit_csv import emit_csv
+        r, t = _td(["a", "b"], [[1, 2]], sheet="S")
+        with tempfile.TemporaryDirectory() as td:
+            out = Path(td) / "out.csv"
+            emit_csv(
+                iter([("S", r, t, None)]),
+                output=out, output_dir=None,
+                sheet_selector="S", tables_mode="whole",
+                include_hyperlinks=False, datetime_format="ISO",
+            )
+            self.assertIn("a,b", out.read_text(encoding="utf-8"))
+
+    def test_delimiter_multi_region_each_file_gets_delimiter(self) -> None:
+        """Multi-region emit applies the same delimiter to every per-region
+        file (regression guard for accidental kwarg drop in the plumbing).
+        """
+        from xlsx2csv2json.emit_csv import emit_csv
+        r1, t1 = _td(["a", "b"], [[1, 2]], sheet="S1")
+        r2, t2 = _td(["c", "d"], [[3, 4]], sheet="S2")
+        with tempfile.TemporaryDirectory() as td:
+            out_dir = Path(td) / "out"
+            emit_csv(
+                iter([("S1", r1, t1, None), ("S2", r2, t2, None)]),
+                output=None, output_dir=out_dir,
+                sheet_selector="all", tables_mode="whole",
+                include_hyperlinks=False, datetime_format="ISO",
+                delimiter=";",
+            )
+            for f in out_dir.rglob("*.csv"):
+                text = f.read_text(encoding="utf-8")
+                self.assertIn(";", text, f"missing ';' in {f}")
+                # No commas should appear as separators (values themselves
+                # don't contain commas in this fixture).
+                self.assertNotIn(",", text)
+
+    def test_drop_empty_rows_skips_all_null_lines(self) -> None:
+        """`--drop-empty-rows` on the CSV side: rows where every value
+        is None or '' are silently dropped. Conservative — partial-null
+        rows are kept.
+        """
+        from xlsx2csv2json.emit_csv import emit_csv
+        r, t = _td(
+            ["a", "b"],
+            [["x", 1], [None, None], ["", ""], [None, "y"]],
+            sheet="S",
+        )
+        with tempfile.TemporaryDirectory() as td:
+            out = Path(td) / "out.csv"
+            rc = emit_csv(
+                iter([("S", r, t, None)]),
+                output=out, output_dir=None,
+                sheet_selector="S", tables_mode="whole",
+                include_hyperlinks=False, datetime_format="ISO",
+                drop_empty_rows=True,
+            )
+            self.assertEqual(rc, 0)
+            rows = list(csv.reader(out.open(encoding="utf-8")))
+            # Expect 3 rows: header + ["x","1"] + ["","y"]
+            self.assertEqual(len(rows), 3)
+            self.assertEqual(rows[0], ["a", "b"])
+            self.assertEqual(rows[1], ["x", "1"])
+            self.assertEqual(rows[2], ["", "y"])
+
+    def test_drop_empty_rows_off_by_default(self) -> None:
+        from xlsx2csv2json.emit_csv import emit_csv
+        r, t = _td(["a"], [["x"], [None], ["y"]], sheet="S")
+        with tempfile.TemporaryDirectory() as td:
+            out = Path(td) / "out.csv"
+            emit_csv(
+                iter([("S", r, t, None)]),
+                output=out, output_dir=None,
+                sheet_selector="S", tables_mode="whole",
+                include_hyperlinks=False, datetime_format="ISO",
+            )
+            rows = list(csv.reader(out.open(encoding="utf-8")))
+            # default: keep all 4 (header + 3 data including the null row)
+            self.assertEqual(len(rows), 4)
+
     def test_encoding_utf8_default_no_bom(self) -> None:
         """Default encoding is plain UTF-8 (no BOM) — pandas / jq do
         not need BOM and treat it as part of the first header cell.

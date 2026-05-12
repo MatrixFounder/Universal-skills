@@ -58,16 +58,30 @@ _VALID_FORMATS = ("csv", "json")
 # Argparse
 # ===========================================================================
 def _header_rows_type(value: str) -> Any:
-    """Custom type for ``--header-rows``. Accepts ``"auto"`` or a
-    non-negative integer; returns ``"auto"`` (str) or ``int``.
+    """Custom type for ``--header-rows``. Accepts ``"auto"``,
+    ``"leaf"``, or a non-negative integer.
+
+    Returns:
+      - ``"auto"`` (str) — auto-detect the header band; concatenate all
+        levels with ` › ` separator (R7).
+      - ``"leaf"`` (str) — auto-detect the band, but keep ONLY the
+        deepest non-empty level per column as the header key. Drops
+        metadata-banner levels above the real column-name row on
+        layout-heavy reports (e.g. a Russian timesheet whose rows 1-6
+        are merged title/customer/contract/project/period blocks and
+        whose real column headers (Дата / Часы / ...) sit on row 7).
+      - ``int >= 0`` — explicit fixed header-row count.
     """
     if value == "auto":
         return "auto"
+    if value == "leaf":
+        return "leaf"
     try:
         n = int(value)
     except ValueError as exc:
         raise argparse.ArgumentTypeError(
-            f"--header-rows must be 'auto' or a non-negative integer, got {value!r}"
+            f"--header-rows must be 'auto', 'leaf', or a non-negative "
+            f"integer, got {value!r}"
         ) from exc
     if n < 0:
         raise argparse.ArgumentTypeError(
@@ -93,6 +107,28 @@ def _format_type_with_lock(format_lock: str | None) -> Callable[[str], str]:
             )
         return value
     return _validator
+
+
+def _delimiter_type(value: str) -> str:
+    """Argparse `type=` callable for `--delimiter`.
+
+    Accepts:
+      - Literal characters: ``,`` ``;``  (passed through unchanged)
+      - Symbolic aliases: ``tab`` → ``\\t``; ``pipe`` → ``|``
+      - 2-char escape: ``\\t`` (literal backslash+t, useful when the
+        shell can't easily emit a raw tab) → ``\\t``
+
+    Returns the literal single-char delimiter ready for ``csv.writer``.
+    Any other input raises ``argparse.ArgumentTypeError`` (which
+    argparse renders as exit-2 with a usage error envelope).
+    """
+    canonical = {",": ",", ";": ";", "tab": "\t", "\\t": "\t", "pipe": "|"}
+    if value in canonical:
+        return canonical[value]
+    raise argparse.ArgumentTypeError(
+        f"--delimiter must be one of: ',', ';', 'tab' (or '\\t'), 'pipe'; "
+        f"got {value!r}"
+    )
 
 
 def build_parser(*, format_lock: str | None) -> argparse.ArgumentParser:
@@ -248,6 +284,38 @@ def build_parser(*, format_lock: str | None) -> argparse.ArgumentParser:
             "value, so the default is plain 'utf-8'."
         ),
     )
+    parser.add_argument(
+        "--delimiter",
+        dest="delimiter",
+        type=_delimiter_type,
+        default=",",
+        metavar="DELIM",
+        help=(
+            "CSV field delimiter. Accepts: ',' (default), ';', 'tab' "
+            "(or the 2-char escape '\\\\t'), 'pipe'. On RU / EU Excel "
+            "locales (where ',' is the decimal separator), pass ';' "
+            "so a double-click open parses into columns instead of "
+            "stuffing every row into column A. The reverse-side "
+            "csv2xlsx.py accepts the same set (plus literal `\\t` "
+            "for legacy callers); the round-trip pair is symmetric."
+        ),
+    )
+    parser.add_argument(
+        "--drop-empty-rows",
+        dest="drop_empty_rows",
+        action="store_true",
+        help=(
+            "Skip rows where every value is None or empty string. "
+            "Layout-heavy reports (mostly-blank separator rows, "
+            "trailing empties left by Excel after row deletion) "
+            "produce noisy mostly-null JSON dict blobs / blank CSV "
+            "lines by default; this flag drops them. Conservative: "
+            "only ALL-empty rows are dropped — rows with at least "
+            "one non-null cell are preserved (e.g. a signature row "
+            "with `A=Подпись, F=Подпись` survives). Default: off "
+            "(preserves the source row count 1:1)."
+        ),
+    )
 
     # Cross-5 envelope flag (4-skill replicated helper).
     _errors.add_json_errors_argument(parser)
@@ -318,6 +386,37 @@ def _validate_flag_combo(args: argparse.Namespace, *, format_lock: str | None) -
         print(
             "warning: --encoding utf-8-sig has no effect on JSON output "
             "(JSON files are written as plain UTF-8 per RFC 8259).",
+            file=sys.stderr,
+        )
+
+    # **vdd-adversarial R26 HIGH-2 fix:** `--delimiter` is CSV-only. JSON
+    # has its own structural separators (no field-delimiter concept).
+    # Mirror the encoding-warning pattern above so the user knows their
+    # flag was parsed but ignored.
+    if effective_format == "json" and args.delimiter != ",":
+        print(
+            "warning: --delimiter has no effect on JSON output "
+            "(JSON uses its own structural separators).",
+            file=sys.stderr,
+        )
+
+    # **vdd-multi-3 Logic-LOW-1 fix:** `--encoding utf-8-sig` is silently
+    # ignored when CSV output goes to stdout (the BOM-bytes-into-a-pipe
+    # case is almost always a downstream-consumer bug, so emit_csv
+    # deliberately drops the BOM there — see `_emit_single_region`).
+    # Surface a stderr warning so the user isn't silently surprised
+    # when they pipe CSV through `tee out.csv` and find no BOM.
+    csv_stdout = (
+        effective_format == "csv"
+        and args.output_dir is None
+        and args.output_flag in (None, "-")
+        and args.output in (None, "-")
+    )
+    if csv_stdout and args.encoding == "utf-8-sig":
+        print(
+            "warning: --encoding utf-8-sig has no effect on stdout CSV "
+            "output (BOM is dropped to avoid breaking piped consumers). "
+            "Pass --output FILE.csv to get a BOM-prefixed file.",
             file=sys.stderr,
         )
 
@@ -590,8 +689,12 @@ def _dispatch_to_emit(
                     header_flatten_style=args.header_flatten_style,
                     include_hyperlinks=args.include_hyperlinks,
                     datetime_format=args.datetime_format,
+                    drop_empty_rows=args.drop_empty_rows,
                 )
             elif effective_format == "csv":
+                # args.delimiter is already a literal char thanks to the
+                # `_delimiter_type` argparse type callable — no further
+                # translation needed here.
                 rc = emit_csv.emit_csv(
                     payloads,
                     output=output_path,
@@ -601,6 +704,8 @@ def _dispatch_to_emit(
                     include_hyperlinks=args.include_hyperlinks,
                     datetime_format=args.datetime_format,
                     encoding=args.encoding,
+                    delimiter=args.delimiter,
+                    drop_empty_rows=args.drop_empty_rows,
                 )
             else:
                 raise ValueError(f"Unknown format: {effective_format!r}")

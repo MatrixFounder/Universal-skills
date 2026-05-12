@@ -140,6 +140,236 @@ class TestBuildParser(unittest.TestCase):
 # ===========================================================================
 # _validate_flag_combo — cross-flag invariants
 # ===========================================================================
+class TestCliDelimiterAliasResolution(unittest.TestCase):
+    """**vdd-adversarial R26 HIGH-1 fix:** the CLI-layer alias resolution
+    (`_delimiter_type` argparse type-callable) was untested. The 4
+    `test_delimiter_*` tests in `test_emit_csv.py` call `emit_csv` with
+    raw `\\t`/`|`/`;`/`,`, bypassing `cli.main` entirely. These tests
+    drive the actual CLI via `main([...])` and assert per-alias output.
+    """
+
+    def _run_and_read(self, td: Path, delimiter_arg: str) -> str:
+        import tempfile
+        from xlsx2csv2json.cli import main
+        wb = _make_workbook(td)
+        out = td / "out.csv"
+        rc = main(
+            [str(wb), str(out), "--sheet", "Sheet1",
+             "--delimiter", delimiter_arg],
+            format_lock="csv",
+        )
+        self.assertEqual(rc, 0)
+        return out.read_text(encoding="utf-8")
+
+    def test_cli_e2e_delimiter_tab_alias_writes_tsv(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            text = self._run_and_read(Path(td), "tab")
+            self.assertIn("id\tname", text)
+            self.assertIn("1\talice", text)
+            self.assertNotIn(",", text)
+
+    def test_cli_e2e_delimiter_pipe_alias_writes_pipe_separated(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            text = self._run_and_read(Path(td), "pipe")
+            self.assertIn("id|name", text)
+            self.assertIn("1|alice", text)
+
+    def test_cli_e2e_delimiter_backslash_t_escape_writes_tsv(self) -> None:
+        """The 2-char escape `\\t` (literal backslash + t) is for shells
+        that can't easily emit a raw tab. Maps to a real tab character.
+        """
+        with tempfile.TemporaryDirectory() as td:
+            text = self._run_and_read(Path(td), "\\t")
+            self.assertIn("id\tname", text)
+
+    def test_cli_e2e_delimiter_semicolon_literal_excel_ru_recipe(self) -> None:
+        """The documented Excel-RU recipe: --delimiter ';'."""
+        with tempfile.TemporaryDirectory() as td:
+            text = self._run_and_read(Path(td), ";")
+            self.assertIn("id;name", text)
+            self.assertIn("1;alice", text)
+
+
+class TestCliDelimiterRejection(unittest.TestCase):
+    """**vdd-adversarial R26 MED-2 fix:** AC-26.5 ("argparse rejects
+    values outside {,, ;, tab, pipe}") was unverified.
+    """
+
+    def test_cli_rejects_unknown_delimiter(self) -> None:
+        """argparse usage error → `main()` returns exit code 2
+        (it converts the underlying `SystemExit` to a rc-return per
+        cross-cutting envelope plumbing).
+        """
+        from xlsx2csv2json.cli import main
+        with tempfile.TemporaryDirectory() as td:
+            wb = _make_workbook(Path(td))
+            _, restore = _capture_stderr()
+            try:
+                rc = main(
+                    [str(wb), "--delimiter", "bogus"], format_lock="csv"
+                )
+            finally:
+                restore()
+            self.assertEqual(rc, 2)
+
+    def test_cli_rejects_multi_char_delimiter(self) -> None:
+        from xlsx2csv2json.cli import main
+        with tempfile.TemporaryDirectory() as td:
+            wb = _make_workbook(Path(td))
+            _, restore = _capture_stderr()
+            try:
+                rc = main(
+                    [str(wb), "--delimiter", ";;"], format_lock="csv"
+                )
+            finally:
+                restore()
+            self.assertEqual(rc, 2)
+
+    def test_delimiter_type_helper_raises_argument_type_error(self) -> None:
+        """Direct unit test on the `_delimiter_type` callable — exercises
+        the error message contents (which argparse surfaces in usage).
+        """
+        import argparse
+        from xlsx2csv2json.cli import _delimiter_type
+        self.assertEqual(_delimiter_type(","), ",")
+        self.assertEqual(_delimiter_type(";"), ";")
+        self.assertEqual(_delimiter_type("tab"), "\t")
+        self.assertEqual(_delimiter_type("\\t"), "\t")
+        self.assertEqual(_delimiter_type("pipe"), "|")
+        with self.assertRaises(argparse.ArgumentTypeError) as cm:
+            _delimiter_type("bogus")
+        self.assertIn("tab", str(cm.exception))
+        self.assertIn("pipe", str(cm.exception))
+
+
+class TestStdoutEncodingWarning(unittest.TestCase):
+    """**/vdd-multi-3 Logic-LOW-1 fix:** `--encoding utf-8-sig` is
+    silently ignored on stdout CSV output (BOM-in-pipe corrupts
+    downstream consumers, so emit_csv drops it). Surface a stderr
+    warning so the user isn't silently surprised.
+    """
+
+    def test_csv_stdout_with_utf8_sig_emits_warning(self) -> None:
+        from xlsx2csv2json.cli import main
+        with tempfile.TemporaryDirectory() as td:
+            wb = _make_workbook(Path(td))
+            buf, restore = _capture_stderr()
+            try:
+                rc = main(
+                    [str(wb), "-", "--sheet", "Sheet1",
+                     "--encoding", "utf-8-sig"],
+                    format_lock="csv",
+                )
+            finally:
+                restore()
+            self.assertEqual(rc, 0)
+            self.assertIn("no effect on stdout CSV output",
+                          buf.getvalue())
+
+    def test_csv_file_output_with_utf8_sig_silent(self) -> None:
+        """File output (not stdout) does NOT trigger the warning —
+        the BOM is correctly emitted to the file.
+        """
+        from xlsx2csv2json.cli import main
+        with tempfile.TemporaryDirectory() as td:
+            wb = _make_workbook(Path(td))
+            out = Path(td) / "out.csv"
+            buf, restore = _capture_stderr()
+            try:
+                main(
+                    [str(wb), str(out), "--sheet", "Sheet1",
+                     "--encoding", "utf-8-sig"],
+                    format_lock="csv",
+                )
+            finally:
+                restore()
+            self.assertNotIn("no effect on stdout", buf.getvalue())
+            self.assertTrue(out.read_bytes().startswith(b"\xef\xbb\xbf"))
+
+
+class TestJsonDelimiterWarning(unittest.TestCase):
+    """**vdd-adversarial R26 HIGH-2 fix:** `xlsx2json.py --delimiter ';'`
+    must emit a stderr warning (mirror of the `--encoding utf-8-sig`
+    warning we added for the same JSON-vs-CSV inconsistency in R25).
+    """
+
+    def test_xlsx2json_with_semicolon_delimiter_warns(self) -> None:
+        from xlsx2csv2json.cli import main
+        with tempfile.TemporaryDirectory() as td:
+            wb = _make_workbook(Path(td))
+            out = Path(td) / "out.json"
+            buf, restore = _capture_stderr()
+            try:
+                rc = main(
+                    [str(wb), str(out), "--sheet", "Sheet1",
+                     "--delimiter", ";"],
+                    format_lock="json",
+                )
+            finally:
+                restore()
+            self.assertEqual(rc, 0)
+            self.assertIn("--delimiter has no effect on JSON output",
+                          buf.getvalue())
+
+    def test_xlsx2json_default_delimiter_is_silent(self) -> None:
+        from xlsx2csv2json.cli import main
+        with tempfile.TemporaryDirectory() as td:
+            wb = _make_workbook(Path(td))
+            out = Path(td) / "out.json"
+            buf, restore = _capture_stderr()
+            try:
+                main([str(wb), str(out)], format_lock="json")
+            finally:
+                restore()
+            self.assertNotIn("--delimiter", buf.getvalue())
+
+
+class TestPublicHelperAcceptsDelimiterKwarg(unittest.TestCase):
+    """**vdd-adversarial R26 HIGH-3 fix:** the Python public helper
+    `convert_xlsx_to_csv(..., delimiter=...)` previously raised
+    `TypeError: Unknown kwarg: 'delimiter'` because `_KWARG_TO_FLAG`
+    in `__init__.py` was not updated alongside the CLI flag.
+    """
+
+    def test_convert_xlsx_to_csv_accepts_delimiter_kwarg(self) -> None:
+        from xlsx2csv2json import convert_xlsx_to_csv
+        with tempfile.TemporaryDirectory() as td:
+            wb = _make_workbook(Path(td))
+            out = Path(td) / "out.csv"
+            rc = convert_xlsx_to_csv(
+                str(wb), str(out), sheet="Sheet1", delimiter=";"
+            )
+            self.assertEqual(rc, 0)
+            self.assertIn("id;name", out.read_text(encoding="utf-8"))
+
+    def test_convert_xlsx_to_csv_accepts_encoding_kwarg(self) -> None:
+        """Side-fix: `--encoding` (R25) had the same hole — it was also
+        missing from `_KWARG_TO_FLAG`. This test locks the fix that
+        landed alongside the delimiter one.
+        """
+        from xlsx2csv2json import convert_xlsx_to_csv
+        with tempfile.TemporaryDirectory() as td:
+            wb = _make_workbook(Path(td))
+            out = Path(td) / "out.csv"
+            rc = convert_xlsx_to_csv(
+                str(wb), str(out), sheet="Sheet1", encoding="utf-8-sig"
+            )
+            self.assertEqual(rc, 0)
+            self.assertTrue(out.read_bytes().startswith(b"\xef\xbb\xbf"))
+
+    def test_convert_xlsx_to_csv_rejects_unknown_kwarg(self) -> None:
+        """Defensive: typo'd kwarg still raises (no silent regression
+        of the strict-mode kwarg validation)."""
+        from xlsx2csv2json import convert_xlsx_to_csv
+        with tempfile.TemporaryDirectory() as td:
+            wb = _make_workbook(Path(td))
+            out = Path(td) / "out.csv"
+            with self.assertRaisesRegex(TypeError, "Unknown kwarg"):
+                convert_xlsx_to_csv(
+                    str(wb), str(out), sheet="Sheet1", delim=";"  # typo
+                )
+
+
 class TestValidateFlagCombo(unittest.TestCase):
 
     def _parse(self, format_lock: str | None, argv: list[str]) -> argparse.Namespace:

@@ -118,12 +118,18 @@ _KWARG_TO_FLAG = {
     "gap_rows": "--gap-rows",
     "gap_cols": "--gap-cols",
     "datetime_format": "--datetime-format",
+    # **vdd-adversarial R26 HIGH-3 fix:** R26 added `--delimiter` to
+    # the CLI but the public Python helper raised `TypeError: Unknown
+    # kwarg: 'delimiter'` because this mapping was not updated.
+    "delimiter": "--delimiter",
+    "encoding": "--encoding",
 }
 _BOOL_KWARG_TO_FLAG = {
     "include_hidden": "--include-hidden",
     "include_hyperlinks": "--include-hyperlinks",
     "include_formulas": "--include-formulas",
     "json_errors": "--json-errors",
+    "drop_empty_rows": "--drop-empty-rows",
 }
 
 
