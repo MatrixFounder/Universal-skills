@@ -236,7 +236,6 @@ def _dispatch_action(
             f"(anchor={args.anchor!r} -> {args.replace!r})"
         )
     if args.insert_after is not None:
-        base_has_numbering = (tree_root / "word" / "numbering.xml").is_file()
         if args.insert_after == "-":
             data = _read_stdin_capped()
             if not data.strip():
@@ -261,17 +260,24 @@ def _dispatch_action(
         insert_tree_root = tmpdir / "insert_unpacked"
         insert_tree_root.mkdir()
         unpack(insert_docx, insert_tree_root)
-        insert_paragraphs = _extract_insert_paragraphs(
-            insert_tree_root, base_has_numbering=base_has_numbering,
+        insert_paragraphs, relocation_report = _extract_insert_paragraphs(
+            insert_tree_root, tree_root,
         )
         count = _do_insert_after(
             tree_root, args.anchor, insert_paragraphs,
             anchor_all=args.all, scope=scope,
         )
-        return count, (
+        summary = (
             f"inserted {len(insert_paragraphs)} paragraph(s) after "
             f"anchor {args.anchor!r} ({count} match(es))"
         )
+        # Q-A2: annotate stderr success line when ≥ 1 asset relocated.
+        k = relocation_report.media_copied + relocation_report.nonmedia_parts_copied
+        a = relocation_report.abstractnum_added
+        x = relocation_report.num_added
+        if k + a + x > 0:
+            summary += f" [relocated {k} media, {a} abstractNum, {x} numId]"
+        return count, summary
     if args.delete_paragraph:
         count = _do_delete_paragraph(
             tree_root, args.anchor, anchor_all=args.all, scope=scope,
@@ -412,18 +418,22 @@ def build_parser() -> argparse.ArgumentParser:
     """Return the argument parser for docx_replace.py.
 
     Honest-scope notes in help text (R8.j):
-      single-run anchor only | image r:embed not wired | last paragraph
-      deletion refused | blast-radius warning for --all --delete-paragraph
+      single-run anchor only | last paragraph deletion refused |
+      blast-radius warning for --all --delete-paragraph.
+
+    (R10.b + R10.e CLOSED in docx-008: --insert-after relocates images,
+    charts, OLE, SmartArt, and numbered/bulleted lists into the base.)
     """
     parser = argparse.ArgumentParser(
         prog="docx_replace.py",
         description=(
             "Replace, insert after, or delete paragraphs in .docx files.\n\n"
+            "--insert-after: images, charts, OLE objects, SmartArt diagrams, "
+            "and numbered/bulleted lists from the MD source are relocated "
+            "into the base document (docx-008, 2026-05-12).\n\n"
             "Honest scope:\n"
             "  * Anchor matching is single-run only. A phrase that spans a "
-            "formatting boundary will not be found.\n"
-            "  * --insert-after: any image in the Markdown source appears as "
-            "a broken reference (no live r:embed wired).\n"
+            "formatting boundary will not be found (R10.a).\n"
             "  * --delete-paragraph refuses to remove the last paragraph "
             "from <w:body>.\n"
             "  * --all --delete-paragraph on a common word is a large "

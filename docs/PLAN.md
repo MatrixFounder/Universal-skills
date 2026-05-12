@@ -1,468 +1,298 @@
-# Development Plan: Task 006 — `docx_replace.py` (docx-6)
+# Development Plan: Task 008 — docx-6.5 + docx-6.6 — `--insert-after` Asset Relocators
 
-> **Status:** ✅ **MERGED 2026-05-12** (11-sub-task chain executed + VDD-Multi adversarial QA pass + post-VDD-Multi honest-scope recommendations applied). All 11 sub-tasks landed via Sarcasmotron Hallucination Convergence (only 006-04 required an iter-2 fix). See [`docs/reviews/task-006-plan-review.md`](reviews/task-006-plan-review.md) for the original round-1/round-2 plan-review and [`docs/TASK.md`](TASK.md) §11 Implementation Summary for delivery actuals.
+> **Status:** DRAFT (Planner phase output, awaiting plan-reviewer gate).
 >
 > **Source documents:**
-> - [`docs/TASK.md`](TASK.md) — Task 006, **DRAFT v2** APPROVED_WITH_COMMENTS ([`docs/reviews/task-006-review.md`](reviews/task-006-review.md)). RTM R1–R12 in §5; UC-1..UC-4 in §2; D1–D8 in §0; honest-scope §9 (§11.1–§11.4 aliases).
-> - [`docs/ARCHITECTURE.md`](ARCHITECTURE.md) — **DRAFT v2** APPROVED ([`docs/reviews/task-006-architecture-review.md`](reviews/task-006-architecture-review.md)). F1–F8 functional regions; Q-A1..Q-A5 closed; atomic-chain skeleton in §11.
-> - **Predecessor PLAN.md** (Task 005 / xlsx-3 / md_tables2xlsx) — current `docs/PLAN.md` superseded by this rewrite; xlsx-3 master at [`docs/tasks/task-005-md-tables2xlsx-master.md`](tasks/task-005-md-tables2xlsx-master.md).
-> - **Predecessor PLAN.md** (Task 004 / xlsx-2 / json2xlsx) archived at [`docs/plans/plan-003-json2xlsx.md`](plans/plan-003-json2xlsx.md).
+> - [`docs/TASK.md`](TASK.md) — Task 008, APPROVED by task-reviewer (no CRITs; 8 MAJORs fixed).
+> - [`docs/ARCHITECTURE.md`](ARCHITECTURE.md) §12 — APPROVED by architecture-reviewer (no CRITs; 4 MAJORs + 4 minors fixed).
+> - **Predecessor PLAN.md** archived at [`docs/plans/plan-006-docx-replace.md`](plans/plan-006-docx-replace.md).
 >
-> **D5 closure (delivery shape):** **11 sub-tasks** — mirroring ARCH §11
-> Atomic-Chain Skeleton (architecture-reviewer MAJ-2 split of 006-01 into
-> 006-01a + 006-01b preserved; plan-review MIN-1 split of 006-07 into
-> 006-07a + 006-07b added). Order: 3 scaffolding tasks (Stage 0 —
-> 006-01a extraction-all-green + 006-01b Red test stubs + 006-02 helper
-> tests Green), 4 logic tasks (Stage 1 — cross-cutting + 3 actions), 2
-> CLI wiring tasks (Stage 1 close — 006-07a mandatory F7+F8 + 006-07b
-> conditional UC-4 library mode), 1 honest-scope lock task (Stage 2),
-> 1 finalization task (Stage 2 close).
+> **Decomposition shape (locked by ARCH §12.11):** **8 sub-tasks** —
+> 1 Stub-First scaffolding task (Stage 0 / Phase 1) + 1 security-primitive
+> task (Stage 1a) + 6 logic tasks (Stage 1b / Phase 2) + 1 finalization
+> task (Stage 2).
 >
-> **Total LOC budget (architect-locked, ARCH §3.2):**
-> ≤ **600 LOC** for `docx_replace.py` (guardrail: extract `_actions.py`
-> sibling if exceeded) + ≤ **180 LOC** for `docx_anchor.py`. Test code:
-> `test_docx_anchor.py` ≥ 20 unit tests (~ 300 LOC); `test_docx_replace.py`
-> ≥ 30 unit tests (~ 500 LOC); `tests/test_e2e.sh` += ≥ 16 named cases
-> (~ 250 LOC append). Plus fixture refresh (3 fixtures from `md2docx.js`
-> + 1 markdown insert-source). `docx_add_comment.py` modification:
-> -45 LOC (3 function bodies removed + 1 import line added; behaviour
-> byte-identical).
->
-> **Stub-First (Red → Green → Refactor) applied as REFACTOR-AHEAD pattern
-> per architecture-reviewer MAJ-2:**
->
-> - **Phase 1 (Stage 0 — Tasks 006-01a, 006-01b, 006-02):**
->   - **006-01a** is **all-green** (byte-identical refactor of
->     `docx_add_comment.py` ↔ new `docx_anchor.py`); no test stubs
->     introduced here so the G4 regression gate is evaluated on green
->     helpers only. This is the **PRE-Phase-1 step** that protects the
->     existing docx-1 test suite.
->   - **006-01b** is the canonical **Red state** — test stubs with
->     explicit `unittest.skip("docx-6 stub — task-006-NN")` and E2E
->     `echo SKIP T-<name>` markers; fixtures created; no production
->     code beyond the 006-01a refactor.
->   - **006-02** turns the **`test_docx_anchor.py`** subset **Green**
->     (≥ 20 unit tests passing on the extracted+new helpers — proves
->     refactor is complete and helpers are usable).
-> - **Phase 2 (Stage 1 — Tasks 006-03 .. 006-07b):** Per-F-region
->   implementation in dependency order:
->   - 006-03 → F1 (cross-cutting pre-flight) + F2 (part walker stub) +
->     CLI skeleton (build_parser, main, _run with pre-flight only).
->     Cross-3 / cross-4 / cross-5 / cross-7 E2E cases turn green.
->   - 006-04 → F4 `_do_replace` (+ F2 full part-walker). UC-1 E2E
->     cases turn green.
->   - 006-05 → F5 `_do_insert_after`, `_materialise_md_source`,
->     `_extract_insert_paragraphs` + stdin `-` path. UC-2 E2E cases
->     turn green.
->   - 006-06 → F6 `_do_delete_paragraph` + `_safe_remove_paragraph`
->     (last-paragraph guard + empty-cell placeholder). UC-3 E2E
->     cases turn green.
->   - **006-07a → F7 full `_run` orchestrator + F8 post-validate hook
->     (MANDATORY).** R8.k output-extension preservation. Full
->     exit-code matrix tests. **No `--unpacked-dir`** (UC-4 lives in
->     006-07b). This is the load-bearing CLI-completion sub-task and
->     is required for MVP.
->   - **006-07b → `--unpacked-dir` library mode (UC-4, MVP=No per
->     R8.g — CONDITIONAL).** Ship only if cumulative
->     `docx_replace.py` LOC ≤ 560 after 006-07a (leaves headroom for
->     UC-4 ~ 30-40 LOC). Otherwise defer to follow-up backlog row
->     `docx-6.4` and document the deferral in 006-09.
-> - **Phase 3 (Stage 2 — Tasks 006-08, 006-09):**
->   - 006-08 — Honest-scope regression locks R10.a–R10.e + Q-U1
->     tracked-change default + A4 TOCTOU symlink-race acceptance test.
->   - 006-09 — `SKILL.md` + `scripts/.AGENTS.md` + backlog row ✅ DONE
->     + `validate_skill.py` exit 0 + the **eleven (actual 12, see ARCH
->     §9 NIT n1 reconciliation)** `diff -q` cross-skill replication
->     checks silent.
+> **Dependencies (locked by ARCH §12.11):** 008-01a precedes everything;
+> 008-01b precedes 008-02 + 008-03 (path-traversal guard is a prereq for
+> F12 + F13); 008-02 precedes 008-03 (rid_offset / `_merge_relationships`
+> consumed by `_copy_nonmedia_parts`); 008-04 precedes 008-05 (signature
+> change must land before E2 wiring); 008-05 precedes 008-06; 008-06
+> precedes 008-07; 008-07 precedes 008-08.
 
 ---
 
 ## Task Execution Sequence
 
-### Stage 0 — Refactor + Scaffolding (Phase 1: 006-01a all-green; 006-01b Red stubs; 006-02 helper tests Green)
+### Stage 0 — Stub-First Scaffolding (Phase 1: Red E2E tests + stubs Green)
 
-- **[R6.a R6.b R6.c]** **Task 006-01a** — Extract `docx_anchor.py` from
-  `docx_add_comment.py` (byte-identical move of `_is_simple_text_run`,
-  `_rpr_key`, `_merge_adjacent_runs`); refactor `docx_add_comment.py`
-  to `from docx_anchor import ...`. **No new test stubs; no behaviour
-  change.** Existing docx-1 E2E suite passes unchanged (G4 gate).
-  - **RTM coverage:** **R6.a** (extract `_is_simple_text_run` /
-    `_rpr_key` / `_merge_adjacent_runs`), **R6.b** (`docx_add_comment.py`
-    imports), **R6.c** (byte-identical behaviour).
-  - **Description:** [`docs/tasks/task-006-01a-anchor-extraction.md`](tasks/task-006-01a-anchor-extraction.md)
-  - **Locks:** Module-level function bodies in `docx_anchor.py` are
-    **byte-identical** to source (verified via `diff` after extraction);
-    new module ≤ 90 LOC at end of 006-01a (full ≤ 180 cap reached only
-    after 006-02 adds `_replace_in_run` + `_concat_paragraph_text` +
-    `_find_paragraphs_containing_anchor`).
-  - **Priority:** Critical · **Dependencies:** none
+- **Task 008-01a** — `_relocator.py` skeleton + `RelocationReport` dataclass + Stub-First scaffolding
+  - RTM Coverage (preparatory, no logic): module surface only — sets up the call-sites for R1–R15 + R3.5.
+  - Description File: [`docs/tasks/task-008-01a-relocator-skeleton.md`](tasks/task-008-01a-relocator-skeleton.md)
+  - Priority: Critical
+  - Dependencies: none
+  - Gate: existing docx-6 unit + E2E tests pass unchanged (TASK §7 G1 partial).
 
-- **[R11.a R11.b R11.c R11.d]** **Task 006-01b** — Red-state test
-  scaffolding for the docx-6 chain: `test_docx_anchor.py` stubs
-  (≥ 20 cases skipped); `test_docx_replace.py` stubs (≥ 30 cases
-  skipped); `tests/test_e2e.sh` `# --- docx-6: docx_replace ---` block
-  with ≥ 16 named `echo SKIP T-<name>` markers; 3 fixtures generated
-  via `md2docx.js` from `.md` sources + 1 inline insert-source
-  markdown file.
-  - **RTM coverage:** **R11.a** (E2E ≥ 16 cases), **R11.b** (anchor
-    unit tests ≥ 20), **R11.c** (replace unit tests ≥ 30), **R11.d**
-    (fixtures derived from `md2docx.js`).
-  - **Description:** [`docs/tasks/task-006-01b-test-scaffolding.md`](tasks/task-006-01b-test-scaffolding.md)
-  - **Locks:** the 16 E2E case tags (see file); 4 unit-test classes
-    in `test_docx_replace.py`; SKIP markers must keep
-    `test_e2e.sh` exit-0 throughout Phase 1.
-  - **Priority:** Critical · **Dependencies:** 006-01a
+### Stage 1a — Security Primitive (Phase 2: F16 logic green)
 
-- **[R6.d R6.e R11.b]** **Task 006-02** — Implement new helpers in
-  `docx_anchor.py` (`_replace_in_run`, `_concat_paragraph_text`,
-  `_find_paragraphs_containing_anchor`); turn `test_docx_anchor.py`'s
-  ≥ 20 unit cases GREEN. **End-state: `docx_anchor.py` ≤ 180 LOC;
-  helper module is complete.**
-  - **RTM coverage:** **R6.d** (`_find_paragraphs_containing_anchor`),
-    **R6.e** (`_concat_paragraph_text`), **R11.b** (anchor unit tests
-    green).
-  - **Description:** [`docs/tasks/task-006-02-anchor-unit-tests.md`](tasks/task-006-02-anchor-unit-tests.md)
-  - **Locks:** new helper signatures verbatim per ARCH §5 internal-
-    signature block (kw-only `anchor_all` for `_replace_in_run`);
-    Q-U1 default behaviour pinned at unit-test level
-    (`_concat_paragraph_text` includes `<w:ins>` content, excludes
-    `<w:del>` content); `_replace_in_run` cursor-loop matches
-    `_wrap_anchors_in_paragraph` semantics (no infinite loop on empty
-    replacement).
-  - **Priority:** Critical · **Dependencies:** 006-01a, 006-01b
+- **Task 008-01b** — `_assert_safe_target` + path-traversal unit tests
+  - [F16] Implements `_assert_safe_target` security primitive (TASK §3.2; M7 from TASK review).
+  - Description File: [`docs/tasks/task-008-01b-assert-safe-target.md`](tasks/task-008-01b-assert-safe-target.md)
+  - Priority: Critical
+  - Dependencies: 008-01a
+  - Gate: 5 new unit tests green (relative OK, absolute reject, `..` reject, drive-letter reject, outside-base reject); T-docx-insert-after-path-traversal still failing (no wiring yet — proves test scaffolding is real).
 
-### Stage 1 — Logic Implementation (Phase 2: per-region Green)
+### Stage 1b — Logic Implementation (Phase 2: Epic E1 then Epic E2)
 
-- **[R7.a R7.b R7.c R7.d R7.e R7.f R2.h R8.h]** **Task 006-03** —
-  Cross-cutting pre-flight (F1) + CLI skeleton (build_parser + main
-  + _run with pre-flight only). Implements `_assert_distinct_paths`,
-  `_read_stdin_capped`, `_tempdir`; wires `assert_not_encrypted`
-  (cross-3), `warn_if_macros_will_be_dropped` (cross-4), cross-5
-  `--json-errors` envelope; cross-7 same-path guard (symlink-aware).
-  No action dispatch yet (Replace/Insert/Delete still
-  `NotImplementedError`). Cross-cutting E2E cases turn GREEN.
-  - **RTM coverage:** **R7.a** (cross-3 exit 3), **R7.b** (cross-4
-    stderr warning), **R7.c** (cross-5 envelope), **R7.d** (cross-7
-    same-path exit 6, symlink-aware), **R7.e** (`_errors.py` imported,
-    not copied), **R7.f** (stdin `-` flag presence), **R2.h** (stdin
-    size cap 16 MiB → `InsertSourceTooLarge`), **R8.h** (`--json-errors`).
-  - **Description:** [`docs/tasks/task-006-03-cross-cutting.md`](tasks/task-006-03-cross-cutting.md)
-  - **Locks:** `_assert_distinct_paths` uses `Path.resolve(strict=False)`
-    (follows symlinks); `_read_stdin_capped` reads up to
-    `16 * 1024 * 1024` bytes; argparse mutex-group registration
-    deferred to 006-07a (CLI is "skeleton" here — flags exist but
-    action dispatch raises `NotImplementedError`); `--unpacked-dir`
-    parse-side recognition only (not yet routed).
-  - **Priority:** Critical · **Dependencies:** 006-02
+#### Epic E1 — Image / Relationship Relocator (docx-6.5)
 
-- **[R1.a R1.b R1.c R1.d R1.e R1.f R1.g R5.a R5.b R5.c R5.d R5.e R5.f R5.g]**
-  **Task 006-04** — Part-walker (F2: `_iter_searchable_parts` with
-  `[Content_Types].xml` authoritative enumeration + glob fallback)
-  and `_do_replace` (F4). `--replace` action: cursor-loop multi-match
-  within run (per docx-1 pattern), `<w:rPr>` preservation, empty-
-  replacement allowed (D3), single-run honest scope (D6/B),
-  `xml:space="preserve"` set when needed. UC-1 E2E cases turn GREEN.
-  - **RTM coverage:** **R1.a** (in-place text swap), **R1.b**
-    (preserve `<w:rPr>`), **R1.c** (first-match default), **R1.d**
-    (cursor-loop multi-match), **R1.e** (empty replacement),
-    **R1.f** (single-run honest scope), **R1.g**
-    (`xml:space="preserve"`), **R5.a–R5.g** (anchor-search scope
-    deterministic ordering: body → headers → footers → footnotes →
-    endnotes, parts enumerated via Content_Types).
-  - **Description:** [`docs/tasks/task-006-04-replace-action.md`](tasks/task-006-04-replace-action.md)
-  - **Locks:** Part-walk order is the **only** deterministic order in
-    v1 (TASK §11.1 — no `--scope=` flag); `_iter_searchable_parts`
-    primary source = `[Content_Types].xml` `<Override>` entries with
-    WordprocessingML content-types; filesystem-glob fallback only on
-    Content_Types parse failure (emits stderr warning); first-match
-    default (no `--all`) **returns after writing the first part that
-    matched** (does NOT continue walking subsequent parts).
-  - **Priority:** Critical · **Dependencies:** 006-03
+- **Task 008-02** — Image relocator core (F10 + F11 + F12 + R1–R5)
+  - [R1] Media file copy with `insert_` prefix and collision-safe counter loop (F10).
+  - [R2] Max-rId scan over base rels (F11).
+  - [R3] Append mergeable relationships to base rels with offset + path-traversal guard (F12).
+  - [R4] Remap `r:embed/r:link/r:id/r:dm/r:lo/r:qs/r:cs` inside cloned `<w:p>` blocks (`_remap_rids_in_clones`).
+  - [R5] Merge `[Content_Types].xml` `<Default Extension>` entries (`_merge_content_types_defaults`).
+  - Description File: [`docs/tasks/task-008-02-image-relocator.md`](tasks/task-008-02-image-relocator.md)
+  - Priority: High
+  - Dependencies: 008-01a, 008-01b
+  - Gate: ≥ 15 new unit tests covering R1–R5 green; existing docx-6 tests still green.
 
-- **[R2.a R2.b R2.c R2.d R2.e R2.f R2.g R2.h R10.b R10.e]** **Task 006-05** —
-  `--insert-after` action (F5). Implements `_materialise_md_source`
-  (subprocess `node md2docx.js IN OUT`, 60 s timeout, `shell=False`),
-  `_extract_insert_paragraphs` (deep-clone `<w:p>` children, strip
-  trailing `<w:sectPr>` per Q-A3, emit stderr warnings on `r:embed`/
-  `r:id` per R10.b and on `<w:numId>` when base lacks
-  `numbering.xml` per Q-A4 / R10.e), `_do_insert_after` (paragraph-
-  level concat-text matching D6/B, `--all` produces N×duplication
-  via `addnext`). Stdin `-` path via `_read_stdin_capped` (006-03)
-  writes to `tempfile.NamedTemporaryFile(suffix=".md")` and passes to
-  subprocess. UC-2 E2E cases turn GREEN.
-  - **RTM coverage:** **R2.a** (md2docx subprocess), **R2.b** (unpack
-    + extract body `<w:p>`), **R2.c** (strip trailing `<w:sectPr>`),
-    **R2.d** (deep-clone after anchor `<w:p>`), **R2.e** (paragraph-
-    level concat-text matching), **R2.f** (`--all` N×duplication),
-    **R2.g** (stdin `-` support), **R2.h** (stdin size cap regression
-    already covered in 006-03 — re-asserted on insert path here),
-    **R10.b** (relationship-target warning), **R10.e** (`<w:numId>`
-    survives + base-doc warning).
-  - **Description:** [`docs/tasks/task-006-05-insert-after-action.md`](tasks/task-006-05-insert-after-action.md)
-  - **Locks:** subprocess invocation is `subprocess.run(["node",
-    str(scripts_dir / "md2docx.js"), str(md_path), str(insert_docx)],
-    shell=False, timeout=60, capture_output=True, check=False)`; deep-
-    clone uses `copy.deepcopy` on each `<w:p>` per match (NOT shared
-    reference between matches when `--all`); `<w:sectPr>` filter uses
-    `lxml.etree.QName(el).localname == "sectPr"` (Q-A3 lock).
-  - **Priority:** Critical · **Dependencies:** 006-04
+- **Task 008-03** — Non-media part copy (F13 + R3.5)
+  - [R3.5] Copy chart (`chartN.xml` + `chartN.xml.rels`), OLE (`oleObject*`), and SmartArt (`diagrams/*`) parts from insert to base; rename only on collision; copy sibling `_rels/*.rels` verbatim (D7).
+  - Includes the two helpers `_read_rel_targets` and `_apply_nonmedia_rename_to_rels` (added in §12.6 surface).
+  - Description File: [`docs/tasks/task-008-03-nonmedia-parts.md`](tasks/task-008-03-nonmedia-parts.md)
+  - Priority: High
+  - Dependencies: 008-02
+  - Gate: 5 new unit tests (chart copy, OLE copy, SmartArt copy, sibling-rels verbatim, collision-rename) green.
 
-- **[R3.a R3.b R3.c R3.d R3.e R3.f R10.c R10.d]** **Task 006-06** —
-  `--delete-paragraph` action (F6). Implements `_do_delete_paragraph`
-  + `_safe_remove_paragraph` (refuse last-body-paragraph deletion →
-  `LastParagraphCannotBeDeleted` exit 2; empty-cell placeholder
-  `etree.Element(qn("w:p"))` per Q-A5; `<w:sectPr>` body-tail
-  metadata is NOT counted as a paragraph). UC-3 E2E cases turn GREEN.
-  - **RTM coverage:** **R3.a** (remove from parent), **R3.b**
-    (paragraph-level concat-text matching), **R3.c** (`--all` removes
-    every match), **R3.d** (last-body-paragraph refusal), **R3.e**
-    (empty-cell placeholder), **R3.f** (preserve `<w:sectPr>` body-
-    tail metadata), **R10.c** (last-paragraph regression lock),
-    **R10.d** (`--all --delete-paragraph` last-paragraph guard wins
-    even with common-word anchor).
-  - **Description:** [`docs/tasks/task-006-06-delete-paragraph-action.md`](tasks/task-006-06-delete-paragraph-action.md)
-  - **Locks:** "last paragraph in `<w:body>`" is computed as
-    `len([c for c in body if etree.QName(c).localname == "p"])`
-    (ignores `<w:sectPr>`); empty-cell placeholder is the **short
-    form** `<w:p/>` (Q-A5 — uses `etree.Element(qn("w:p"))`); deletion
-    iterates a **snapshot** of matches before mutating (no iterator
-    invalidation on `--all`).
-  - **Priority:** Critical · **Dependencies:** 006-04 (part-walker
-    shared); independent of 006-05.
+- **Task 008-04** — `_extract_insert_paragraphs` signature change + E1 wiring + R6
+  - [R6] Widen `_extract_insert_paragraphs(insert_tree_root, base_tree_root) -> tuple[clones, RelocationReport]`; delete R10.b WARNING line in `_actions.py`; thread `base_tree_root` from `_do_insert_after` caller.
+  - Wires `relocator.relocate_assets(...)` into `_extract_insert_paragraphs`.
+  - Rewrites E2E `T-docx-insert-after-image-warns` → GREEN-path test (image relocated, no WARNING).
+  - Adds new E2E `T-docx-insert-after-image-relocated` (TASK §7 G2).
+  - Description File: [`docs/tasks/task-008-04-e1-wiring.md`](tasks/task-008-04-e1-wiring.md)
+  - Priority: Critical
+  - Dependencies: 008-03
+  - Gate: G2 + G5 (image-relocated + rewritten warn cases) green; G1 holds for all other Task 006 E2E cases.
 
-- **[R4.a R4.b R4.c R8.a R8.b R8.c R8.d R8.e R8.f R8.i R8.j R8.k R9.a R9.b R9.c R9.d]**
-  **Task 006-07a** — CLI wiring (F7 full `_run` pipeline) + post-
-  validate hook (F8). **MANDATORY MVP closure** for zip-mode happy
-  paths. R8.k output-extension preservation. **No `--unpacked-dir`**
-  in this task — UC-4 lives in 006-07b.
-  - **RTM coverage:** **R4.a** (action mutex), **R4.b** (exit 2
-    `UsageError`), **R4.c** (`--anchor` required), **R8.a** positional
-    INPUT/OUTPUT, **R8.b** `--anchor TEXT`, **R8.c** `--replace TEXT`,
-    **R8.d** `--insert-after PATH`, **R8.e** `--delete-paragraph`,
-    **R8.f** `--all`, **R8.i** one-line stderr success log (D8),
-    **R8.j** `--help` documents honest scope, **R8.k** output-
-    extension preserved verbatim, **R9.a**
-    `DOCX_REPLACE_POST_VALIDATE` env opt-in, **R9.b** validation
-    failure → exit 7 + `unlink(output)`, **R9.c** subprocess env-
-    override for hermetic tests, **R9.d** truthy allowlist
-    `{1, true, yes, on}`.
-  - **Description:** [`docs/tasks/task-006-07a-cli-and-post-validate.md`](tasks/task-006-07a-cli-and-post-validate.md)
-  - **Locks:** `_run` dispatch order (ARCH §F7 step list MAJ-1 fix,
-    minus the library-mode step deferred to 006-07b): cross-7, then
-    cross-3/cross-4, then unpack, then action, then pack, then
-    post-validate, then success summary; argparse mutually-exclusive
-    group on `{--replace, --insert-after, --delete-paragraph}` with
-    `required=True`; success summary uses `Path(args.output).name`
-    for filename component; **560 LOC soft ceiling** for
-    `docx_replace.py` end-state (headroom for 006-07b UC-4 ≥ 40 LOC);
-    **600 LOC HARD ceiling** — if exceeded, **STOP** and extract
-    `_actions.py` sibling before merging 006-07a.
-  - **Priority:** Critical · **Dependencies:** 006-05, 006-06
+#### Epic E2 — Numbering Relocator (docx-6.6)
 
-- **[R8.g R4.b]** **Task 006-07b** — `--unpacked-dir` library mode
-  (UC-4). **CONDITIONAL MVP=No per R8.g.** Lands only if cumulative
-  `docx_replace.py` LOC after 006-07a is ≤ 560 (≥ 40 LOC headroom).
-  Implements library-mode dispatch FIRST in `_run` (ARCH §F7 step 1
-  MAJ-1 fix), `NotADocxTree` guard, skip cross-7/3/4 in library
-  mode, no pack step. If LOC budget is exceeded by 006-07a, this
-  task is **deferred** to follow-up backlog row `docx-6.4`
-  (documented in 006-09).
-  - **RTM coverage:** **R8.g** (`--unpacked-dir` library mode,
-    MVP=No), **R4.b** (`UsageError` when `--unpacked-dir` combined
-    with positional INPUT/OUTPUT).
-  - **Description:** [`docs/tasks/task-006-07b-unpacked-dir.md`](tasks/task-006-07b-unpacked-dir.md)
-  - **Locks:** Library-mode dispatch happens **first** in `_run`
-    (before cross-7) per ARCH MAJ-1 fix; library-mode does NOT
-    invoke `_assert_distinct_paths`, `assert_not_encrypted`, or
-    `warn_if_macros_will_be_dropped` (caller owns the tree); library
-    mode also skips `office.pack` and post-validate (no output file
-    to validate).
-  - **Priority:** High (conditional) · **Dependencies:** 006-07a
+- **Task 008-05** — Numbering relocator core (F14 + F15 + R9–R13)
+  - [R9] Read insert tree `word/numbering.xml`.
+  - [R10] Compute `anum_offset` and `num_offset` from base.
+  - [R11] Clone + offset-shift `<w:abstractNum>` + `<w:num>` into base, preserving ECMA-376 §17.9.20 ordering (abstractNum-before-num).
+  - [R12] If base has no `numbering.xml`: install insert's verbatim and call `_ensure_numbering_part`.
+  - [R13] Rewrite `<w:numId w:val>` inside cloned `<w:p>` blocks (`_remap_numid_in_clones`).
+  - Description File: [`docs/tasks/task-008-05-numbering-relocator.md`](tasks/task-008-05-numbering-relocator.md)
+  - Priority: High
+  - Dependencies: 008-04
+  - Gate: ≥ 10 unit tests including the ECMA-376 §17.9.20 ordering regression-lock green.
 
-### Stage 2 — Honest-Scope Locks & Finalization
+- **Task 008-06** — E2 wiring + R14
+  - [R14] Call numbering relocator after image relocator in `relocate_assets`; delete R10.e WARNING line.
+  - Rewrites E2E `T-docx-numid-survives-warning` → GREEN-path test (list rendered with bullets/numbers, no WARNING).
+  - Adds new E2E `T-docx-insert-after-numbering-relocated` (TASK §7 G3).
+  - Adds new E2E `T-docx-insert-after-image-and-numbering` (TASK §7 G4 — E1+E2 integration).
+  - Description File: [`docs/tasks/task-008-06-e2-wiring.md`](tasks/task-008-06-e2-wiring.md)
+  - Priority: Critical
+  - Dependencies: 008-05
+  - Gate: G3 + G4 + G5 (numbering-relocated + image-and-numbering + rewritten numid case) green.
 
-- **[R10.a R10.b R10.c R10.d R10.e]** **Task 006-08** — Honest-scope
-  regression locks (R10.a–R10.e), Q-U1 tracked-change default lock
-  (arch-review MIN-4), and **A4 TOCTOU symlink-race acceptance test**
-  (arch-review MIN-2). These tests already have stubs from 006-01b;
-  this task **upgrades them to live tests** that exercise the v1
-  honest-scope boundary. No new production code unless a regression
-  test reveals a behaviour gap (in which case the gap is escalated
-  via a NEW plan-review round, NOT silently widened in 006-08).
-  - **RTM coverage:** **R10.a** (`--replace` cross-run anchor →
-    `AnchorNotFound`), **R10.b** (`--insert-after` image-bearing MD →
-    stderr warning + no live `r:embed`), **R10.c** (last-paragraph
-    refusal regression), **R10.d** (`--all --delete-paragraph` on
-    common word does NOT empty body), **R10.e** (`<w:numId>` survives).
-  - **Description:** [`docs/tasks/task-006-08-honest-scope-locks.md`](tasks/task-006-08-honest-scope-locks.md)
-  - **Locks:** R10.a fixture uses an anchor that spans two different-
-    rPr runs (must NOT match after `_merge_adjacent_runs`); R10.b
-    fixture is generated by `md2docx.js` from a markdown source
-    containing `![alt](image.png)` — the resulting `.docx` contains a
-    relationship-bearing `<w:p>` that triggers the stderr warning and
-    is inserted **without** copying the `word/media/` part; R10.d
-    uses a fixture with anchor `the` matching every paragraph in body
-    — first match removed without `--all`, exit 2
-    `LastParagraphCannotBeDeleted` with `--all`; Q-U1 lock asserts
-    `<w:ins>`-wrapped anchor matches; `<w:del>`-wrapped anchor does
-    NOT match.
-  - **Priority:** High · **Dependencies:** 006-07
+### Stage 1c — Security E2E + Q-A2 + Idempotency (Phase 2 close)
 
-- **[R12.a R12.b R12.c R12.d R12.e R12.f]** **Task 006-09** — Final
-  docs + backlog + validator gates. Updates `SKILL.md` (docx skill;
-  scripts-list row for `docx_replace.py` + new Red Flag if a
-  v1-shipping behaviour diverges from the docx-1 cookbook),
-  `scripts/.AGENTS.md` (docx-6 row), `docs/office-skills-backlog.md`
-  (`docx-6` row → ✅ DONE with status line, LOC, test counts);
-  re-runs `validate_skill.py skills/docx` (must exit 0); re-runs the
-  **eleven (actual 12 — see ARCH §9 NIT n1 reconciliation)**
-  `diff -q` cross-skill replication checks (must be silent); re-runs
-  full `tests/test_e2e.sh` (must exit 0). **DoD checklist explicitly
-  enumerates all 12 `diff -q` invocations to close the "eleven vs
-  twelve" gap.**
-  - **RTM coverage:** **R12.a** (`SKILL.md` row), **R12.b**
-    (`scripts/.AGENTS.md` row), **R12.c** (backlog ✅ DONE), **R12.d**
-    (`validate_skill.py` exit 0), **R12.e** (`test_e2e.sh` exit 0),
-    **R12.f** (eleven/12 `diff -q` silent).
-  - **Description:** [`docs/tasks/task-006-09-final-docs-and-backlog.md`](tasks/task-006-09-final-docs-and-backlog.md)
-  - **Locks:** the **DoD reconciliation note** explicitly lists all
-    12 invocations from CLAUDE.md §2 (3-skill OOXML `office/` ×2 +
-    4-skill `_soffice.py` ×2 + 4-skill `_errors.py` ×3 + 4-skill
-    `preview.py` ×3 + 3-skill `office_passwd.py` ×2 = 12); backlog
-    update format mirrors xlsx-3's status-line cadence.
-  - **Priority:** High · **Dependencies:** 006-08
+- **Task 008-07** — Path-traversal E2E + success-line annotation + idempotency unit test
+  - [R15.e] New E2E `T-docx-insert-after-path-traversal` (TASK §7 G11): malicious insert rels with `Target="../../etc/passwd"` → exit 1 `Md2DocxOutputInvalid`.
+  - Q-A2 success-line annotation: append `[relocated K media, A abstractNum, X numId]` to stderr success line when any count > 0; suppress when all zero (back-compat for plain-text inserts).
+  - Q-A3 idempotency unit test: `test_relocator_idempotent_on_same_inputs`.
+  - `DOCX_REPLACE_POST_VALIDATE=1 ./tests/test_e2e.sh` run hermetic (TASK §7 G10).
+  - Description File: [`docs/tasks/task-008-07-path-traversal-success-line.md`](tasks/task-008-07-path-traversal-success-line.md)
+  - Priority: Medium
+  - Dependencies: 008-06
+  - Gate: G10 + G11 green.
+
+### Stage 2 — Documentation, Backlog & Cross-Skill Replication (Phase 2 finalization)
+
+- **Task 008-08** — Docs + backlog + validator + cross-skill `diff -q`
+  - [R15.f] Update `SKILL.md` (`docx_replace.py` row: only R10.a remains in honest scope; image + numbering + chart + OLE + SmartArt relocated).
+  - [R15.f] Flip `docs/office-skills-backlog.md` rows `docx-6.5` and `docx-6.6` to `✅ DONE 2026-05-12`.
+  - [R15.f] Update `skills/docx/scripts/.AGENTS.md` with docx-6.5/6.6 row + sync LOC + test counts.
+  - Update `docx_replace.py --help` (remove "image r:embed not wired" / "<w:numId> rendering as plain text"; optionally add one line on relocation).
+  - Run `validate_skill.py skills/docx` → exit 0 (TASK §7 G8).
+  - Run all 12 `diff -q` cross-skill invocations → silent (TASK §7 G7).
+  - **MIN-5 propagation:** while editing ARCH §9 "eleven (actual count 12)" reconciliation NIT n1 — replace with "12" everywhere.
+  - Description File: [`docs/tasks/task-008-08-docs-backlog.md`](tasks/task-008-08-docs-backlog.md)
+  - Priority: Medium
+  - Dependencies: 008-07
+  - Gate: G6 + G7 + G8 + G9 green.
 
 ---
 
 ## RTM Coverage Matrix
 
-| RTM Row | Sub-feature scope | Closing task(s) |
-| :---: | :--- | :---: |
-| **R1** | `--replace` action (in-place swap, preserve rPr, first-match, cursor-loop, empty replacement, single-run honest scope, xml:space) | 006-02 (helpers green), 006-04 (action) |
-| **R2** | `--insert-after` action (md2docx subprocess, unpack/extract body, strip sectPr, deep-clone after anchor, paragraph-level concat-text, --all, stdin, stdin cap) | 006-03 (stdin cap helper + size cap), 006-05 (full action) |
-| **R3** | `--delete-paragraph` action (remove from parent, concat-text match, --all, last-paragraph refusal, empty-cell placeholder, sectPr preserved) | 006-06 |
-| **R4** | Action mutex (exactly one of replace/insert/delete; --anchor required) | 006-07a (argparse mutex group); 006-07b (R4.b for `--unpacked-dir` mutex with INPUT/OUTPUT) |
-| **R5** | Anchor-search scope (body + headers + footers + footnotes + endnotes; Content_Types enumeration; deterministic part-walk order) | 006-04 (`_iter_searchable_parts`) |
-| **R6** | `docx_anchor.py` helpers — R6.a/b/c: extract `_is_simple_text_run` / `_rpr_key` / `_merge_adjacent_runs` + refactor `docx_add_comment.py` (byte-identical); R6.d/e: new helpers `_replace_in_run` / `_concat_paragraph_text` / `_find_paragraphs_containing_anchor` | 006-01a (R6.a/b/c extraction+refactor), 006-02 (R6.d/e new helpers + green tests) |
-| **R7** | Cross-cutting parity (cross-3/4/5/7; `_errors.py` imported; stdin `-` flag) | 006-03 |
-| **R8** | CLI surface (positional INPUT/OUTPUT; --anchor required; --replace/--insert-after/--delete-paragraph; --all; --unpacked-dir MVP=No; --json-errors; one-line stderr success; --help documents honest scope; output extension preserved) | 006-07a (R8.a-f, R8.i-k full CLI), 006-07b (R8.g `--unpacked-dir` conditional), 006-03 (R8.h `--json-errors` + `--help` skeleton) |
-| **R9** | Output integrity (`DOCX_REPLACE_POST_VALIDATE` env opt-in; failure → exit 7 + unlink; subprocess env-override for hermetic tests; truthy allowlist) | 006-07a |
-| **R10** | Honest-scope regression locks: cross-run anchor → `AnchorNotFound`; image-bearing insert → stderr warning + no live r:embed; last-paragraph refusal; --all --delete-paragraph on common word; `<w:numId>` survives | 006-08 (live regression locks); also: R10.b warning code in 006-05, R10.c/d guards in 006-06, R10.e warning code in 006-05 |
-| **R11** | Testing scaffolding — R11.a E2E ≥ 16 cases; R11.b anchor unit ≥ 20; R11.c replace unit ≥ 30; R11.d fixtures from md2docx.js (no manually-crafted OOXML); **R11.e — N/A (docx-1 had none; declared not applicable in 006-01b)** | 006-01b (R11.a-d stubs; R11.e N/A declaration), 006-02 (R11.b anchor green), 006-04..07a (R11.a/c unit + E2E logic green) |
-| **R12** | Docs & validators (SKILL.md row; .AGENTS.md row; backlog ✅ DONE; `validate_skill.py` exit 0; `test_e2e.sh` exit 0; eleven/12 `diff -q` silent) | 006-09 |
+| RTM ID (TASK §5) | Sub-feature anchor | Closing task |
+|---|---|---|
+| **R1** (Media file copy with collision-safe prefix) | F10 `_copy_extra_media` | 008-02 |
+| **R2** (Max-rId scan over base rels) | F11 `_max_existing_rid` | 008-02 |
+| **R3** (Append mergeable rels with offset + path guard) | F12 `_merge_relationships` (with R3.(g) path-traversal call) | 008-02 (R3.a-f) + 008-01b (R3.(g) primitive in F16) |
+| **R3.5** (Non-media part copy) | F13 `_copy_nonmedia_parts` + `_read_rel_targets` + `_apply_nonmedia_rename_to_rels` | 008-03 |
+| **R4** (Remap `r:embed/r:link/r:id` in clones) | `_remap_rids_in_clones` | 008-02 |
+| **R5** (Merge Content-Types `<Default>`) | `_merge_content_types_defaults` | 008-02 |
+| **R6** (Wire E1 relocator into `_extract_insert_paragraphs`) | `_actions.py` signature change | 008-04 |
+| **R7** (E1 unit tests) | `test_docx_relocator.py` E1 tests | 008-01a (scaffolding) + 008-01b (F16 tests Green) + 008-02 (E1 core Green) + 008-03 (non-media Green) |
+| **R8** (E1 E2E test `T-docx-insert-after-image-relocated`) | `tests/test_e2e.sh` | 008-04 |
+| **R9** (Read insert numbering.xml) | F14 part 1 | 008-05 |
+| **R10** (Compute anum/num offsets from base) | F14 part 2 | 008-05 |
+| **R11** (Clone + offset-shift defs; ECMA-376 §17.9.20 order) | F14 part 3 | 008-05 |
+| **R12** (Install verbatim if base has no numbering) | F14 + `_ensure_numbering_part` | 008-05 |
+| **R13** (Rewrite `<w:numId w:val>` in clones) | F15 `_remap_numid_in_clones` | 008-05 |
+| **R14** (Wire E2 relocator + delete R10.e WARNING) | `relocate_assets` E2 branch | 008-06 |
+| **R15** (E2 unit + E2E tests + integration + path-traversal + docs sync) | `test_docx_relocator.py` E2; `T-docx-insert-after-numbering-relocated`; `T-docx-insert-after-image-and-numbering`; `T-docx-insert-after-path-traversal`; SKILL.md / backlog / .AGENTS.md | 008-05 + 008-06 + 008-07 + 008-08 |
 
-## Use Case Coverage
-
-| Use Case | Closing task(s) |
-| :--- | :--- |
-| **UC-1** — Replace text inside a run (preserve formatting) | 006-04 (action body) + 006-07a (CLI wiring) |
-| **UC-2** — Insert paragraph(s) after anchor's `<w:p>` | 006-05 (action body + md2docx subprocess) + 006-07a (CLI wiring) |
-| **UC-3** — Delete the paragraph containing the anchor | 006-06 (action body) + 006-07a (CLI wiring) |
-| **UC-4** — Library mode (`--unpacked-dir`) — **MVP=No** | 006-07b (CONDITIONAL — lands only if 006-07a leaves ≥ 40 LOC headroom; else deferred to follow-up backlog row `docx-6.4`) |
-
-## Open-Question Closure Trail
-
-| Question (source) | Closing task | Resolution lock |
-| :--- | :---: | :--- |
-| ARCH Q-A1 — Module split (single file vs package) | 006-01a + 006-07a/07b | Single file `docx_replace.py` ≤ 600 LOC; soft ceiling 560 after 006-07a; guardrail extract `_actions.py` if exceeded |
-| ARCH Q-A2 — `docx_anchor.py` extraction timing | 006-01a | Ship in same atomic chain; 006-01a is byte-identical refactor, regression-guarded by docx-1 E2E |
-| ARCH Q-A3 — `<w:sectPr>` stripping | 006-05 | Strip via `QName(el).localname == "sectPr"` filter unconditionally |
-| ARCH Q-A4 — Numbering relocation | 006-05 (warning) + 006-08 (regression lock R10.e) | Warn-only (honest scope §11.4); v2 ticket `docx-6.5` |
-| ARCH Q-A5 — Empty-cell placeholder | 006-06 | `etree.Element(qn("w:p"))` short-form (Q-A5 lock) |
-| TASK Q-U1 — Tracked-changes behaviour | 006-02 (helper-level) + 006-08 (regression lock) | Default v1: match through `<w:ins>`; ignore `<w:del>` |
-| TASK Q-U2 — Comment-range preservation | (documentation only) | `<w:commentRangeStart/End>` are run siblings; untouched by `<w:t>` rewrite |
-| TASK Q-U3 — Per-part match-count reporting | (deferred to v2) | v1 single-line aggregate summary only |
-| task-reviewer NIT n1 — eleven vs twelve `diff -q` | 006-09 | DoD checklist enumerates all 12; "eleven" label kept for narrative continuity, count reconciled in note |
-| arch-reviewer MIN-2 — A4 TOCTOU regression lock | 006-08 | Test exercises resolve→open same-path even when source is symlink-rewritten between resolve() and open() |
-| arch-reviewer MIN-3 — Part-walker enumeration source | 006-04 | Content_Types primary; filesystem glob fallback only on parse failure (stderr warning) |
-| arch-reviewer MIN-4 — Q-U1 default behaviour lock | 006-02 (unit) + 006-08 (e2e) | `_concat_paragraph_text` includes `<w:ins>` content, excludes `<w:del>` content |
-| arch-reviewer NIT-3 — R1.g `xml:space="preserve"` explicit test | 006-02 (helper unit) + 006-04 (e2e) | Set when result contains leading/trailing space or whitespace ≠ stripped form |
-| plan-reviewer MIN-3 — Q-U1 fixture generation method | 006-08 | `scripts/tests/build_tracked_change_fixture.py` LibreOffice-headless round-trip; hand-crafted OOXML deviation from R11.d REJECTED. If LO automation proves impractical → escalate to plan-review round 2 (Word COM, or documented R11.d waiver). |
-
-## Honest-Scope Carry-Forward (TASK §9 + ARCH §10)
-
-The following limitations are **deliberately accepted in v1**. The
-chain MUST NOT silently widen scope. If implementation work surfaces
-a limitation as blocking, **stop and escalate** — open a new TASK
-Open Question or a v2 backlog row (`docx-6.5`, `docx-6.6`, …):
-
-- **§11.1** Part-walk ordering deterministic, NOT user-configurable
-  (no `--scope=` flag in v1).
-- **§11.2** `<w:sectPr>` stripped from MD-source body before splice
-  (no `--carry-section-props` flag in v1).
-- **§11.3** Inserted MD content: images/charts/OLE/SmartArt NOT
-  relocated (R10.b lock; v2 ticket `docx-6.5`).
-- **§11.4** Numbering definitions NOT relocated (R10.e lock; warn-only).
-- **ARCH A1** No `--allow-empty-body` escape hatch (last-paragraph
-  refusal is unconditional in v1).
-- **ARCH A2** No relationship relocation in `--insert-after`.
-- **ARCH A3** No scope filter (`--scope=body|all`).
-- **ARCH A4** TOCTOU symlink race between `Path.resolve()` and file
-  open (mirrors xlsx-2 ARCH §10 precedent).
-- **ARCH A5** `--unpacked-dir` library mode (UC-4) is **MVP=No** (R8.g).
-
-## Platform-IO Errors (envelope-only, NOT typed `_AppError`)
-
-The typed `_AppError` taxonomy covers docx-6's logical error classes
-(AnchorNotFound, EncryptedFileError, SelfOverwriteRefused,
-Md2DocxFailed, Md2DocxOutputInvalid, Md2DocxNotAvailable,
-EmptyInsertSource, InsertSourceTooLarge, LastParagraphCannotBeDeleted,
-NotADocxTree, PostValidateFailed, UsageError). Platform-IO failures
-(`FileNotFoundError`, generic `OSError` on read/write) are
-**deliberately NOT** added to the taxonomy — they're caught at the
-CLI layer in `_run` and surfaced via direct
-`report_error(message, code=1, error_type="FileNotFound" | "IOError",
-details={"path": ...})` calls. Same pattern as xlsx-3 PLAN.
-
-## Phase-Boundary Gates
-
-Between each task, the developer MUST verify:
-
-1. **Validator gate:** `python3 .claude/skills/skill-creator/scripts/validate_skill.py skills/docx` exits 0.
-2. **Cross-skill byte-identity gate (at each task boundary, i.e. after
-   each `task-006-NN` lands and before the next begins — MIN-2 fix;
-   NOT per-commit which would be impractical):** all **12** `diff -q`
-   invocations from CLAUDE.md §2 silent (the chain consumes
-   `office/` / `_soffice.py` / `_errors.py` / `preview.py` /
-   `office_passwd.py` as read-only; none of them is modified in
-   006-NN tasks). The DoD checklist in 006-09 enumerates the 12
-   invocations explicitly. Mirrors Task-005 precedent cadence.
-3. **Test gate:** `cd skills/docx/scripts && ./.venv/bin/python -m unittest discover -s tests` exits 0; `bash skills/docx/scripts/tests/test_e2e.sh` exits 0 (modulo the `DOCX6_STUBS_ENABLED` env flag — see MAJ-2 lock below).
-4. **G4 regression gate (006-01a only — critical):** docx-1 E2E suite
-   passes **unchanged** after the `docx_anchor.py` extraction. If
-   ANY existing test fails, **STOP** and revert 006-01a.
-5. **LOC ceiling gate (006-07a / 006-07b):** `wc -l
-   skills/docx/scripts/docx_replace.py` ≤ 560 after 006-07a (soft;
-   leaves ≥ 40 LOC headroom for 006-07b UC-4); ≤ 600 after 006-07b
-   (HARD ceiling). If 006-07a exceeds 560, defer 006-07b to follow-up
-   backlog row `docx-6.4`. If 006-07b would push past 600, extract
-   `_actions.py` sibling **before** merging.
-6. **Stub-First Red-state gate (MAJ-2 lock — 006-01b onward until each
-   F-region lands):** unit-test stubs use `self.fail("docx-6 stub —
-   to be implemented in task-006-NN")` (NOT `unittest.skip`) so the
-   suite reports an observably failing test per Phase-2 deliverable.
-   E2E stubs gated behind `DOCX6_STUBS_ENABLED` env flag: default
-   unset → `echo SKIP` (suite stays exit-0 in CI); `DOCX6_STUBS_ENABLED=1`
-   → expect-fail (run the case; `nok` if rc != expected). Phase-2
-   sub-tasks flip individual `self.fail()` lines to real assertions
-   as their region lands. The CI red bar SHRINKS monotonically.
-7. **Session-state persistence:** `update_state.py` invoked at each
-   task boundary (mode `VDD-Develop`, task
-   `Task-006-docx-replace`, status `Task-NN-Done`).
-
-## Acceptance Gates (TASK §7 ↔ closing task)
-
-| Gate | Pass condition | Closing task |
-| :---: | :--- | :---: |
-| **G1** (Cross-cutting) | cross-3/4/5/7 all green for `docx_replace.py` | 006-03 |
-| **G2** (RTM coverage) | All R1–R12 sub-features have ≥ 1 E2E or unit test (R11.e is N/A — declared in 006-01b) | 006-04..07a (logic), 006-02 (helpers), 006-08 (locks) |
-| **G3** (Honest-scope locks) | R10.a–R10.e regression tests live (not skipped) | 006-08 |
-| **G4** (Refactor) | `docx_add_comment.py` E2E suite passes unchanged after `docx_anchor.py` extraction | 006-01a |
-| **G5** (Validator) | `validate_skill.py skills/docx` exit 0 | 006-09 |
-| **G6** (Cross-skill drift) | All 11 (actual 12) `diff -q` parity checks silent | 006-09 (DoD enumeration) |
-| **G7** (Backlog) | `docs/office-skills-backlog.md` row docx-6 marked ✅ DONE | 006-09 |
-| **G8** (Docs) | `SKILL.md` + `scripts/.AGENTS.md` updated; `--help` documents honest scope | 006-07a (--help text) + 006-09 (SKILL.md / .AGENTS.md) |
+**Coverage check:** Every RTM row maps to ≥ 1 closing task. The 16
+RTM rows distribute as: 008-02 owns R1+R2+R3+R4+R5; 008-03 owns R3.5;
+008-04 owns R6+R8; 008-05 owns R9+R10+R11+R12+R13; 008-06 owns R14;
+008-01a + 008-02 + 008-03 + 008-05 + 008-06 collectively own R7
+(scaffolding + Green per epic); 008-08 owns R15.f docs items. No
+gaps; no double-allocation.
 
 ---
 
-**End of PLAN — Task 006 — `docx_replace.py` (✅ MERGED 2026-05-12 + VDD-Multi-hardened; see [`docs/TASK.md`](TASK.md) §11 for delivery actuals).**
+## Use Case Coverage
+
+| Use Case (TASK §2) | Tasks |
+|---|---|
+| **UC-1** — `--insert-after` with image in MD source | 008-02, 008-03, 008-04 |
+| **UC-2** — `--insert-after` with numbered/bulleted list in MD source | 008-05, 008-06 |
+| **UC-3** — UC-1 + UC-2 integration | 008-06 (E2E `T-docx-insert-after-image-and-numbering`) |
+| **UC-4** — Backward-compat regression (plain text, no rels) | 008-04 + 008-06 (regression assertion via existing T-docx-insert-after-{file,stdin,empty-stdin,all-duplicates}) |
+
+---
+
+## Phase-Boundary Gates
+
+Each sub-task MUST pass the following before its commit lands:
+
+| Gate | Pass condition | Owner sub-task |
+|---|---|---|
+| **G-Stub** | After 008-01a: `_relocator.py` importable; `python3 -m unittest discover -s skills/docx/scripts/tests -p "test_docx_relocator.py"` collects ≥ 25 skipped tests; existing 108 docx-6 unit tests + 24 E2E cases pass unchanged. | 008-01a |
+| **G-F16** | After 008-01b: 5 `test_assert_safe_target_*` tests green; details.reason tokens match the four cases. | 008-01b |
+| **G-E1-core** | After 008-02: ≥ 15 E1 unit tests green; F10–F12 + R4 + R5 helpers implemented. | 008-02 |
+| **G-E1-nonmedia** | After 008-03: 5 non-media-copy unit tests green; F13 + helpers implemented. | 008-03 |
+| **G-E1-wiring** | After 008-04: TASK §7 G2 + G5 (image-relocated + rewritten warn case) green; `_extract_insert_paragraphs` new signature live. | 008-04 |
+| **G-E2-core** | After 008-05: ≥ 10 E2 unit tests green, including ECMA-376 §17.9.20 ordering regression-lock. | 008-05 |
+| **G-E2-wiring** | After 008-06: TASK §7 G3 + G4 + G5 (numbering + image-and-numbering + rewritten numid case) green. | 008-06 |
+| **G-Security-E2E** | After 008-07: TASK §7 G10 + G11 green (POST_VALIDATE hermetic; path-traversal test exit 1). | 008-07 |
+| **G-Finalize** | After 008-08: TASK §7 G6 + G7 + G8 + G9 green. | 008-08 |
+
+---
+
+## Acceptance Gates Map (TASK §7 ↔ closing task)
+
+| TASK §7 Gate | Pass condition (TASK §7) | Closing task |
+|---|---|---|
+| **G1** All Task 006 E2E cases unchanged except 2 rewritten | 22 unchanged + 2 rewritten = 24 passing | 008-04 + 008-06 |
+| **G2** `T-docx-insert-after-image-relocated` green | E2E exit 0 + assertions in TASK §2.1 hold | 008-04 |
+| **G3** `T-docx-insert-after-numbering-relocated` green | E2E exit 0 + assertions in TASK §2.2 hold | 008-06 |
+| **G4** `T-docx-insert-after-image-and-numbering` green | E2E exit 0 + UC-3 assertions | 008-06 |
+| **G5** Rewritten E2E cases assert GREEN path | T-docx-insert-after-image-warns + T-docx-numid-survives-warning both pass on GREEN path | 008-04 (image) + 008-06 (numbering) |
+| **G6** Unit-test suite: ≥ 25 new tests; ≥ 100 total | `python3 -m unittest discover` exit 0 + count assertions | 008-08 |
+| **G7** All 12 `diff -q` invocations silent | `bash` cross-skill replication check produces zero output | 008-08 |
+| **G8** `validate_skill.py skills/docx` exit 0 | Script exit code 0 | 008-08 |
+| **G9** Backlog + SKILL.md + .AGENTS.md updated | git diff shows expected updates | 008-08 |
+| **G10** `DOCX_REPLACE_POST_VALIDATE=1 ./tests/test_e2e.sh` exit 0 | Hermetic env-var-on run exit 0 | 008-07 |
+| **G11** Path-traversal regression test | `T-docx-insert-after-path-traversal` exits 1 with `Md2DocxOutputInvalid` envelope | 008-07 |
+
+---
+
+## Open-Question Closure Trail
+
+| Q | Section in TASK | Section in ARCH §12 | Closing task |
+|---|---|---|---|
+| **Q-A1** Module placement | TASK §6.1 | §12.1, §12.2 (single `_relocator.py` sibling) | Closed in ARCH §12; ratified by 008-01a (module created with single-file layout) |
+| **Q-A2** Success-summary annotation | TASK §6.1 | §12.1, §12.9 (annotate when ≥ 1 asset) | 008-07 |
+| **Q-A3** Idempotency unit test | TASK §6.1 | §12.1 (included) | 008-07 |
+| **Q-A4** Chart sub-rels recursion | TASK §6.1 | §12.1 (verbatim copy, D7 ratified) | Closed in ARCH §12; ratified by 008-03 (sibling rels copied verbatim, no recursion) |
+
+---
+
+## Honest-Scope Carry-Forward (TASK §9 + ARCH §10)
+
+After Task 008 merges, the honest-scope catalogue is **shrunk**:
+
+| Honest-scope item | Before docx-008 | After docx-008 |
+|---|---|---|
+| **R10.a** (cross-run anchor) | Locked | **Untouched** (preserved) |
+| **R10.b** (image relocation gap) | Locked | **CLOSED** by 008-04 (warning deleted, image relocated) |
+| **R10.c** (last-paragraph deletion) | Locked | **Untouched** (preserved) |
+| **R10.d** (--all --delete-paragraph blast-radius) | Locked | **Untouched** (preserved) |
+| **R10.e** (numbering relocation gap) | Locked | **CLOSED** by 008-06 (warning deleted, list rendered) |
+| **ARCH §10 A1** | Locked | **Untouched** |
+| **ARCH §10 A2** | Locked | **CLOSED** by §12 (full relocation shipped) |
+| **ARCH §10 A3** | Already closed (docx-6.7) | No-op |
+| **ARCH §10 A4** | Locked | **Untouched** |
+| **ARCH §10 A5** | Already closed (UC-4 shipped in 006-07b) | No-op |
+| **TASK §9 H1** (multi-level SmartArt sub-rels) | NEW (introduced by docx-008) | Documented v3 ticket |
+| **TASK §9 H2** (hyperlink validation) | NEW | YAGNI v3 |
+| **TASK §9 H3** (embedded fonts) | NEW | Out of backlog scope |
+| **TASK §9 H4** (media dedup) | NEW | YAGNI v3 |
+| **TASK §9 H5** (insert tree `<Override>` parts) | NEW | v3 ticket |
+
+---
+
+## Stub-First Methodology Application
+
+| Phase | Sub-tasks | Output |
+|---|---|---|
+| **Phase 1 — Stubs & Tests (Red → Green)** | 008-01a | New module `_relocator.py` with all 13 functions as stubs returning zero/empty defaults. `test_docx_relocator.py` with ≥ 25 explicitly-skipped tests (`@unittest.skip("stub-first; logic lands in 008-02..008-06")`). |
+| **Phase 2 — Logic Implementation (Green replacing stubs)** | 008-01b, 008-02, 008-03, 008-04, 008-05, 008-06, 008-07 | Per-sub-task: unskip 4–15 tests at a time as the corresponding logic lands. By 008-07's commit, all 25+ tests are unskipped and green. |
+| **Phase 3 — Finalization** | 008-08 | Documentation, backlog, validator, cross-skill replication. |
+
+**Critical Stub-First invariant:** every test scaffolding written in
+008-01a uses `@unittest.skip` (NOT `assert True`); each implementation
+sub-task removes the `@unittest.skip` decorator AS PART of landing the
+logic. This ensures the Red→Green transition is auditable per
+sub-task.
+
+---
+
+## File-Touchpoint Summary
+
+| File | Action | Closing task(s) |
+|---|---|---|
+| `skills/docx/scripts/_relocator.py` | **CREATE** (new file, ≤ 500 LOC) | 008-01a (skeleton) + 008-01b (F16) + 008-02 (F10–F12, helpers) + 008-03 (F13, helpers) + 008-05 (F14, F15, `_ensure_numbering_part`) |
+| `skills/docx/scripts/_actions.py` | **EDIT** (signature widen + WARNING delete) | 008-04 (E1 wiring) + 008-06 (E2 wiring) |
+| `skills/docx/scripts/docx_replace.py` | **EDIT** (success-line annotation + `--help` text) | 008-07 (success-line) + 008-08 (`--help` polish) |
+| `skills/docx/scripts/tests/test_docx_relocator.py` | **CREATE** (new file) | 008-01a (scaffolding) + 008-01b–008-06 (Green) |
+| `skills/docx/scripts/tests/test_docx_replace.py` | **EDIT** (rewrite 2 warn tests as GREEN-path) | 008-04 (image) + 008-06 (numbering) |
+| `skills/docx/scripts/tests/test_e2e.sh` | **EDIT** (rewrite 2 cases + add 4 new cases) | 008-04 (image-relocated + rewritten image-warns) + 008-06 (numbering-relocated + image-and-numbering + rewritten numid) + 008-07 (path-traversal) |
+| `skills/docx/SKILL.md` | **EDIT** (honest-scope reword) | 008-08 |
+| `skills/docx/scripts/.AGENTS.md` | **EDIT** (LOC + test count sync) | 008-08 |
+| `docs/office-skills-backlog.md` | **EDIT** (flip 6.5 + 6.6 rows) | 008-08 |
+| `docs/ARCHITECTURE.md` | **EDIT** (§9 NIT n1 reconciliation: eleven→12) | 008-08 |
+
+---
+
+## Estimated Effort
+
+| Task | Effort | Notes |
+|---|---:|---|
+| 008-01a | 1 h | Mechanical stub creation + test scaffolding. |
+| 008-01b | 0.5 h | Small, security-critical. 5 unit tests. |
+| 008-02 | 2.5 h | Largest E1 task — 5 functions + ≥ 15 unit tests. |
+| 008-03 | 1.5 h | F13 + 2 helpers + 5 unit tests. |
+| 008-04 | 1.5 h | Signature change touches multiple callers; 2 E2E + 1 rewrite. |
+| 008-05 | 2.5 h | Largest E2 task — F14 with ECMA ordering trap; ≥ 10 unit tests. |
+| 008-06 | 1.5 h | E2 wiring + 2 E2E (1 new + 1 integration) + 1 rewrite. |
+| 008-07 | 1 h | E2E + success-line annotation + idempotency. |
+| 008-08 | 1 h | Mechanical docs + backlog + validator. |
+| **Total** | **~13 h** | Within the M (Medium) per-row budget of the two backlog items combined. |
+
+---
+
+## References
+
+- [`docs/TASK.md`](TASK.md) — Task 008 specification.
+- [`docs/ARCHITECTURE.md`](ARCHITECTURE.md) §12 — relocator architecture extension.
+- [`docs/plans/plan-006-docx-replace.md`](plans/plan-006-docx-replace.md) — predecessor PLAN (archived).
+- [`skills/docx/scripts/docx_merge.py`](../skills/docx/scripts/docx_merge.py) lines 109–544 — pattern source for relocator helpers.
+- [`skills/docx/scripts/_actions.py`](../skills/docx/scripts/_actions.py) lines 255–358 — `_extract_insert_paragraphs` + `_do_insert_after` (sites of edit in 008-04 / 008-06).
+- [`skills/docx/scripts/tests/test_e2e.sh`](../skills/docx/scripts/tests/test_e2e.sh) lines 1969 + 2239 — existing R10.b + R10.e regression-lock cases (sites of rewrite in 008-04 / 008-06).

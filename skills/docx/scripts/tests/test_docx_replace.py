@@ -22,6 +22,7 @@ Downstream sub-task mapping per class:
 
 import copy
 import io
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -888,7 +889,7 @@ class TestInsertAfterAction(unittest.TestCase):
     def test_extract_insert_paragraphs_strips_sectPr(self):
         """<w:sectPr> body child is stripped; only <w:p> elements returned."""
         W = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
-        # Build insert tree with 2 paragraphs + 1 sectPr
+        # Build insert tree with 2 paragraphs + 1 sectPr; build matching base tree.
         tmp = _build_insert_tree(
             [f'<w:p xmlns:w="{W}"/>',
              f'<w:p xmlns:w="{W}"/>'],
@@ -896,63 +897,87 @@ class TestInsertAfterAction(unittest.TestCase):
         )
         with tmp:
             insert_tree_root = Path(tmp.name)
-            result = _extract_insert_paragraphs(
-                insert_tree_root, base_has_numbering=False
-            )
-        self.assertEqual(len(result), 2, "Expected 2 paragraphs (sectPr stripped)")
+            with tempfile.TemporaryDirectory() as base_dir:
+                base_tree_root = Path(base_dir)
+                (base_tree_root / "word").mkdir()
+                clones, _report = _extract_insert_paragraphs(
+                    insert_tree_root, base_tree_root,
+                )
+        self.assertEqual(len(clones), 2, "Expected 2 paragraphs (sectPr stripped)")
         from lxml import etree as _etree
-        for el in result:
+        for el in clones:
             self.assertNotEqual(
                 _etree.QName(el).localname, "sectPr",
                 "sectPr must not appear in result",
             )
 
-    def test_extract_insert_paragraphs_warns_on_relationship_refs(self):
-        """R10.b: r:embed on inserted body → stderr warning, paragraph still returned,
-        and no live r:embed pointing at a relationship that exists in base doc rels."""
+    def test_extract_relocates_image(self):
+        """docx-008 R10.b → GREEN: r:embed on inserted body now relocated;
+        NO WARNING; rId rewritten to base-side; report.rels_appended ≥ 1."""
         W = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
         R = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
-        # Build a paragraph with a <w:drawing> containing r:embed="rId99"
+        # Build insert tree with a paragraph whose <a:blip r:embed="rId7">
+        # references an image, AND the insert rels file declaring rId7.
         para_xml = (
             f'<w:p xmlns:w="{W}" xmlns:r="{R}">'
-            f'<w:r><w:drawing r:embed="rId99"/></w:r>'
+            f'<w:r><w:drawing>'
+            f'<a:blip xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" r:embed="rId7"/>'
+            f'</w:drawing></w:r>'
             f'</w:p>'
         )
         tmp = _build_insert_tree([para_xml])
         with tmp:
             insert_tree_root = Path(tmp.name)
-            stderr_buf = io.StringIO()
-            import contextlib
-            with contextlib.redirect_stderr(stderr_buf):
-                result = _extract_insert_paragraphs(
-                    insert_tree_root, base_has_numbering=False
+            # Add insert rels file with rId7 → media/img.png
+            insert_rels = (insert_tree_root / "word" / "_rels"
+                           / "document.xml.rels")
+            insert_rels.parent.mkdir(parents=True, exist_ok=True)
+            PR_NS_LOCAL = "http://schemas.openxmlformats.org/package/2006/relationships"
+            insert_rels.write_text(
+                f'<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+                f'<Relationships xmlns="{PR_NS_LOCAL}">'
+                f'<Relationship Id="rId7" Type="{R}/image" Target="media/img.png"/>'
+                f'</Relationships>'
+            )
+            # Add the insert image bytes.
+            insert_media = insert_tree_root / "word" / "media"
+            insert_media.mkdir()
+            (insert_media / "img.png").write_bytes(b"PNGDATA")
+
+            with tempfile.TemporaryDirectory() as base_dir:
+                base_tree_root = Path(base_dir)
+                (base_tree_root / "word").mkdir()
+                stderr_buf = io.StringIO()
+                import contextlib
+                with contextlib.redirect_stderr(stderr_buf):
+                    clones, report = _extract_insert_paragraphs(
+                        insert_tree_root, base_tree_root,
+                    )
+                # Assertion 1: no WARNING emitted.
+                self.assertNotIn(
+                    "[docx_replace] WARNING", stderr_buf.getvalue(),
+                    "R10.b WARNING line must be deleted in docx-008",
                 )
-        warning_text = stderr_buf.getvalue()
-        # Assertion 1: warning message matches ARCH §8 R10.b format.
-        self.assertIn(
-            "[docx_replace] WARNING: inserted body references "
-            "relationships (r:embed/r:id) that are not copied to the "
-            "base document — embedded objects may not render. Use "
-            "--insert-after with image-free markdown in v1.",
-            warning_text,
-            "R10.b warning string must match ARCH §8 format verbatim",
-        )
-        # Assertion 2: warn-and-proceed — paragraph is still in the list.
-        self.assertEqual(len(result), 1, "Paragraph must still be returned (warn-and-proceed)")
-        # Assertion 3: R10.b survival check — no live r:embed pointing at
-        # a relationship that exists in the BASE document's rels.
-        paragraph = result[0]
-        embed_attr = f"{{{R}}}embed"
-        live_embeds = [el for el in paragraph.iter() if embed_attr in el.attrib]
-        # Base doc rels contains only rId1 (rId99 doesn't exist in base).
-        base_rids = {"rId1"}
-        self.assertTrue(
-            not live_embeds or all(
-                el.attrib[embed_attr] not in base_rids
-                for el in live_embeds
-            ),
-            "No live r:embed should point at a relationship that exists in base doc rels",
-        )
+                # Assertion 2: relocator report shows ≥ 1 media + ≥ 1 rels.
+                self.assertGreaterEqual(report.media_copied, 1)
+                self.assertGreaterEqual(report.rels_appended, 1)
+                self.assertGreaterEqual(report.rid_rewrites, 1)
+                # Assertion 3: clone's r:embed was rewritten to a different rId.
+                embed_attr = f"{{{R}}}embed"
+                live_embeds = [
+                    el.get(embed_attr) for el in clones[0].iter()
+                    if embed_attr in el.attrib
+                ]
+                self.assertEqual(len(live_embeds), 1)
+                self.assertNotEqual(
+                    live_embeds[0], "rId7",
+                    "r:embed should have been remapped from insert-side rId7",
+                )
+                # Assertion 4: the image file was copied to base.
+                copied = list((base_tree_root / "word" / "media").iterdir())
+                self.assertEqual(len(copied), 1)
+                self.assertTrue(copied[0].name.startswith("insert_"))
+                self.assertEqual(copied[0].read_bytes(), b"PNGDATA")
 
     def test_do_insert_after_first_match(self):
         """First anchor match: 2 insert paragraphs appear after matched <w:p>; count==1."""
@@ -1680,16 +1705,10 @@ class TestHonestScopeLocks(unittest.TestCase):
     # ── R10.b: image-bearing MD → warning + no live r:embed ─────────────────
 
     @unittest.skipUnless(_DOCX_REPLACE_AVAILABLE, "docx_replace not yet importable")
-    def test_rel_target_warning_no_live_r_embed(self):
-        """MD insert source with image → stderr warning + no live r:embed (R10.b).
-
-        Assertion 1: stderr contains the R10.b warning string verbatim.
-        Assertion 2: exit code is 0 (warn-and-proceed).
-        Assertion 3: the inserted paragraphs do NOT reference an r:embed
-        relationship that exists in the base document (honest-scope: images
-        are broken references in v1).
-        """
-        from lxml import etree as _etree
+    def test_image_relocated_no_warning(self):
+        """docx-008 R10.b → GREEN. MD insert source with image →
+        image is relocated into base/word/media/insert_*; rId rewritten
+        to base-side; NO WARNING; output validates."""
         examples = self._examples_dir()
         base_docx = examples / "docx_replace_body.docx"
         if not base_docx.is_file():
@@ -1697,10 +1716,8 @@ class TestHonestScopeLocks(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp:
             t = Path(tmp)
-            # Create a real PNG so md2docx produces an r:embed reference.
             png_path = t / "real_image.png"
             self._make_minimal_png(png_path)
-            # MD with a local image reference.
             md_path = t / "img_source.md"
             md_path.write_text(
                 f"# Image heading\n\n![test image]({png_path})\n",
@@ -1718,36 +1735,42 @@ class TestHonestScopeLocks(unittest.TestCase):
                 ])
 
             stderr_text = stderr_buf.getvalue()
-            # Assertion 1: warn-and-proceed exit code.
-            self.assertEqual(rc, 0, f"Expected exit 0 (warn-and-proceed), got {rc}; stderr={stderr_text!r}")
-            # Assertion 2: warning message present.
-            self.assertIn(
-                "[docx_replace] WARNING: inserted body references "
-                "relationships (r:embed/r:id) that are not copied to the "
-                "base document",
-                stderr_text,
-                "R10.b warning string must appear in stderr",
+            self.assertEqual(rc, 0, f"Expected exit 0, got {rc}; stderr={stderr_text!r}")
+            # Assertion 1: no R10.b WARNING line.
+            self.assertNotIn(
+                "[docx_replace] WARNING", stderr_text,
+                "R10.b WARNING line must be deleted in docx-008",
             )
-            # Assertion 3: no live r:embed in inserted part resolves to a
-            # relationship that exists in the base document's rels.
-            # Unpack the output and verify.
+            # Assertion 2: success line carries the [relocated K media ...] suffix.
+            self.assertIn("[relocated", stderr_text)
+            # Assertion 3: image relocated to base/word/media/insert_*.
             from office.unpack import unpack  # type: ignore
             unpack_dir = t / "unpacked_out"
             unpack_dir.mkdir()
             unpack(out_docx, unpack_dir)
+            media_dir = unpack_dir / "word" / "media"
+            self.assertTrue(media_dir.is_dir())
+            insert_media = [
+                p for p in media_dir.iterdir()
+                if p.name.startswith("insert_")
+            ]
+            self.assertGreaterEqual(
+                len(insert_media), 1,
+                "expected ≥ 1 relocated media file with insert_ prefix",
+            )
+            # Assertion 4: doc.xml r:embed values RESOLVE in base rels
+            # (the opposite of R10.b honest-scope assertion).
             doc_xml = (unpack_dir / "word" / "document.xml").read_text()
             rels_path = unpack_dir / "word" / "_rels" / "document.xml.rels"
             rels_text = rels_path.read_text() if rels_path.is_file() else ""
-            # Extract rIds from rels.
             import re
             base_rids = set(re.findall(r'Id="(rId[^"]+)"', rels_text))
-            # Extract r:embed values from the doc.
             embed_vals = set(re.findall(r'r:embed="([^"]+)"', doc_xml))
-            # Any r:embed in doc must NOT resolve in base rels.
-            bad_embeds = embed_vals & base_rids
+            # All r:embed values in doc MUST resolve in base rels.
+            unresolved = embed_vals - base_rids
             self.assertEqual(
-                bad_embeds, set(),
-                f"Inserted paragraph has live r:embed pointing to base rels: {bad_embeds}",
+                unresolved, set(),
+                f"All r:embed values must resolve in base rels; unresolved={unresolved}",
             )
 
     # ── R10.c: last paragraph refused ───────────────────────────────────────
@@ -1821,8 +1844,49 @@ class TestHonestScopeLocks(unittest.TestCase):
                 "Output file must NOT exist when guard trips mid-loop",
             )
 
-    # ── R10.e: numId survives + warns when base lacks numbering ─────────────
+    # ── R10.e: numId is now RELOCATED, no warning (docx-008) ────────────────
 
+    @unittest.skipUnless(_DOCX_REPLACE_AVAILABLE, "docx_replace not yet importable")
+    def test_numbering_relocated_no_warning(self):
+        """docx-008 R10.e → GREEN. List-producing markdown produces inserted
+        numId; numbering.xml installed verbatim in base (if base had none) OR
+        merged with offset; NO WARNING."""
+        examples = self._examples_dir()
+        base_docx = examples / "docx_replace_body.docx"
+        if not base_docx.is_file():
+            self.skipTest(f"Base fixture not found: {base_docx}")
+        with tempfile.TemporaryDirectory() as tmp:
+            t = Path(tmp)
+            md_path = t / "list.md"
+            md_path.write_text("# Heading\n\n1. step one\n2. step two\n", encoding="utf-8")
+            out_docx = t / "result.docx"
+            import io, contextlib
+            stderr_buf = io.StringIO()
+            with contextlib.redirect_stderr(stderr_buf):
+                rc = main([
+                    str(base_docx), str(out_docx),
+                    "--anchor", "Article 5.",
+                    "--insert-after", str(md_path),
+                ])
+            stderr_text = stderr_buf.getvalue()
+            self.assertEqual(rc, 0, f"Expected exit 0, got {rc}; stderr={stderr_text!r}")
+            # Assertion 1: no R10.e WARNING.
+            self.assertNotIn(
+                "[docx_replace] WARNING", stderr_text,
+                "R10.e WARNING line must be deleted in docx-008",
+            )
+            # Assertion 2: output has <w:numId> in document.xml AND <w:num>
+            # def in numbering.xml.
+            from office.unpack import unpack  # type: ignore
+            unpack_dir = t / "unpacked"
+            unpack_dir.mkdir()
+            unpack(out_docx, unpack_dir)
+            doc_xml = (unpack_dir / "word" / "document.xml").read_text()
+            self.assertIn("w:numId", doc_xml, "inserted paragraph should reference numId")
+            num_xml_path = unpack_dir / "word" / "numbering.xml"
+            self.assertTrue(num_xml_path.is_file(), "base should have numbering.xml")
+
+    @unittest.skip("R10.e WARNING deleted in docx-008; replaced by test_numbering_relocated_no_warning above")
     @unittest.skipUnless(_DOCX_REPLACE_AVAILABLE, "docx_replace not yet importable")
     def test_numid_survives_replace(self):
         """<w:numId> in inserted list items survives; stderr warns when base
@@ -2060,6 +2124,61 @@ class TestHonestScopeLocks(unittest.TestCase):
                 "Expected xml:space='preserve' on a <w:t> in output when replacement "
                 "has leading whitespace (R1.g)",
             )
+
+
+class TestPathTraversal(unittest.TestCase):
+    """G11 (docx-008): malicious insert rels with traversal Target →
+    Md2DocxOutputInvalid (exit 1). Tests are defence-in-depth + faster
+    debug for the shell-E2E case `T-docx-insert-after-path-traversal`."""
+
+    @unittest.skipUnless(_DOCX_REPLACE_AVAILABLE, "docx_replace not yet importable")
+    def test_relocator_rejects_parent_segment_target(self) -> None:
+        # Directly invoke the relocator with a crafted malicious insert tree.
+        from _relocator import relocate_assets
+        from _app_errors import Md2DocxOutputInvalid
+        base = Path(tempfile.mkdtemp(prefix="docx-pt-base-"))
+        insert = Path(tempfile.mkdtemp(prefix="docx-pt-insert-"))
+        try:
+            (base / "word").mkdir()
+            (insert / "word" / "_rels").mkdir(parents=True)
+            R = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
+            PR = "http://schemas.openxmlformats.org/package/2006/relationships"
+            (insert / "word" / "_rels" / "document.xml.rels").write_text(
+                f'<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+                f'<Relationships xmlns="{PR}">'
+                f'<Relationship Id="rId1" Type="{R}/image" Target="../../../etc/passwd"/>'
+                f'</Relationships>'
+            )
+            with self.assertRaises(Md2DocxOutputInvalid) as ctx:
+                relocate_assets(insert, base, [])
+            self.assertEqual(ctx.exception.details["reason"], "parent_segment")
+        finally:
+            shutil.rmtree(base, ignore_errors=True)
+            shutil.rmtree(insert, ignore_errors=True)
+
+    @unittest.skipUnless(_DOCX_REPLACE_AVAILABLE, "docx_replace not yet importable")
+    def test_relocator_rejects_absolute_target(self) -> None:
+        from _relocator import relocate_assets
+        from _app_errors import Md2DocxOutputInvalid
+        base = Path(tempfile.mkdtemp(prefix="docx-pt-abs-base-"))
+        insert = Path(tempfile.mkdtemp(prefix="docx-pt-abs-insert-"))
+        try:
+            (base / "word").mkdir()
+            (insert / "word" / "_rels").mkdir(parents=True)
+            R = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
+            PR = "http://schemas.openxmlformats.org/package/2006/relationships"
+            (insert / "word" / "_rels" / "document.xml.rels").write_text(
+                f'<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+                f'<Relationships xmlns="{PR}">'
+                f'<Relationship Id="rId1" Type="{R}/image" Target="/etc/passwd"/>'
+                f'</Relationships>'
+            )
+            with self.assertRaises(Md2DocxOutputInvalid) as ctx:
+                relocate_assets(insert, base, [])
+            self.assertEqual(ctx.exception.details["reason"], "absolute_or_empty")
+        finally:
+            shutil.rmtree(base, ignore_errors=True)
+            shutil.rmtree(insert, ignore_errors=True)
 
 
 if __name__ == "__main__":

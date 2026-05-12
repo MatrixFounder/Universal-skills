@@ -1966,8 +1966,8 @@ else
     nok "T-docx-insert-after-all-duplicates" "rc=$ia_all_rc or no output"
 fi
 
-# 10. T-docx-insert-after-image-warns (R10.b no live r:embed; GREEN in 006-05)
-# Create a real 1×1 PNG image so md2docx.js can produce a docx with r:embed.
+# 10. T-docx-insert-after-image-relocated (docx-008 R10.b → GREEN path)
+# Insert MD with image → image relocated into base/word/media/insert_*; NO WARNING.
 "$PY" -c "
 from PIL import Image
 img = Image.new('RGB', (8, 8), color=(255,0,0))
@@ -1995,12 +1995,22 @@ ia_img_output=$("$PY" docx_replace.py ../examples/docx_replace_body.docx "$TMP/i
     --anchor "Article 5." --insert-after "$TMP/warn_img.md" 2>&1 >/dev/null)
 ia_img_rc=$?
 set -e
+# Unpack output and verify image relocated under word/media/insert_*.
+"$PY" -c "
+import zipfile, sys
+with zipfile.ZipFile('$TMP/insert_img.docx') as z:
+    names = z.namelist()
+    media = [n for n in names if n.startswith('word/media/insert_')]
+    sys.exit(0 if media else 1)
+" 2>/dev/null
+relocated_present=$?
 if [ "$ia_img_rc" -eq 0 ] \
-    && echo "$ia_img_output" | grep -q "WARNING" \
+    && ! echo "$ia_img_output" | grep -q "\\[docx_replace\\] WARNING" \
+    && [ "$relocated_present" = "0" ] \
     && "$PY" -m office.validate "$TMP/insert_img.docx" >/dev/null 2>&1; then
-    ok "T-docx-insert-after-image-warns (rc=0, WARNING in stderr, output validates)"
+    ok "T-docx-insert-after-image-relocated (rc=0, NO WARNING, image relocated as insert_*, validates)"
 else
-    nok "T-docx-insert-after-image-warns" "rc=$ia_img_rc output=$ia_img_output"
+    nok "T-docx-insert-after-image-relocated" "rc=$ia_img_rc relocated_present=$relocated_present output=$ia_img_output"
 fi
 
 # 11. T-docx-delete-paragraph (UC-3 happy path; GREEN in 006-06)
@@ -2236,51 +2246,138 @@ pack(Path('$TMP/unpacked'), Path('$TMP/repacked.docx'))
     fi
 fi
 
-# 22. T-docx-numid-survives-warning (R10.e; GREEN in 006-08)
-# UC-2 with list-producing markdown + base doc that has no numbering.xml.
-# stderr must contain <w:numId> warning; exit 0; output contains <w:numId>.
+# 22. T-docx-insert-after-numbering-relocated (docx-008 R10.e → GREEN).
+# UC-2: list-producing MD; numbering relocated; NO WARNING.
+# vdd-multi M-2 fix: build a BASE that ALREADY has numbering.xml with
+# numId=1, so the test exercises the offset-shift branch (not just the
+# install-verbatim branch which would pass with broken offset logic).
 cat > "$TMP/numid_insert.md" << 'NUMIDEOF'
-1. list item
+1. step one
+2. step two
 NUMIDEOF
-# Build a base docx without word/numbering.xml (strip it from body.docx)
-"$PY" - ../examples/docx_replace_body.docx "$TMP/base_no_num.docx" << 'PYEOF'
-import sys, zipfile, re
-src, dst = sys.argv[1], sys.argv[2]
-with zipfile.ZipFile(src, 'r') as zin:
+# Pre-stamp a numbering.xml into a base copy (numId=1, abstractNumId=0).
+"$PY" - "$TMP/base_with_numbering.docx" << 'PRENUMEOF'
+import sys, zipfile, shutil
+src = '../examples/docx_replace_body.docx'
+dst = sys.argv[1]
+shutil.copy(src, dst)
+W = 'http://schemas.openxmlformats.org/wordprocessingml/2006/main'
+PR = 'http://schemas.openxmlformats.org/package/2006/relationships'
+CT = 'http://schemas.openxmlformats.org/package/2006/content-types'
+R = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships'
+existing_numbering = (
+    f'<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+    f'<w:numbering xmlns:w="{W}">'
+    f'<w:abstractNum w:abstractNumId="0"><w:lvl w:ilvl="0"/></w:abstractNum>'
+    f'<w:num w:numId="1"><w:abstractNumId w:val="0"/></w:num>'
+    f'</w:numbering>'
+)
+# Re-zip with numbering.xml + Override + Relationship if missing.
+with zipfile.ZipFile(dst, 'r') as zin:
     parts = {n: zin.read(n) for n in zin.namelist()}
-parts.pop('word/numbering.xml', None)
+parts['word/numbering.xml'] = existing_numbering.encode('utf-8')
 ct = parts.get('[Content_Types].xml', b'').decode('utf-8')
-ct = re.sub(r'<Override[^>]*numbering\.xml[^/]*/>', '', ct)
+if 'numbering' not in ct:
+    ct = ct.replace(
+        '</Types>',
+        f'<Override PartName="/word/numbering.xml" ContentType='
+        f'"application/vnd.openxmlformats-officedocument.wordprocessingml.numbering+xml"/></Types>',
+    )
 parts['[Content_Types].xml'] = ct.encode('utf-8')
-rels_key = 'word/_rels/document.xml.rels'
-if rels_key in parts:
-    rels = parts[rels_key].decode('utf-8')
-    rels = re.sub(r'<Relationship[^>]*numbering\.xml[^/]*/>', '', rels)
-    parts[rels_key] = rels.encode('utf-8')
+rels = parts.get('word/_rels/document.xml.rels', b'').decode('utf-8')
+if 'numbering' not in rels:
+    rels = rels.replace(
+        '</Relationships>',
+        f'<Relationship Id="rId999" Type="{R}/numbering" Target="numbering.xml"/></Relationships>',
+    )
+parts['word/_rels/document.xml.rels'] = rels.encode('utf-8')
 with zipfile.ZipFile(dst, 'w', zipfile.ZIP_DEFLATED) as zout:
     for n, d in parts.items():
         zout.writestr(n, d)
-PYEOF
+PRENUMEOF
 set +e
-numid_output=$("$PY" docx_replace.py "$TMP/base_no_num.docx" "$TMP/numid_result.docx" \
+numrel_output=$("$PY" docx_replace.py "$TMP/base_with_numbering.docx" "$TMP/numrel.docx" \
     --anchor "Article 5." --insert-after "$TMP/numid_insert.md" 2>&1 >/dev/null)
-numid_rc=$?
+numrel_rc=$?
 set -e
-if [ "$numid_rc" -eq 0 ] \
-    && echo "$numid_output" | grep -q "<w:numId>" \
-    && "$PY" -m office.validate "$TMP/numid_result.docx" >/dev/null 2>&1 \
+if [ "$numrel_rc" -eq 0 ] \
+    && ! echo "$numrel_output" | grep -q "\\[docx_replace\\] WARNING" \
+    && "$PY" -m office.validate "$TMP/numrel.docx" >/dev/null 2>&1 \
     && "$PY" -c "
 import zipfile
 from lxml import etree
 W = 'http://schemas.openxmlformats.org/wordprocessingml/2006/main'
-with zipfile.ZipFile('$TMP/numid_result.docx') as z:
-    root = etree.fromstring(z.read('word/document.xml'))
-numid_els = root.findall(f'.//{{{W}}}numId')
-assert len(numid_els) >= 1, f'numId not found in output'
+with zipfile.ZipFile('$TMP/numrel.docx') as z:
+    num_root = etree.fromstring(z.read('word/numbering.xml'))
+    doc_root = etree.fromstring(z.read('word/document.xml'))
+# Verify base's original numId=1 SURVIVED + insert's numId was offset-shifted.
+all_num_ids = [n.get(f'{{{W}}}numId') for n in num_root.findall(f'{{{W}}}num')]
+all_anum_ids = [a.get(f'{{{W}}}abstractNumId') for a in num_root.findall(f'{{{W}}}abstractNum')]
+assert '1' in all_num_ids, f'base numId=1 must survive, got {all_num_ids}'
+assert '0' in all_anum_ids, f'base abstractNumId=0 must survive, got {all_anum_ids}'
+# Insert's numId=1 should have been offset-shifted to numId>1.
+relocated_num_ids = [n for n in all_num_ids if n != '1']
+assert relocated_num_ids, f'no relocated num found (expected offset-shifted), got {all_num_ids}'
+relocated_max = max(int(n) for n in relocated_num_ids)
+assert relocated_max > 1, f'relocated numId should be > 1 (offset-shifted), got {relocated_max}'
+# Verify ECMA-376 §17.9.20 ordering preserved in output.
+kinds = [etree.QName(c).localname for c in num_root]
+seen_num = False
+for k in kinds:
+    if k == 'num':
+        seen_num = True
+    elif k == 'abstractNum':
+        assert not seen_num, f'ECMA-376 §17.9.20 ordering broken: {kinds}'
+# Verify inserted clones have rewritten numId pointing at relocated def.
+clone_num_ids = set()
+for el in doc_root.iter(f'{{{W}}}numId'):
+    v = el.get(f'{{{W}}}val')
+    if v:
+        clone_num_ids.add(v)
+relocated_set = set(relocated_num_ids)
+assert clone_num_ids & relocated_set, (
+    f'inserted numId refs ({clone_num_ids}) do not include relocated ({relocated_set})'
+)
 " 2>/dev/null; then
-    ok "T-docx-numid-survives-warning (rc=0, WARNING in stderr, <w:numId> in output)"
+    ok "T-docx-insert-after-numbering-relocated (rc=0, NO WARNING, offset-shift verified, ECMA-376 §17.9.20 preserved)"
 else
-    nok "T-docx-numid-survives-warning" "rc=$numid_rc output=$numid_output"
+    nok "T-docx-insert-after-numbering-relocated" "rc=$numrel_rc output=$numrel_output"
+fi
+
+# 22b. T-docx-insert-after-image-and-numbering (UC-3 integration; docx-008 G4).
+# MD with BOTH image AND list → both relocated; NO WARNING; success line annotated.
+"$PY" -c "
+import struct, zlib
+def png_chunk(tag, data):
+    c = zlib.crc32(tag + data) & 0xffffffff
+    return struct.pack('>I', len(data)) + tag + data + struct.pack('>I', c)
+sig = b'\x89PNG\r\n\x1a\n'
+ihdr = png_chunk(b'IHDR', struct.pack('>IIBBBBB', 1, 1, 8, 2, 0, 0, 0))
+raw = b'\x00\x80\x80\x80'
+idat = png_chunk(b'IDAT', zlib.compress(raw))
+iend = png_chunk(b'IEND', b'')
+open('$TMP/combo_img.png', 'wb').write(sig + ihdr + idat + iend)
+"
+cat > "$TMP/combo.md" << COMBOEOF
+# Combo heading
+
+![demo]($TMP/combo_img.png)
+
+1. one
+2. two
+COMBOEOF
+set +e
+combo_output=$("$PY" docx_replace.py ../examples/docx_replace_body.docx "$TMP/combo.docx" \
+    --anchor "Article 5." --insert-after "$TMP/combo.md" 2>&1 >/dev/null)
+combo_rc=$?
+set -e
+if [ "$combo_rc" -eq 0 ] \
+    && ! echo "$combo_output" | grep -q "\\[docx_replace\\] WARNING" \
+    && echo "$combo_output" | grep -q "\\[relocated" \
+    && "$PY" -m office.validate "$TMP/combo.docx" >/dev/null 2>&1; then
+    ok "T-docx-insert-after-image-and-numbering (rc=0, NO WARNING, [relocated ...] annotation)"
+else
+    nok "T-docx-insert-after-image-and-numbering" "rc=$combo_rc output=$combo_output"
 fi
 
 # 23. T-docx-ins-content-matches (Q-U1 ins; GREEN in 006-08)
@@ -2399,6 +2496,81 @@ assert 'body' in d.get('details', {}).get('valid', []), f'valid missing: {d}'
     ok "T-docx-scope-invalid-value (envelope lists invalid + valid scope values)"
 else
     nok "T-docx-scope-invalid-value" "rc=$inv_rc out=$inv_out"
+fi
+
+# T-docx-insert-after-path-traversal (G11; docx-008): malicious insert rels
+# with traversal Target → exit 1 + Md2DocxOutputInvalid envelope.
+# Build a malicious insert .docx whose rels file has Target="../../../etc/passwd".
+"$PY" - "$TMP/pt_malicious.docx" << 'PTPYEOF'
+import sys, zipfile
+out = sys.argv[1]
+PR_NS = 'http://schemas.openxmlformats.org/package/2006/relationships'
+R_NS = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships'
+CT_NS = 'http://schemas.openxmlformats.org/package/2006/content-types'
+W_NS = 'http://schemas.openxmlformats.org/wordprocessingml/2006/main'
+with zipfile.ZipFile(out, 'w', zipfile.ZIP_DEFLATED) as z:
+    z.writestr('[Content_Types].xml',
+        f'<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        f'<Types xmlns="{CT_NS}">'
+        f'<Override PartName="/word/document.xml" '
+        f'ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>'
+        f'</Types>')
+    z.writestr('_rels/.rels',
+        f'<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        f'<Relationships xmlns="{PR_NS}">'
+        f'<Relationship Id="rId1" Type="{R_NS}/officeDocument" Target="word/document.xml"/>'
+        f'</Relationships>')
+    z.writestr('word/document.xml',
+        f'<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        f'<w:document xmlns:w="{W_NS}">'
+        f'<w:body><w:p><w:r><w:t>malicious</w:t></w:r></w:p></w:body>'
+        f'</w:document>')
+    # Malicious Target.
+    z.writestr('word/_rels/document.xml.rels',
+        f'<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        f'<Relationships xmlns="{PR_NS}">'
+        f'<Relationship Id="rId1" Type="{R_NS}/image" Target="../../../etc/passwd"/>'
+        f'</Relationships>')
+PTPYEOF
+# Hand-craft .md that will be materialised via md2docx, then monkey-replace
+# the materialised tree with our malicious one. Easier: write a small wrapper
+# that bypasses md2docx and feeds the malicious docx as the materialised path.
+# Instead: use the existing helper convention — patch _materialise_md_source
+# via a wrapper Python invocation.
+cat > "$TMP/pt_runner.py" << 'PTRUNNEREOF'
+import sys, os, tempfile
+from pathlib import Path
+sys.path.insert(0, '/Users/sergey/dev-projects/Universal-skills/skills/docx/scripts')
+import docx_replace
+def fake_materialise(md_path, scripts_dir, tmpdir):
+    # Ignore md_path; return the pre-built malicious docx instead.
+    dst = Path(tmpdir) / "malicious_materialised.docx"
+    dst.write_bytes(Path(sys.argv[1]).read_bytes())
+    return dst
+# docx_replace.py has a LOCAL import of _materialise_md_source, so we
+# patch the binding in the docx_replace module namespace.
+docx_replace._materialise_md_source = fake_materialise
+md = Path(tempfile.mkstemp(suffix=".md")[1])
+md.write_text("placeholder\n")
+rc = docx_replace.main([
+    sys.argv[2], sys.argv[3],
+    "--anchor", "Article 5.",
+    "--insert-after", str(md),
+    "--json-errors",
+])
+sys.exit(rc)
+PTRUNNEREOF
+PT_BASE_ABS=$(cd ../examples && pwd)/docx_replace_body.docx
+set +e
+pt_stderr=$("$PY" "$TMP/pt_runner.py" "$TMP/pt_malicious.docx" \
+    "$PT_BASE_ABS" "$TMP/pt_out.docx" 2>&1)
+pt_rc=$?
+set -e
+if [ "$pt_rc" = "1" ] && echo "$pt_stderr" | grep -q '"type": *"Md2DocxOutputInvalid"' \
+        && echo "$pt_stderr" | grep -q "parent_segment"; then
+    ok "T-docx-insert-after-path-traversal (rc=1, type=Md2DocxOutputInvalid, reason=parent_segment)"
+else
+    nok "T-docx-insert-after-path-traversal" "rc=$pt_rc stderr=$pt_stderr"
 fi
 
 echo

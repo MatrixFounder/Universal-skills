@@ -38,6 +38,7 @@ from docx_anchor import (
     _replace_in_run,
     _find_paragraphs_containing_anchor,
 )
+import _relocator  # docx-008: asset relocator for --insert-after
 
 
 # ---------------------------------------------------------------------------
@@ -254,13 +255,17 @@ def _deep_clone(el: "etree._Element") -> "etree._Element":
 
 def _extract_insert_paragraphs(
     insert_tree_root: Path,
-    *,
-    base_has_numbering: bool,
-) -> "list[etree._Element]":
+    base_tree_root: Path,
+) -> "tuple[list[etree._Element], _relocator.RelocationReport]":
     """Deep-clone body block children from insert tree's word/document.xml.
-    Strip ALL <w:sectPr> body-direct children (Q-A3 lock). Emit stderr
-    warnings on r:embed/r:id references (R10.b) and on <w:numId> when
-    base doc has no numbering.xml (Q-A4 / R10.e)."""
+    Strip ALL <w:sectPr> body-direct children (Q-A3 lock).
+
+    As of docx-008: runs the asset relocator BEFORE returning, so the
+    returned clones have rIds + numIds already remapped to base-side
+    values. The relocator mutates base_tree_root files in place
+    (word/_rels/document.xml.rels, word/numbering.xml, [Content_Types].xml,
+    word/media/, word/charts/, word/embeddings/, word/diagrams/).
+    Returns (clones, RelocationReport)."""
     doc_xml = insert_tree_root / "word" / "document.xml"
     if not doc_xml.is_file():
         raise Md2DocxOutputInvalid(
@@ -276,40 +281,16 @@ def _extract_insert_paragraphs(
             code=1, error_type="Md2DocxOutputInvalid",
             details={"path": str(doc_xml)},
         )
-    children: "list[etree._Element]" = []
-    saw_relationship_ref = False
-    saw_numid = False
+    clones: "list[etree._Element]" = []
     for child in body:
         local = etree.QName(child).localname
         if local == "sectPr":
             continue  # Q-A3 strip.
-        clone = _deep_clone(child)
-        # Scan for relationship-bearing attributes (R10.b precursor warning).
-        for el in clone.iter():
-            for attr_name in el.attrib:
-                if attr_name.endswith("}embed") or attr_name.endswith("}id"):
-                    saw_relationship_ref = True
-                    break
-            if etree.QName(el).localname == "numId":
-                saw_numid = True
-        children.append(clone)
-    if saw_relationship_ref:
-        print(
-            "[docx_replace] WARNING: inserted body references "
-            "relationships (r:embed/r:id) that are not copied to the "
-            "base document — embedded objects may not render. Use "
-            "--insert-after with image-free markdown in v1.",
-            file=sys.stderr,
-        )
-    if saw_numid and not base_has_numbering:
-        print(
-            "[docx_replace] WARNING: inserted body contains "
-            "<w:numId> references; base document has no numbering.xml "
-            "— list items may render as plain text. Relocate numbering "
-            "in a future update.",
-            file=sys.stderr,
-        )
-    return children
+        clones.append(_deep_clone(child))
+    report = _relocator.relocate_assets(
+        insert_tree_root, base_tree_root, clones,
+    )
+    return clones, report
 
 
 def _do_insert_after(
