@@ -848,3 +848,272 @@ recorded as deliberate honest-scope items in §1.4 / §R*.
 | 010-06 | `emit-csv` | `emit_csv.py` — single-region stdout, multi-region subdirectory schema, hyperlink markdown emission, path-traversal guard, OutputPathTraversal envelope. | UC-02, UC-04, UC-06 (CSV path) all green. |
 | 010-07 | `roundtrip-and-references` | Update `references/json-shapes.md` with §R11 shapes; flip xlsx-2's `TestRoundTripXlsx8` from skip to live; add 30 E2E test list per §5.5. | UC-10 + all 30 E2E green. |
 | 010-08 | `final-docs-and-validation` | `SKILL.md` + `.AGENTS.md` updates; `validate_skill.py` exit 0; 12-line `diff -q` silent gate; package LOC budget verified (≤ 1500 total). | All gates green. |
+
+---
+
+## 11. v1 Patch — Reserved-Name Filter + Auto-Header Band Semantics
+
+> **Added:** 2026-05-12 (post-merge addendum to TASK 010).
+> **Scope:** two narrow bug-fixes in the `xlsx_read/` library (xlsx-10.A
+> foundation) that surfaced through `xlsx2csv.py` / `xlsx2json.py` v1.
+> **Touched modules:** `xlsx_read/_tables.py`, `xlsx_read/_headers.py`,
+> new data file `xlsx_read/_reserved_names.json`. No shim or
+> `xlsx2csv2json/` changes. Cross-skill replication gate (`diff -q`)
+> stays silent — only xlsx-specific files touched.
+
+### 11.1 Trigger case
+
+Real-world fixture (`tmp4/masterdata_report_202604.xlsx`, Russian
+timesheet report, `Timesheet` sheet 25 cols × 1007 rows) ran through
+`xlsx2csv.py … --sheet all --tables auto --output-dir …` produced **9
+output files** for a sheet with a single logical data table:
+
+| Output | Cause |
+| --- | --- |
+| 4 × `Z_<guid>_.wvu.FilterData.csv` | Excel-auto-generated Custom-View defined names emitted as user tables (bug A). |
+| 1 × `Table-3.csv` with `›`-joined per-row cell values | Auto-header detector counted ~30 data rows as a multi-row header band because scattered horizontal merges in the totals/signatures block sat far below the real header row (bug B). |
+| 4 × tiny fragment CSVs (`Table-1`, `Table-2`, `Table-4`, `Table-5`) | Layout-detection fragmentation, unrelated to A/B; out of scope. |
+
+### 11.2 Issues
+
+| ID | Issue | Location | Severity |
+| --- | --- | --- | --- |
+| **R21** | `_named_ranges_for_sheet` emits Excel-reserved defined names (`_xlnm.*`, `Z_<guid>_.wvu.*`, legacy `Print_Area` / `_FilterDatabase`) as user tables for both `mode="auto"` and `mode="tables-only"`. These are Excel-internal artefacts per OOXML §18.2.6 and Custom-View conventions, never user data. | `skills/xlsx/scripts/xlsx_read/_tables.py::_named_ranges_for_sheet` | **High** — produces phantom tables on any workbook that has been saved with View → Custom Views. |
+| **R22** | `detect_header_band(..., hint="auto")` returns `max(merge.max_row) - region.top_row + 1 + 1` over **all** column-spanning merges anchored anywhere in the region. The module docstring promises "the first row WITHOUT such a merge ends the header band" — implementation contradicts the contract. Scattered deep-body banners (totals blocks, signature sections) inflate the band by tens of rows. | `skills/xlsx/scripts/xlsx_read/_headers.py::detect_header_band` | **Medium** — manifests only when `--header-rows auto` AND non-header column-spanning merges exist below row 1; output is silently corrupt when it does. |
+
+### 11.3 Sub-features
+
+**R21 — Reserved-name filter (data-driven):**
+1. **(a)** Ship `skills/xlsx/scripts/xlsx_read/_reserved_names.json` —
+   declarative pattern list (regex + provenance per entry) covering
+   OOXML §18.2.6 `_xlnm.*` prefix, Custom-View `Z_<GUID>_.wvu.*` shape,
+   and legacy bare-form (`Print_Area`, `_FilterDatabase`, etc.).
+2. **(b)** `_load_reserved_name_matchers()` reads and compiles the
+   JSON on first `detect_tables` call (lazy — `xlsx_read.__init__`
+   does not eagerly import `_tables`). Missing file / invalid JSON /
+   invalid regex / missing `regex` key / ReDoS-shape pattern → loud
+   failure at first-use (packaging error, not runtime data). Error
+   messages include the file path and pattern index for diagnostics.
+3. **(c)** `_is_reserved_name(name: str) -> bool` exposed as a private
+   helper for unit-testability.
+4. **(d)** `_named_ranges_for_sheet` skips any name matching the
+   filter; both `mode="auto"` and `mode="tables-only"` are affected
+   (the filter sits inside Tier-2, before the overlap check).
+5. **(e)** No CLI override flag in v1 (YAGNI; the JSON file is the
+   sole source of truth, maintained alongside the spec).
+6. **(f)** No workbook-scope changes — honest-scope (g) (workbook-scope
+   names ignored by construction) remains.
+7. **(g)** **Case-insensitive matching** (`re.IGNORECASE`): OOXML
+   §18.2.5 specifies that defined names compare case-insensitively;
+   `_XLNM.Print_Area`, `PRINT_AREA`, and `_xlnm.print_area` are the
+   same name and must all be filtered. Locks the defence-in-depth
+   promise stated in `_reserved_names.json`.
+8. **(h)** **Whitespace-tolerant matching** (`name.strip()`): leading
+   or trailing whitespace in a hand-crafted or third-party-emitted
+   `<definedName>` must not bypass the filter.
+9. **(i)** **Load-time ReDoS lint**: every pattern from the JSON is
+   checked against the four catastrophic-backtracking shapes from
+   `xlsx_check_rules.constants.REDOS_REJECT_PATTERNS` (inlined to keep
+   `xlsx_read` self-contained). A future contributor cannot add a
+   `(a+)+`-style pattern without the loader raising `ValueError`.
+10. **(j)** Trust boundary documented: `_reserved_names.json` shares
+    the package's trust boundary; tampering implies a compromised
+    installation and is out of the threat model.
+
+**R22 — Auto-header contiguous-from-top:**
+1. **(a)** Re-implement `detect_header_band(..., hint="auto")` to
+   match the docstring: walk rows top→bottom; a row is part of the
+   header band iff it has an eligible merge anchored on it OR is
+   covered by a merge anchored above. The first row that satisfies
+   neither ends the band.
+2. **(b)** Preserve existing semantics where merges anchored on row K
+   imply row K+1 is the sub-labels row (`band_end = deepest_max_row +
+   1`).
+3. **(c)** Preserve all L-H1 / merge-eligibility guards (vertical-only
+   merges skipped; merges escaping the column span skipped; anchors
+   outside the region's row span skipped).
+4. **(d)** Default-to-1 when no eligible merge is found (unchanged
+   conservative behaviour for plain-header tables).
+5. **(e)** No new public API; private behaviour fix; consumers
+   (`xlsx_read.read_table`, all shims) continue to call the same
+   signature.
+
+### 11.4 Acceptance Criteria
+
+- **AC-21.1** `_is_reserved_name("Z_<canonical-guid>_.wvu.FilterData")`
+  returns `True`; `_is_reserved_name("_xlnm.Print_Area")` returns
+  `True`; `_is_reserved_name("MyData")` returns `False`. Verified by
+  `TestReservedNameFilter::test_is_reserved_helper_matches_canonical_examples`.
+- **AC-21.2** `detect_tables(..., mode="tables-only")` on a workbook
+  with one user-named range and one `Z_<guid>_.wvu.FilterData` name
+  returns exactly one region (the user one). Verified by
+  `TestReservedNameFilter::test_wvu_filter_data_excluded_from_detect_tables`.
+- **AC-21.3** `detect_tables(..., mode="tables-only")` on a workbook
+  with only `_xlnm.Print_Area` returns `[]`. Verified by
+  `TestReservedNameFilter::test_xlnm_builtin_excluded_from_detect_tables`.
+- **AC-22.1** A region with a row-1 banner and another banner 49 rows
+  below returns `band == 2` (not 50). Verified by
+  `TestHeaderBandContiguousFromTop::test_deep_body_merge_does_not_inflate_band`.
+- **AC-22.2** All existing `TestDetectHeaderBand` E2E cases
+  (`headers_single_row`, `headers_two_row_merged`, `headers_three_row`)
+  return the same band as before the patch (no regression).
+- **AC-21.4** Case-insensitive matching: `_is_reserved_name("_XLNM.Print_Area")`,
+  `_is_reserved_name("PRINT_AREA")`, and `_is_reserved_name("Z_<guid>_.WVU.FilterData")`
+  all return `True`. Verified by
+  `TestReservedNameFilter::test_case_insensitive_match`.
+- **AC-21.5** Whitespace-tolerant matching: `_is_reserved_name(" _xlnm.Print_Area ")`
+  returns `True`. Verified by
+  `TestReservedNameFilter::test_whitespace_tolerant_match`.
+- **AC-21.6** Load-time ReDoS lint: a JSON pattern matching `^(a+)+$`
+  raises `ValueError` at first `detect_tables` call. Verified by
+  `TestReservedNameFilter::test_redos_shape_rejected_at_load`.
+- **AC-21.7** Malformed JSON diagnostics: a `patterns[0]` entry without
+  the `regex` key raises `KeyError` containing the pattern index.
+  Verified by
+  `TestReservedNameFilter::test_missing_regex_key_raises_with_context`.
+- **AC-22.3** `headers_three_row.xlsx` returns band = 2 deterministically
+  (pinned via `assertEqual`, no longer `assertIn(band, (2, 3))`).
+- **AC-23** Full xlsx_read test suite green (188/188). Full
+  xlsx2csv2json test suite green (152/152). `validate_skill.py
+  skills/xlsx` exit 0. 12-line `diff -q` silent gate (CLAUDE.md §2)
+  silent — patch touches no replicated files.
+- **AC-24** Manual smoke on the trigger fixture: post-patch
+  `mode="auto"` on `Timesheet` returns **3** regions (gap-detect
+  only; no `wvu.FilterData` leakage), down from 9. The big data
+  region's `header_rows="auto"` no longer collapses 30+ rows into
+  one (any residual UX limitation from layout-heavy reports is
+  separate scope; users still pass `--header-rows 0` or `--tables
+  whole` for layout sheets).
+
+### 11.5 Honest scope (v1 patch)
+
+- The reserved-name JSON has **fixed entries**. New Excel-introduced
+  reserved names (e.g. future `wvu.*` siblings) require a JSON edit;
+  there is no auto-discovery mechanism.
+- `detect_header_band` still operates on a per-region basis with the
+  region pre-supplied by Tier-1/2/3 detection. Layouts where the
+  detected region accidentally encompasses unrelated metadata blocks
+  (single-empty-row separators between metadata and data) remain
+  out-of-scope — the patch fixes auto-header inflation **within** a
+  region, not region boundary detection.
+- No new exception classes. Reserved names are silently dropped (the
+  filter is a pre-flight, not a validation failure).
+
+### 11.6 Execution
+
+Implementation merged in the same change as this addendum (post-merge
+patch; the full TASK 010 chain plus xlsx-10.A foundation are already
+shipped). New regression tests live in:
+
+- `skills/xlsx/scripts/xlsx_read/tests/test_tables.py::TestReservedNameFilter`
+  (3 tests).
+- `skills/xlsx/scripts/xlsx_read/tests/test_headers.py::TestHeaderBandContiguousFromTop`
+  (3 tests).
+
+---
+
+## 11.7 Patch v2 — Output Hygiene (CSV trim + merge-scoped sticky-fill + `--encoding`)
+
+> **Added:** 2026-05-12 (second-pass addendum, same TASK 010 chain).
+> **Scope:** three independent output-hygiene fixes surfaced by the
+> same real-world fixture (`tmp4/masterdata_report_202604.xlsx`):
+> trailing-empty-row inflation, sticky-fill over-propagation beyond
+> merge boundaries, and Cyrillic mojibake on Excel-default open.
+
+### R23 — `_whole_sheet_region` trims trailing empties
+
+`ws.max_row` / `ws.max_column` come from the `<dimension>` ref in the
+sheet XML, which Excel routinely inflates beyond the real data range
+(legacy formatting on empty rows, deleted-row residue). The fix scans
+the dimension bbox via `iter_rows(values_only=True)` and contracts to
+the tight `(last_nonempty_row, last_nonempty_col)`. **vdd-multi-2
+HIGH fix**: the cap is enforced as an **in-loop iteration counter**
+that breaks early and emits the best-effort trimmed bbox seen so far
+— NEVER the inflated dim bbox (the old "bail without scan" path
+produced 1M-row CSV garbage on hostile
+`<dimension ref="A1:XFD1048576"/>`). Locked by
+`TestWholeSheetRegionTrim::test_in_loop_cap_does_not_emit_inflated_region`.
+Acceptance:
+
+- **AC-23.1** A workbook with `max_row=1007` but content ending at
+  row 119 returns `region.bottom_row = 119`. Verified by
+  `TestWholeSheetRegionTrim::test_trims_trailing_empty_rows`.
+- **AC-23.2** Same for columns. Verified by
+  `test_trims_trailing_empty_columns`.
+- **AC-23.3** A completely empty sheet returns a degenerate 1×1
+  region (not `0×0`, to keep downstream emit code defensive).
+  Verified by `test_empty_sheet_returns_degenerate_1x1`.
+
+### R24 — `flatten_headers` sticky-fill is merge-scoped
+
+Old behaviour: sticky-fill-left propagated the leftmost non-empty
+value across every subsequent `None` cell in a header row. A title
+merge `A1:F1` covering 6 of 25 columns produced 25 identical header
+keys because the propagation never stopped. New behaviour: sticky-
+fill is scoped to the column span of the horizontal merge that
+anchored the value; cells outside any horizontal merge get an empty
+string (no inheritance). Legacy fallback preserved when
+`merges=None` (synthetic test fixtures pre-dating this patch).
+Acceptance:
+
+- **AC-24.1** Title `A1:F1` over a 25-column region produces 6
+  filled keys + 19 empty keys. Verified by
+  `TestMergeScopedStickyFill::test_title_merge_does_not_overflow_into_uncovered_cols`.
+- **AC-24.2** Two disjoint banners (`A1:B1` + `D1:E1`) on the same
+  header row each scope their own sticky-fill; col C between them
+  uses its own anchor value. Verified by
+  `test_merge_scoped_fill_within_two_disjoint_banners`.
+- **AC-24.3** `flatten_headers(rows, hdr)` without `merges=` keyword
+  preserves the legacy unconditional sticky-fill (backwards-compat
+  with `TestStickyFillLeft` fixtures). Verified by
+  `test_legacy_fallback_when_merges_none`.
+- **AC-24.4** **vdd-multi-2 MED fix**: `merges={}` (explicit empty
+  dict) and `merges={(50,1):(50,3)}` (body-only merges with no
+  header-band anchor) BOTH trigger strict no-fill semantics, not
+  legacy unconditional sticky-fill. Verified by
+  `test_empty_merges_dict_triggers_strict_no_fill` and
+  `test_body_only_merges_do_not_trigger_legacy_in_header`.
+- **AC-25.4** **vdd-multi-2 MED fix**: `xlsx2json.py --encoding
+  utf-8-sig` emits a stderr warning ("…has no effect on JSON output
+  per RFC 8259…"). The JSON file itself is still plain UTF-8 (no
+  BOM); only the warning surfaces. Verified manually; no test added
+  because the warning is informational and stderr-only.
+- **AC-25.5** Multi-region CSV emit with `--encoding utf-8-sig`
+  writes a BOM to **every** per-region file (not just the first).
+  Verified by
+  `test_encoding_utf8_sig_multi_region_each_file_has_bom`.
+
+### R25 — `--encoding {utf-8,utf-8-sig}` flag (CSV only)
+
+`emit_csv` previously hardcoded `encoding="utf-8"`. Excel on Windows
+and macOS auto-detects UTF-8 only when a BOM is present; without
+BOM, Cyrillic and other non-ASCII content rendered as mojibake. New
+CLI flag `--encoding utf-8|utf-8-sig` (default `utf-8`, preserving
+pandas/jq compatibility) lets the user opt into BOM emission for
+Excel-friendly output. Stdout is unaffected (BOM in a pipe is
+typically a consumer-side bug). JSON path is unaffected (json.dump
+uses UTF-8 by default with no BOM convention). Acceptance:
+
+- **AC-25.1** `--encoding utf-8-sig` writes a file starting with
+  `EF BB BF`. Verified by
+  `TestEmitCsvSingleRegion::test_encoding_utf8_sig_writes_bom`.
+- **AC-25.2** Default (`--encoding utf-8`) writes a file with NO
+  BOM. Verified by `test_encoding_utf8_default_no_bom`.
+- **AC-25.3** Argparse rejects values outside `{utf-8, utf-8-sig}`.
+
+### 11.7 Honest scope (v2)
+
+- **Layout-heavy reports.** With `--tables whole --header-rows 1`
+  (defaults), row 1 is still treated as a header. If row 1 is a wide
+  banner (e.g. report title spanning N columns), the OUTPUT now
+  shows the title in those N columns + empty cells beyond, instead
+  of duplicating the title across all sheet columns. Users who want
+  raw rows for the layout-heavy case still pass `--header-rows 0`.
+  This patch did not change the default header behaviour, only the
+  fill semantics inside it.
+- **Trailing empty rows past 1M cells.** The defensive cap mirrors
+  `_gap_detect`. Malformed-dimensions inputs still produce a large
+  CSV in `--tables whole` mode; the user can switch to `--tables auto`
+  to engage gap-detection (which DOES enforce the cap).
+- **Stdout BOM.** `--encoding utf-8-sig` does NOT inject BOM into
+  stdout. The flag applies to file output only.

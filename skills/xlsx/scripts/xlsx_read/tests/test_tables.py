@@ -51,6 +51,248 @@ class TestNamedRangeDetect(unittest.TestCase):
         self.assertEqual(regions, [])
 
 
+class TestReservedNameFilter(unittest.TestCase):
+    """TASK 010 §11 patch: Excel-reserved defined names must be excluded
+    from Tier-2 named-range emission. Source-of-truth list lives in
+    `xlsx_read/_reserved_names.json`.
+    """
+
+    def test_is_reserved_helper_matches_canonical_examples(self) -> None:
+        from xlsx_read._tables import _is_reserved_name
+        # OOXML §18.2.6 _xlnm.* built-ins
+        self.assertTrue(_is_reserved_name("_xlnm.Print_Area"))
+        self.assertTrue(_is_reserved_name("_xlnm._FilterDatabase"))
+        self.assertTrue(_is_reserved_name("_xlnm.Print_Titles"))
+        self.assertTrue(_is_reserved_name("_xlnm.Criteria"))
+        # Custom-View artefacts — must match the strict GUID layout
+        self.assertTrue(_is_reserved_name(
+            "Z_DEADBEEF_1234_5678_9ABC_DEF012345678_.wvu.FilterData"
+        ))
+        self.assertTrue(_is_reserved_name(
+            "Z_F5BF852F_D0BB_4165_A12A_8595FD3E6864_.wvu.PrintArea"
+        ))
+        # Legacy bare-form
+        self.assertTrue(_is_reserved_name("Print_Area"))
+        self.assertTrue(_is_reserved_name("_FilterDatabase"))
+        # Genuine user names — NOT reserved
+        self.assertFalse(_is_reserved_name("KPI"))
+        self.assertFalse(_is_reserved_name("MyTable"))
+        self.assertFalse(_is_reserved_name("Sales2026"))
+        # Looks-like prefix but not actually reserved
+        self.assertFalse(_is_reserved_name("_xlnmMisspelled"))
+        # Z_-prefixed but not the canonical GUID layout
+        self.assertFalse(_is_reserved_name("Z_NotAGuid_.wvu.FilterData"))
+
+    def test_case_insensitive_match(self) -> None:
+        """OOXML §18.2.5: defined names are case-insensitive in Excel.
+        The filter must match `_XLNM.Print_Area`, `PRINT_AREA`, etc.
+        Locks the defence-in-depth promise stated in `_reserved_names.json`.
+        """
+        from xlsx_read._tables import _is_reserved_name
+        # Uppercase / mixed-case xlnm prefix
+        self.assertTrue(_is_reserved_name("_XLNM.Print_Area"))
+        self.assertTrue(_is_reserved_name("_Xlnm._FilterDatabase"))
+        # Uppercase legacy bare-form
+        self.assertTrue(_is_reserved_name("PRINT_AREA"))
+        self.assertTrue(_is_reserved_name("_filterdatabase"))
+        # Uppercase wvu literal
+        self.assertTrue(_is_reserved_name(
+            "Z_DEADBEEF_1234_5678_9ABC_DEF012345678_.WVU.FilterData"
+        ))
+
+    def test_whitespace_tolerant_match(self) -> None:
+        """Leading/trailing whitespace must not bypass the filter.
+        A hand-crafted or third-party-emitted `<definedName>` with
+        ` _xlnm.Print_Area ` (legal-ish XML, openpyxl may pass through
+        verbatim) must still be classified as reserved.
+        """
+        from xlsx_read._tables import _is_reserved_name
+        self.assertTrue(_is_reserved_name(" _xlnm.Print_Area"))
+        self.assertTrue(_is_reserved_name("_xlnm.Print_Area "))
+        self.assertTrue(_is_reserved_name("\t_FilterDatabase\n"))
+        self.assertTrue(_is_reserved_name("  Print_Area  "))
+
+    def test_wvu_filter_data_excluded_from_detect_tables(self) -> None:
+        import openpyxl
+        from openpyxl.workbook.defined_name import DefinedName
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = "Sheet1"
+        ws["A1"] = "x"
+        ws["B2"] = "y"
+        reserved = DefinedName(
+            name="Z_DEADBEEF_1234_5678_9ABC_DEF012345678_.wvu.FilterData",
+            attr_text="Sheet1!$A$1:$B$2",
+        )
+        ws.defined_names[reserved.name] = reserved
+        user = DefinedName(name="MyData", attr_text="Sheet1!$A$1:$B$2")
+        ws.defined_names[user.name] = user
+        from xlsx_read._tables import detect_tables
+        regions = detect_tables(wb, "Sheet1", mode="tables-only")
+        names = [r.name for r in regions]
+        self.assertIn("MyData", names)
+        self.assertNotIn(reserved.name, names)
+
+    def test_redos_shape_rejected_at_load(self) -> None:
+        """The loader must refuse a JSON pattern matching a known
+        catastrophic-backtracking shape, mirroring the lint already
+        applied to user-supplied rules in `xlsx_check_rules`.
+        """
+        import json
+        import tempfile
+        from pathlib import Path
+        from unittest.mock import patch
+        from xlsx_read import _tables
+        evil = {
+            "schema_version": 1,
+            "patterns": [
+                {"regex": "^(a+)+$", "source": "test", "notes": "ReDoS"}
+            ],
+        }
+        with tempfile.NamedTemporaryFile(
+            mode="w", suffix=".json", delete=False
+        ) as fp:
+            json.dump(evil, fp)
+            tmp_path = Path(fp.name)
+        try:
+            with patch.object(_tables, "_RESERVED_NAMES_PATH", tmp_path):
+                with self.assertRaisesRegex(ValueError, "ReDoS"):
+                    _tables._load_reserved_name_matchers()
+        finally:
+            tmp_path.unlink()
+
+    def test_missing_regex_key_raises_with_context(self) -> None:
+        """A malformed JSON entry (missing 'regex' key) must fail loudly
+        with the file path and pattern index in the error message.
+        """
+        import json
+        import tempfile
+        from pathlib import Path
+        from unittest.mock import patch
+        from xlsx_read import _tables
+        bad = {
+            "schema_version": 1,
+            "patterns": [{"source": "test", "notes": "no regex key"}],
+        }
+        with tempfile.NamedTemporaryFile(
+            mode="w", suffix=".json", delete=False
+        ) as fp:
+            json.dump(bad, fp)
+            tmp_path = Path(fp.name)
+        try:
+            with patch.object(_tables, "_RESERVED_NAMES_PATH", tmp_path):
+                with self.assertRaisesRegex(KeyError, "patterns\\[0\\]"):
+                    _tables._load_reserved_name_matchers()
+        finally:
+            tmp_path.unlink()
+
+    def test_xlnm_builtin_excluded_from_detect_tables(self) -> None:
+        import openpyxl
+        from openpyxl.workbook.defined_name import DefinedName
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = "Sheet1"
+        ws["A1"] = "x"
+        builtin = DefinedName(
+            name="_xlnm.Print_Area", attr_text="Sheet1!$A$1:$A$1"
+        )
+        ws.defined_names[builtin.name] = builtin
+        from xlsx_read._tables import detect_tables
+        regions = detect_tables(wb, "Sheet1", mode="tables-only")
+        self.assertEqual(regions, [])
+
+
+class TestWholeSheetRegionTrim(unittest.TestCase):
+    """TASK 010 §11 patch v2: `_whole_sheet_region` must trim to the
+    actual non-empty content bbox rather than blindly using
+    `ws.max_row` / `ws.max_column` (Excel inflates the dimension ref
+    after row deletions and on legacy-formatted empty rows).
+    """
+
+    def test_trims_trailing_empty_rows(self) -> None:
+        import openpyxl
+        from xlsx_read._tables import _whole_sheet_region
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws["A1"] = "header"
+        ws["A2"] = "data"
+        # Force dimension to inflate by touching a far cell then
+        # clearing it — openpyxl retains the dimension hint after
+        # value-clear in 3.1.x. The precondition assert below makes
+        # the test fail loudly if a future openpyxl shrinks max_row
+        # after clear (in which case the test stops exercising the
+        # trim and needs a real on-disk fixture instead).
+        ws["A100"] = "x"
+        ws["A100"] = None
+        self.assertGreaterEqual(
+            ws.max_row, 100,
+            "openpyxl now shrinks max_row after cell-clear; this test "
+            "no longer exercises the trim. Use an on-disk fixture with "
+            "a hand-crafted <dimension ref='A1:A100'/> instead.",
+        )
+        region = _whole_sheet_region(ws, "Sheet")
+        self.assertEqual(region.bottom_row, 2)
+
+    def test_trims_trailing_empty_columns(self) -> None:
+        import openpyxl
+        from xlsx_read._tables import _whole_sheet_region
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws["A1"] = "x"
+        ws["B1"] = "y"
+        ws["Z1"] = "far"
+        ws["Z1"] = None
+        self.assertGreaterEqual(
+            ws.max_column, 26,
+            "openpyxl now shrinks max_column after cell-clear; "
+            "test needs an on-disk fixture instead.",
+        )
+        region = _whole_sheet_region(ws, "Sheet")
+        self.assertEqual(region.right_col, 2)
+
+    def test_in_loop_cap_does_not_emit_inflated_region(self) -> None:
+        """**vdd-multi-2 HIGH fix:** when the in-loop cell-scan
+        counter exceeds `_GAP_DETECT_MAX_CELLS`, the function must
+        emit the best-effort TRIMMED bbox seen so far — NEVER the
+        inflated dim bbox (which would produce 1M-row CSV garbage
+        on hostile `<dimension ref='A1:XFD1048576'/>`).
+        """
+        import openpyxl
+        from unittest.mock import patch
+        from xlsx_read import _tables
+        from xlsx_read._tables import _whole_sheet_region
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws["A1"] = "only-content"
+        # Force an inflated dimension hint that exceeds the 1M cap.
+        # Touch a far cell, then mock max_row/max_column so the scan
+        # loop ranges over the full bogus bbox.
+        with patch.object(
+            type(ws), "max_row", new_callable=lambda: property(lambda self: 1_048_576)
+        ), patch.object(
+            type(ws), "max_column", new_callable=lambda: property(lambda self: 16_384)
+        ), patch.object(_tables, "_GAP_DETECT_MAX_CELLS", 100):
+            region = _whole_sheet_region(ws, "Sheet")
+        # The cap fires after 100 cells scanned. A1 has content, so
+        # last_row=1, last_col=1. Output is 1×1 — NOT 1048576×16384.
+        self.assertLess(region.bottom_row, 1000)
+        self.assertLess(region.right_col, 1000)
+        self.assertEqual(region.top_row, 1)
+        self.assertEqual(region.left_col, 1)
+
+    def test_empty_sheet_returns_degenerate_1x1(self) -> None:
+        import openpyxl
+        from xlsx_read._tables import _whole_sheet_region
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        # No cell touched — empty sheet.
+        region = _whole_sheet_region(ws, "Sheet")
+        self.assertEqual(
+            (region.top_row, region.left_col, region.bottom_row, region.right_col),
+            (1, 1, 1, 1),
+        )
+
+
 class TestGapDetect(unittest.TestCase):
     """TC-E2E-05..-06: gap-detection thresholds."""
 

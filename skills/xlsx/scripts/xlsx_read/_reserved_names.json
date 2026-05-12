@@ -1,0 +1,22 @@
+{
+  "schema_version": 1,
+  "spec_ref": "ECMA-376 OOXML §18.2.6 (Reserved Names) + Excel Custom-View conventions (View → Custom Views)",
+  "description": "Defined names that Excel auto-generates as internal artefacts (print areas, autofilter ranges, saved-view state). These MUST NOT be emitted as user tables by xlsx_read.WorkbookReader.detect_tables Tier-2 scanner. Each pattern is a Python re.match() regex against the bare defined-name string. Source-of-truth file consumed by xlsx_read._tables._load_reserved_name_matchers().",
+  "patterns": [
+    {
+      "regex": "^_xlnm\\.",
+      "source": "OOXML §18.2.6",
+      "notes": "Built-in name prefix. Covers _xlnm.Print_Area, _xlnm.Print_Titles, _xlnm._FilterDatabase, _xlnm.Criteria, _xlnm.Extract, _xlnm.Database, _xlnm.Sheet_Title, _xlnm.Consolidate_Area, _xlnm.Auto_Open, _xlnm.Auto_Close, _xlnm.Disable_Reset, _xlnm.Data_Form. openpyxl usually filters these but some workbooks expose them; belt-and-suspenders."
+    },
+    {
+      "regex": "^Z_[0-9A-Fa-f]{8}_[0-9A-Fa-f]{4}_[0-9A-Fa-f]{4}_[0-9A-Fa-f]{4}_[0-9A-Fa-f]{12}_\\.wvu\\.",
+      "source": "Excel Custom Views (View → Custom Views)",
+      "notes": "Auto-generated when a user saves a Custom View with autofilter / column-hide / print-area state. Suffix can be FilterData, Cols, Rows, PrintArea, PrintTitles. The GUID-like middle segment is the Custom-View identifier; one name per saved view per artefact. Always sheet-scoped."
+    },
+    {
+      "regex": "^(?:Print_Area|Print_Titles|_FilterDatabase|Criteria|Extract|Database|Sheet_Title|Consolidate_Area|Auto_Open|Auto_Close)$",
+      "source": "OOXML §18.2.6 (legacy bare-form)",
+      "notes": "Some older Excel writers and third-party tools emit reserved names without the _xlnm. prefix. Match the exact bare names for defence-in-depth."
+    }
+  ]
+}

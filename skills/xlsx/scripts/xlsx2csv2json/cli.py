@@ -235,6 +235,19 @@ def build_parser(*, format_lock: str | None) -> argparse.ArgumentParser:
         default="ISO",
         help="Datetime rendering.",
     )
+    parser.add_argument(
+        "--encoding",
+        dest="encoding",
+        choices=("utf-8", "utf-8-sig"),
+        default="utf-8",
+        help=(
+            "Output text encoding (CSV only). 'utf-8-sig' prepends a "
+            "UTF-8 BOM so Excel on Windows / macOS auto-detects the "
+            "charset; pandas, jq and other downstream tools that pin "
+            "the first header cell may misread BOM as part of the "
+            "value, so the default is plain 'utf-8'."
+        ),
+    )
 
     # Cross-5 envelope flag (4-skill replicated helper).
     _errors.add_json_errors_argument(parser)
@@ -296,6 +309,17 @@ def _validate_flag_combo(args: argparse.Namespace, *, format_lock: str | None) -
                 "CSV cannot multiplex multiple sheets into a single stream. "
                 "Use --output-dir or --sheet <NAME>."
             )
+
+    # **vdd-multi-2 MED fix:** `--encoding utf-8-sig` only affects CSV
+    # file output; JSON emit hardcodes plain UTF-8 (no BOM convention
+    # for JSON per RFC 8259). Surface a stderr warning so the user
+    # isn't silently surprised when they expect BOM on a .json file.
+    if effective_format == "json" and args.encoding == "utf-8-sig":
+        print(
+            "warning: --encoding utf-8-sig has no effect on JSON output "
+            "(JSON files are written as plain UTF-8 per RFC 8259).",
+            file=sys.stderr,
+        )
 
 
 # ===========================================================================
@@ -576,6 +600,7 @@ def _dispatch_to_emit(
                     tables_mode=args.tables,
                     include_hyperlinks=args.include_hyperlinks,
                     datetime_format=args.datetime_format,
+                    encoding=args.encoding,
                 )
             else:
                 raise ValueError(f"Unknown format: {effective_format!r}")

@@ -239,7 +239,12 @@ class WorkbookReader:
                 )
                 if ambig is not None:
                     warnings_list.append(ambig)
-                headers, hdr_warnings = flatten_headers(values_grid[:hdr], hdr)
+                headers, hdr_warnings = flatten_headers(
+                    values_grid[:hdr], hdr,
+                    merges=merges,
+                    region_top_row=region.top_row,
+                    region_left_col=region.left_col,
+                )
                 warnings_list.extend(hdr_warnings)
                 data_rows = values_grid[hdr:]
 

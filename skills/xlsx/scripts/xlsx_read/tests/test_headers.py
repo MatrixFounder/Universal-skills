@@ -41,12 +41,79 @@ class TestDetectHeaderBand(unittest.TestCase):
         with open_workbook(FIXTURES_DIR / "headers_three_row.xlsx") as r:
             ws = r._wb.active
             region = _whole_sheet_region(ws)
-            # Two of the three rows carry column-spanning merges; row 3
-            # doesn't have one, so band = 2 (the contiguous header run).
-            # NOTE: this is the *honest* outcome of the auto-detect
-            # heuristic — caller can override via explicit int hint.
-            band = _headers.detect_header_band(ws, region, "auto")
-            self.assertIn(band, (2, 3))  # Either is acceptable per design.
+            # Fixture geometry: row 1 has merges B1:C1 + D1:E1 (anchored
+            # row 1, max_row=1). Rows 2-3 have no column-spanning merges.
+            # Under the TASK 010 §11 contiguous-from-top algorithm, the
+            # band runs row 1 (anchored) + row 2 (sub-labels under the
+            # banner). Row 3 starts the body. Pinned to 2 — the prior
+            # `assertIn(band, (2, 3))` slack was a pre-rewrite tolerance.
+            self.assertEqual(_headers.detect_header_band(ws, region, "auto"), 2)
+
+
+class TestHeaderBandContiguousFromTop(unittest.TestCase):
+    """TASK 010 §11 patch: scattered deep-body merges must NOT inflate
+    the auto-detected header band. Implementation must match the
+    docstring contract: "the first row WITHOUT such a merge ends the
+    header band (minimum 1 row)".
+    """
+
+    def test_deep_body_merge_does_not_inflate_band(self) -> None:
+        """Row 1 banner; rows 2-49 plain; row 50 another banner. Pre-patch
+        the function returned band = 50 (deepest anchor + 1). Post-patch
+        returns 2 (1 anchored + 1 sub-labels row), because row 2 breaks
+        the contiguous-from-top run.
+        """
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.merge_cells("A1:B1")
+        ws["A1"] = "Banner"
+        ws["A2"] = "Sub-A"
+        ws["B2"] = "Sub-B"
+        for r in range(3, 50):
+            ws.cell(row=r, column=1).value = r
+            ws.cell(row=r, column=2).value = r * 10
+        ws.merge_cells("A50:B50")
+        ws["A50"] = "Totals"
+        region = TableRegion(
+            sheet="Sheet", top_row=1, left_col=1,
+            bottom_row=50, right_col=2, source="gap_detect",
+        )
+        self.assertEqual(_headers.detect_header_band(ws, region, "auto"), 2)
+
+    def test_no_merges_returns_one(self) -> None:
+        """No column-spanning merges anywhere in the region → default 1."""
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        for c, h in enumerate(["A", "B", "C"], start=1):
+            ws.cell(row=1, column=c).value = h
+        for r in range(2, 11):
+            for c in range(1, 4):
+                ws.cell(row=r, column=c).value = r * c
+        region = TableRegion(
+            sheet="Sheet", top_row=1, left_col=1,
+            bottom_row=10, right_col=3, source="gap_detect",
+        )
+        self.assertEqual(_headers.detect_header_band(ws, region, "auto"), 1)
+
+    def test_contiguous_two_row_banner(self) -> None:
+        """Row 1 + Row 2 banners; Row 3 plain → band covers rows 1-2 +
+        sub-labels row 3 = 3 total."""
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.merge_cells("A1:C1")
+        ws.merge_cells("A2:C2")
+        ws["A1"] = "L0"
+        ws["A2"] = "L1"
+        ws["A3"] = "h1"
+        ws["B3"] = "h2"
+        ws["C3"] = "h3"
+        for r in range(4, 8):
+            ws.cell(row=r, column=1).value = r
+        region = TableRegion(
+            sheet="Sheet", top_row=1, left_col=1,
+            bottom_row=7, right_col=3, source="gap_detect",
+        )
+        self.assertEqual(_headers.detect_header_band(ws, region, "auto"), 3)
 
 
 class TestHintPassthrough(unittest.TestCase):
@@ -125,6 +192,98 @@ class TestStickyFillLeft(unittest.TestCase):
         # Column 0: dedup "X" → "X". Column 1: "X › Y" (different values).
         self.assertEqual(keys[0], "X")
         self.assertEqual(keys[1], "X › Y")
+
+
+class TestMergeScopedStickyFill(unittest.TestCase):
+    """TASK 010 §11 patch v2: sticky-fill must NOT propagate beyond the
+    column-span of the originating horizontal merge. A title merge
+    `A1:F1` covering 6 of 25 columns must produce 6 filled keys + 19
+    empty keys, not 25 identical keys.
+    """
+
+    def test_title_merge_does_not_overflow_into_uncovered_cols(self) -> None:
+        # 25 columns. A1:F1 is the title merge (cols 1-6). G1..Y1 are
+        # untouched. After anchor-only policy: row[0] = [title, None×24].
+        # Merge-scoped fill should produce [title, title, title, title,
+        # title, title, "", "", ..., ""] — 6 fills, 19 empties.
+        rows = [["TITLE"] + [None] * 24]
+        merges = {(1, 1): (1, 6)}  # min_row=1, min_col=1 → max_row=1, max_col=6
+        keys, _ = _headers.flatten_headers(
+            rows, 1, merges=merges,
+            region_top_row=1, region_left_col=1,
+        )
+        self.assertEqual(keys[:6], ["TITLE"] * 6)
+        self.assertEqual(keys[6:], [""] * 19)
+
+    def test_merge_scoped_fill_within_two_disjoint_banners(self) -> None:
+        # Two banners on row 1: A1:B1 ("2026 Plan"), D1:E1 ("Actual").
+        # Col C is between them (no merge). Row 2 has sub-labels.
+        rows = [
+            ["2026 Plan", None, "Mid", "Actual", None],
+            ["Q1", "Q2", "X", "Q1", "Q2"],
+        ]
+        merges = {(1, 1): (1, 2), (1, 4): (1, 5)}
+        keys, _ = _headers.flatten_headers(
+            rows, 2, merges=merges,
+            region_top_row=1, region_left_col=1,
+        )
+        # Col 0: "2026 Plan / Q1" — under banner.
+        # Col 1: "2026 Plan / Q2" — under banner.
+        # Col 2: "Mid / X" — not under banner; level-0 anchor cell value.
+        # Col 3: "Actual / Q1" — under banner.
+        # Col 4: "Actual / Q2" — under banner.
+        self.assertEqual(keys[0], "2026 Plan › Q1")
+        self.assertEqual(keys[1], "2026 Plan › Q2")
+        self.assertEqual(keys[2], "Mid › X")
+        self.assertEqual(keys[3], "Actual › Q1")
+        self.assertEqual(keys[4], "Actual › Q2")
+
+    def test_legacy_fallback_when_merges_none(self) -> None:
+        """Calling flatten_headers without `merges` preserves the
+        legacy unconditional sticky-fill (existing synthetic test
+        fixtures pre-date this patch and don't model merge ranges).
+        """
+        rows = [["A", None, None, "B"], ["x", "y", "z", "w"]]
+        keys_legacy, _ = _headers.flatten_headers(rows, 2)
+        self.assertEqual(keys_legacy, ["A › x", "A › y", "A › z", "B › w"])
+
+    def test_empty_merges_dict_triggers_strict_no_fill(self) -> None:
+        """**vdd-multi-2 MED fix:** an explicitly empty `MergeMap`
+        (`merges={}`) is a caller assertion of "no merges exist" —
+        NOT the same as "merge info unknown" (`merges=None`).
+        Strict no-fill semantics apply: `None` header cells stay
+        empty, no inheritance from arbitrary left neighbours.
+
+        Before the fix, `merges={}` collapsed to legacy unconditional
+        sticky-fill, silently re-introducing the title-spillover bug
+        for workbooks whose only merges sit in the body (not the
+        header band). The new semantics: caller passed merge info =>
+        we honour it, even when empty.
+        """
+        rows = [["A", None, None, "B"], ["x", "y", "z", "w"]]
+        keys, _ = _headers.flatten_headers(rows, 2, merges={})
+        # col 0: "A" / "x" → "A › x"
+        # col 1: None / "y" → "y"  (no merge → no inheritance)
+        # col 2: None / "z" → "z"
+        # col 3: "B" / "w" → "B › w"
+        self.assertEqual(keys, ["A › x", "y", "z", "B › w"])
+
+    def test_body_only_merges_do_not_trigger_legacy_in_header(self) -> None:
+        """**vdd-multi-2 MED fix:** when the workbook has merges but
+        none anchor in the header band (e.g. totals-block banners in
+        the body), `flatten_headers` must NOT silently fall back to
+        legacy unconditional sticky-fill on the header rows. The
+        body merges are real merge knowledge — strict mode applies.
+        """
+        rows = [["Region", None, "Country", None, None]]
+        # A merge anchored at row 50 (body, below header band).
+        merges = {(50, 1): (50, 3)}
+        keys, _ = _headers.flatten_headers(
+            rows, 1, merges=merges,
+            region_top_row=1, region_left_col=1,
+        )
+        # Strict mode: None cells are empty, NOT inherited.
+        self.assertEqual(keys, ["Region", "", "Country", "", ""])
 
 
 class TestSyntheticHeaders(unittest.TestCase):

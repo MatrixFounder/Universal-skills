@@ -65,6 +65,73 @@ class TestEmitCsvSingleRegion(unittest.TestCase):
                 rows = list(csv.reader(fp))
             self.assertEqual(rows, [["a", "b"], ["1", "2"], ["3", "4"]])
 
+    def test_encoding_utf8_sig_writes_bom(self) -> None:
+        """TASK 010 §11 patch v2: `--encoding utf-8-sig` prepends the
+        UTF-8 BOM (0xEF 0xBB 0xBF) so Excel on Windows/macOS auto-
+        detects the charset on .csv open.
+        """
+        from xlsx2csv2json.emit_csv import emit_csv
+        r, t = _td(["Дата", "Часы"], [["2026-04-01", 8]], sheet="S")
+        with tempfile.TemporaryDirectory() as td:
+            out = Path(td) / "out.csv"
+            rc = emit_csv(
+                iter([("S", r, t, None)]),
+                output=out, output_dir=None,
+                sheet_selector="S", tables_mode="whole",
+                include_hyperlinks=False, datetime_format="ISO",
+                encoding="utf-8-sig",
+            )
+            self.assertEqual(rc, 0)
+            raw = out.read_bytes()
+            self.assertTrue(raw.startswith(b"\xef\xbb\xbf"))
+            # Body decodes cleanly as UTF-8 (after stripping BOM).
+            decoded = raw.decode("utf-8-sig")
+            self.assertIn("Дата", decoded)
+
+    def test_encoding_utf8_sig_multi_region_each_file_has_bom(self) -> None:
+        """**vdd-multi-2 LOW fix:** every per-region file in
+        `_emit_multi_region` must get the BOM, not just the first.
+        Regression guard for an accidental drop of the kwarg in the
+        plumbing chain.
+        """
+        from xlsx2csv2json.emit_csv import emit_csv
+        r1, t1 = _td(["a", "b"], [["Привет", 1]], sheet="S1")
+        r2, t2 = _td(["c", "d"], [["Мир", 2]], sheet="S2")
+        with tempfile.TemporaryDirectory() as td:
+            out_dir = Path(td) / "out"
+            rc = emit_csv(
+                iter([("S1", r1, t1, None), ("S2", r2, t2, None)]),
+                output=None, output_dir=out_dir,
+                sheet_selector="all", tables_mode="whole",
+                include_hyperlinks=False, datetime_format="ISO",
+                encoding="utf-8-sig",
+            )
+            self.assertEqual(rc, 0)
+            files = list(out_dir.rglob("*.csv"))
+            self.assertEqual(len(files), 2)
+            for f in files:
+                self.assertTrue(
+                    f.read_bytes().startswith(b"\xef\xbb\xbf"),
+                    f"missing BOM in {f}",
+                )
+
+    def test_encoding_utf8_default_no_bom(self) -> None:
+        """Default encoding is plain UTF-8 (no BOM) — pandas / jq do
+        not need BOM and treat it as part of the first header cell.
+        """
+        from xlsx2csv2json.emit_csv import emit_csv
+        r, t = _td(["a", "b"], [[1, 2]], sheet="S")
+        with tempfile.TemporaryDirectory() as td:
+            out = Path(td) / "out.csv"
+            emit_csv(
+                iter([("S", r, t, None)]),
+                output=out, output_dir=None,
+                sheet_selector="S", tables_mode="whole",
+                include_hyperlinks=False, datetime_format="ISO",
+            )
+            raw = out.read_bytes()
+            self.assertFalse(raw.startswith(b"\xef\xbb\xbf"))
+
     def test_to_stdout(self) -> None:
         from xlsx2csv2json.emit_csv import emit_csv
         r, t = _td(["a", "b"], [[1, 2]], sheet="S")

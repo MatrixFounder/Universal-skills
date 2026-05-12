@@ -40,6 +40,7 @@ def emit_csv(
     tables_mode: str,  # noqa: ARG001  -- reserved
     include_hyperlinks: bool,
     datetime_format: str,  # noqa: ARG001  -- library handles datetime emit
+    encoding: str = "utf-8",
 ) -> int:
     """Drive single-file or multi-file CSV emission.
 
@@ -65,6 +66,7 @@ def emit_csv(
             payloads_list[0],
             output=output,
             include_hyperlinks=include_hyperlinks,
+            encoding=encoding,
         )
         return 0
 
@@ -81,6 +83,7 @@ def emit_csv(
         payloads_list,
         output_dir=output_dir,
         include_hyperlinks=include_hyperlinks,
+        encoding=encoding,
     )
     return 0
 
@@ -90,8 +93,14 @@ def _emit_single_region(
     *,
     output: Path | None,
     include_hyperlinks: bool,
+    encoding: str = "utf-8",
 ) -> None:
-    """Write one region to ``output`` (or stdout if None)."""
+    """Write one region to ``output`` (or stdout if None).
+
+    ``encoding`` applies to file output only. stdout retains its
+    process-wide encoding (sys.stdout configuration) because injecting
+    a BOM into a pipe is almost always a bug at the consumer side.
+    """
     _, _, table_data, hl_map = payload
     if output is None:
         _write_region_csv(
@@ -99,7 +108,7 @@ def _emit_single_region(
             include_hyperlinks=include_hyperlinks,
         )
     else:
-        with output.open("w", encoding="utf-8", newline="") as fp:
+        with output.open("w", encoding=encoding, newline="") as fp:
             _write_region_csv(
                 fp, table_data, hl_map=hl_map,
                 include_hyperlinks=include_hyperlinks,
@@ -111,6 +120,7 @@ def _emit_multi_region(
     *,
     output_dir: Path,
     include_hyperlinks: bool,
+    encoding: str = "utf-8",
 ) -> None:
     """Write each region to ``<output_dir>/<sheet>/<table>.csv``.
 
@@ -147,7 +157,7 @@ def _emit_multi_region(
             suffix += 1
         written.add(target)
         target.parent.mkdir(parents=True, exist_ok=True)
-        with target.open("w", encoding="utf-8", newline="") as fp:
+        with target.open("w", encoding=encoding, newline="") as fp:
             _write_region_csv(
                 fp, table_data, hl_map=hl_map,
                 include_hyperlinks=include_hyperlinks,
