@@ -135,6 +135,57 @@ class TestE2EReadBack(unittest.TestCase):
                 ["Q1", "Q2", "Q3"],
             )
 
+    # ----- R11 — xlsx-8a-09 — --header-rows smart -----
+    def test_R11_header_rows_smart_skips_metadata_block(self) -> None:
+        """xlsx-8a-09 (R11): `--header-rows smart` skips an unmerged
+        metadata block above the real data table.
+
+        Synthesises a workbook with 6 rows of config-like parameters
+        on top (sparse, mixed types) + a row of 8 string headers +
+        10 rows of numeric data. With `--header-rows smart`, the
+        emit must drop the metadata and key the JSON by the 8 real
+        column names — NOT the row-1 sparse "От/До" pattern that
+        `--header-rows auto` would lock onto.
+        """
+        from openpyxl import Workbook
+        from xlsx2csv2json import convert_xlsx_to_json
+
+        with tempfile.TemporaryDirectory() as td:
+            src = Path(td) / "synthetic.xlsx"
+            wb = Workbook()
+            ws = wb.active
+            ws.title = "Data"
+            ws.append([None, "От", "До", None, None, None, None, None])
+            ws.append(["Param A", 0, 2000, None, None, None, None, None])
+            ws.append(["Param B", 0.1, 1.0, None, None, None, None, None])
+            ws.append(["Param C", 500, 5000, None, None, None, None, None])
+            ws.append(["Param D", 50, 100, None, None, None, None, None])
+            ws.append([None, None, None, None, None, None, None, None])
+            ws.append(["id", "name", "score", "tag", "rate", "qty", "total", "status"])
+            for r in range(10):
+                ws.append([r, f"user-{r}", r * 10, "tag", 0.5, r, r * 0.5, "ok"])
+            wb.save(src)
+
+            out = Path(td) / "out.json"
+            rc = convert_xlsx_to_json(
+                src, out, sheet="Data", tables="whole",
+                header_rows="smart", drop_empty_rows=True,
+            )
+            self.assertEqual(rc, 0)
+            data = json.loads(out.read_text("utf-8"))
+            # Single sheet single region → flat array (Shape 1).
+            self.assertIsInstance(data, list)
+            self.assertEqual(len(data), 10)
+            # Keys come from the REAL header row (row 7 in the source),
+            # NOT the row-1 "От/До" pattern that auto would pick up.
+            self.assertEqual(
+                list(data[0].keys()),
+                ["id", "name", "score", "tag", "rate", "qty", "total", "status"],
+            )
+            self.assertEqual(data[0]["id"], 0)
+            self.assertEqual(data[0]["name"], "user-0")
+            self.assertEqual(data[9]["score"], 90)
+
     # ----- 2. json_stdout_when_output_omitted -----
     def test_02_json_stdout_when_output_omitted(self) -> None:
         result = subprocess.run(

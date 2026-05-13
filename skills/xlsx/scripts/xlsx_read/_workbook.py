@@ -56,9 +56,22 @@ _OPC_MACRO_PART: str = "xl/vbaProject.bin"
 
 # Default size threshold above which `read_only=True` is preferred —
 # openpyxl streams rows one at a time in that mode, capping memory.
-# 10 MiB matches the xlsx-7 precedent (verified in
-# `xlsx_check_rules/scope_resolver.py`).
-_DEFAULT_READ_ONLY_THRESHOLD: int = 10 * 1024 * 1024
+#
+# **xlsx-8a-10 (R12, 2026-05-13)**: raised 10 MiB → 100 MiB. The
+# previous 10 MiB threshold caused typical office workbooks (5-50 MB)
+# to auto-enter read-only mode, where openpyxl's `ReadOnlyWorksheet`
+# does NOT expose `.merged_cells.ranges` (verified empirically on
+# openpyxl 3.1.5). The library's `_overlapping_merges_check` +
+# `parse_merges` crashed with `AttributeError` on these workbooks,
+# surfacing through the cross-5 envelope catch-all as
+# `Internal error: AttributeError`. Bumping the threshold restores
+# correct merge handling for the typical-size case; users with truly
+# large workbooks (≥ 100 MiB) implicitly opt into streaming, for
+# which `parse_merges` falls back to `{}` (no-op merge handling —
+# documented honest-scope in SKILL.md). xlsx-7 precedent value of
+# 10 MiB was tuned for a different code path (`xlsx_check_rules`)
+# that did not depend on `ws.merged_cells` access.
+_DEFAULT_READ_ONLY_THRESHOLD: int = 100 * 1024 * 1024
 
 
 def _probe_encryption(path: Path) -> None:

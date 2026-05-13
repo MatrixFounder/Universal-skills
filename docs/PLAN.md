@@ -184,6 +184,102 @@ The three performance-axis beads are **linearly ordered**:
     Keeping the bead unified preserves the regression-test
     continuity; the L sizing is a deliberate trade-off.
 
+- **Task 011-10** — [R12] Fix `ReadOnlyWorksheet` `AttributeError` on
+  workbooks > 10 MiB auto-streaming threshold.
+  - Use Cases: UC-10 (new, no separate spec — covered by R12 in
+    TASK §2 RTM)
+  - Priority: HIGH (blocks the user-reported 15 MB workbook
+    conversion path; surfaces as opaque `Internal error: AttributeError`
+    via the catch-all in `cli._run_with_envelope`)
+  - Dependencies: none (independent of R8/R9/R10/R11)
+  - Files touched:
+    - `scripts/xlsx_read/_workbook.py` (`_DEFAULT_READ_ONLY_THRESHOLD`
+      10 MiB → 100 MiB; docstring + comment update)
+    - `scripts/xlsx_read/_merges.py` (`parse_merges` guards
+      `hasattr(ws, 'merged_cells')` — returns `{}` on
+      `ReadOnlyWorksheet`)
+    - `scripts/xlsx_read/_types.py` (`read_table` overlap-check
+      block guards the `merged_cells.ranges` access — skip if
+      attribute missing)
+    - `scripts/xlsx_read/tests/test_workbook.py` or
+      `tests/test_tables.py` (3 new tests)
+    - `skills/xlsx/SKILL.md` (document `read_only_mode` tradeoffs)
+  - **Design summary**:
+    - Bumping the threshold to 100 MiB covers typical office
+      workbook sizes (5-50 MB) with no behaviour change. Users
+      with truly large workbooks (≥ 100 MiB) implicitly opt into
+      streaming — for them, merge-aware features degrade to
+      no-ops (no overlap detection, no merge policy effect on
+      header band). The honest-scope tradeoff is documented in
+      SKILL.md.
+    - Graceful guard in `parse_merges` + `read_table`
+      overlap-check eliminates the crash path for explicit
+      `read_only_mode=True` callers.
+
+- **Task 011-09** — [R11] `--header-rows smart`: type-pattern
+  header-row detection for unmerged metadata blocks above data tables.
+  - Use Cases: UC-09 (new)
+  - Priority: High (real-world workbook pattern — config + data
+    stacked, no merges to guide header band; surfaced by user
+    workload `tmp4/Моделирование.xlsx` 2026-05-13)
+  - Dependencies: none (independent of perf axis 011-06/07/08)
+  - Files touched:
+    - `scripts/xlsx_read/_tables.py` (new private
+      `_detect_data_table_offset(ws, region)` heuristic, ~60 LOC)
+    - `scripts/xlsx_read/_types.py` (`read_table` wires
+      `header_rows='smart'`: compute offset, shift `region.top_row`,
+      treat as 1-row header; ~15 LOC)
+    - `scripts/xlsx2csv2json/cli.py` (`_header_rows_type` accepts
+      `"smart"`; help text updated)
+    - `scripts/xlsx2csv2json/dispatch.py` (`smart_mode` branch
+      mirroring existing `leaf_mode` plumbing)
+    - `scripts/xlsx_read/tests/test_tables.py` and
+      `scripts/xlsx2csv2json/tests/test_emit_json.py` (5 new tests)
+    - `skills/xlsx/SKILL.md` (document `smart` mode in
+      `--header-rows` help)
+  - **Design summary (as-shipped after iter-2 + iter-3 + iter-4)**:
+    - Score each top row (up to `PROBE_ROWS=20`) by
+      `string_ratio + 1.5×coverage_ratio + 2×stability_ratio
+      + 0.5×depth_score` (type stability of `STABILITY_DEPTH=5`
+      rows below). Max theoretical score 5.0 after iter-3 H1 clamp.
+    - **Score-only** (iter-2 design change): does NOT defer to
+      merge-based detection. On merged-banner fixtures, `smart`
+      shifts to the sub-header row (leaf-like keys); callers
+      needing merge-concatenated multi-level form must use
+      `auto` or `leaf` instead. The `--header-rows smart` recipe
+      is non-overlapping with `auto`/`leaf` at the **output shape**
+      level, not at the scoring-input level.
+    - **Adaptive `data_width`** (iter-2): the per-candidate
+      `min_non_empty_cols = max(3, data_width // 2)` floor is
+      computed from rows BELOW the candidate (max non-empty col
+      index across `sample_below`), not from the region width
+      `n_cols`. This fixes the masterdata Timesheet pattern
+      where a sparse banner inflates `n_cols=25` while the real
+      data table is 7 cols wide.
+    - **`coverage_ratio` clamp** (iter-3 H1): `min(1.0,
+      len(non_empty) / data_width)` so a banner wider than the
+      data table can't blow the documented theoretical max score
+      via coverage alone.
+    - **`len(sample_below) ≥ 2` floor** (iter-3 M1): prevents
+      candidates near the bottom of the probe window from
+      passing a trivially-satisfied 1-row stability check.
+    - **Threshold**: `score ≥ 3.5` to justify a shift; below
+      threshold, OR when best candidate is `offset == 0`,
+      return 0 (current row-1 fallback).
+    - **R12 hasattr probe** (iter-3 L1): the `ws.merged_cells`
+      probe used by the no-defer path (and the R12 graceful
+      guards in `parse_merges`, `detect_header_band`, overlap-
+      check, ambiguous-boundary) uses
+      `getattr(merged_cells_attr, "ranges", None)` rather than
+      trusting a non-`None` `merged_cells` to expose `.ranges` —
+      future-proofs against openpyxl version drift.
+    - **Acceptance (as-shipped 2026-05-13)**: 9 R11 tests + 6 R12
+      tests + 1 iter-3 hasattr-probe test = 16 new tests green;
+      total xlsx_read suite at 224 (+15 from 209 pre-009/010),
+      xlsx2csv2json at 221 (+1 E2E from 220) = **445 green**;
+      `validate_skill.py skills/xlsx` exit 0; 12-line cross-skill
+      `diff -q` gate silent (no replicated files touched).
+
 ### Stage 3 — Integration & Final Gates
 
 After all 8 beads land:

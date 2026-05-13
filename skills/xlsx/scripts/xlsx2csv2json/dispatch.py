@@ -238,12 +238,17 @@ def iter_table_payloads(
         selected = matching
 
     # Resolve header_rows for `read_table`. `1` (default), `"auto"`,
-    # and `"leaf"` are all legal CLI values; `int` other than 1 was
-    # guarded by `cli._validate_flag_combo` against multi-table mode.
+    # `"leaf"`, and `"smart"` are all legal CLI values; `int` other
+    # than 1 was guarded by `cli._validate_flag_combo` against
+    # multi-table mode.
     # **`"leaf"` is a shim-level extension**: the library only knows
-    # `int | "auto"`. We translate `"leaf"` → `"auto"` for the library
-    # call and remember the leaf intent so the emit layer can trim the
-    # multi-level concatenated keys to their deepest level per column.
+    # `int | "auto" | "smart"`. We translate `"leaf"` → `"auto"` for
+    # the library call and remember the leaf intent so the emit layer
+    # can trim the multi-level concatenated keys to their deepest
+    # level per column.
+    # **`"smart"` (xlsx-8a-09 R11)** flows through to the library
+    # directly — the library shifts the region past any detected
+    # metadata block and treats the remainder as a 1-row header.
     leaf_mode = (args.header_rows == "leaf")
     header_rows_arg = "auto" if leaf_mode else args.header_rows
 

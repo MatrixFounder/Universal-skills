@@ -53,8 +53,22 @@ def detect_header_band(
     # `max_row >= region.top_row`) is NOT a header signal for *this*
     # region — it belongs to an enclosing super-region whose
     # tightening produced this one.
+    #
+    # **xlsx-8a-10 (R12) fix:** `ReadOnlyWorksheet` (selected when
+    # `read_only=True` for very large workbooks) does NOT expose
+    # `.merged_cells`. Fall back to "no merges" → header band = 1
+    # (per the existing no-merges sentinel branch below). The
+    # merge-based detection becomes a no-op on the streaming path;
+    # callers needing real merge handling open without
+    # `read_only_mode=True` (default) — see SKILL.md.
+    merged_cells_attr = getattr(ws, "merged_cells", None)
+    # **iter-3 fix (vdd-multi L1)**: probe `.ranges` via `getattr`
+    # rather than trusting non-`None` `merged_cells_attr` to expose it.
+    ranges_attr = getattr(merged_cells_attr, "ranges", None)
+    if ranges_attr is None:
+        return 1
     eligible_by_anchor: dict[int, list[Any]] = {}
-    for merge in ws.merged_cells.ranges:
+    for merge in ranges_attr:
         if merge.min_col == merge.max_col:
             continue  # vertical-only merge — not a header signal
         if merge.min_col < region.left_col or merge.max_col > region.right_col:

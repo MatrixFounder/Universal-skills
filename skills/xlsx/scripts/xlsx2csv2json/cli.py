@@ -67,29 +67,40 @@ _FORMULA_SENTINELS = ("=", "+", "-", "@", "\t", "\r")
 # ===========================================================================
 def _header_rows_type(value: str) -> Any:
     """Custom type for ``--header-rows``. Accepts ``"auto"``,
-    ``"leaf"``, or a non-negative integer.
+    ``"leaf"``, ``"smart"``, or a non-negative integer.
 
     Returns:
-      - ``"auto"`` (str) — auto-detect the header band; concatenate all
-        levels with ` › ` separator (R7).
+      - ``"auto"`` (str) — auto-detect the header band via merge-cell
+        structure; concatenate all levels with ` › ` separator (R7).
       - ``"leaf"`` (str) — auto-detect the band, but keep ONLY the
         deepest non-empty level per column as the header key. Drops
-        metadata-banner levels above the real column-name row on
-        layout-heavy reports (e.g. a Russian timesheet whose rows 1-6
-        are merged title/customer/contract/project/period blocks and
-        whose real column headers (Дата / Часы / ...) sit on row 7).
+        merged metadata-banner levels above the real column-name row
+        on layout-heavy reports with merge cells.
+      - ``"smart"`` (str, xlsx-8a-09 / R11; iter-3 2026-05-13) —
+        type-pattern heuristic, "find-the-data-table" recipe.
+        Scores each top row by `string_ratio + 1.5×coverage +
+        2×stability + 0.5×depth` (max 5.0); when a candidate scores
+        ≥ 3.5 AND has ≥ 2 sample rows below, the library shifts
+        the region past the metadata block and treats the candidate
+        as a 1-row header. **Does NOT defer to merge-based
+        detection** — competes purely on score. On merged-banner
+        fixtures, ``smart`` shifts to the sub-header row (leaf-like
+        keys); callers needing merge-concatenated multi-level
+        headers must use ``"auto"`` or ``"leaf"``.
       - ``int >= 0`` — explicit fixed header-row count.
     """
     if value == "auto":
         return "auto"
     if value == "leaf":
         return "leaf"
+    if value == "smart":
+        return "smart"
     try:
         n = int(value)
     except ValueError as exc:
         raise argparse.ArgumentTypeError(
-            f"--header-rows must be 'auto', 'leaf', or a non-negative "
-            f"integer, got {value!r}"
+            f"--header-rows must be 'auto', 'leaf', 'smart', or a "
+            f"non-negative integer, got {value!r}"
         ) from exc
     if n < 0:
         raise argparse.ArgumentTypeError(
@@ -236,8 +247,14 @@ def build_parser(*, format_lock: str | None) -> argparse.ArgumentParser:
         default=None,
         type=_header_rows_type,
         help=(
-            "Header row count: 'auto' or a non-negative int. "
-            "Defaults to 1 when --tables=whole; 'auto' otherwise."
+            "Header row count: 'auto', 'leaf', 'smart', or a "
+            "non-negative int. 'auto' = merge-based detection (default). "
+            "'leaf' = auto + keep deepest level per column (drops merged "
+            "metadata banners). 'smart' (xlsx-8a-09) = type-pattern "
+            "heuristic that locates the data table even WITHOUT merges, "
+            "skipping unmerged metadata blocks above (e.g. config rows "
+            "with parameters above the real column-name row). Defaults "
+            "to 1 when --tables=whole; 'auto' otherwise."
         ),
     )
     parser.add_argument(

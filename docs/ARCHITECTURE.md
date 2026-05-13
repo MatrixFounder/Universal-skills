@@ -1826,3 +1826,156 @@ touch.
   bounded, which matters when the producer is the constrained
   process (e.g. CI box with capped RSS). Locked.
 
+## 15.11. Smart-header detection + `ReadOnlyWorksheet` fallback (R11 + R12 — 2026-05-13 hot-patch)
+
+Two follow-up beads landed same-day as the R8/R9/R10 perf axis
+to close real-world-workbook gaps surfaced by the user's
+`tmp4/Моделирование.xlsx` (financial-modeling stacked-table
+pattern) and `tmp4/masterdata_report_202604.xlsx` (timesheet
+banner-and-metadata pattern).
+
+### 15.11.1. R11 — `--header-rows smart` (bead 011-09)
+
+**Motivation.** `--header-rows auto` (merge-based) and
+`--header-rows leaf` (auto + leaf-trim) both rely on
+column-spanning merges to locate the header band. Real-world
+financial-modeling and timesheet workbooks routinely stack a
+config / lookup table + a metadata banner + an unmerged real
+header above the data table — `auto` locks onto row 1
+(`["От", "До"]` + 16 synthetic `__N` keys) and `leaf` has
+nothing to trim.
+
+**Algorithm** (see [`scripts/xlsx_read/_tables.py`](../skills/xlsx/scripts/xlsx_read/_tables.py)
+`_detect_data_table_offset`). For each top row in the first
+`_SMART_PROBE_ROWS = 20` of the region, compute
+`score = string_ratio + 1.5 × coverage_ratio + 2 × stability_ratio + 0.5 × depth_score`
+(max 5.0). Pick the highest-scoring row (tie-break: earliest).
+If best score ≥ `_SMART_SHIFT_THRESHOLD = 3.5` AND best offset
+> 0, shift `region.top_row` past the metadata block and treat
+the result as a 1-row header.
+
+**Architecture decisions (D-A19..D-A22 — locked 2026-05-13):**
+
+- **D-A19 — Score-only, no defer-to-merges.** The initial
+  iter-1 design (2026-05-13 morning) included a "defer to
+  merge-based detection if any column-spanning merge anchors in
+  the top of the region" short-circuit. Iter-2 (same-day)
+  removed it because merged banners are common ABOVE data
+  tables in real workbooks (masterdata Timesheet has 21
+  scattered merges; the row-1 merge is a title banner, not a
+  multi-row-header band). The heuristic now competes purely on
+  score. On `multi_row_header.xlsx`-style merged-banner
+  fixtures, `smart` shifts to the sub-header row and produces
+  leaf-like keys (`["Q1", "Q2", "Q3"]`); callers needing the
+  merge-concatenated multi-level form
+  (`"2026 plan › Q1"`) must use `auto` or `leaf`. `smart` is
+  non-overlapping with `auto`/`leaf` at the **output shape**
+  level only, NOT at the scoring-input level.
+- **D-A20 — `data_width` from rows below the candidate, not
+  region width.** Iter-2 fix: the `min_non_empty_cols` floor
+  is `max(3, data_width // 2)` where `data_width` is the max
+  non-empty col index across `sample_below`. The previous
+  `max(3, n_cols // 2)` form rejected legitimate narrow data
+  tables in wide regions (masterdata Timesheet pattern:
+  `n_cols=25` from a sparse banner; real data table 7 cols
+  wide; pre-iter-2 the 7-col header on R7 was rejected for
+  `7 < 25/2 = 12`).
+- **D-A21 — `coverage_ratio` clamp at 1.0.** Iter-3 H1 fix:
+  `min(1.0, len(non_empty) / data_width)`. Without the clamp,
+  a candidate row broader than the data table below produces
+  a `coverage_ratio > 1.0` that blows the documented
+  theoretical max score (5.0) and makes the threshold
+  trivially passable on ill-formed input. Locked by
+  `test_R11_smart_iter3_coverage_ratio_clamped_at_one` (a
+  threshold-patched test that fails if the clamp is removed).
+- **D-A22 — `len(sample_below) ≥ 2` floor.** Iter-3 M1 fix:
+  candidates near the bottom of the probe window with only 1
+  sample row below have a trivially-1.0 `stability_ratio` (one
+  value → one type → "stable"). The floor prevents marginal
+  candidates from passing the threshold for the wrong row.
+
+### 15.11.2. R12 — `ReadOnlyWorksheet` graceful fallback (bead 011-10)
+
+**Motivation.** openpyxl auto-selects `read_only=True` for
+workbooks above a configurable size threshold. In that mode,
+`ReadOnlyWorksheet` does NOT expose `.merged_cells.ranges` —
+`xlsx_read._merges.parse_merges`,
+`xlsx_read._headers.detect_header_band`, and
+`xlsx_read._types.read_table` previously accessed this
+attribute unconditionally and crashed with `AttributeError` on
+every workbook above the (pre-R12) 10 MiB threshold. The crash
+surfaced through `xlsx2csv2json.cli._run_with_envelope`'s
+catch-all as opaque `Internal error: AttributeError`.
+
+**Architecture decisions (D-A23..D-A24 — locked 2026-05-13):**
+
+- **D-A23 — Default threshold 10 MiB → 100 MiB.** Most office
+  workbooks (5-50 MB) are below 100 MiB and benefit from
+  non-read-only mode (correct merge handling). Workbooks ≥ 100
+  MiB implicitly opt into the streaming path; users explicitly
+  needing streaming for medium-sized workbooks pass
+  `read_only_mode=True` to `open_workbook`. **Memory
+  trade-off**: a 99 MB workbook at the new default uses ~800
+  MB-1.5 GB Python heap in non-read-only mode (10× the file
+  size). On memory-constrained CI (≤ 4 GB containers), users
+  must override the threshold or pass `read_only_mode=True`
+  explicitly to keep memory bounded.
+- **D-A24 — `getattr(merged_cells_attr, "ranges", None)` probe
+  pattern.** Iter-3 L1 hardening: the four merge-accessing
+  call sites (`parse_merges`, `detect_header_band`,
+  `read_table` overlap-check, `read_table` ambiguous-boundary)
+  all use the `getattr(...).ranges` probe rather than trusting
+  a non-`None` `merged_cells_attr` to expose `.ranges`. This
+  future-proofs against openpyxl version drift / 3rd-party
+  openpyxl-compatible libraries where `merged_cells` exists
+  but `.ranges` has a different name or shape. Locked by
+  `test_R12_iter3_parse_merges_hasattr_probe_proxy_without_ranges`.
+
+**Streaming-path honest-scope (from `references/security.md`
+and `KNOWN_ISSUES.md` follow-up).** On the streaming path
+(≥ 100 MiB or explicit `read_only_mode=True`), merge-aware
+features become no-ops: `parse_merges` returns `{}`,
+`_overlapping_merges_check` is skipped, `detect_header_band`
+falls back to 1-row header, `_ambiguous_boundary_check`
+receives an empty merge list. The fail-loud contract for
+overlapping merges (M8/D4) is structurally inactive on this
+path because openpyxl does not parse `<mergeCell>` ranges in
+read-only mode at all — not bypassable from user-controlled
+input. The `_MAX_MERGES = 100_000` cap (Sec-MED-3) is
+similarly structurally inapplicable on the streaming path.
+
+### 15.11.3. Test coverage (R11 + R12)
+
+`xlsx_read/tests/test_tables.py`:
+- `TestR11SmartHeaderDetection` — 8 tests covering: synthetic
+  metadata-above-data shift, single-row-header preservation,
+  merged-banner-shifts-to-sub-header (iter-2), low-confidence
+  no-shift, narrow-table-in-wide-region (iter-2),
+  coverage-ratio clamp (iter-3 H1, threshold-patched
+  regression), `len(sample_below) ≥ 2` floor (iter-3 M1),
+  end-to-end `read_table` shift via `WorkbookReader`.
+- `TestR12ReadOnlyMergedCellsFallback` — 6 tests covering:
+  `_DEFAULT_READ_ONLY_THRESHOLD = 100 MiB` constant lock,
+  `parse_merges` fallback on missing `merged_cells`,
+  `detect_header_band` fallback, smart-detector fallback,
+  threshold-window E2E via `size_threshold_bytes` override,
+  explicit `read_only_mode=True` round-trip. Plus
+  `test_R12_iter3_parse_merges_hasattr_probe_proxy_without_ranges`
+  (iter-3 L1 hardening).
+
+`xlsx2csv2json/tests/test_e2e.py`:
+- `test_R11_header_rows_smart_skips_metadata_block` — E2E via
+  the `xlsx2json.py` shim using a synthetic 6-row-metadata +
+  row-7-header + 10-row-data fixture.
+
+### 15.11.4. Atomic chain (extends §15.10.7)
+
+| # | Slug | Scope | Stub-First gate |
+| --- | --- | --- | --- |
+| 011-09 | `smart-header-detection` | New `_detect_data_table_offset`; new `header_rows='smart'` value in CLI + library; type-pattern heuristic with iter-2 (data_width adaptive, no defer-to-merges) + iter-3 (coverage clamp, sample-below ≥ 2, dead-code removal) + iter-4 (function-docstring fix). | 9 R11 tests green; merge-based `auto`/`leaf` regression-free. |
+| 011-10 | `readonly-worksheet-fallback` | `_DEFAULT_READ_ONLY_THRESHOLD` 10 MiB → 100 MiB; graceful `getattr` guards in 4 merge-accessing call sites; iter-3 L1 `.ranges` probe hardening. | 6 R12 tests green; non-streaming-path merge behaviour unchanged. |
+
+Both beads are independent of the R8/R9/R10 perf axis and of
+each other; either can ship first. As-shipped 2026-05-13 they
+land together as a hot-patch on top of the security+perf axis.
+

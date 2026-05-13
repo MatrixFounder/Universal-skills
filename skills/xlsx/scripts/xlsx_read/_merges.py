@@ -49,9 +49,32 @@ def parse_merges(ws: Any) -> MergeMap:
     entries. Hand-crafted OOXML with millions of `<mergeCell>` is
     refused with `TooManyMerges` before the dict balloons RAM. Cap
     fires on the 100_001st insertion.
+
+    xlsx-8a-10 (R12, 2026-05-13): openpyxl's `ReadOnlyWorksheet`
+    (selected when the workbook was opened with `read_only=True`)
+    does NOT expose `.merged_cells.ranges`. Caller-side this happens
+    for very large workbooks (≥ `_DEFAULT_READ_ONLY_THRESHOLD` =
+    100 MiB) OR when the user explicitly passes `read_only_mode=True`
+    to `open_workbook`. We return an empty `MergeMap` in that case —
+    merge-aware features (overlap detection, multi-row header band
+    via merges, merge-policy fill) become no-ops on the streaming
+    path. This is the documented honest-scope tradeoff for streaming
+    mode (see SKILL.md `--header-rows smart` / `read_only_mode`
+    docs).
     """
+    merged_cells_attr = getattr(ws, "merged_cells", None)
+    # **iter-3 fix (vdd-multi L1)**: probe `.ranges` directly via
+    # `getattr` instead of trusting that a non-`None`
+    # `merged_cells_attr` always exposes `.ranges`. Future openpyxl
+    # versions (or third-party openpyxl-compatible libraries) could
+    # change the shape of the proxy object; the previous
+    # `is not None` check followed by unconditional `.ranges`
+    # access would AttributeError on such an evolution.
+    ranges_attr = getattr(merged_cells_attr, "ranges", None)
+    if ranges_attr is None:
+        return {}
     out: MergeMap = {}
-    for r in ws.merged_cells.ranges:
+    for r in ranges_attr:
         out[(r.min_row, r.min_col)] = (r.max_row, r.max_col)
         if len(out) > _MAX_MERGES:
             raise TooManyMerges(

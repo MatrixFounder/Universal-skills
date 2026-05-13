@@ -682,3 +682,225 @@ def _whole_sheet_region(ws: Any, sheet_name: str) -> TableRegion:
         bottom_row=last_row, right_col=last_col,
         source="gap_detect", name="Table-1",
     )
+
+
+# ---------------------------------------------------------------------------
+# xlsx-8a-09 (R11) — Smart header detection (type-pattern-based)
+# ---------------------------------------------------------------------------
+#
+# Caller-side opt-in via `header_rows='smart'`. The library scans the
+# top of the region for a row that "looks like" a header (high
+# string-ratio, broad column coverage) followed by data rows with
+# stable types per column. If such a row sits below the region's
+# `top_row` (i.e. there's a metadata block above the data table),
+# returns the offset; otherwise returns 0.
+#
+# **Score-only**: the heuristic competes purely on the
+# `string_ratio + 1.5×coverage + 2×stability + 0.5×depth` score
+# vs the `_SMART_SHIFT_THRESHOLD` floor. No special-case deferral
+# for merged-banner fixtures (iter-2 fix, 2026-05-13): on
+# `multi_row_header.xlsx`-style workbooks (`A1:C1` "2026 plan"
+# merged banner over `Q1`/`Q2`/`Q3` sub-headers), smart shifts to
+# the sub-header row and produces leaf-like keys. Callers needing
+# the merge-concatenated multi-level form (`"2026 plan › Q1"`)
+# must use `--header-rows auto`/`leaf` — `smart` is the
+# "find-the-data-table" recipe and is non-overlapping with
+# `auto`/`leaf` only at the OUTPUT shape level, not at the
+# scoring-input level.
+#
+# Algorithm constants (tunable; not part of public API).
+
+_SMART_PROBE_ROWS: int = 20          # candidate header rows to consider
+_SMART_STABILITY_DEPTH: int = 5      # rows after candidate to score
+_SMART_MIN_STRING_RATIO: float = 0.5 # candidate row must be ≥50% strings
+_SMART_SHIFT_THRESHOLD: float = 3.5  # min score to justify a shift
+
+
+def _normalize_type_for_smart(v: Any) -> str:
+    """Return a coarse type tag for type-stability scoring."""
+    import datetime as _dt
+    if v is None or v == "":
+        return "empty"
+    if isinstance(v, bool):
+        return "bool"
+    if isinstance(v, (int, float)):
+        return "number"
+    if isinstance(v, (_dt.datetime, _dt.date)):
+        return "date"
+    if isinstance(v, _dt.time):
+        return "time"
+    if isinstance(v, str):
+        return "str"
+    return type(v).__name__
+
+
+def _detect_data_table_offset(ws: Any, region: TableRegion) -> int:
+    """Return the row offset within `region` where the data table starts.
+
+    Returns 0 if the region already starts at the data table (or if
+    we cannot confidently identify a metadata block). Returns N > 0
+    if a metadata block of N rows sits above a clearly-identifiable
+    header + data run.
+
+    xlsx-8a-09 (R11; iter-3 2026-05-13): used when caller passes
+    `header_rows='smart'`. **Score-only** — does NOT defer to
+    merge-based detection; competes purely on the
+    `string_ratio + 1.5×coverage + 2×stability + 0.5×depth` score
+    (max 5.0) vs the `_SMART_SHIFT_THRESHOLD` floor. Callers
+    needing the merge-concatenated multi-level form must use
+    `header_rows='auto'` or `'leaf'` instead.
+
+    Algorithm: for each candidate row in the first `_SMART_PROBE_ROWS`
+    of the region, score by `string_ratio + 1.5×coverage + 2×stability
+    + 0.5×depth`. Pick the highest-scoring row (tie-break: earliest).
+    If best score ≥ `_SMART_SHIFT_THRESHOLD` AND best offset > 0,
+    return that offset; otherwise 0.
+    """
+    n_cols = region.right_col - region.left_col + 1
+    n_rows = region.bottom_row - region.top_row + 1
+    if n_rows < 2 or n_cols < 1:
+        return 0
+
+    # **xlsx-8a-09 iter-2 (2026-05-13)**: previous version unconditionally
+    # deferred to merge-based detection when any column-spanning merge
+    # anchored in the top of the region. That was over-conservative —
+    # in workbooks like `masterdata_report_202604.xlsx::Timesheet`, the
+    # row-1 merge is a **banner** (a long title spanning cols 1-7),
+    # NOT a multi-row-header band; the real column headers sit on
+    # row 7 and the heuristic SHOULD find them.
+    #
+    # The defer guard is removed. The heuristic now always runs and
+    # competes purely on score. Multi-row-header fixtures with merged
+    # banners (e.g. `multi_row_header.xlsx` with A1:C1 "2026 plan"
+    # over Q1/Q2/Q3 sub-headers) will produce a non-zero shift under
+    # `--header-rows smart` (matches the `leaf` mode's intent), which
+    # is the right semantics for the "find the data table" mode.
+    # `--header-rows auto`/`leaf` continue to use merge-based
+    # detection unchanged.
+
+    # Cache the first PROBE + STABILITY_DEPTH rows once via iter_rows
+    # (single XML walk; works in read_only mode too).
+    probe_limit = min(_SMART_PROBE_ROWS + _SMART_STABILITY_DEPTH, n_rows)
+    cached_rows: list[list[Any]] = []
+    for r_offset, row in enumerate(ws.iter_rows(
+        min_row=region.top_row,
+        max_row=region.top_row + probe_limit - 1,
+        min_col=region.left_col,
+        max_col=region.right_col,
+        values_only=True,
+    )):
+        cached_rows.append(list(row))
+        if r_offset + 1 >= probe_limit:
+            break
+    if len(cached_rows) < 2:
+        return 0
+
+    # **xlsx-8a-09 iter-2 fix (2026-05-13)**: `min_non_empty_cols`
+    # is now computed against the **effective data width** (the
+    # max column index where data rows below the candidate have
+    # any non-empty cell), NOT the region width `n_cols`.
+    #
+    # Why: a narrow data table (e.g. 7 cols) inside a region whose
+    # width is inflated by sparse meta-banner cells (e.g. a
+    # "Period: ..." line that lights up col 7 of a 25-col `<dimension>`)
+    # would otherwise have its real header rejected because
+    # 7 cells < n_cols // 2 = 12. The masterdata Timesheet fixture
+    # exhibits this exact pattern. Per-candidate `data_width` is
+    # computed from rows below by taking the max non-empty col
+    # index, capped at `n_cols`.
+    #
+    # The absolute floor of 3 stays: a "header" with < 3 cells is
+    # almost certainly not a real header — even narrow tables have
+    # at least date / value / description.
+    candidates: list[tuple[int, float]] = []
+
+    for r_offset in range(min(_SMART_PROBE_ROWS, len(cached_rows) - 1)):
+        row_values = cached_rows[r_offset]
+        non_empty = [v for v in row_values if v not in (None, "")]
+
+        sample_below = cached_rows[r_offset + 1: r_offset + 1 + _SMART_STABILITY_DEPTH]
+        # **iter-3 fix (vdd-multi M1)**: require at least 2 rows
+        # below to score stability meaningfully. With only 1 sample,
+        # `stability_ratio` is trivially 1.0 (any single value has 1
+        # type), which can push borderline candidates over the
+        # threshold for the WRONG row (e.g. r_offset near the end
+        # of `cached_rows`). The R8+ realistic data tables have far
+        # more than 2 rows below the header, so this floor is safe.
+        if len(sample_below) < 2:
+            continue
+
+        # Compute the effective data width from rows BELOW the candidate.
+        data_width = 0
+        for r in sample_below:
+            for c_idx in range(len(r) - 1, -1, -1):
+                if r[c_idx] not in (None, ""):
+                    if c_idx + 1 > data_width:
+                        data_width = c_idx + 1
+                    break
+        if data_width == 0:
+            # No data below → not a header. Skip.
+            continue
+        min_non_empty_cols = max(3, data_width // 2)
+
+        if len(non_empty) < min_non_empty_cols:
+            continue
+        string_count = sum(1 for v in non_empty if isinstance(v, str))
+        string_ratio = string_count / len(non_empty)
+        if string_ratio < _SMART_MIN_STRING_RATIO:
+            continue
+
+        stable_cols = 0
+        populated_cols = 0
+        # **Iter-2**: only consider columns within `data_width` for the
+        # stability check (cells beyond the actual data table can never
+        # be "stable" — they're empty in the sample).
+        for c_idx in range(min(len(row_values), data_width)):
+            h_val = row_values[c_idx]
+            if h_val in (None, ""):
+                continue
+            col_vals = [
+                r[c_idx] if c_idx < len(r) else None
+                for r in sample_below
+            ]
+            col_non_empty = [v for v in col_vals if v not in (None, "")]
+            if not col_non_empty:
+                continue
+            populated_cols += 1
+            col_types = {_normalize_type_for_smart(v) for v in col_non_empty}
+            if len(col_types) == 1:
+                stable_cols += 1
+        if populated_cols == 0:
+            continue
+        stability_ratio = stable_cols / populated_cols
+
+        # **iter-3 fix (vdd-multi H1)**: clamp `coverage_ratio` at
+        # 1.0. Without the clamp, a candidate row that is broader
+        # than the data table below (wide banner over a narrow
+        # data table — e.g. 20 strings on row 1 above a 7-col
+        # data section) produces `coverage_ratio = 20/7 ≈ 2.86`,
+        # blowing the documented theoretical max score of 5.0 and
+        # making the threshold trivially passable on hostile or
+        # ill-formed input. The clamp preserves the "wider header
+        # is better" signal up to data_width, then saturates.
+        coverage_ratio = min(1.0, len(non_empty) / data_width)
+        n_rows_with_data = sum(
+            1 for r in sample_below
+            if any(v not in (None, "") for v in r)
+        )
+        depth_score = min(1.0, n_rows_with_data / _SMART_STABILITY_DEPTH)
+
+        score = (
+            string_ratio * 1.0
+            + coverage_ratio * 1.5
+            + stability_ratio * 2.0
+            + depth_score * 0.5
+        )
+        candidates.append((r_offset, score))
+
+    if not candidates:
+        return 0
+    candidates.sort(key=lambda x: (-x[1], x[0]))
+    best_offset, best_score = candidates[0]
+    if best_score < _SMART_SHIFT_THRESHOLD or best_offset == 0:
+        return 0
+    return best_offset

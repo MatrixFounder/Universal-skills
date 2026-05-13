@@ -127,7 +127,7 @@ class WorkbookReader:
         self,
         region: TableRegion,
         *,
-        header_rows: int | Literal["auto"] = "auto",
+        header_rows: int | Literal["auto", "smart"] = "auto",
         merge_policy: MergePolicy = "anchor-only",
         include_hyperlinks: bool = False,
         include_formulas: bool = False,
@@ -139,6 +139,15 @@ class WorkbookReader:
         apply merge policy → resolve header band (incl. synthetic
         col_1..col_N for listobject_header_row_count=0) → flatten
         headers → extract values per cell, lifting warnings.
+
+        **xlsx-8a-09 (R11)**: `header_rows='smart'` runs a type-pattern
+        heuristic via `_tables._detect_data_table_offset(ws, region)`.
+        When the heuristic identifies a metadata block above the data
+        table (score ≥ `_SMART_SHIFT_THRESHOLD`), the region's
+        `top_row` is shifted past the metadata and the call proceeds
+        as a 1-row header. When no shift is warranted (or merges
+        anchor a real header band), `smart` is equivalent to `auto`
+        with `header_rows=1` fallback.
         """
         from ._headers import (
             _ambiguous_boundary_check,
@@ -157,6 +166,26 @@ class WorkbookReader:
             return TableData(region=region)
 
         ws = self._wb[region.sheet]
+
+        # xlsx-8a-09 (R11) — `smart` mode: detect metadata block above
+        # the data table and shift the region accordingly before any
+        # downstream merge / header / extraction work runs. After the
+        # shift, the remaining header detection is a fixed 1-row count.
+        if header_rows == "smart":
+            from ._tables import _detect_data_table_offset
+            offset = _detect_data_table_offset(ws, region)
+            if offset > 0:
+                region = TableRegion(
+                    sheet=region.sheet,
+                    top_row=region.top_row + offset,
+                    left_col=region.left_col,
+                    bottom_row=region.bottom_row,
+                    right_col=region.right_col,
+                    source=region.source,
+                    name=region.name,
+                    listobject_header_row_count=region.listobject_header_row_count,
+                )
+            header_rows = 1
         # P-H1 / S-L3 fix (iter-3 NEW-S-M1 soundness regression fix):
         # run the O(n²) overlap detector ONCE per **sheet** across the
         # reader's lifetime — the overlap property is static. The
@@ -165,8 +194,21 @@ class WorkbookReader:
         # were silently skipped after region A's call). Now we check
         # the entire sheet's merges on the cold pass; bounded by
         # Excel's practical merge cap (typically < 100 per sheet).
+        # xlsx-8a-10 (R12): `ReadOnlyWorksheet` (selected by openpyxl
+        # when read_only=True) does NOT expose `.merged_cells`. Probe
+        # once per read_table call; reuse for both the overlap check
+        # and the ambiguous-boundary check below. The fail-loud
+        # contract for overlapping merges degrades to no-op in
+        # streaming mode (documented honest-scope).
+        # **iter-3 fix (vdd-multi L1)**: probe `.ranges` via
+        # `getattr` so a non-`None` `merged_cells_attr` with a
+        # different proxy shape (future openpyxl) doesn't
+        # AttributeError downstream.
+        merged_cells_attr = getattr(ws, "merged_cells", None)
+        merged_ranges_attr = getattr(merged_cells_attr, "ranges", None)
         if region.sheet not in self._overlap_checked:
-            _overlapping_merges_check(list(ws.merged_cells.ranges))
+            if merged_ranges_attr is not None:
+                _overlapping_merges_check(list(merged_ranges_attr))
             self._overlap_checked.add(region.sheet)
         merges = parse_merges(ws)
 
@@ -234,8 +276,17 @@ class WorkbookReader:
                 headers = synthetic_headers(width)
                 data_rows = values_grid
             else:
+                # xlsx-8a-10 (R12): graceful no-merge fallback on
+                # ReadOnlyWorksheet — `.merged_cells` is absent.
+                # iter-3 (vdd-multi L1): re-use the `.ranges`-via-
+                # `getattr` probe from above to stay hasattr-safe.
+                ambig_merges = (
+                    list(merged_ranges_attr)
+                    if merged_ranges_attr is not None
+                    else []
+                )
                 ambig = _ambiguous_boundary_check(
-                    list(ws.merged_cells.ranges), region, hdr
+                    ambig_merges, region, hdr
                 )
                 if ambig is not None:
                     warnings_list.append(ambig)
