@@ -123,6 +123,8 @@ _KWARG_TO_FLAG = {
     # kwarg: 'delimiter'` because this mapping was not updated.
     "delimiter": "--delimiter",
     "encoding": "--encoding",
+    # xlsx-8a-11 (R13): openpyxl streaming-mode opt-in.
+    "memory_mode": "--memory-mode",
 }
 _BOOL_KWARG_TO_FLAG = {
     "include_hidden": "--include-hidden",

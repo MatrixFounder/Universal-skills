@@ -216,6 +216,63 @@ The three performance-axis beads are **linearly ordered**:
       overlap-check eliminates the crash path for explicit
       `read_only_mode=True` callers.
 
+- **Task 011-11** — [R13] Expose `--memory-mode {auto,streaming,full}`
+  CLI flag so callers can opt into openpyxl streaming for large
+  workbooks without editing code.
+  - Use Cases: UC-11 (new; no separate spec)
+  - Priority: HIGH (4.3× RSS reduction available on
+    `Моделирование.xlsx` measured 2026-05-13: 1188 MB → 278 MB;
+    user can't access this without code change today)
+  - Dependencies: R12 (graceful ReadOnlyWorksheet fallback must be
+    in place so explicit `streaming` opt-in doesn't crash on
+    merge-bearing workbooks)
+  - Files touched:
+    - `scripts/xlsx2csv2json/cli.py` — new `_MEMORY_MODES =
+      ("auto", "streaming", "full")` constant + argparse entry
+      `--memory-mode` (default `"auto"`); help-text documents
+      RAM trade-off and merge-handling no-op on `streaming`.
+    - `scripts/xlsx2csv2json/dispatch.py` (`_dispatch_to_emit`):
+      replace the hard-coded
+      `read_only_mode = False if args.include_hyperlinks else None`
+      with a 3-way switch:
+      - `auto` → `None` (preserves existing size-threshold-driven
+        behaviour).
+      - `streaming` → `True` (force openpyxl streaming).
+      - `full` → `False` (force non-streaming, all merge features
+        work).
+      `--include-hyperlinks` overrides `streaming` → `full` (with
+      stderr warning) because ReadOnlyWorksheet doesn't expose
+      `cell.hyperlink`.
+    - `scripts/xlsx2csv2json/tests/test_e2e.py` or
+      `tests/test_cli.py` — 5 new tests.
+    - `skills/xlsx/SKILL.md` — document `--memory-mode` in the
+      `--header-rows`/`--tables` flag table.
+    - `skills/xlsx/scripts/.AGENTS.md` — append 011-11 section.
+  - **Design summary**:
+    - Default `auto` preserves backward-compat: `open_workbook`
+      auto-selects streaming above the
+      `_DEFAULT_READ_ONLY_THRESHOLD = 100 MiB` cap (R12 raised
+      from 10 MiB).
+    - `streaming` is the recommended mode for workbooks where
+      memory matters and merges are absent (financial-modeling
+      sheets, raw timesheets, gap-detect-friendly layouts).
+    - `full` is the recommended mode for merge-heavy workbooks
+      regardless of size (forces non-streaming so
+      `parse_merges` / `detect_header_band` / overlap-detection
+      work correctly).
+    - `--include-hyperlinks --memory-mode streaming` is a known
+      conflict: hyperlink extraction requires
+      `cell.hyperlink.target` which is absent on
+      `ReadOnlyWorksheet`. The conflict resolver emits a stderr
+      warning and overrides to `full` (matches the existing
+      auto-coerce path for `--include-hyperlinks`).
+    - **Acceptance**: 5 R13 tests green; existing 445 tests
+      stay green (regression gate); `validate_skill.py
+      skills/xlsx` exit 0; 12-line cross-skill `diff -q` gate
+      silent. Live verification: `xlsx2json.py Моделирование.xlsx
+      out.json --memory-mode streaming` should complete with
+      peak RSS ≤ 500 MB (was 1188 MB).
+
 - **Task 011-09** — [R11] `--header-rows smart`: type-pattern
   header-row detection for unmerged metadata blocks above data tables.
   - Use Cases: UC-09 (new)

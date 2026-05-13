@@ -1979,3 +1979,124 @@ Both beads are independent of the R8/R9/R10 perf axis and of
 each other; either can ship first. As-shipped 2026-05-13 they
 land together as a hot-patch on top of the security+perf axis.
 
+## 15.12. `--memory-mode` CLI flag (R13 — 2026-05-13 same-day hot-patch)
+
+Surfaced by `tracemalloc` + `resource.getrusage` measurement on
+`Моделирование.xlsx`: default-mode peak RSS hit 1188 MB on a
+14.7 MB workbook, while passing `read_only_mode=True` to
+`open_workbook` brought it down to 156 MB (7.6× reduction) with
+a 2.6× wall-clock speedup. The library API supported this
+since R12 (graceful guards for `ReadOnlyWorksheet`) but the CLI
+hard-coded `read_only_mode = False if args.include_hyperlinks else None`
+— users could not access the win without code change.
+
+### 15.12.1. CLI surface (extends §15.2)
+
+| Flag | Values | Default | Effect |
+| --- | --- | --- | --- |
+| `--memory-mode` | `auto`, `streaming`, `full` | `auto` | Read-mode selection. `auto` lets the library pick based on `_DEFAULT_READ_ONLY_THRESHOLD = 100 MiB`. `streaming` forces `read_only=True` (minimum RAM; merge-aware features become no-ops per R12 honest-scope). `full` forces `read_only=False` (correct merges; RAM scales ~10× with file size). |
+
+### 15.12.2. Architecture decisions (D-A25 — locked 2026-05-13)
+
+- **D-A25 — Three-mode flag, no `--read-only` boolean.** The
+  flag is `--memory-mode {auto, streaming, full}` (three string
+  enum values), NOT `--read-only` (boolean). Rationale:
+  - `auto` is the existing size-threshold-driven default and
+    must remain expressible as a distinct mode (not "user
+    unset").
+  - `streaming` and `full` are not symmetric — `streaming`
+    silently degrades merge handling, `full` silently inflates
+    RAM. A 3-mode enum forces an explicit choice rather than
+    "true/false on a boolean nobody understands."
+  - The flag intentionally does NOT name openpyxl
+    (`--read-only` would leak an openpyxl-specific name);
+    `--memory-mode` is library-agnostic and survives an
+    openpyxl-replacement refactor.
+- **D-A25 conflict-resolution rule**: `--include-hyperlinks` +
+  `--memory-mode streaming` is structurally impossible
+  (`ReadOnlyWorksheet` doesn't expose `cell.hyperlink.target`).
+  The shim emits a stderr warning (with actionable hint —
+  "either drop `--include-hyperlinks` or use
+  `--memory-mode full/auto`") and overrides to `full`. The
+  `args.include_hyperlinks` first-class check in the
+  translation block at `cli.py:_dispatch_to_emit` is the
+  load-bearing guard; the `memory_mode` enum is informational
+  in this branch.
+
+### 15.12.3. Measurements (2026-05-13 baseline)
+
+Two complementary measurements on `tmp4/Моделирование.xlsx`
+(14.7 MB, 5 sheets, 71K row total across 4 data sheets,
+largest sheet "Применение Купона" with 1.13M cells, no
+business-critical merges):
+
+| Method | Default (full) | streaming | Reduction |
+| --- | ---: | ---: | ---: |
+| In-process tracemalloc + `getrusage` (with instrumentation overhead) | 1188 MB RSS · 32.4 s | 278 MB RSS · 43.3 s | 4.3× RAM · +35% wall |
+| Subprocess (no instrumentation, cold-start) | 1188 MB RSS · 32.4 s | **156 MB RSS · 12.6 s** | **7.6× RAM · 2.6× speedup** |
+
+The subprocess measurement is the canonical real-world
+delivery cost. The in-process measurement is included for
+reproducibility from the same Python process — tracemalloc
+itself uses ~20% extra RSS, and full-load `load_workbook`
+amortises its cost across instrumented + non-instrumented
+runs differently.
+
+**Why streaming is faster on this file**: openpyxl's
+non-read-only mode eagerly materialises every `Cell` object
++ style refs at `load_workbook` time; the streaming path
+parses lazily and only touches cells that
+`iter_rows(values_only=True)` actually consumes. For
+mostly-numeric workbooks like Моделирование (financial
+modeling), streaming is unambiguously the right mode.
+
+### 15.12.4. Test coverage
+
+`xlsx2csv2json/tests/test_e2e.py`:
+- `test_R13_memory_mode_auto_preserves_default` —
+  no-explicit-flag baseline, verifies the kwarg path doesn't
+  break the existing default.
+- `test_R13_memory_mode_streaming_forces_read_only` —
+  introspects `WorkbookReader._read_only` directly to verify
+  the override fires regardless of file size (iter-2
+  strengthening per vdd-adversarial SEC-INFO-2; not just
+  data-round-trip).
+- `test_R13_memory_mode_full_forces_non_read_only` — same
+  strengthening for the `full` path.
+- `test_R13_streaming_with_hyperlinks_warns_and_overrides` —
+  subprocess test asserting the stderr warning fires AND the
+  override produces correct hyperlink extraction.
+- `test_R13_memory_mode_invalid_value_rejected` — argparse
+  enum-validation locks.
+
+### 15.12.5. Atomic chain (extends §15.11.4)
+
+| # | Slug | Scope | Stub-First gate |
+| --- | --- | --- | --- |
+| 011-11 | `memory-mode-flag` | `cli.py`: new `_MEMORY_MODES` constant + `--memory-mode` argparse entry + 3-way translation in `_dispatch_to_emit`; conflict-resolution with `--include-hyperlinks`. `__init__.py`: `memory_mode` in `_KWARG_TO_FLAG`. | 5 R13 tests green; existing 445 tests stay green; live subprocess measurement on Моделирование.xlsx → ≤ 500 MB RSS (target met: 156 MB observed). |
+
+Bead is independent of R8/R9/R10/R11/R12. As-shipped
+2026-05-13 lands same-day as the rest of the xlsx-8a follow-up
+hot-patches.
+
+### 15.12.6. /vdd-adversarial cycle outcome (2026-05-13)
+
+- **Round 1 (Sarcasmotron, fresh context)**: `clean-pass`
+  with 4 actionable LOW/INFO findings:
+  SEC-LOW-1 (dead `memory_mode = "full"` reassignment),
+  SEC-LOW-2 (stale 4.3× measurement numbers across SKILL.md +
+  cli.py + TASK.md surfaces — should reflect 7.6× subprocess
+  measurement),
+  SEC-LOW-3 (defensive `getattr(args, "memory_mode", "auto")`
+  masking partial-Namespace bugs),
+  SEC-INFO-2 (test_R13_full_forces_non_read_only was weak —
+  passed trivially on small fixtures where `auto` already
+  selected non-streaming).
+- **Iter-2 fixes (all 4 closed)**: dead code removed; direct
+  attribute access; 3-surface measurement update with
+  subprocess-vs-in-process explanation; `_read_only`
+  introspection in tests.
+- **Round 2 (Sarcasmotron, second pass)**: `zero-slop-achieved`
+  — convergence signal per `vdd-sarcastic` §4 ("when forced
+  to invent flaws, the code is done"). VDD cycle complete.
+

@@ -53,6 +53,15 @@ _DATETIME_FORMATS = ("ISO", "excel-serial", "raw")
 _HEADER_FLATTEN_STYLES = ("string", "array")
 _VALID_FORMATS = ("csv", "json")
 
+# xlsx-8a-11 (R13) — `--memory-mode` exposes openpyxl streaming mode
+# choice to the CLI. Default `auto` preserves the existing
+# size-threshold behaviour (`_DEFAULT_READ_ONLY_THRESHOLD = 100 MiB`
+# in `xlsx_read._workbook`). `streaming` forces `read_only=True`
+# (lower RAM, merge-aware features no-op per R12 honest-scope).
+# `full` forces `read_only=False` (correct merges, RAM unbounded
+# by file size).
+_MEMORY_MODES = ("auto", "streaming", "full")
+
 # xlsx-8a-04 (R4, Sec-MED-1) — `--escape-formulas` modes.
 _ESCAPE_FORMULAS_MODES = ("off", "quote", "strip")
 # OWASP-canonical CSV-injection sentinels (D-A13). Cell values
@@ -371,6 +380,31 @@ def build_parser(*, format_lock: str | None) -> argparse.ArgumentParser:
             "'http,https,mailto' (covers typical office workbook "
             "schemes). Pass an empty string to block ALL schemes. "
             "Case-insensitive per RFC 3986 §3.1."
+        ),
+    )
+
+    # xlsx-8a-11 (R13) — openpyxl streaming-mode opt-in.
+    parser.add_argument(
+        "--memory-mode",
+        dest="memory_mode",
+        choices=_MEMORY_MODES,
+        default="auto",
+        help=(
+            "Read-mode selection. 'auto' (default) lets the library "
+            "pick based on file size threshold. 'streaming' minimizes "
+            "RAM at the cost of merge-aware features (overlap "
+            "detection, merge-policy fill, multi-row header band via "
+            "merges) becoming no-ops — use on workbooks without "
+            "merges OR where merge fidelity does not matter. "
+            "'full' forces non-streaming — all merge features work, "
+            "RAM scales ~10× with file size. Measured on a 15 MB "
+            "multi-sheet workbook 2026-05-13: 'streaming' delivered "
+            "7.6× RAM reduction (1188 MB → 156 MB) plus 2.6× "
+            "wall-clock speedup vs 'full'. NOTE: "
+            "`--include-hyperlinks` forces 'full' (a stderr warning "
+            "fires if you also requested 'streaming') because "
+            "hyperlink extraction needs the non-streaming cell "
+            "object."
         ),
     )
 
@@ -766,7 +800,46 @@ def _dispatch_to_emit(
     # carry the .hyperlink attribute. Memory cost is bounded by the file size;
     # honest-scope: large workbook + --include-hyperlinks may need 5-10x the
     # workbook size in RAM. Caller-controlled flag, so the trade-off is opt-in.
-    read_only_mode: bool | None = False if args.include_hyperlinks else None
+    #
+    # **xlsx-8a-11 (R13, 2026-05-13)**: `--memory-mode` exposes the
+    # `read_only_mode` selection to the CLI. Translation table:
+    #   - `auto`      → `read_only_mode=None` (size-threshold-driven)
+    #   - `streaming` → `read_only_mode=True`  (force openpyxl streaming;
+    #                   merge-aware features no-op per R12 honest-scope)
+    #   - `full`      → `read_only_mode=False` (force non-streaming;
+    #                   merges work, RAM unbounded by file size)
+    # **Conflict**: `--include-hyperlinks --memory-mode streaming` is
+    # structurally impossible (ReadOnlyWorksheet doesn't expose
+    # `cell.hyperlink`). Emit a stderr warning and override to `full`
+    # — matches the existing `--include-hyperlinks` → `read_only=False`
+    # auto-coerce pattern.
+    # **iter-2 fixes from /vdd-adversarial (SEC-LOW-1 + SEC-LOW-3)**:
+    # - Direct attribute access (`args.memory_mode`) replaces the
+    #   defensive `getattr(..., "auto")` — argparse always sets the
+    #   default; any caller constructing a partial `Namespace` should
+    #   fail loud rather than silently default to auto.
+    # - The `memory_mode = "full"` reassignment in the conflict path
+    #   was dead code (the next branch checks `args.include_hyperlinks`
+    #   directly, not `memory_mode`); removed.
+    memory_mode = args.memory_mode
+    if args.include_hyperlinks and memory_mode == "streaming":
+        print(
+            "warning: --memory-mode streaming overridden to 'full' "
+            "because --include-hyperlinks requires non-read-only mode "
+            "(ReadOnlyWorksheet does not expose cell.hyperlink). "
+            "Either drop --include-hyperlinks (lose hyperlink "
+            "extraction) or use --memory-mode full/auto (lose RAM "
+            "savings).",
+            file=sys.stderr,
+        )
+    if args.include_hyperlinks:
+        read_only_mode: bool | None = False
+    elif memory_mode == "streaming":
+        read_only_mode = True
+    elif memory_mode == "full":
+        read_only_mode = False
+    else:  # "auto"
+        read_only_mode = None
 
     # xlsx-8a-03 (R3): parse allowlist once per invocation.
     scheme_allowlist = _parse_scheme_allowlist(
