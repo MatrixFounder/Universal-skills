@@ -1,13 +1,23 @@
-# ARCHITECTURE: xlsx-8 — `xlsx2csv.py` / `xlsx2json.py` read-back CLIs
+# ARCHITECTURE: xlsx-8 + xlsx-8a — `xlsx2csv.py` / `xlsx2json.py` read-back CLIs + production hardening + large-table support
 
-> **Status:** ✅ **IMPLEMENTED 2026-05-12** (8 atomic sub-tasks
-> 010-01..010-08 + vdd-multi adversarial review with 6 fixes — see
-> §14 Post-merge adaptations). 841 tests green; ruff clean; 12-line
-> cross-skill `diff -q` silent; `validate_skill.py skills/xlsx`
-> exit 0. Body below preserves the design-time specification verbatim;
+> **Status (xlsx-8):** ✅ **IMPLEMENTED 2026-05-12** (8 atomic
+> sub-tasks 010-01..010-08 + vdd-multi adversarial review with 6
+> fixes — see §14 Post-merge adaptations). 841 tests green; ruff
+> clean; 12-line cross-skill `diff -q` silent;
+> `validate_skill.py skills/xlsx` exit 0.
+>
+> **Status (xlsx-8a):** 📝 **SPECIFIED 2026-05-13** (TASK 011, 8
+> atomic sub-tasks 011-01..011-08 — see §15). Implementation
+> pending; this document defines the contract.
+> Security axis (011-01..05): 5 fixes — see §15.1–§15.9.
+> Performance axis (011-06..08): 3 fixes for large-table support
+> (≥ 100K × 30 cols / 3M cells) — see §15.10.
+>
+> Body below preserves the design-time specification verbatim;
 > the post-merge implementation differs in a small number of
-> documented ways — see **§14 Post-merge adaptations** at the foot of
-> this document for the full delta.
+> documented ways — see **§14 Post-merge adaptations** for the
+> xlsx-8 delta and **§15 xlsx-8a Production Hardening** for the
+> additive xlsx-8a contract.
 >
 > Prior `docs/ARCHITECTURE.md` (xlsx-10.A `xlsx_read/`) is archived
 > verbatim at
@@ -1176,10 +1186,12 @@ for each suffix variant. Honest scope **(o)** in TASK §1.4.
 
 ### 14.7. Accepted-risk items (NOT fixed in this iteration)
 
-The critics flagged additional items deferred to v2:
+The critics flagged additional items deferred to v2. Per
+arch-review M2 (2026-05-13), each item carries a stable numeric ID
+referenced by §15.4 column 1:
 
-- **Unicode normalization in path validator** (security M, critic
-  S/H2): sheet names with `․․` (one-dot-leader) or
+- **§14.7.1 — Unicode normalization in path validator** (security
+  M, critic S/H2): sheet names with `․․` (one-dot-leader) or
   `．．` (fullwidth full stop) bypass the ASCII `".."`
   reject; the `is_relative_to` defense-in-depth still catches the
   resulting path, but the first-line defense has a gap. Accepted
@@ -1187,26 +1199,600 @@ The critics flagged additional items deferred to v2:
   pitfalls; (b) defense-in-depth is sound; (c) workbook authors
   can already produce filename-confused output through other
   channels.
-- **CSV injection on `=` / `+` / `-` / `@`-prefixed cell values**
-  (security M, critic S/M2): xlsx-8 emits cell values verbatim;
-  Excel/Calc reopening the CSV may interpret leading `=` as a
-  formula. Matches csv2xlsx parity (no defusing there either) —
-  joint fix tracked as xlsx-2a / csv2xlsx-1 backlog item.
-- **`javascript:` / `data:` URIs in hyperlinks** (security M,
-  critic S/M3): hyperlink targets are emitted verbatim in JSON
-  `href` and CSV markdown-link text. Downstream consumers
+- **§14.7.2 — CSV injection on `=` / `+` / `-` / `@`-prefixed cell
+  values** (security M, critic S/M2): xlsx-8 emits cell values
+  verbatim; Excel/Calc reopening the CSV may interpret leading `=`
+  as a formula. Matches csv2xlsx parity (no defusing there either)
+  — joint fix tracked as xlsx-2a / csv2xlsx-1 backlog item.
+- **§14.7.3 — `javascript:` / `data:` URIs in hyperlinks**
+  (security M, critic S/M3): hyperlink targets are emitted verbatim
+  in JSON `href` and CSV markdown-link text. Downstream consumers
   (LLM renderers, markdown viewers) must sanitise. Documented as
   caller responsibility — would add `--hyperlink-scheme-allowlist`
   in v2 if user demand surfaces.
-- **JSON full-payload materialisation** (perf H, critic P/H2): the
-  emit_json path holds the entire shape + serialized string in
-  memory before write. Within the 250 MiB / 10K×20 budget but
-  tight. Streaming JSON deferred to v2.
-- **TOCTOU race in `_emit_multi_region`** (security M, critic
-  S/H3): a local attacker with write access to `output_dir` can
-  symlink-swap between `resolve()` and `open("w")`. `O_NOFOLLOW`
-  via `os.open` would close the window. Deferred — the threat
-  model is local attacker with write access, not in v1 scope.
+- **§14.7.4 — JSON full-payload materialisation** (perf H, critic
+  P/H2): the emit_json path holds the entire shape + serialized
+  string in memory before write. Within the 250 MiB / 10K×20
+  budget but tight. Streaming JSON deferred to v2.
+- **§14.7.5 — TOCTOU race in `_emit_multi_region`** (security M,
+  critic S/H3): a local attacker with write access to `output_dir`
+  can symlink-swap between `resolve()` and `open("w")`.
+  `O_NOFOLLOW` via `os.open` would close the window. Deferred —
+  the threat model is local attacker with write access, not in v1
+  scope.
 
 These items are documented here for traceability; the vdd-multi
 verdict was PASS after the 6 fixes above landed.
+
+> **xlsx-8a follow-up (2026-05-13).** Four of the five
+> "Accepted-risk" items listed above are addressed in §15 below
+> via a chained 5-step hardening task (TASK 011 / `xlsx-8a`); the
+> fifth (TOCTOU race) is **documented** as a known-limitation in
+> [`skills/xlsx/references/security.md`](../skills/xlsx/references/security.md)
+> rather than fixed. The two "Perf-HIGH" items are deferred and
+> catalogued in [`docs/KNOWN_ISSUES.md`](KNOWN_ISSUES.md).
+
+---
+
+## 15. xlsx-8a Production Hardening (TASK 011, 2026-05-13)
+
+Five atomic fixes layered on top of xlsx-8 / xlsx-10.A. Each fix is
+additive (no existing function signature changes); regression tests
+gate each sub-task; the 12-line cross-skill `diff -q` gate from §9.4
+stays silent. Authoritative spec:
+[`docs/TASK.md`](TASK.md) (TASK 011) and backlog row `xlsx-8a` in
+[`docs/office-skills-backlog.md`](office-skills-backlog.md).
+
+### 15.1. Data Model deltas
+
+**New typed exceptions.** Two new classes (one per cap):
+
+```
+xlsx_read._exceptions.TooManyMerges(RuntimeError)
+    Raised by parse_merges(ws) when ws.merged_cells.ranges
+    yields > _MAX_MERGES (=100_000) entries. Cross-5 envelope
+    mapping: exit 2 (matches OverlappingMerges precedent).
+
+xlsx2csv2json.exceptions.CollisionSuffixExhausted(_AppError)
+    CODE = 2. Raised by _emit_multi_region when the per-region
+    filename-collision suffix loop attempts > _MAX_COLLISION_SUFFIX
+    (=1000) variants. Cross-5 envelope details = {sheet, region}
+    (both already validated path-safe by §4.2 reject list).
+```
+
+**New module-level constants:**
+
+```
+xlsx_read/_merges.py        _MAX_MERGES = 100_000
+xlsx2csv2json/emit_csv.py   _MAX_COLLISION_SUFFIX = 1000
+```
+
+Both are **named constants** at module top so a future widening
+change is a 1-line edit + regression test update. They are **NOT**
+exposed as CLI flags (per TASK Q-1 decision — caps are policy, not
+user-tunable).
+
+**No new dataclasses, no new public types.** Cell value shapes
+unchanged from xlsx-8 §4.1; the hyperlink-scheme allowlist drops
+blocked entries from the hyperlinks_map entirely (existing
+"no-hyperlink" branch in emit_json / emit_csv handles them — see
+§15.3 D-A11 below).
+
+### 15.2. CLI surface deltas (§5.1 extension)
+
+Two new flags, applicable to both shims (`xlsx2csv.py` /
+`xlsx2json.py`):
+
+| Flag | Type | Default | Format scope | Description |
+| --- | --- | --- | --- | --- |
+| `--hyperlink-scheme-allowlist` | CSV string | `http,https,mailto` | both | Comma-separated scheme allowlist. Disallowed-scheme hyperlinks drop to the no-hyperlink branch (JSON: bare scalar value; CSV: plain text). One stderr warning per distinct blocked scheme (deduped). |
+| `--escape-formulas` | enum `{off,quote,strip}` | `off` | CSV-only (stderr warning when passed to JSON shim) | Defang CSV-injection-prone cell values. `quote` prepends `'`; `strip` replaces with `""`. Sentinels: `=` `+` `-` `@` `\t` `\r`. |
+
+Both flags **preserve backward compatibility** — defaults reproduce
+xlsx-8 behaviour byte-for-byte. The `--encoding utf-8-sig` help-text
+is updated to cross-reference `--escape-formulas` (both flags speak
+to "what happens when Excel double-clicks the CSV").
+
+### 15.3. New architecture decisions (D-A11..D-A14)
+
+The xlsx-8 doc locked decisions D1..D10 (TASK) + D-A1..D-A10
+(architecture). xlsx-8a adds:
+
+- **D-A11 — Blocked-scheme hyperlink cells emit through the
+  no-hyperlink branch.** When `_extract_hyperlinks_for_region`
+  encounters a cell whose `urlparse(href).scheme.lower()` is not in
+  the allowlist, the entry is **dropped from the hyperlinks_map
+  entirely** (not emitted as `(text, href=None)`). Downstream
+  emit_json / emit_csv code paths cannot distinguish "never had a
+  link" from "had a blocked-scheme link", which is intentional —
+  this preserves the existing JSON two-shape contract from §4.1
+  R11 (bare scalar VS `{value, href: url}`). Locked as
+  TASK D7. The workbook-level stderr warning provides the
+  scheme-was-blocked signal.
+
+- **D-A12 — Hyperlink-scheme allowlist matches OWASP "URL Schemes"
+  recommendation.** Default `http,https,mailto` is the minimum
+  intersection of (a) "schemes a downstream LLM-renderer can
+  safely auto-link", (b) "schemes typical office documents use",
+  and (c) "schemes that don't require platform-specific protocol
+  handlers". Other schemes (`tel:`, `vscode:`, `slack:`) are
+  user-opt-in via explicit allowlist widening (`-
+  -hyperlink-scheme-allowlist "http,https,mailto,tel"`). No `*` /
+  `all` shorthand (TASK Q-3 decision: defense-in-depth means
+  explicit allow only).
+
+- **D-A13 — Formula-escape sentinels are the OWASP-canonical six.**
+  `=` `+` `-` `@` `\t` `\r`. Unicode lookalikes (e.g. `＝` U+FF1D
+  fullwidth equals sign) are **out of scope**; the OWASP six cover
+  Excel + LibreOffice Calc current behaviour. A future report
+  showing real-world exploitation via a Unicode lookalike would
+  trigger a follow-up task; current spec is conservative against
+  the documented attack surface.
+
+- **D-A14 — Caps fire on the (cap+1)th iteration, not the cap-th.**
+  - `_MAX_MERGES = 100_000` — the 100_001st merge triggers raise;
+    the dict is allowed to reach 100_000 entries.
+  - `_MAX_COLLISION_SUFFIX = 1000` — when the suffix counter
+    exceeds 1000 (i.e. on the 1001st suffix attempt), raise.
+  Both caps fail-loud before the natural O(N²) cost dominates.
+
+### 15.4. Threat-model updates (§7 extension)
+
+The xlsx-8 threat model (§7.1) is unchanged. xlsx-8a closes four of
+the five "Accepted-risk" items from §14.7 above. Each row's left
+column carries the §14.7.N anchor introduced by arch-review M2:
+
+| §14.7 item | Status after xlsx-8a |
+| --- | --- |
+| **§14.7.1** Unicode-norm bypass in path-validator | **Still accepted** — out of scope for xlsx-8a (no decision number assigned in this iteration). Defense-in-depth via `is_relative_to(output_dir)` continues to catch the resulting path. NOT to be confused with D-A13 (which covers a different Unicode case in `--escape-formulas`). |
+| **§14.7.2** CSV injection on `=`/`+`/`-`/`@`-prefix cells | **Closed via `--escape-formulas`** (R4, D-A13). Default `off` for compat; users opt-in for shared spreadsheet workflows. |
+| **§14.7.3** `javascript:` / `data:` URIs in hyperlinks | **Closed via `--hyperlink-scheme-allowlist`** (R3, D-A11/12). Default deny outside `http`/`https`/`mailto`. |
+| **§14.7.4** JSON full-payload materialisation (PERF-HIGH-2) | **Still accepted** (deferred — see [`docs/KNOWN_ISSUES.md`](KNOWN_ISSUES.md) PERF-HIGH-2). Future `xlsx-8c-perf-streaming`. |
+| **§14.7.5** TOCTOU race in `_emit_multi_region` | **Still accepted; now documented.** xlsx-8a-05 ships [`skills/xlsx/references/security.md`](../skills/xlsx/references/security.md) explaining when this becomes critical (multi-tenant CI) and the fix recipe (`os.open(..., O_NOFOLLOW)` per component). Code-fix deferred to a separate ticket. |
+
+Two **new** threats surface and are closed in xlsx-8a:
+
+| Threat | Mitigation | Owner |
+| --- | --- | --- |
+| **Sec-HIGH-3 DoS via unbounded collision-suffix loop** in `_emit_multi_region`. Workbook with thousands of same-named regions forces O(N²) `Path.resolve()` per emit attempt. | Hard cap `_MAX_COLLISION_SUFFIX = 1000`; fail-loud `CollisionSuffixExhausted` (exit 2) on overflow. | F4 (`emit_csv.py`). |
+| **Sec-MED-3 memory exhaustion via unbounded merge-count** in `parse_merges(ws)`. Hand-crafted OOXML with millions of `<mergeCell>` entries blows RSS before `apply_merge_policy` runs. | Hard cap `_MAX_MERGES = 100_000`; fail-loud `TooManyMerges` (exit 2). | `xlsx_read._merges.parse_merges`. |
+
+### 15.5. Files modified / created
+
+**Carve-out from the §9.1 xlsx-10.A frozen surface.** xlsx-8a
+explicitly re-opens three files inside `xlsx_read/`:
+
+- `skills/xlsx/scripts/xlsx_read/_merges.py` — add `_MAX_MERGES`
+  guard.
+- `skills/xlsx/scripts/xlsx_read/_exceptions.py` — add
+  `TooManyMerges` class.
+- `skills/xlsx/scripts/xlsx_read/__init__.py` — add `TooManyMerges`
+  to `__all__`.
+
+The carve-out is **bounded** (3 files), **additive** (no existing
+function signature changes, no existing export removed), and
+**justified** by the backlog row's explicit re-opening of the
+freeze for this specific defect class. All existing
+`xlsx_read/tests/` continue to pass unchanged.
+
+**New file (no replication):**
+
+- `skills/xlsx/references/security.md` — trust-boundary statement
+  + parent-symlink TOCTOU narrative + `O_NOFOLLOW` fix-recipe
+  sketch.
+
+**Modified files (no replication):**
+
+- `skills/xlsx/scripts/xlsx2csv2json/cli.py` — two new argparse
+  flags + `TooManyMerges` envelope branch + warnings on the
+  JSON-only no-effect cases (mirrors the existing `--delimiter` /
+  `--encoding utf-8-sig` pattern).
+- `skills/xlsx/scripts/xlsx2csv2json/dispatch.py` —
+  `_extract_hyperlinks_for_region` accepts the allowlist set and
+  filters by scheme.
+- `skills/xlsx/scripts/xlsx2csv2json/emit_csv.py` — `_MAX_COLLISION_SUFFIX`
+  cap + `_write_region_csv` escape-formulas transform.
+- `skills/xlsx/scripts/xlsx2csv2json/emit_json.py` — no change to
+  the dict-shape logic (D-A11 ensures the no-hyperlink branch
+  handles blocked schemes uniformly).
+- `skills/xlsx/scripts/xlsx2csv2json/exceptions.py` — add
+  `CollisionSuffixExhausted`.
+- `skills/xlsx/SKILL.md` — one cross-link line to
+  `references/security.md` in the xlsx-8 section.
+
+**Cross-skill replication: NONE.** The 12-line `diff -q` gate from
+§9.4 stays silent — none of `office/**` / `_soffice.py` /
+`_errors.py` / `preview.py` / `office_passwd.py` is touched.
+
+### 15.6. Test plan (binary, ≥ 23 tests)
+
+Detailed enumeration in TASK §5.2. Summary:
+
+- **R1 — collision-suffix cap (2 tests, in
+  `xlsx2csv2json/tests/test_emit_csv.py` or a new `test_hardening.py`):**
+  `test_collision_suffix_caps_at_1000` (1001 collisions raise);
+  `test_collision_suffix_999_succeeds` (999 collisions write 999 files).
+- **R2 — merge-count cap (2 tests, in
+  `xlsx_read/tests/test_merges.py`):**
+  `test_parse_merges_at_100000_passes` (synthetic mock with 100_000
+  ranges returns the full dict); `test_parse_merges_at_100001_raises`
+  (synthetic mock with 100_001 ranges raises `TooManyMerges`).
+- **R3 — hyperlink-scheme allowlist (4 tests, in
+  `xlsx2csv2json/tests/`):** `test_hyperlink_scheme_https_allowed`;
+  `test_hyperlink_scheme_javascript_blocked` (asserts JSON output
+  is bare scalar, not `{value, href: null}`);
+  `test_hyperlink_scheme_mixed_warning_dedup` (two `javascript:`
+  cells → one stderr line); `test_hyperlink_scheme_mailto_allowed_by_default`.
+- **R4 — escape-formulas (15 tests):** 6 sentinels × 2 modes (quote
+  / strip) = 12 parameterised; plus `test_escape_off_no_transform`;
+  `test_escape_json_warning_only`; `test_dde_payload_e2e`.
+
+Regression gate: all existing tests in `xlsx2csv2json/tests/` and
+`xlsx_read/tests/` stay green; `validate_skill.py` exit 0 on all
+four office skills; 12-line cross-skill `diff -q` gate silent.
+
+### 15.7. Atomic chain (Planner handoff)
+
+Five sub-tasks, ordered linearly so later sub-tasks may reference
+exception classes / constants from earlier ones:
+
+| # | Slug | Scope | Stub-First gate |
+| --- | --- | --- | --- |
+| 011-01 | `collision-suffix-cap` | `_MAX_COLLISION_SUFFIX` + `CollisionSuffixExhausted` exception; 2 tests. | R1 acceptance criteria green. |
+| 011-02 | `merges-cap` | `_MAX_MERGES` + `TooManyMerges` exception; export via `xlsx_read.__all__`; map to envelope in `cli._run_with_envelope`; 2 tests. | R2 acceptance criteria green. |
+| 011-03 | `hyperlink-scheme-allowlist` | CLI flag; `urlparse` scheme-check; warn-only on blocked; 4 tests. Blocked entries dropped from map (D-A11). | R3 acceptance criteria green. |
+| 011-04 | `escape-formulas` | CLI flag; `_write_region_csv` transform; help-text update on `--encoding utf-8-sig`; 15 tests. | R4 acceptance criteria green. |
+| 011-05 | `security-docs` | New `references/security.md` + cross-links from SKILL.md & ARCHITECTURE.md §14.7. | Grep gate for trust-boundary sentence; cross-link presence verified. |
+
+### 15.8. Open Questions (residual, non-blocking)
+
+- **Q-15-1.** Should `_MAX_COLLISION_SUFFIX` / `_MAX_MERGES` be
+  exposed as env-vars for ops-time tuning?
+  **Decision (locks here):** No. Both caps are policy. Env-var
+  ergonomics encourage silent widening on misconfigured workbooks;
+  raising a cap requires a code-change PR with rationale. Mirrors
+  the precedent set by `_GAP_DETECT_MAX_CELLS = 1_000_000`
+  (xlsx-10.A) which is also a hard-coded constant.
+- **Q-15-2.** Should the hyperlink scheme allowlist be case-sensitive?
+  **Decision (locks here):** No. RFC 3986 §3.1 declares scheme
+  matching is case-insensitive (`HTTPS://` ≡ `https://`). We
+  `.scheme.lower()` before allowlist lookup. Default allowlist is
+  lower-case; user-supplied list is also lower-cased on parse.
+- **Q-15-3.** Should `--escape-formulas` apply to header rows (the
+  first row of CSV output) the same way it applies to data rows?
+  **Decision (locks here):** Yes. A header cell `="Total"` is
+  identical in attack surface to a data cell with the same value.
+  Headers and data flow through `_write_region_csv` via the same
+  `writerow` calls; the transform sits in one place and applies to
+  both. R4 tests cover both header and data rows for at least one
+  sentinel.
+
+### 15.9. Decision-record summary update
+
+The locked decisions for xlsx-8a (D7 from TASK + D-A11..D-A14 from
+this section) extend the §13 record. Future xlsx-8b / xlsx-8c (perf
+follow-ups) MUST reference D-A14 (cap fires on cap+1) if extending
+the policy.
+
+---
+
+## 15.10. Performance Hardening (R8 / R9 / R10 — 2026-05-13 scope extension)
+
+User-requested scope extension on 2026-05-13: support legitimate
+workbooks of order 100K rows × 20-30 cols (2-3M cells). Adds three
+performance-axis sub-tasks (`xlsx-8a-06..08`) layered on the security
+axis (`xlsx-8a-01..05`). Authoritative spec: [`docs/TASK.md`](TASK.md)
+§§ R8 / R9 / R10 + UC-06 / UC-07 / UC-08.
+
+### 15.10.1. Data Model deltas (R8)
+
+**Constants:**
+
+```
+xlsx_read/_tables.py    _GAP_DETECT_MAX_CELLS = 50_000_000  (was 1_000_000)
+```
+
+The cap raise is policy (D8 in TASK §7.3). 50M gives 16x headroom
+over the documented 3M-cell workload; XFD1048576 attack envelope
+(17B cells) remains blocked at 340× the cap. No env-var, no CLI
+flag (precedent: §15.8 Q-15-1 policy stance on `_MAX_COLLISION_SUFFIX`
+/ `_MAX_MERGES`; locked here as D-A15 for `_GAP_DETECT_MAX_CELLS`).
+
+**Buffer representation:**
+
+```
+_gap_detect:
+    occupancy: list[list[bool]]  →  occupancy: bytearray
+    access:    occupancy[r][c]   →  occupancy[r * n_cols + c]
+
+_build_claimed_mask:
+    mask: list[list[bool]]  →  mask: bytearray
+    access: mask[r][c]      →  mask[r * n_cols + c]
+    pre-guard: if not claimed: return None  (NEW — early-exit)
+```
+
+8x memory reduction (1 byte/cell vs 8 bytes/ref on 64-bit Python).
+On the 50M cap that is 50 MB transient (vs 400 MB on
+`list[list[bool]]`). Big-O unchanged at O(n_rows × n_cols).
+
+**Per-sheet vs per-invocation cap semantics** (per arch-review m7
+fix): the cap is **per-sheet** (`_gap_detect` allocates one
+buffer per `detect_tables` call); peak RSS per invocation is
+bounded by 50 MB + openpyxl working set even on 100-sheet
+workbooks because each `_gap_detect` call frees its buffer before
+the next sheet's call runs. Concurrent-invocation memory budget
+(N parallel CLI processes × 50 MB each) is the operator's
+responsibility — not the architecture's concern.
+
+The early-exit `if not claimed: return None` in `_build_claimed_mask`
+skips the allocation entirely when the claimed-set is empty (Tier-1
+ListObjects + Tier-2 named-ranges produced nothing) — common case
+for `--tables whole` and for sheets with no structured data.
+
+**Consumer-guard contract** (per arch-review m4 fix): callers of
+`_build_claimed_mask` must handle the `None` return. The current
+`_gap_detect` body reads `claimed_mask[r_idx][c_idx]` unconditionally
+at [`_tables.py:372`](../skills/xlsx/scripts/xlsx_read/_tables.py#L372);
+after the bytearray flip and `None`-return contract, the guard
+becomes:
+
+```python
+if claimed_mask is None or not claimed_mask[r * n_cols + c]:
+    # cell is unclaimed; proceed with occupancy scan
+```
+
+(Or equivalently: a `claimed_mask = bytearray(0)` sentinel that is
+iterable and safely-indexed-empty — developer judgement at
+implementation. The 011-06 atomic sub-task names BOTH the producer
+contract (`_build_claimed_mask` returns `None` on empty) AND the
+consumer guard (`_gap_detect` handles `None`) so the planner gets
+a deterministic decomposition.)
+
+### 15.10.2. JSON path deltas (R9 + R10)
+
+**R9 — `json.dump(fp)` for file output (drop one full-payload copy):**
+
+```python
+# v1 (xlsx-8):
+text = json.dumps(shape, ensure_ascii=False, indent=2, ...)
+output.write_text(text + "\n", encoding="utf-8")
+
+# R9 (xlsx-8a-07):
+with output.open("w", encoding="utf-8") as fp:
+    json.dump(shape, fp, ensure_ascii=False, indent=2, ...)
+    fp.write("\n")
+```
+
+Drops the serialised-string buffer (~300-500 MB on a 3M-cell
+payload). The `shape` dict itself remains in memory; multi-sheet
+R11.2-4 shapes are dict-of-arrays and cannot be RFC-8259-streamed
+without inventing a non-canonical chunked-encoding contract.
+
+Stdout path unchanged (no memory benefit — `sys.stdout.write` has
+the same characteristics as `output.write_text` against a pipe;
+keeping the existing newline contract is more important than
+saving a string buffer that the pipe consumer is going to buffer
+anyway).
+
+**R10 — R11.1 single-region streaming (close PERF-HIGH-2 for the
+common large-table case):**
+
+R11.1 is `[{...},{...},...]` — a flat JSON array. Stream-friendly.
+The refactor:
+
+1. `_rows_to_dicts` / `_rows_to_string_style` / `_rows_to_array_style`
+   convert from `list`-returning to `Iterator[dict]`-yielding
+   (generators). Callers in R11.2-4 branches consume eagerly via
+   `list(...)` at the call site — preserves the v1 dict-of-arrays
+   semantics.
+
+2. New `_stream_single_region_json(payload, output_path, ...)`:
+
+```python
+def _stream_single_region_json(payload, output_path, ...) -> None:
+    sheet_name, region, table_data, hl_map = payload
+    rows_iter = iter(_rows_to_dicts(table_data, hl_map, ...))  # generator
+    with output_path.open("w", encoding="utf-8") as fp:
+        # Empty-payload early-exit — v1-byte-identical "[]\n".
+        # See arch-review M3 (architecture-011-review-v3.md): without
+        # this guard, the streaming helper emits "[\n  \n]\n" which
+        # breaks the byte-identity invariant against v1
+        # `json.dumps([], indent=2) + "\n"` = "[]\n".
+        try:
+            first_row = next(rows_iter)
+        except StopIteration:
+            fp.write("[]\n")
+            return
+        fp.write("[\n  ")
+        first_row_json = json.dumps(
+            first_row, ensure_ascii=False, indent=2,
+            default=_json_default,
+        ).replace("\n", "\n  ")
+        fp.write(first_row_json)
+        for row_dict in rows_iter:
+            row_json = json.dumps(
+                row_dict, ensure_ascii=False, indent=2,
+                default=_json_default,
+            ).replace("\n", "\n  ")
+            fp.write(",\n  ")
+            fp.write(row_json)
+        fp.write("\n]\n")
+```
+
+3. `_shape_for_payloads` early-detects R11.1
+   (`single_sheet ∧ not is_multi_region[only_sheet]`) and dispatches
+   to `_stream_single_region_json`; the rest of `_shape_for_payloads`
+   (R11.2-4) is unchanged.
+
+Peak RSS on 3M-cell R11.1 workload: ≤ 200 MB (one row-dict in flight
++ openpyxl working set), vs. 1-1.5 GB on the v1 full-shape path.
+
+**Byte-identity invariant** (unconditional, per arch-review M3
+fix): the streaming output is byte-identical to the v1 path on
+**every** R11.1 fixture in `xlsx2csv2json/tests/fixtures/`,
+**including the empty-payload case**. This is locked by
+`test_R10_stream_byte_identical_to_v1_single_sheet_single_region`
+which `diff -q`s the two outputs. The empty-payload branch in the
+helper emits `"[]\n"` (3 bytes, byte-identical to v1
+`json.dumps([], indent=2) + "\n"`) before any `[\n  ` opener is
+written. The indent strategy on non-empty payloads ("depth-2
+within a row-dict, depth-1 between rows") is the contract.
+
+### 15.10.3. New architecture decisions (D-A15..D-A18)
+
+- **D-A15 — `_GAP_DETECT_MAX_CELLS` raised to 50_000_000 via code
+  change, not CLI/env-var.** Aligns with TASK D8 and Q-15-1
+  precedent (caps are policy). Future raises require a code-change
+  PR with rationale; no operator-time widening permitted.
+- **D-A16 — Flat `bytearray` indexed `[r * n_cols + c]`** replaces
+  `list[list[bool]]` for `_gap_detect` and `_build_claimed_mask`.
+  Drop-in performance improvement; algorithm unchanged. The
+  `_build_claimed_mask` early-exit (`if not claimed: return None`)
+  is paired in the same atomic sub-task (011-06) because
+  `_gap_detect` consumers downstream rely on the matrix shape and
+  the early-exit eliminates the alloc when no caller would have
+  read it.
+- **D-A17 — JSON file output uses `json.dump(fp)`; stdout uses
+  `json.dumps(...) + write`.** Asymmetric on purpose. File output
+  benefits from dropping the string-buffer copy; stdout output is
+  pipe-buffered downstream anyway, and the dump-to-stream path
+  forfeits the trailing-newline guarantee that the cross-skill
+  envelope contract relies on. Two paths, single source of
+  serialisation parameters (`_json_dump_kwargs` extracted to a
+  module-level constant if the duplication becomes painful).
+- **D-A18 — `_stream_single_region_json` is the only streaming
+  emit path.** R11.1 is the structurally-streamable shape; R11.2-4
+  fall back to R9 `json.dump`. Multi-sheet streaming (R11.2 per-
+  sheet streaming with manual `{"S1": [...],"S2": [...]}` envelope
+  authoring) is feasible but **deferred to
+  `xlsx-8c-multi-sheet-stream`** because (a) the common large-table
+  workload is single-sheet single-region; (b) R11.3-4 nested-dict
+  shapes are not RFC-8259-streamable without redesign; (c) keeping
+  the streaming surface small reduces the test-matrix explosion.
+
+### 15.10.4. Threat-model & known-issue updates
+
+The xlsx-8 threat model (§7.1) is unchanged. xlsx-8a-06..08 close
+two `KNOWN_ISSUES.md` entries:
+
+| Pre-fix item | Status after xlsx-8a |
+| --- | --- |
+| **PERF-HIGH-1** (`_gap_detect` 8 MB occupancy matrix per sheet, scales linearly with sheet area) | **Closed** by R8 / xlsx-8a-06. `bytearray` flip + early-exit. Entry deleted from `KNOWN_ISSUES.md` in the 011-06 commit. |
+| **PERF-HIGH-2** (`payloads_list = list(payloads)` + `json.dumps`-then-write triple copy in JSON path) | **Partially closed.** R9 drops one of three copies (the serialised-string buffer) for JSON file output. R10 closes it entirely for R11.1 single-region (the most common large-table shape) by streaming. **Residual:** multi-sheet R11.2 streaming and CSV-multi-region streaming deferred to `xlsx-8c-multi-sheet-stream` / `xlsx-8c-csv-stream`. `KNOWN_ISSUES.md` entry narrowed in the 011-08 commit to reflect the residual. |
+| **§14.7.4** (JSON full-payload materialisation) | **Closed for R11.1** by R10; **partially closed for R11.2-4** by R9 (one copy dropped). |
+
+### 15.10.5. Files modified
+
+`xlsx_read/` (additive carve-out continues):
+
+- `_tables.py` — `_GAP_DETECT_MAX_CELLS` constant change;
+  `_gap_detect` / `_build_claimed_mask` / `_split_on_gap` /
+  `_tight_bbox` updated for flat bytearray indexing;
+  `_whole_sheet_region` cap raise alongside.
+
+`xlsx2csv2json/`:
+
+- `emit_json.py` — `_rows_to_dicts` / `_rows_to_string_style` /
+  `_rows_to_array_style` converted to generators; new
+  `_stream_single_region_json` helper; `_shape_for_payloads`
+  R11.1 early-detect dispatch; `emit_json` file-output branch
+  switches to `json.dump(fp)`.
+
+**Carve-out boundary update** (per arch-review m5 fix): the §15.5
+carve-out from §9.1's xlsx-10.A frozen surface initially covered
+3 files (`_merges.py` + `_exceptions.py` + `__init__.py`); §15.10.5
+extends it to **4 files** by adding `_tables.py`. The carve-out
+remains bounded by the rule **"each re-opened file ships with a
+documented `KNOWN_ISSUES.md` entry OR a §15.x decision record"**,
+NOT by a fixed file count. A future xlsx-8c task adding a 5th
+re-opened file must (a) reference an existing
+`KNOWN_ISSUES.md` entry or open a new §15.x decision record, and
+(b) document the additive change in a new sub-section under §15.
+
+**No new files.** **No deletions.** **No public API changes** at
+the package level — `xlsx_read.__all__` and
+`xlsx2csv2json.__all__` are unchanged. The generator-vs-list
+internals are private (`_rows_to_*` already prefixed).
+
+`docs/KNOWN_ISSUES.md` — PERF-HIGH-1 entry deleted in 011-06
+commit; PERF-HIGH-2 entry narrowed in 011-08 commit.
+
+### 15.10.6. Test plan
+
+≥ 11 new tests across R8 + R9 + R10:
+
+- **R8 (`xlsx_read/tests/test_tables.py`):**
+  `test_R8_gap_detect_at_3M_cells_succeeds`,
+  `test_R8_gap_detect_at_50M_plus_one_raises`,
+  `test_R8_bytearray_correctness_vs_listoflist` (parametric
+  same-output on a 100×100 synthetic fixture).
+- **R9 (`xlsx2csv2json/tests/test_emit_json.py`):**
+  `test_R9_file_output_no_string_buffer` (tracemalloc-based peak
+  RSS assertion), `test_R9_file_byte_identical_to_v1`.
+- **R10 (`xlsx2csv2json/tests/test_emit_json.py` or new
+  `test_streaming.py`):**
+  `test_R10_stream_byte_identical_to_v1_single_sheet_single_region`,
+  `test_R10_stream_3M_cells_peak_rss_below_200MB`,
+  `test_R10_stream_with_hyperlinks`,
+  `test_R10_stream_array_style`,
+  `test_R10_stream_empty_table`,
+  `test_R10_R11_2_to_4_unchanged`.
+
+Regression gate: every existing test in `xlsx_read/tests/` and
+`xlsx2csv2json/tests/` stays green; `validate_skill.py` exit 0 on
+all four office skills; 12-line cross-skill `diff -q` gate from
+§9.4 silent (none of `office/`, `_soffice.py`, `_errors.py`,
+`preview.py`, `office_passwd.py` touched).
+
+### 15.10.7. Atomic chain (extends §15.7)
+
+| # | Slug | Scope | Stub-First gate |
+| --- | --- | --- | --- |
+| 011-06 | `cap-raise-and-bytearray` | `_GAP_DETECT_MAX_CELLS` 1M → 50M; matrices → `bytearray`; early-exit; delete PERF-HIGH-1 from `KNOWN_ISSUES.md`. | 3 R8 tests green; existing `xlsx_read/tests/test_tables.py` 100% green. |
+| 011-07 | `json-dump-file-output` | `emit_json` file branch: `json.dumps`→`json.dump(fp)`; stdout unchanged. | 2 R9 tests green; multi-sheet fixtures byte-identical. |
+| 011-08 | `r11-1-streaming` | `_rows_to_*` → generators; new `_stream_single_region_json`; `_shape_for_payloads` R11.1 dispatch; narrow PERF-HIGH-2 entry in `KNOWN_ISSUES.md`. | 6 R10 tests green; R11.2-4 fixtures unchanged; `XLSX_XLSX2CSV2JSON_POST_VALIDATE=1` passes on R11.1. |
+
+011-06 must precede 011-07/08 because the R10 large-table test
+fixtures (3M cells) only complete in reasonable time after the
+bytearray flip is in place. 011-07 and 011-08 can be merged
+sequentially in either order; 011-08 supersedes the 011-07 path for
+R11.1 specifically, but R9 covers R11.2-4 which 011-08 does not
+touch.
+
+### 15.10.8. Open Questions (residual, non-blocking)
+
+- **Q-15-4.** ~~Should the streaming JSON path emit a trailing
+  newline after the closing `]`?~~ **Resolved by arch-review M3
+  fix (2026-05-13)**. The streaming path emits a trailing newline
+  after `]` for non-empty payloads (final-row newline + `]` +
+  `\n` → `"\n]\n"`) and emits `"[]\n"` for empty payloads via the
+  early-exit guard in `_stream_single_region_json`. Output is
+  byte-identical to v1 `json.dumps(..., indent=2) + "\n"` on
+  **every** R11.1 fixture, empty included. The empty-payload test
+  `test_R10_stream_empty_table` locks the `"[]\n"` form (no
+  developer judgement; the helper's `try/except StopIteration`
+  branch is the contract).
+- **Q-15-5.** Should R11.2 (multi-sheet single-region per sheet)
+  also be streamed in this task? **Decision (locks here):** No.
+  R11.2 streaming is technically feasible (per-sheet append with
+  manual `{"S1": [...], "S2": [...]}` envelope authoring) but
+  expands the test matrix and the contract surface. Deferred to
+  `xlsx-8c-multi-sheet-stream` if a real R11.2 large-table
+  workload emerges. The user-documented workload (100K × 25-30) is
+  R11.1, which R10 covers fully.
+  **Deferral-carrier requirement** (per arch-review m6 fix):
+  sub-task 011-08 acceptance criterion includes — narrow
+  PERF-HIGH-2 in `docs/KNOWN_ISSUES.md` to reference
+  `xlsx-8c-multi-sheet-stream` by slug in its `Related` line, and
+  if no backlog row exists yet, **also create a stub row** in
+  [`docs/office-skills-backlog.md`](office-skills-backlog.md).
+  Converts a soft inline mention into a recorded follow-up that a
+  future agent reading `KNOWN_ISSUES.md` will find.
+- **Q-15-6.** Should `_stream_single_region_json` also support
+  stdout? **Decision (locks here):** Yes (streaming-to-stdout is
+  the consistent choice). Memory benefit on stdout is
+  downstream-dependent (the pipe consumer can still buffer the
+  full output), but the streaming path keeps **producer-side** RSS
+  bounded, which matters when the producer is the constrained
+  process (e.g. CI box with capped RSS). Locked.
+
