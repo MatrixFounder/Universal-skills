@@ -1,9 +1,15 @@
-# Development Plan: TASK 011 — `xlsx-8a` Production Hardening (8 atomic fixes)
+# Development Plan: Task 012 — `xlsx-9` `xlsx2md.py` read-back CLI
 
-> **Source TASK:** [`docs/TASK.md`](TASK.md) (TASK 011 v3)
-> **Source Architecture:** [`docs/ARCHITECTURE.md`](ARCHITECTURE.md) §15 (§15.1–§15.9 security axis; §15.10 perf axis).
-> **Predecessor plan archived:** [`docs/plans/plan-010-xlsx-8-readback.md`](plans/plan-010-xlsx-8-readback.md).
-> **Mode:** VDD (Verification-Driven Development) — Stub-First two-pass per atomic bead.
+> **Mode:** VDD (Verification-Driven Development) + Stub-First.
+> **Status:** DRAFT v1 — pending Plan-Reviewer approval.
+> **TASK:** [TASK.md](TASK.md) (Task 012, slug `xlsx-9-xlsx2md`).
+> **Architecture:** [ARCHITECTURE.md](ARCHITECTURE.md) (xlsx-9 — thin
+> shim + `xlsx2md/` package on top of the xlsx-10.A `xlsx_read/`
+> foundation).
+> **Prior plan archived:** [plans/plan-011-xlsx-8a-production-hardening.md](plans/plan-011-xlsx-8a-production-hardening.md).
+> **Closest stylistic precedent:** [plans/plan-010-xlsx-8-readback.md](plans/plan-010-xlsx-8-readback.md)
+> (xlsx-8 read-back — shim + package pattern xlsx-9 mirrors).
+> **Atomic-chain hint (architect handoff):** [ARCHITECTURE.md §11](ARCHITECTURE.md).
 
 ---
 
@@ -11,448 +17,550 @@
 
 ### 0.1. Chainlink Decomposition Overview
 
-xlsx-8a is decomposed along **two axes** (per TASK §1.1):
+This plan is a **Chainlink** (VDD discipline): every Issue from the
+TASK RTM (R1..R27 + R10a + R20a, 29 IDs) is decomposed into one or
+more **Beads** (atomic sub-issues), each implementable in a single
+sitting (2–4 h) and verifiable through a single test cluster. Beads
+are grouped by **module-scoped tasks** (`task-012-NN-*.md`), and
+each task is tagged Stub-First per `skill-tdd-stub-first §1–§2`.
 
-- **Security axis (011-01..05)** — 5 atomic fixes for defense-in-depth.
-  Closes Sec-HIGH-3, Sec-MED-1/2/3 from `/vdd-multi-3` and ARCH §14.7;
-  documents Sec-HIGH-1 (TOCTOU) as known-limitation.
-- **Performance axis (011-06..08)** — 3 atomic fixes for large-table
-  support (100K × 20-30 cols ≈ 2-3M cells). Closes PERF-HIGH-1
-  fully; PERF-HIGH-2 closed for R11.1 single-region (most common
-  large-table shape), narrowed for R11.2-4 residual.
+The 6 inherited xlsx-8 / xlsx-8a production-hardening items
+(`--header-rows smart` R14g, `HeaderRowsConflict` R14h,
+`--memory-mode` R20a, `--hyperlink-scheme-allowlist` R10a,
+`InternalError` terminal envelope R23f, `read_only_mode=False`
+honest-scope §1.4 m) are planned explicitly — none are silently
+dropped. See §3 R-Issue Coverage Matrix and §5 Honest-scope Lock
+Inventory.
 
-Each atomic bead corresponds to **exactly one RTM requirement**
-(R1..R10 in TASK §2) and ships as one PR-ready unit with stubs,
-E2E tests, and logic in the same atomic delivery (the Stub-First
-two-pass is applied **within** each bead — see §0.2 below).
+### 0.2. Phasing
 
-### 0.2. Phasing (Stub-First within each atomic bead)
+- **Phase 1 (Structure & Stubs)** — single bootstrap task `012-01`:
+  package skeleton (`xlsx2md/` with 9 modules per ARCH §3.2 C2),
+  shim `xlsx2md.py` (≤ 60 LOC, body verbatim from ARCH §3.2 C1),
+  `__init__.py` `__all__` lock with all 10 public symbols (frozen
+  contract; including the inherited `HeaderRowsConflict` and the
+  new R23f `InternalError`), every module a `pass` /
+  `NotImplementedError` stub, `tests/` skeleton with ONE smoke E2E
+  asserting hardcoded sentinel behaviour (Red → Green on stubs).
+  Toolchain is **inherited unchanged** from xlsx-10.A
+  (`pyproject.toml` / `ruff` / `install.sh` / `requirements.txt`
+  are NOT touched — see TASK AC #6 and ARCH C3/C4/C5).
 
-Per [skill-tdd-stub-first](.agent/skills/tdd-stub-first/SKILL.md),
-each of the 8 atomic beads is internally a two-pass:
+- **Phase 2 (Logic Implementation)** — 5 module-scoped logic tasks
+  (`012-02` cross-cutting + envelopes + `convert_xlsx_to_md` helper,
+  `012-03` library-glue / dispatch / memory-mode plumbing, `012-04`
+  emit-gfm, `012-05` emit-html, `012-06` emit-hybrid) — each
+  replacing one private module's stubs (or one cluster of stubs)
+  with real behaviour and adding the unit-test cluster for that
+  module; the existing E2E smoke test is **updated** to assert real
+  values per `tdd-stub-first §2`.
 
-1. **Pass 1 — Stub + E2E test (Red → Green).**
-   Create the file structure (new exception class / new flag
-   argparse entry / new helper signature) with stub bodies
-   (`raise NotImplementedError` for new logic; passthrough for new
-   no-op flags). Write an E2E test that asserts the stub-level
-   behaviour. Run test → green.
-2. **Pass 2 — Logic implementation (replace stubs).**
-   Replace stubs with real logic. Update the E2E test to assert
-   real behaviour. Add unit tests for edge cases. Run regression
-   suite (every existing test green); run `validate_skill.py`;
-   run 12-line cross-skill `diff -q` gate.
+- **Stage 3 (Integration + final gates)** — task `012-07`
+  round-trip + references (write `xlsx-md-shapes.md`, flip
+  `md_tables2xlsx`'s `@unittest.skipUnless(xlsx9_exists)` gate to
+  live, lock cell-content byte-identity), then task `012-08` final
+  docs + validation (`SKILL.md` registry row, `.AGENTS.md`
+  `## xlsx2md` section, module docstrings for honest-scope §1.4
+  items, `KNOWN_ISSUES.md` `XLSX-10B-DEFER` entry per TASK AC #15,
+  the 34 test slugs from TASK §5.1 fully bound, `validate_skill.py`
+  exit 0, 5-line `diff -q` silent gate, full xlsx suite green).
 
-For docs-only beads (011-05), the two passes collapse to one
-(write the markdown, grep-gate the trust-boundary sentence).
+> **Atomicity check:** each task targets a single F-region (one or
+> two modules + their tests) — within the 2–4 h budget per
+> `planning-decision-tree` and planner prompt §1. All tasks
+> include explicit Stub-First gates per `tdd-stub-first §2`.
 
-### 0.3. Cross-skill replication gate (mandatory before every commit)
+### 0.3. Cross-skill replication gate
 
-Each bead's acceptance criteria includes the 12-line cross-skill
-`diff -q` gate from `docs/ARCHITECTURE.md §9.4`. All 12 must
-produce no output. Beads that touch only `xlsx_read/_tables.py`,
-`xlsx_read/_merges.py`, `xlsx_read/_exceptions.py`,
-`xlsx_read/__init__.py`, `xlsx2csv2json/*.py`, or
-`skills/xlsx/references/security.md` automatically satisfy this
-gate (none of those files are in the replicated set).
+**This task does NOT replicate anywhere** — `xlsx2md/`,
+`xlsx2md.py`, `xlsx-md-shapes.md` are all xlsx-specific (consume
+`xlsx_read/` which is xlsx-only). The 5-line `diff -q` silent gate
+(CLAUDE.md §2; TASK §0; ARCH §9.1) MUST stay silent every task —
+the gating shell snippet appears in every task file under
+"Acceptance Criteria":
 
-### 0.4. Carve-out boundary (from ARCH §9.1 + §15.10.5)
+```bash
+diff -qr skills/docx/scripts/office skills/xlsx/scripts/office
+diff -q  skills/docx/scripts/_soffice.py      skills/xlsx/scripts/_soffice.py
+diff -q  skills/docx/scripts/_errors.py       skills/xlsx/scripts/_errors.py
+diff -q  skills/docx/scripts/preview.py       skills/xlsx/scripts/preview.py
+diff -q  skills/docx/scripts/office_passwd.py skills/xlsx/scripts/office_passwd.py
+```
 
-xlsx-8a re-opens 4 files inside the xlsx-10.A "frozen surface"
-(`_merges.py`, `_exceptions.py`, `__init__.py`, `_tables.py`).
-The carve-out is bounded by the rule "each re-opened file ships
-with a documented `KNOWN_ISSUES.md` entry OR a §15.x decision
-record" (per arch-review m5 fix). Beads 011-02 and 011-06
-contribute to this carve-out; all changes are additive (no
-existing function signature changes; no existing export removed).
+All five must produce no output.
+
+### 0.4. Defaults locked from inheritance (no blocking questions)
+
+The user has explicitly said "no clarifying questions". The
+following inherited / defaulted decisions are recorded here in case
+the Plan-Reviewer would have asked:
+
+- **Terminal envelope `InternalError` CODE = 7.** The xlsx-8
+  precedent in `xlsx2csv2json/cli.py` uses `code=1` with a
+  redacted message but no dedicated exception class. xlsx-9 ARCH
+  §2.1 F8 + R23f explicitly upgrades this to a real
+  `InternalError(_AppError)` with `CODE = 7` (parity with the
+  `_AppError` register). The plan locks in CODE 7.
+
+- **Output-parent auto-create.** ARCH §2.1 F1 lists
+  "output-parent auto-create" inside `_resolve_paths` (csv2xlsx
+  parity, R4d). Same-path guard precedes auto-create.
+
+- **`--no-split` H3 heading.** Q-A1 in ARCH §12 explicitly
+  resolves to "emit `### Table-1`" even in `--no-split` mode. UC-03
+  A2 in TASK §3 says "no H3 heading emitted"; ARCH supersedes
+  (ARCH was specified AFTER TASK §3 was drafted; ARCH §2.1 F3
+  carries the closed-Q decision). The plan uses ARCH's wording.
+
+- **`InconsistentHeaderDepth` CODE = 2.** Defensive D-A11 check.
+  Added to the frozen `__all__` though it never fires in normal
+  workbooks (`xlsx_read.flatten_headers` already enforces uniform
+  depth per its docstring).
 
 ---
 
 ## 1. Task Execution Sequence
 
-### Stage 1 — Security Axis (011-01..05)
+### Stage 1 — Structure, Stubs, Test Scaffolding
 
-The five security-axis beads are **internally order-independent**
-(any internal sequence valid; the order below matches the backlog
-row `xlsx-8a` enumeration and the TASK §8 atomic-chain table).
+- **Task 012-01** [STUB CREATION] — Package + shim skeleton,
+  exceptions catalogue with `HeaderRowsConflict` + `InternalError`,
+  `__all__` lock, smoke E2E asserting hardcoded sentinels.
+  - RTM: [R1] (shim ≤ 60 LOC), [R2] (package + 9 modules),
+    [R3] (import hygiene + ruff banned-api), exception catalogue
+    declared (used by R10, R13, R14h, R21, R23, R23f, R24);
+    [R10a] flag DECLARED in argparse (logic in 012-04/05),
+    [R14g/h] flag DECLARED (validation in 012-02),
+    [R20a] flag DECLARED (mapping in 012-03).
+  - Use Cases: scaffolds UC-01..UC-12 (all stubs return sentinels);
+    establishes UC-08 / UC-09 envelope plumbing skeleton.
+  - Description File: [tasks/task-012-01-pkg-skeleton.md](tasks/task-012-01-pkg-skeleton.md)
+  - Priority: Critical (blocks every later task).
+  - Dependencies: none.
+  - Estimated time: 2-3 h.
 
-- **Task 011-01** — [R1] Bounded collision-suffix in `_emit_multi_region`.
-  - Use Cases: UC-01
-  - Description File: [`docs/tasks/task-011-01-collision-suffix-cap.md`](tasks/task-011-01-collision-suffix-cap.md)
-  - Priority: Critical (Sec-HIGH-3 DoS closure)
-  - Dependencies: none
-  - Files touched: `scripts/xlsx2csv2json/emit_csv.py` (lines ~162-172),
-    `scripts/xlsx2csv2json/exceptions.py` (new class).
+### Stage 2 — Logic Implementation (cross-cutting → library glue → emit)
 
-- **Task 011-02** — [R2] Bounded merge-count in `parse_merges(ws)`.
-  - Use Cases: UC-02
-  - Description File: [`docs/tasks/task-011-02-merges-cap.md`](tasks/task-011-02-merges-cap.md)
-  - Priority: Critical (Sec-MED-3 memory exhaustion closure)
-  - Dependencies: none (independent of 011-01; touches different files)
-  - Files touched: `scripts/xlsx_read/_merges.py` (lines ~36-41),
-    `scripts/xlsx_read/_exceptions.py` (new class),
-    `scripts/xlsx_read/__init__.py` (`__all__` export),
-    `scripts/xlsx2csv2json/cli.py` (`_run_with_envelope` branch).
+- **Task 012-02** [LOGIC IMPLEMENTATION] — Cross-cutting envelopes,
+  `_validate_flag_combo` (M7 + R14h + R15-D14 gates),
+  `_resolve_paths` with same-path guard + output-parent auto-create,
+  terminal `InternalError` catch-all, `convert_xlsx_to_md`
+  programmatic helper in `__init__.py` with `--flag=value`
+  atomic-token form.
+  - RTM: [R4] (input/output positional args + parent-auto-create
+    + cross-7 H1), [R6] (defaults wired in argparse — the
+    no-flag-omitted shape pin lives in 012-08 regression cluster),
+    [R13] (M7 lock `IncludeFormulasRequiresHTML`),
+    [R14h] (`HeaderRowsConflict` early-exit gate),
+    [R21] (encrypted → exit 3 envelope), [R22] (macro → exit 0 +
+    warning), [R23] (cross-5 `--json-errors` envelope shape v1),
+    [R23f] (terminal `InternalError` code 7 envelope, raw-message
+    redacted), [R24] (cross-7 H1 same-path guard).
+  - Use Cases: UC-08 (same-path guard), UC-09 (encrypted),
+    UC-10 (macro), UC-07 Scenario A (M7 lock).
+  - Description File: [tasks/task-012-02-cross-cutting-envelopes.md](tasks/task-012-02-cross-cutting-envelopes.md)
+  - Priority: Critical (every later task depends on the envelope
+    plumbing).
+  - Dependencies: 012-01.
+  - Estimated time: 3-4 h.
 
-- **Task 011-03** — [R3] `--hyperlink-scheme-allowlist` flag (both shims).
-  - Use Cases: UC-03
-  - Description File: [`docs/tasks/task-011-03-hyperlink-scheme-allowlist.md`](tasks/task-011-03-hyperlink-scheme-allowlist.md)
-  - Priority: High (Sec-MED-2 javascript:/data: URI closure)
-  - Dependencies: none
-  - Files touched: `scripts/xlsx2csv2json/cli.py` (argparse),
-    `scripts/xlsx2csv2json/dispatch.py` (`_extract_hyperlinks_for_region`).
-    Emit branches in `emit_json.py` / `emit_csv.py` are NOT touched —
-    blocked entries are dropped from the map upstream and traverse
-    the existing no-hyperlink branch (per D7 / D-A11).
+- **Task 012-03** [LOGIC IMPLEMENTATION] — `dispatch.py` reader-glue:
+  `iter_table_payloads`, `_resolve_read_only_mode` (R20a /
+  `--memory-mode` → `xlsx_read.open_workbook(read_only_mode=...)`),
+  sheet enumeration + filter (`--sheet`, `--include-hidden`),
+  `_detect_mode_for_args` (D-A2 post-call filter for
+  `--no-table-autodetect` and `--no-split`), `_gap_fallback_if_empty`
+  (R8.f info-warning path), `--header-rows {N, "auto", "smart"}`
+  pass-through to `reader.read_table`.
+  - RTM: [R5] (sheet selector + `--include-hidden`), [R8]
+    (3-tier detection + `--no-table-autodetect` post-call filter +
+    `--no-split`), [R8.f] (gap-fallback info warning),
+    [R9] (`--gap-rows`/`--gap-cols`), [R14a/b/f] (header-rows
+    pass-through; emit-side flatten lives in 012-04/05),
+    [R14g] (`--header-rows smart` pass-through to library),
+    [R17] (datetime-format pass-through), [R19]
+    (`--datetime-format` enum), [R20] (number-format heuristic
+    delegated to library; regression in 012-08),
+    [R20a] (`--memory-mode` → `read_only_mode` mapping).
+  - Use Cases: UC-02 (multi-sheet H2 order), UC-03 (multi-table
+    detection), UC-11 (synthetic headers feed reaches emit), UC-05
+    (multi-row header library call).
+  - Description File: [tasks/task-012-03-library-glue.md](tasks/task-012-03-library-glue.md)
+  - Priority: High.
+  - Dependencies: 012-01, 012-02.
+  - Estimated time: 3-4 h.
 
-- **Task 011-04** — [R4] `--escape-formulas {off,quote,strip}` (CSV-only).
-  - Use Cases: UC-04
-  - Description File: [`docs/tasks/task-011-04-escape-formulas.md`](tasks/task-011-04-escape-formulas.md)
-  - Priority: High (Sec-MED-1 CSV injection closure)
-  - Dependencies: none
-  - Files touched: `scripts/xlsx2csv2json/cli.py` (argparse + JSON-shim warning),
-    `scripts/xlsx2csv2json/emit_csv.py` (`_write_region_csv` transform).
+- **Task 012-04** [LOGIC IMPLEMENTATION] — `emit_gfm.py` + `inline.py`:
+  pure GFM table serialisation (header / separator / body rows),
+  `_format_cell_gfm` (pipe `\|` escape, `\n` → `<br>`, hyperlink
+  branch with scheme-allowlist filter), `_render_hyperlink`
+  (D-A15 / R10a `allowed_schemes` core), synthetic-header GFM
+  emission (D13 GFM half), multi-row ` › ` flatten + warning,
+  `_apply_gfm_merge_policy` (duplicate / blank).
+  - RTM: [R10] (pure GFM emission + pipe escape + `<br>` +
+    hyperlink + `GfmMergesRequirePolicy` raise-site),
+    [R10a] (URL scheme allowlist GFM half + emit-side filter
+    integration; CLI flag was declared in 012-01, default value
+    parsed and propagated here), [R14d] (multi-row ` › ` flatten
+    GFM), [R15] (GFM merge policy fail/duplicate/blank), [R16]
+    (cell newline `<br>` + pipe escape + hyperlink GFM emit).
+  - Use Cases: UC-01 (GFM happy path), UC-04 main-gfm
+    (`GfmMergesRequirePolicy`), UC-04 A1/A2 (GFM merge policies),
+    UC-05 GFM half (` › ` flatten), UC-06 GFM half (`[text](url)`),
+    UC-11 GFM half (synthetic visible header row + separator),
+    UC-12 (cell-newline `<br>`).
+  - Description File: [tasks/task-012-04-emit-gfm.md](tasks/task-012-04-emit-gfm.md)
+  - Priority: High.
+  - Dependencies: 012-02, 012-03.
+  - Estimated time: 3-4 h.
 
-- **Task 011-05** — [R5] Trust-boundary docs (`security.md`).
-  - Use Cases: UC-05
-  - Description File: [`docs/tasks/task-011-05-security-docs.md`](tasks/task-011-05-security-docs.md)
-  - Priority: Medium (documentation only — no code change)
-  - Dependencies: none
-  - Files touched: `skills/xlsx/references/security.md` (NEW),
-    `skills/xlsx/SKILL.md` (cross-link),
-    `docs/ARCHITECTURE.md` §14.7 (cross-link).
+- **Task 012-05** [LOGIC IMPLEMENTATION] — `emit_html.py` +
+  `headers.py`: HTML `<table>` serialisation (`<thead>` + `<tbody>`,
+  `colspan`/`rowspan` at anchors, child-cell suppression,
+  `data-formula` attr + `class="stale-cache"`, `<a href>`
+  hyperlinks with allowlist filter via `inline._render_hyperlink`,
+  `html.escape` for text + attrs); multi-row `<thead>`
+  reconstruction by splitting ` › ` separators (D-A11 algorithm:
+  `split_headers_to_rows`, `compute_colspan_spans`,
+  `validate_header_depth_uniformity` raises
+  `InconsistentHeaderDepth`).
+  - RTM: [R10a] (URL scheme allowlist HTML half — the `<a href>`
+    branch routes through the same `_render_hyperlink` written in
+    012-04; this task verifies the HTML path), [R11] (HTML
+    `<table>` + colspan/rowspan + child suppression + hyperlink
+    `<a href>` + `data-formula` attr + pipe `&#124;` + `<br>`),
+    [R14c] (multi-row `<thead>` reconstruction), [R18]
+    (`data-formula` + `class="stale-cache"`).
+  - Use Cases: UC-04 (HTML colspan), UC-05 (HTML multi-row
+    `<thead>` with `colspan` reconstruction), UC-06 HTML half
+    (`<a href>`), UC-07 Scenario B/C (`data-formula`),
+    UC-11 HTML half (synthetic `<thead>` D13).
+  - Description File: [tasks/task-012-05-emit-html.md](tasks/task-012-05-emit-html.md)
+  - Priority: High.
+  - Dependencies: 012-02, 012-03, 012-04 (`inline.py` shared).
+  - Estimated time: 3-4 h.
 
-### Stage 2 — Performance Axis (011-06..08)
+- **Task 012-06** [LOGIC IMPLEMENTATION] — `emit_hybrid.py`
+  (TASK R2.e mandatory): `select_format` with the four promotion
+  rules (merges; multi-row; formula-bearing; `headerRowCount=0`),
+  `emit_workbook_md` H2/H3 orchestration loop (per-sheet
+  `## SheetName`, per-table `### TableName` / `### Table-N`),
+  predicates `_has_body_merges`, `_is_multi_row_header`,
+  `_has_formula_cells`, `_is_synthetic_header`. Raise-site for
+  `GfmMergesRequirePolicy` (fail-mode lock) lives here for the
+  `--format gfm` path; `_apply_gfm_merge_policy` (duplicate/blank)
+  is consumed.
+  - RTM: [R7] (multi-sheet H2 with document order from
+    `WorkbookReader.sheets()`), [R12] (hybrid auto-select; four
+    promotion rules; per-table format), [R15] (raise-site for
+    `--format gfm` + body merges + default policy → exit 2).
+  - Use Cases: UC-02 (multi-sheet H2), UC-03 (multi-table H3),
+    UC-04 (hybrid promotion on merge), UC-05 (hybrid promotion on
+    multi-row header), UC-07 Scenario C (hybrid promotion on
+    formulas), UC-11 (hybrid promotion on synthetic headers).
+  - Description File: [tasks/task-012-06-emit-hybrid.md](tasks/task-012-06-emit-hybrid.md)
+  - Priority: High.
+  - Dependencies: 012-04, 012-05.
+  - Estimated time: 3-4 h.
 
-The three performance-axis beads are **linearly ordered**:
+### Stage 3 — Integration, Round-Trip, Final Gates
 
-- **Task 011-06 must precede 011-07 and 011-08** because the
-  3M-cell synthesised test fixtures used by R9 / R10 cannot
-  complete under the v1 1M-cell cap during fixture setup (per
-  TASK §8 reviewer-corrected wording; the bytearray flip does NOT
-  change the JSON-path call shape — the dependency is fixture
-  timing).
-- **011-07 → 011-08** is recommended (simpler `json.dump` refactor
-  before larger generator refactor) but not strictly required.
+- **Task 012-07** [INTEGRATION] — Round-trip contract +
+  references: write `skills/xlsx/references/xlsx-md-shapes.md`
+  (mirrors `json-shapes.md` H2-per-sheet shape + GFM/HTML/hybrid
+  shapes + inline contract + sheet-name asymmetry D9 + round-trip
+  limitations + live round-trip activation); flip
+  `TestRoundTripXlsx9::test_live_roundtrip_xlsx_md`
+  `@unittest.skipUnless(xlsx9_exists, ...)` gate to live in
+  `md_tables2xlsx/tests/`; add live cell-content byte-identity
+  round-trip E2E using one multi-cell fixture.
+  - RTM: [R25] (`xlsx-md-shapes.md` document), [R26] (xlsx-3
+    live round-trip activation; cell-content byte-identity, NOT
+    sheet-name byte-identity per D9 lock).
+  - Use Cases: UC-12 (cell-newline `<br>` round-trip).
+  - Description File: [tasks/task-012-07-round-trip-contract.md](tasks/task-012-07-round-trip-contract.md)
+  - Priority: High.
+  - Dependencies: 012-06.
+  - Estimated time: 2-3 h.
 
-- **Task 011-06** — [R8] `_GAP_DETECT_MAX_CELLS` raise + `bytearray` matrices.
-  - Use Cases: UC-06
-  - Description File: [`docs/tasks/task-011-06-cap-raise-and-bytearray.md`](tasks/task-011-06-cap-raise-and-bytearray.md)
-  - Priority: Critical (large-table support gate; closes PERF-HIGH-1)
-  - Dependencies: none (touches only `xlsx_read/_tables.py`)
-  - Files touched: `scripts/xlsx_read/_tables.py` (5 functions:
-    `_GAP_DETECT_MAX_CELLS` constant, `_gap_detect`,
-    `_build_claimed_mask`, `_split_on_gap` / `_tight_bbox`,
-    `_whole_sheet_region`); `docs/KNOWN_ISSUES.md` (delete
-    PERF-HIGH-1 entry in this commit).
-
-- **Task 011-07** — [R9] `json.dump(fp)` for file output (drop one copy).
-  - Use Cases: UC-08
-  - Description File: [`docs/tasks/task-011-07-json-dump-file-output.md`](tasks/task-011-07-json-dump-file-output.md)
-  - Priority: High (PERF-HIGH-2 R11.2-4 partial closure)
-  - Dependencies: 011-06 (fixture-timing prerequisite)
-  - Files touched: `scripts/xlsx2csv2json/emit_json.py`
-    (lines ~89-98, file-output branch only; stdout unchanged).
-
-- **Task 011-08** — [R10] R11.1 single-region JSON streaming.
-  - Use Cases: UC-07
-  - Description File: [`docs/tasks/task-011-08-r11-1-streaming.md`](tasks/task-011-08-r11-1-streaming.md)
-  - Priority: High (PERF-HIGH-2 closure for most common large-table case)
-  - Dependencies: 011-06 (fixture-timing prerequisite); 011-07
-    (sequencing recommendation — simpler refactor first)
-  - Files touched: `scripts/xlsx2csv2json/emit_json.py`
-    (`_rows_to_*` → generators; new `_stream_single_region_json`;
-    `_shape_for_payloads` R11.1 dispatch); `docs/KNOWN_ISSUES.md`
-    (narrow PERF-HIGH-2 entry: drop `emit_json.py:79` reference,
-    narrow `emit_csv.py:59` to region-list-only; add
-    `xlsx-8c-multi-sheet-stream` to `Related`);
-    `docs/office-skills-backlog.md` (create stub row
-    `xlsx-8c-multi-sheet-stream`).
-  - **Effort exception (per plan-review M1)**: this bead is sized
-    L (~6 h), exceeding the 2-4 h atomicity envelope of
-    `06_planner_prompt.md` §1. **Accepted with rationale**: the
-    byte-identity invariant (PLAN.md §5 risk row 1) is the
-    highest-risk item in the plan; the Stub-First two-pass within
-    this single bead already provides a natural in-bead checkpoint
-    (Pass 1 lands generators + sentinel + `NotImplementedError`
-    stub; Pass 2 lands the streaming-helper body and doc updates).
-    Splitting into 011-08a/b would break the byte-identity-test
-    continuity (Pass 1's generator refactor must NOT regress
-    `test_R10_R11_2_to_4_unchanged`, and the byte-identity gate
-    `test_R10_stream_byte_identical_to_v1_*` is best run by the
-    same developer in one sitting against the same fixture set).
-    Keeping the bead unified preserves the regression-test
-    continuity; the L sizing is a deliberate trade-off.
-
-- **Task 011-10** — [R12] Fix `ReadOnlyWorksheet` `AttributeError` on
-  workbooks > 10 MiB auto-streaming threshold.
-  - Use Cases: UC-10 (new, no separate spec — covered by R12 in
-    TASK §2 RTM)
-  - Priority: HIGH (blocks the user-reported 15 MB workbook
-    conversion path; surfaces as opaque `Internal error: AttributeError`
-    via the catch-all in `cli._run_with_envelope`)
-  - Dependencies: none (independent of R8/R9/R10/R11)
-  - Files touched:
-    - `scripts/xlsx_read/_workbook.py` (`_DEFAULT_READ_ONLY_THRESHOLD`
-      10 MiB → 100 MiB; docstring + comment update)
-    - `scripts/xlsx_read/_merges.py` (`parse_merges` guards
-      `hasattr(ws, 'merged_cells')` — returns `{}` on
-      `ReadOnlyWorksheet`)
-    - `scripts/xlsx_read/_types.py` (`read_table` overlap-check
-      block guards the `merged_cells.ranges` access — skip if
-      attribute missing)
-    - `scripts/xlsx_read/tests/test_workbook.py` or
-      `tests/test_tables.py` (3 new tests)
-    - `skills/xlsx/SKILL.md` (document `read_only_mode` tradeoffs)
-  - **Design summary**:
-    - Bumping the threshold to 100 MiB covers typical office
-      workbook sizes (5-50 MB) with no behaviour change. Users
-      with truly large workbooks (≥ 100 MiB) implicitly opt into
-      streaming — for them, merge-aware features degrade to
-      no-ops (no overlap detection, no merge policy effect on
-      header band). The honest-scope tradeoff is documented in
-      SKILL.md.
-    - Graceful guard in `parse_merges` + `read_table`
-      overlap-check eliminates the crash path for explicit
-      `read_only_mode=True` callers.
-
-- **Task 011-11** — [R13] Expose `--memory-mode {auto,streaming,full}`
-  CLI flag so callers can opt into openpyxl streaming for large
-  workbooks without editing code.
-  - Use Cases: UC-11 (new; no separate spec)
-  - Priority: HIGH (4.3× RSS reduction available on
-    `Моделирование.xlsx` measured 2026-05-13: 1188 MB → 278 MB;
-    user can't access this without code change today)
-  - Dependencies: R12 (graceful ReadOnlyWorksheet fallback must be
-    in place so explicit `streaming` opt-in doesn't crash on
-    merge-bearing workbooks)
-  - Files touched:
-    - `scripts/xlsx2csv2json/cli.py` — new `_MEMORY_MODES =
-      ("auto", "streaming", "full")` constant + argparse entry
-      `--memory-mode` (default `"auto"`); help-text documents
-      RAM trade-off and merge-handling no-op on `streaming`.
-    - `scripts/xlsx2csv2json/dispatch.py` (`_dispatch_to_emit`):
-      replace the hard-coded
-      `read_only_mode = False if args.include_hyperlinks else None`
-      with a 3-way switch:
-      - `auto` → `None` (preserves existing size-threshold-driven
-        behaviour).
-      - `streaming` → `True` (force openpyxl streaming).
-      - `full` → `False` (force non-streaming, all merge features
-        work).
-      `--include-hyperlinks` overrides `streaming` → `full` (with
-      stderr warning) because ReadOnlyWorksheet doesn't expose
-      `cell.hyperlink`.
-    - `scripts/xlsx2csv2json/tests/test_e2e.py` or
-      `tests/test_cli.py` — 5 new tests.
-    - `skills/xlsx/SKILL.md` — document `--memory-mode` in the
-      `--header-rows`/`--tables` flag table.
-    - `skills/xlsx/scripts/.AGENTS.md` — append 011-11 section.
-  - **Design summary**:
-    - Default `auto` preserves backward-compat: `open_workbook`
-      auto-selects streaming above the
-      `_DEFAULT_READ_ONLY_THRESHOLD = 100 MiB` cap (R12 raised
-      from 10 MiB).
-    - `streaming` is the recommended mode for workbooks where
-      memory matters and merges are absent (financial-modeling
-      sheets, raw timesheets, gap-detect-friendly layouts).
-    - `full` is the recommended mode for merge-heavy workbooks
-      regardless of size (forces non-streaming so
-      `parse_merges` / `detect_header_band` / overlap-detection
-      work correctly).
-    - `--include-hyperlinks --memory-mode streaming` is a known
-      conflict: hyperlink extraction requires
-      `cell.hyperlink.target` which is absent on
-      `ReadOnlyWorksheet`. The conflict resolver emits a stderr
-      warning and overrides to `full` (matches the existing
-      auto-coerce path for `--include-hyperlinks`).
-    - **Acceptance**: 5 R13 tests green; existing 445 tests
-      stay green (regression gate); `validate_skill.py
-      skills/xlsx` exit 0; 12-line cross-skill `diff -q` gate
-      silent. Live verification: `xlsx2json.py Моделирование.xlsx
-      out.json --memory-mode streaming` should complete with
-      peak RSS ≤ 500 MB (was 1188 MB).
-
-- **Task 011-09** — [R11] `--header-rows smart`: type-pattern
-  header-row detection for unmerged metadata blocks above data tables.
-  - Use Cases: UC-09 (new)
-  - Priority: High (real-world workbook pattern — config + data
-    stacked, no merges to guide header band; surfaced by user
-    workload `tmp4/Моделирование.xlsx` 2026-05-13)
-  - Dependencies: none (independent of perf axis 011-06/07/08)
-  - Files touched:
-    - `scripts/xlsx_read/_tables.py` (new private
-      `_detect_data_table_offset(ws, region)` heuristic, ~60 LOC)
-    - `scripts/xlsx_read/_types.py` (`read_table` wires
-      `header_rows='smart'`: compute offset, shift `region.top_row`,
-      treat as 1-row header; ~15 LOC)
-    - `scripts/xlsx2csv2json/cli.py` (`_header_rows_type` accepts
-      `"smart"`; help text updated)
-    - `scripts/xlsx2csv2json/dispatch.py` (`smart_mode` branch
-      mirroring existing `leaf_mode` plumbing)
-    - `scripts/xlsx_read/tests/test_tables.py` and
-      `scripts/xlsx2csv2json/tests/test_emit_json.py` (5 new tests)
-    - `skills/xlsx/SKILL.md` (document `smart` mode in
-      `--header-rows` help)
-  - **Design summary (as-shipped after iter-2 + iter-3 + iter-4)**:
-    - Score each top row (up to `PROBE_ROWS=20`) by
-      `string_ratio + 1.5×coverage_ratio + 2×stability_ratio
-      + 0.5×depth_score` (type stability of `STABILITY_DEPTH=5`
-      rows below). Max theoretical score 5.0 after iter-3 H1 clamp.
-    - **Score-only** (iter-2 design change): does NOT defer to
-      merge-based detection. On merged-banner fixtures, `smart`
-      shifts to the sub-header row (leaf-like keys); callers
-      needing merge-concatenated multi-level form must use
-      `auto` or `leaf` instead. The `--header-rows smart` recipe
-      is non-overlapping with `auto`/`leaf` at the **output shape**
-      level, not at the scoring-input level.
-    - **Adaptive `data_width`** (iter-2): the per-candidate
-      `min_non_empty_cols = max(3, data_width // 2)` floor is
-      computed from rows BELOW the candidate (max non-empty col
-      index across `sample_below`), not from the region width
-      `n_cols`. This fixes the masterdata Timesheet pattern
-      where a sparse banner inflates `n_cols=25` while the real
-      data table is 7 cols wide.
-    - **`coverage_ratio` clamp** (iter-3 H1): `min(1.0,
-      len(non_empty) / data_width)` so a banner wider than the
-      data table can't blow the documented theoretical max score
-      via coverage alone.
-    - **`len(sample_below) ≥ 2` floor** (iter-3 M1): prevents
-      candidates near the bottom of the probe window from
-      passing a trivially-satisfied 1-row stability check.
-    - **Threshold**: `score ≥ 3.5` to justify a shift; below
-      threshold, OR when best candidate is `offset == 0`,
-      return 0 (current row-1 fallback).
-    - **R12 hasattr probe** (iter-3 L1): the `ws.merged_cells`
-      probe used by the no-defer path (and the R12 graceful
-      guards in `parse_merges`, `detect_header_band`, overlap-
-      check, ambiguous-boundary) uses
-      `getattr(merged_cells_attr, "ranges", None)` rather than
-      trusting a non-`None` `merged_cells` to expose `.ranges` —
-      future-proofs against openpyxl version drift.
-    - **Acceptance (as-shipped 2026-05-13)**: 9 R11 tests + 6 R12
-      tests + 1 iter-3 hasattr-probe test = 16 new tests green;
-      total xlsx_read suite at 224 (+15 from 209 pre-009/010),
-      xlsx2csv2json at 221 (+1 E2E from 220) = **445 green**;
-      `validate_skill.py skills/xlsx` exit 0; 12-line cross-skill
-      `diff -q` gate silent (no replicated files touched).
-
-### Stage 3 — Integration & Final Gates
-
-After all 8 beads land:
-
-- Run full test suite: `cd skills/xlsx/scripts && ./.venv/bin/python
-  -m unittest discover -s xlsx_read/tests` + `... -s xlsx2csv2json/tests`.
-- Run `python3 .claude/skills/skill-creator/scripts/validate_skill.py
-  skills/xlsx` → exit 0.
-- Run 12-line cross-skill `diff -q` gate from ARCH §9.4 → silent.
-- Verify `docs/KNOWN_ISSUES.md` reflects post-merge state:
-  PERF-HIGH-1 deleted; PERF-HIGH-2 narrowed; `xlsx-8c-multi-sheet-stream`
-  appears in backlog.
-- Update `docs/office-skills-backlog.md` row `xlsx-8a` to ✅ DONE.
+- **Task 012-08** [INTEGRATION] — Final docs + validation:
+  `SKILL.md` registry row + §10 honest-scope note;
+  `.AGENTS.md` `## xlsx2md` section; module docstrings for the
+  14 honest-scope §1.4 (a)..(m) + R3-H1 items distributed per
+  module; the 34 test slugs from TASK §5.1 fully bound (new ones
+  in this task: #19 `T-gap-detect-default-no-split-on-1-row`,
+  #20 `T-gap-detect-splits-on-2-empty-rows`, #22
+  `T-json-errors-envelope-shape-v1` global lock, #25
+  `T-no-autodetect-empty-fallback-whole-sheet`, plus the 9
+  inherited-hardening regressions #26-34); `KNOWN_ISSUES.md`
+  `XLSX-10B-DEFER` entry (TASK AC #15);
+  `python3 .claude/skills/skill-creator/scripts/validate_skill.py
+  skills/xlsx` exit 0; `ruff check scripts/` green; 5-line
+  `diff -q` silent gate verified; full xlsx skill test suite
+  green (no-behaviour-change for existing xlsx-* paths).
+  - RTM: [R6h] (no-flag output-shape pin regression),
+    [R20] (number-format heuristic regression), [R27] (≥ 14 E2E
+    scenarios live + unit ≥ 8/module; validate_skill exit 0);
+    final lock for all honest-scope §1.4 (a)..(m) + R3-H1.
+  - Use Cases: locks all UCs via the final E2E gate.
+  - Description File: [tasks/task-012-08-final-docs-and-validation.md](tasks/task-012-08-final-docs-and-validation.md)
+  - Priority: Critical (release gate).
+  - Dependencies: 012-07.
+  - Estimated time: 2-3 h.
 
 ---
 
-## 2. Chainlink — Epic → Issue → Bead breakdown
+## 2. Use Case Coverage Matrix
 
-Eight epics, eight issues, eight beads (1:1:1 across the entire RTM).
-
-### Epic E1 — Sec-HIGH-3 collision-suffix DoS (R1)
-- **Issue I1.1** — `_emit_multi_region` collision-suffix loop is unbounded.
-  - **Bead 011-01** — Add `_MAX_COLLISION_SUFFIX = 1000` + `CollisionSuffixExhausted(_AppError, CODE=2)`; 2 tests.
-
-### Epic E2 — Sec-MED-3 merge-count unbounded (R2)
-- **Issue I2.1** — `parse_merges(ws)` materialises unbounded dict.
-  - **Bead 011-02** — Add `_MAX_MERGES = 100_000` + `TooManyMerges(RuntimeError)`; export via `__all__`; map to envelope in shim; 2 tests.
-
-### Epic E3 — Sec-MED-2 hyperlink scheme abuse (R3)
-- **Issue I3.1** — Hyperlink targets emitted verbatim (XSS / RCE downstream).
-  - **Bead 011-03** — `--hyperlink-scheme-allowlist` (default `http,https,mailto`); `urlparse` scheme-check in `_extract_hyperlinks_for_region`; warn-only on blocked; blocked entries drop from map; 4 tests.
-
-### Epic E4 — Sec-MED-1 CSV formula injection (R4)
-- **Issue I4.1** — Cell values starting with `=` / `+` / `-` / `@` / `\t` / `\r` execute as DDE formulas on Excel double-click.
-  - **Bead 011-04** — `--escape-formulas {off,quote,strip}` (default `off`); `_write_region_csv` transform; help-text cross-ref `--encoding utf-8-sig`; 15 tests.
-
-### Epic E5 — Sec-HIGH-1 TOCTOU trust-boundary documentation (R5)
-- **Issue I5.1** — Parent-symlink + TOCTOU race in `_emit_multi_region` not closed by code; needs documentation.
-  - **Bead 011-05** — New `skills/xlsx/references/security.md` (≥ 80 lines, trust-boundary sentence, fix recipe); cross-link from `SKILL.md` + `ARCHITECTURE.md §14.7`.
-
-### Epic E6 — PERF-HIGH-1 `_gap_detect` 8MB matrix (R8)
-- **Issue I6.1** — `list[list[bool]]` occupancy matrix + cap blocks 100K × 25-30 workloads.
-  - **Bead 011-06** — Cap raise 1M → 50M; bytearray flat buffer; early-exit on empty claimed; delete PERF-HIGH-1 from `KNOWN_ISSUES.md`; 3 tests.
-
-### Epic E7 — PERF-HIGH-2 partial — JSON file-output (R9)
-- **Issue I7.1** — `json.dumps(shape) + write_text` materialises serialised string buffer (1 of 3 copies).
-  - **Bead 011-07** — `json.dump(shape, fp)` for file output; stdout unchanged; 2 tests.
-
-### Epic E8 — PERF-HIGH-2 full — R11.1 single-region streaming (R10)
-- **Issue I8.1** — `_rows_to_dicts` materialises full `list[dict]`; `_shape_for_payloads` builds full `shape` dict.
-  - **Bead 011-08** — Refactor `_rows_to_*` to generators; new `_stream_single_region_json`; `_shape_for_payloads` R11.1 dispatch; narrow PERF-HIGH-2 in `KNOWN_ISSUES.md`; create `xlsx-8c-multi-sheet-stream` backlog stub; 6 tests.
-
----
-
-## 3. Use Case Coverage
-
-| Use Case | Beads | Description |
-| --- | --- | --- |
-| UC-01 | 011-01 | Collision-suffix cap in multi-region CSV emit |
-| UC-02 | 011-02 | Merge-count cap in `parse_merges(ws)` |
-| UC-03 | 011-03 | Hyperlink scheme allowlist (R3) |
-| UC-04 | 011-04 | CSV formula escape (R4) |
-| UC-05 | 011-05 | Trust-boundary documentation |
-| UC-06 | 011-06 | Large-table CSV emit (3M cells, `--tables whole`) |
-| UC-07 | 011-08 | Large-table JSON emit, R11.1 single-region streaming |
-| UC-08 | 011-07 | JSON multi-sheet / multi-region fallback to `json.dump(fp)` |
-
----
-
-## 4. Stub-First Compliance Matrix
-
-| Bead | Pass 1 (Stub + E2E Red→Green) | Pass 2 (Logic) |
-| --- | --- | --- |
-| 011-01 | `CollisionSuffixExhausted` class shell + raise-never-triggered stub; `test_collision_suffix_caps_at_1000` Red. | Add `if suffix > _MAX_COLLISION_SUFFIX: raise CollisionSuffixExhausted(...)` inside loop. Test Green. |
-| 011-02 | `TooManyMerges` class shell + `_MAX_MERGES` constant; `test_parse_merges_at_100001_raises` Red. | Add `if len(out) > _MAX_MERGES: raise` in iteration loop; `__all__` export; `_run_with_envelope` branch. Test Green. |
-| 011-03 | argparse `--hyperlink-scheme-allowlist` accepted but ignored; `test_hyperlink_scheme_javascript_blocked` Red. | `urlparse(href).scheme.lower()` check in `_extract_hyperlinks_for_region`; warn-on-blocked dedup. Test Green. |
-| 011-04 | argparse `--escape-formulas {off,quote,strip}` accepted but ignored; `test_escape_quote_prefixes_<char>` Red. | `_write_region_csv` transform on each cell; JSON-shim no-effect warning. Test Green. |
-| 011-05 | Empty `security.md` file with header only; grep-gate test asserts trust-boundary sentence — Red. | Write full content (≥ 80 lines); add `SKILL.md` + ARCH §14.7 cross-link. Test Green. |
-| 011-06 | `_GAP_DETECT_MAX_CELLS = 50_000_000` constant only (matrix still list-of-list); 3M-cell synthetic fixture test still Red on memory budget but cap-respecting. | Replace `list[list[bool]]` → `bytearray`; add `_build_claimed_mask` early-exit; update `_gap_detect` consumer guard. Test Green. |
-| 011-07 | `with output.open("w") as fp: fp.write(json.dumps(shape, ...))` (still buffers string but writes to fp) — half-step stub; test asserts file output exists but no RSS budget yet. | Switch to `json.dump(shape, fp, ...)` proper; remove the string-buffer copy. RSS budget test Green. |
-| 011-08 | `_rows_to_dicts` converted to generator but still consumed via `list(rows_gen)` at call site (no streaming yet); `_stream_single_region_json` helper signature only with `NotImplementedError`. E2E Red on streaming peak-RSS test. | Implement helper body (try/except StopIteration + write loop); `_shape_for_payloads` R11.1 early-detect dispatch. Test Green. |
-
----
-
-## 5. Risk register (planner-layer)
-
-| Risk | Mitigation |
+| Use Case | Tasks |
 | --- | --- |
-| 011-08 streaming output drifts byte-for-byte from v1 (indent/separator/empty-array edge cases) | `test_R10_stream_byte_identical_to_v1_*` runs same fixture through both paths; `diff -q` gates. Arch-review M3 fix locked empty-payload `"[]\n"` form. |
-| 011-06 bytearray flip silently breaks `_split_on_gap` / `_tight_bbox` consumers | `test_R8_bytearray_correctness_vs_listoflist` parametric same-output on 100×100 fixture before any behavioural change can land. |
-| Carve-out (4th `xlsx_read/` file) erodes the §9.1 frozen-surface contract long-term | §15.10.5 m5-fix locks the rule "per-fix-with-rationale, not fixed count". 011-06 commits a `KNOWN_ISSUES.md` deletion as its rationale anchor. |
-| 011-08 forgets to update `docs/office-skills-backlog.md` with `xlsx-8c-multi-sheet-stream` stub row | Q-15-5 m6-fix promoted this to an explicit acceptance criterion of 011-08 (not a "future task"). |
-| `tracemalloc`-based RSS budget tests flake on CI runners with different Python builds | Honest scope: budgets are sized at ≥ 2× margin from the v1 baseline. Tests use `current, peak = get_traced_memory()` and assert against budgets that hold across CPython 3.11/3.12/3.13. |
-| 011-05 trust-boundary doc lands but cross-links rot if SKILL.md / ARCHITECTURE.md restructure later | Grep-gate in CI: `grep -F "references/security.md" skills/xlsx/SKILL.md docs/ARCHITECTURE.md` returns ≥ 1 hit each. |
+| UC-01 (single sheet GFM, default flags) | 012-01 (smoke), 012-03 (reader-glue), 012-04 (GFM emit), 012-06 (hybrid pick-gfm), 012-08 (E2E #1) |
+| UC-02 (multi-sheet H2 ordering, hidden skip) | 012-03 (sheet filter + `--include-hidden`), 012-06 (H2 loop), 012-08 (E2E #3-#6) |
+| UC-03 (multi-table ListObjects H3) | 012-03 (`--no-table-autodetect` post-call filter; `--no-split` whole-mode), 012-06 (H3 loop), 012-08 (E2E #7, #25) |
+| UC-04 (merged body → HTML / GFM policies) | 012-04 (`_apply_gfm_merge_policy`), 012-05 (`colspan`/`rowspan`), 012-06 (promotion rule 1 + raise-site), 012-08 (E2E #8, #9, #23) |
+| UC-05 (multi-row header HTML / GFM ` › ` flatten) | 012-04 (GFM ` › ` flatten + warning), 012-05 (HTML `<thead>` D-A11 reconstruction), 012-06 (promotion rule 2), 012-08 (E2E #10, #11) |
+| UC-06 (hyperlinks GFM / HTML) | 012-04 (GFM `[text](url)` via `inline._render_hyperlink`), 012-05 (HTML `<a href>` via same helper), 012-08 (E2E #12, #13) |
+| UC-07 (`--include-formulas` interaction) | 012-02 (M7 lock `IncludeFormulasRequiresHTML`), 012-05 (`data-formula` attr), 012-06 (promotion rule 3), 012-08 (E2E #14, #15) |
+| UC-08 (same-path guard) | 012-02 (`_resolve_paths` + symlink-follow + cross-extension guard), 012-08 (E2E #16) |
+| UC-09 (encrypted workbook) | 012-02 (envelope code 3 + basename), 012-08 (E2E #17) |
+| UC-10 (`.xlsm` macro warning) | 012-02 (`warnings.catch_warnings(record=True)` + stderr surface), 012-08 (E2E #18) |
+| UC-11 (`headerRowCount=0` synthetic headers) | 012-04 (GFM synthetic visible header + separator), 012-05 (HTML synthetic `<thead>` per D13), 012-06 (promotion rule 4), 012-08 (E2E #24) |
+| UC-12 (cell-newline `<br>` round-trip) | 012-04 (`<br>` in GFM cell), 012-05 (`<br>` in HTML cell), 012-07 (live xlsx-3 round-trip; E2E #21) |
 
 ---
 
-## 6. Dependencies & Execution Order
+## 3. R-Issue Coverage Matrix
 
+> Convention: every R-Issue from TASK §2 (RTM) appears in at least
+> one bead. The Plan-Reviewer asserts no orphan. Count below: 29
+> distinct IDs (R1..R27 + R10a + R20a).
+
+| R-ID | Title | Owner Bead(s) |
+| --- | --- | --- |
+| R1 | CLI shim `xlsx2md.py` ≤ 60 LOC | 012-01 |
+| R2 | In-skill package with 9 single-responsibility modules | 012-01 (skeleton); 012-02..012-06 (per-module logic) |
+| R3 | Package import hygiene + ruff banned-api | 012-01 |
+| R4 | INPUT + OUTPUT positional args + parent-auto-create + cross-7 H1 | 012-02 |
+| R5 | Sheet selector `--sheet NAME\|all` + `--include-hidden` + `SheetNotFound` envelope | 012-03 |
+| R6 | Default flag values (backward-compat lock) | 012-01 (defaults wired in argparse); 012-08 (R6h no-flag shape pin regression) |
+| R7 | Multi-sheet H2 headings (document order, hidden skip, `--sheet NAME` suppresses H2) | 012-03 (sheet filter); 012-06 (H2 loop) |
+| R8 | Multi-table detection 3-tier (Tier-1 / Tier-2 / Tier-3); `--no-table-autodetect` post-call filter; `--no-split`; R8.f gap-fallback warning | 012-03 |
+| R9 | Gap-detect config `--gap-rows N` / `--gap-cols N` | 012-03 (flag pass-through); 012-08 (E2E #19, #20) |
+| R10 | `--format gfm` pure GFM emission (pipe escape, `<br>`, hyperlink, `GfmMergesRequirePolicy`) | 012-04 |
+| R10a | `--hyperlink-scheme-allowlist` URL scheme filter | 012-01 (flag declaration); 012-04 (parser + GFM branch via `inline._render_hyperlink`); 012-05 (HTML branch via same helper) |
+| R11 | `--format html` HTML `<table>` emission (colspan/rowspan, child suppression, `<a href>`, `data-formula`, pipe `&#124;`, `<br>`) | 012-05 |
+| R12 | `--format hybrid` per-table auto-select (default); four promotion rules | 012-06 |
+| R13 | M7 lock — `--format gfm` + `--include-formulas` → exit 2 `IncludeFormulasRequiresHTML` | 012-02 |
+| R14 | Multi-row header detection + emission (a-h: `auto`/`N`/multi-row HTML/multi-row GFM ` › `, ambiguous-boundary warning, library single-call-path, `smart` heuristic, `HeaderRowsConflict`) | 012-01 (flag); 012-02 (R14h conflict gate); 012-03 (R14a/b/f/g pass-through); 012-04 (R14d GFM ` › `); 012-05 (R14c HTML `<thead>`) |
+| R15 | Merged body-cell GFM policy `fail`/`duplicate`/`blank` | 012-04 (`_apply_gfm_merge_policy`); 012-06 (raise-site for `fail` + `--format gfm`) |
+| R16 | Inline content (cell newline `<br>`, pipe escape, hyperlinks, empty-text link) | 012-04 (GFM half); 012-05 (HTML half) |
+| R17 | Numbers, dates, formula cells (`--datetime-format`, number-format heuristic, formula-cell-cached-or-empty) | 012-03 (datetime-format pass-through); 012-04/05 (emit-side cached values); 012-08 (number-format regression) |
+| R18 | `--include-formulas` → `data-formula` attr + `class="stale-cache"` | 012-05 |
+| R19 | `--datetime-format ISO\|excel-serial\|raw` flag | 012-01 (flag); 012-03 (pass-through to `read_table`) |
+| R20 | Number-format heuristic delegated to `xlsx_read._values.extract_cell` | 012-03 (no re-implementation; library forwards formatted strings); 012-08 (regression `#,##0.00 → "1,234.50"`) |
+| R20a | `--memory-mode {auto,streaming,full}` openpyxl read-mode exposure | 012-01 (flag); 012-03 (`_resolve_read_only_mode` mapping + auto-switch hyperlink-unreliable warning) |
+| R21 | Cross-3 encrypted input → exit 3 envelope with basename | 012-02 |
+| R22 | Cross-4 macro-bearing input → exit 0 + stderr warning | 012-02 |
+| R23 | Cross-5 `--json-errors` envelope (v=1, code ≠ 0, byte-identical to xlsx-2/3/8) | 012-02 (envelope helper + add_json_errors_argument); 012-08 (E2E #22 global shape lock) |
+| R23(f) | Terminal `InternalError` code 7 envelope (raw-message redacted) | 012-01 (`InternalError` class declared); 012-02 (`try/except Exception` in `main()`); 012-08 (E2E #34 redaction regression) |
+| R24 | Cross-7 H1 same-path guard `Path.resolve()` | 012-02 |
+| R25 | `xlsx-md-shapes.md` round-trip contract document | 012-07 |
+| R26 | xlsx-3 (`md_tables2xlsx`) live round-trip flip | 012-07 |
+| R27 | Test suite gates (≥ 14 E2E + ≥ 8 unit/module + validate_skill + existing-suite green + 5-line `diff -q`) | 012-08 |
+
+**Orphan check:** 29 R-IDs declared; 29 R-IDs covered. **No
+orphans.**
+
+---
+
+## 4. Test-slug Coverage
+
+> Source: TASK §5.1 (34 entries; ≥ 14 required per R27).
+
+| # | Slug | Owner Bead |
+| --- | --- | --- |
+| 1 | `T-single-sheet-gfm-default` | 012-04 (defined here, locked-in 012-08 E2E cluster) |
+| 2 | `T-stdout-when-output-omitted` | 012-02 (output-path resolution + stdout default) |
+| 3 | `T-sheet-named-filter` | 012-06 (`--sheet NAME` suppresses H2; integration test) |
+| 4 | `T-multi-sheet-h2-ordering` | 012-06 (H2 loop integration) |
+| 5 | `T-hidden-sheet-skipped-default` | 012-03 (sheet filter unit-test); 012-08 (E2E) |
+| 6 | `T-hidden-sheet-included-with-flag` | 012-03 (`--include-hidden` unit); 012-08 (E2E) |
+| 7 | `T-multi-table-listobjects-h3` | 012-06 (H3 loop) |
+| 8 | `T-merged-body-cells-html-colspan` | 012-05 |
+| 9 | `T-gfm-merges-require-policy-exit2` | 012-06 (raise-site); 012-08 (E2E gate) |
+| 10 | `T-multi-row-header-html-thead` | 012-05 |
+| 11 | `T-multi-row-header-gfm-u203a-flatten` | 012-04 |
+| 12 | `T-hyperlink-gfm-url-form` | 012-04 |
+| 13 | `T-hyperlink-html-anchor-tag` | 012-05 |
+| 14 | `T-include-formulas-gfm-exits2` | 012-02 (M7 raise-site) |
+| 15 | `T-include-formulas-html-data-attr` | 012-05 |
+| 16 | `T-same-path-via-symlink-exit6` | 012-02 |
+| 17 | `T-encrypted-workbook-exit3` | 012-02 |
+| 18 | `T-xlsm-macro-warning` | 012-02 |
+| 19 | `T-gap-detect-default-no-split-on-1-row` | 012-03 (unit); 012-08 (E2E) |
+| 20 | `T-gap-detect-splits-on-2-empty-rows` | 012-03 (unit); 012-08 (E2E) |
+| 21 | `T-cell-newline-br-roundtrip` | 012-07 |
+| 22 | `T-json-errors-envelope-shape-v1` | 012-02 (envelope shape unit-test); 012-08 (global E2E gate) |
+| 23 | `T-gfm-merge-policy-duplicate` | 012-04 |
+| 24 | `T-synthetic-headers-listobject-zero` | 012-05 (HTML `<thead>` per D13); 012-04 (GFM visible synthetic + separator); 012-06 (promotion rule 4); 012-08 (E2E gate) |
+| 25 | `T-no-autodetect-empty-fallback-whole-sheet` | 012-03 (`_gap_fallback_if_empty` unit); 012-08 (E2E) |
+| 26 | `T-header-rows-smart-skips-metadata-block` | 012-03 (`--header-rows smart` pass-through unit); 012-08 (E2E regression) |
+| 27 | `T-header-rows-int-with-multi-table-exits-2-conflict` | 012-02 (`HeaderRowsConflict` raise-site); 012-08 (E2E gate) |
+| 28 | `T-memory-mode-streaming-bounds-peak-rss` | 012-03 (`_resolve_read_only_mode` unit); 012-08 (slow E2E `@skipUnless(SLOW)`) |
+| 29 | `T-memory-mode-auto-respects-library-default-100mib-threshold` | 012-03 (unit) |
+| 30 | `T-hyperlink-allowlist-blocks-javascript-html` | 012-05 (HTML branch unit); 012-08 (E2E) |
+| 31 | `T-hyperlink-allowlist-blocks-javascript-gfm` | 012-04 (GFM branch unit); 012-08 (E2E) |
+| 32 | `T-hyperlink-allowlist-default-passes-https-mailto` | 012-04 / 012-05 (both branches unit); 012-08 (E2E) |
+| 33 | `T-hyperlink-allowlist-custom-extends` | 012-04 / 012-05 (parser + custom CSV); 012-08 (E2E) |
+| 34 | `T-internal-error-envelope-redacts-raw-message` | 012-02 (`try/except Exception` unit + monkey-patch); 012-08 (E2E) |
+
+**Orphan check:** 34 slugs declared in TASK §5.1; 34 slugs bound
+to at least one bead. **No orphans.**
+
+---
+
+## 5. Honest-scope Lock Inventory
+
+> Source: TASK §1.4 (a)..(m) + R3-H1 — 14 items. Each must be
+> locked by a docstring note AND/OR a regression test.
+
+| Item | Subject | Lock owner | Lock mechanism |
+| --- | --- | --- | --- |
+| §1.4 (a) | Rich-text spans → plain-text concat | 012-08 (lib delegate) | Docstring in `xlsx2md/__init__.py` notes "delegated to `xlsx_read._values.extract_cell`"; no separate test (covered by xlsx_read's own tests). |
+| §1.4 (b) | Cell styles dropped | 012-08 | `__init__.py` docstring; honest scope; no regression test (markdown has no representation). |
+| §1.4 (c) | Comments dropped | 012-08 | `__init__.py` docstring; deferred to v2 sidecar pattern. |
+| §1.4 (d) | Charts / images / shapes dropped | 012-08 | `__init__.py` docstring; `preview.py` canonical visual path note. |
+| §1.4 (e) | Pivot tables unfold to cached values | 012-08 | `__init__.py` docstring (delegated to `xlsx_read`). |
+| §1.4 (f) | Data validation dropdowns dropped | 012-08 | `__init__.py` docstring. |
+| §1.4 (g) | Formula without cached value → empty / `data-formula` | 012-05 (HTML emit `class="stale-cache"`); 012-08 (regression) | `emit_html.py` docstring + unit test asserting stale-cache class; `__init__.py` docstring. |
+| §1.4 (h) | Shared / array formulas → cached value only | 012-08 | `__init__.py` docstring (library forwards cached value). |
+| §1.4 (i) | `headerRowCount=0` synthetic headers + D13 visible `<thead>` + hybrid auto-promote | 012-04 (GFM visible row + separator); 012-05 (HTML synthetic `<thead>` per D13); 012-06 (promotion rule 4); 012-08 (E2E #24 regression) | Emit module docstrings; UC-11 E2E. |
+| §1.4 (j) | Diagonal borders / sparklines / camera objects dropped | 012-08 | `__init__.py` docstring. |
+| §1.4 (k) | `smart` vs `auto` produce different shapes on metadata banners | 012-03 (smart pass-through unit); 012-08 (E2E #26 regression) | `dispatch.py` docstring + unit test + E2E. |
+| §1.4 (l) | Hyperlink scheme allowlist (default `http,https,mailto`); `'*'` allows all, `""` blocks all | 012-04 (`inline._render_hyperlink` GFM); 012-05 (HTML branch); 012-08 (E2E #30-#33) | `inline.py` docstring + ≥ 4 unit tests + E2E regression cluster. |
+| §1.4 (m) | Hyperlinks always-on → `read_only_mode=False` heap cost; `--memory-mode=streaming` workaround | 012-01 (`__init__.py` docstring); 012-03 (`_resolve_read_only_mode` unit); 012-08 (E2E #28, #29) | Docstring + unit + slow E2E. |
+| R3-H1 | `--sanitize-sheet-names` option dropped entirely; sheet names verbatim; `History` → `History` (xlsx-9 emit) vs `History_` (xlsx-3 write-back) asymmetry is expected | 012-07 (`xlsx-md-shapes.md` §6 documents D9 lock); 012-08 (regression: `History` sheet name preserved verbatim) | Contract doc + regression. |
+
+**Orphan check:** 14 honest-scope items; 14 with at least one
+docstring lock or regression test. **No orphans.**
+
+---
+
+## 6. Cross-skill replication gate
+
+Asserted in every task's Acceptance Criteria block:
+
+```bash
+diff -qr skills/docx/scripts/office skills/xlsx/scripts/office
+diff -q  skills/docx/scripts/_soffice.py      skills/xlsx/scripts/_soffice.py
+diff -q  skills/docx/scripts/_errors.py       skills/xlsx/scripts/_errors.py
+diff -q  skills/docx/scripts/preview.py       skills/xlsx/scripts/preview.py
+diff -q  skills/docx/scripts/office_passwd.py skills/xlsx/scripts/office_passwd.py
 ```
-Stage 1 (Security axis — independent, can ship in parallel):
-    011-01 ──┐
-    011-02 ──┤
-    011-03 ──┼──> Stage 1 complete
-    011-04 ──┤
-    011-05 ──┘
 
-Stage 2 (Performance axis — linear):
-    011-06 ──> 011-07 ──> 011-08 ──> Stage 2 complete
+All five commands must produce **no output** after every bead
+lands. xlsx-9 touches zero cross-replicated files, so the gate
+should remain silent from start to finish.
 
-Stage 3 (Integration):
-    All beads → full test suite → validate_skill.py → cross-skill diff gate
-              → backlog row update → DONE.
+---
+
+## 7. Stub-First Compliance Matrix
+
+| Stage | Task ID | Tag | Stub gate | Logic gate |
+| --- | --- | --- | --- | --- |
+| 1 | 012-01 | [STUB CREATION] | Smoke E2E asserts sentinel; `ruff` green; package importable | — |
+| 2 | 012-02 | [LOGIC IMPLEMENTATION] | (stubs from 012-01) | Cross-cutting envelopes + `_validate_flag_combo` + `_resolve_paths` + `InternalError` catch-all live |
+| 2 | 012-03 | [LOGIC IMPLEMENTATION] | (stubs from 012-01) | `dispatch.iter_table_payloads` + memory-mode mapping live |
+| 2 | 012-04 | [LOGIC IMPLEMENTATION] | (stubs from 012-01) | `emit_gfm.emit_gfm_table` + `inline.*` live |
+| 2 | 012-05 | [LOGIC IMPLEMENTATION] | (stubs from 012-01) | `emit_html.emit_html_table` + `headers.*` live |
+| 2 | 012-06 | [LOGIC IMPLEMENTATION] | (stubs from 012-01) | `emit_hybrid.emit_workbook_md` + `select_format` live |
+| 3 | 012-07 | [INTEGRATION] | (per-task stubs) | `xlsx-md-shapes.md` + live round-trip E2E |
+| 3 | 012-08 | [INTEGRATION] | (per-task stubs) | Validate + 5-line `diff -q` silent + KNOWN_ISSUES.md + full suite green |
+
+> **Per `tdd-stub-first §2`:** the smoke E2E in 012-01 asserts the
+> hardcoded sentinel; each subsequent task **updates** the E2E to
+> assert the new real behaviour AND adds module-scoped unit tests
+> (per `skill-testing-best-practices`).
+
+---
+
+## 8. Risk register (planner-layer)
+
+| Risk | Mitigation | Owner Task |
+| --- | --- | --- |
+| **R-1.** `xlsx_read` library API drift between xlsx-10.A merge and xlsx-9 implementation. | xlsx-10.A `__all__` is frozen; ruff banned-api enforces. 012-01 imports every symbol; CI fails-loud on any rename. | 012-01 |
+| **R-2.** `md_tables2xlsx`'s `TestRoundTripXlsx9::test_live_roundtrip_xlsx_md` skipUnless predicate references a non-existent file at flip-time, so the test stays skipped silently. | 012-07 adds an explicit assertion that the test is **not** skipped after flip; CI asserts `unittest.SkipTest` is NOT raised. | 012-07 |
+| **R-3.** D-A11 multi-row `<thead>` reconstruction misinterprets literal U+203A in header cells (A-A3 honest scope). | ARCH §10 A-A3 documents the accepted edge case; 012-08 adds a regression that the reconstruction result is *consistent across re-runs* (deterministic). The misinterpretation itself is the user's responsibility. | 012-05, 012-08 |
+| **R-4.** `--memory-mode=streaming` on a workbook with hyperlinks: openpyxl `ReadOnlyCell.hyperlink` is None → hyperlinks silently lost. | 012-03 surfaces a `summary.warnings` entry: `"hyperlinks unreliable in streaming mode; pass --memory-mode=full or extract on a smaller workbook"`. Documented honest scope §1.4 (m). | 012-03 |
+| **R-5.** `--no-table-autodetect` post-call filter (D-A2) on a dense sheet yields zero regions; the E2E might fail with "no tables" instead of falling back to whole-sheet. | 012-03 `_gap_fallback_if_empty` falls back to `mode="whole"` + info warning; 012-08 E2E #25 locks the behaviour. | 012-03 |
+| **R-6.** `InternalError` redaction regression: the raw exception message contains an absolute path that leaks despite the `details={}` redaction. | 012-02 wraps the entire `main()` body in `try/except Exception`; the `error` field is hardcoded to `f"Internal error: {type(exc).__name__}"` (NEVER `str(exc)`); 012-08 E2E #34 monkey-patches `open_workbook` to raise `PermissionError("/Users/secret/file.xlsx")` and asserts `"/Users/secret"` NOT in the envelope JSON. | 012-02, 012-08 |
+| **R-7.** `xlsx-md-shapes.md` drifts from emit-side reality. | 012-07 writes the doc AFTER 012-06 stabilises emit behaviour; doc cross-references emit-module docstrings; 012-08 doesn't ship until both are consistent. | 012-07 |
+
+---
+
+## 9. Dependencies & Execution Order
+
+```mermaid
+flowchart LR
+    T01[012-01<br/>STUB CREATION]
+    T02[012-02<br/>cross-cutting+envelopes]
+    T03[012-03<br/>library-glue/dispatch]
+    T04[012-04<br/>emit-gfm]
+    T05[012-05<br/>emit-html]
+    T06[012-06<br/>emit-hybrid]
+    T07[012-07<br/>roundtrip-contract]
+    T08[012-08<br/>final-docs+validate]
+
+    T01 --> T02
+    T01 --> T03
+    T02 --> T03
+    T03 --> T04
+    T03 --> T05
+    T04 --> T05
+    T04 --> T06
+    T05 --> T06
+    T06 --> T07
+    T07 --> T08
 ```
 
-**Critical path**: 011-06 → 011-07 → 011-08 (performance axis,
-fixture-timing dependency chain). Stage 1 beads are independent and
-can be shipped concurrently if the developer parallelises. The
-backlog row `xlsx-8a` is marked DONE only when Stage 3 completes.
+**Parallelisation hint:** 012-04 (`emit_gfm.py` + `inline.py`) and
+012-05 (`emit_html.py` + `headers.py`) share `inline.py`. They can
+be developed by two developers in parallel if `inline.py` is
+written first (the GFM developer writes it as part of 012-04 and
+the HTML developer pulls latest), or sequentially as the dependency
+arrow suggests.
+
+---
+
+## 10. Done-Definition (release gate)
+
+A merge of Task 012 is acceptable iff **all** the following pass
+on the merge commit:
+
+1. **Unit tests:** all per-module test files green
+   (`test_cli.py`, `test_dispatch.py`, `test_emit_gfm.py`,
+   `test_emit_html.py`, `test_emit_hybrid.py`, `test_inline.py`,
+   `test_headers.py`, `test_exceptions.py`, `test_public_api.py`).
+   Per TASK §5.2 minimum counts: cli 8, emit_gfm 10, emit_html 12,
+   emit_hybrid 8, exceptions 4.
+2. **34 E2E scenarios** (TASK §5.1) live in `test_e2e.py` — all
+   green.
+3. **`md_tables2xlsx/`'s `TestRoundTripXlsx9::test_live_roundtrip_xlsx_md`**
+   is no longer `@unittest.skipUnless`-skipped AND passes.
+4. **Existing xlsx-* test suites** (xlsx-2, xlsx-3, xlsx-6,
+   xlsx-7, xlsx-8 / xlsx2csv2json, xlsx-10.A / xlsx_read) green —
+   no-behaviour-change gate.
+5. **`ruff check scripts/`** green from `skills/xlsx/scripts/`
+   (xlsx-10.A toolchain inherited).
+6. **`python3 .claude/skills/skill-creator/scripts/validate_skill.py
+   skills/xlsx`** exits 0.
+7. **5-line `diff -q`** silent gate (CLAUDE.md §2; TASK §0;
+   ARCH §9.1).
+8. **`skills/xlsx/references/xlsx-md-shapes.md`** exists and
+   covers §1 Scope / §2 GFM shape / §3 HTML shape / §4 Hybrid /
+   §5 Inline contract / §6 Sheet-name asymmetry / §7 Round-trip
+   limitations / §8 Live round-trip test activation.
+9. **LOC budget:** shim ≤ 60 LOC (TASK AC #1). Package per-module
+   ≤ 700 LOC (TASK R2.g xlsx skill precedent).
+10. **`docs/KNOWN_ISSUES.md`** has `XLSX-10B-DEFER` entry linking
+    `xlsx-10.B` backlog row + 14-day deadline marker (TASK AC #15).
