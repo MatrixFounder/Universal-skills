@@ -26,18 +26,38 @@ from __future__ import annotations
 
 from typing import Any, Iterable
 
-from ._exceptions import OverlappingMerges
+from ._exceptions import OverlappingMerges, TooManyMerges
 from ._types import MergePolicy
 
 # anchor (row, col) → bottom-right (row, col); both inclusive, 1-based.
 MergeMap = dict[tuple[int, int], tuple[int, int]]
 
+# xlsx-8a-02 (R2) — Sec-MED-3 memory-exhaustion mitigation. Bounded
+# merge-count in `parse_merges`: a hand-crafted OOXML workbook with
+# millions of `<mergeCell>` entries would otherwise materialise an
+# unbounded Python dict in RAM before any `apply_merge_policy` work.
+# Cap fires on the (cap+1)-th iteration per TASK D2 / ARCH D-A14.
+# Practical real-world max is ~8K merges; 100K gives 10× headroom.
+# Policy-locked; no CLI / env-var override (TASK Q-1 precedent).
+_MAX_MERGES: int = 100_000
+
 
 def parse_merges(ws: Any) -> MergeMap:
-    """Build the anchor→bottom-right map for every merge range on `ws`."""
+    """Build the anchor→bottom-right map for every merge range on `ws`.
+
+    xlsx-8a-02 (R2, Sec-MED-3): bounded at `_MAX_MERGES` (=100_000)
+    entries. Hand-crafted OOXML with millions of `<mergeCell>` is
+    refused with `TooManyMerges` before the dict balloons RAM. Cap
+    fires on the 100_001st insertion.
+    """
     out: MergeMap = {}
     for r in ws.merged_cells.ranges:
         out[(r.min_row, r.min_col)] = (r.max_row, r.max_col)
+        if len(out) > _MAX_MERGES:
+            raise TooManyMerges(
+                f"Worksheet {getattr(ws, 'title', '?')!r}: more than "
+                f"{_MAX_MERGES} merge ranges; aborting to protect memory."
+            )
     return out
 
 

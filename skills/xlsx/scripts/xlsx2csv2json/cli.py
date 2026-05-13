@@ -53,6 +53,14 @@ _DATETIME_FORMATS = ("ISO", "excel-serial", "raw")
 _HEADER_FLATTEN_STYLES = ("string", "array")
 _VALID_FORMATS = ("csv", "json")
 
+# xlsx-8a-04 (R4, Sec-MED-1) — `--escape-formulas` modes.
+_ESCAPE_FORMULAS_MODES = ("off", "quote", "strip")
+# OWASP-canonical CSV-injection sentinels (D-A13). Cell values
+# whose stringified form starts with one of these are treated by
+# Excel-on-double-click as DDE formulas. Unicode lookalikes (e.g.
+# `＝` U+FF1D fullwidth equals) are explicitly out of scope here.
+_FORMULA_SENTINELS = ("=", "+", "-", "@", "\t", "\r")
+
 
 # ===========================================================================
 # Argparse
@@ -107,6 +115,20 @@ def _format_type_with_lock(format_lock: str | None) -> Callable[[str], str]:
             )
         return value
     return _validator
+
+
+def _parse_scheme_allowlist(csv: str) -> frozenset[str]:
+    """Parse the ``--hyperlink-scheme-allowlist`` CSV value.
+
+    xlsx-8a-03 (R3, D-A11/A12): comma-separated list of allowed
+    URL schemes. Whitespace stripped; case-folded to lower (RFC
+    3986 §3.1 — scheme matching is case-insensitive). Empty
+    entries dropped. Empty input → ``frozenset()`` (blocks ALL
+    schemes).
+    """
+    return frozenset(
+        s.strip().lower() for s in csv.split(",") if s.strip()
+    )
 
 
 def _delimiter_type(value: str) -> str:
@@ -317,6 +339,42 @@ def build_parser(*, format_lock: str | None) -> argparse.ArgumentParser:
         ),
     )
 
+    # xlsx-8a-03 (R3, Sec-MED-2) — URL-scheme allowlist for hyperlinks.
+    parser.add_argument(
+        "--hyperlink-scheme-allowlist",
+        dest="hyperlink_scheme_allowlist",
+        default="http,https,mailto",
+        metavar="CSV",
+        help=(
+            "Comma-separated list of allowed URL schemes for "
+            "hyperlink cells. Disallowed-scheme hyperlinks drop "
+            "to the no-hyperlink emit branch (JSON: bare scalar "
+            "value; CSV: plain text). One stderr warning per "
+            "distinct blocked scheme (deduped). Default: "
+            "'http,https,mailto' (covers typical office workbook "
+            "schemes). Pass an empty string to block ALL schemes. "
+            "Case-insensitive per RFC 3986 §3.1."
+        ),
+    )
+
+    # xlsx-8a-04 (R4, Sec-MED-1) — CSV formula-injection defang.
+    parser.add_argument(
+        "--escape-formulas",
+        dest="escape_formulas",
+        choices=_ESCAPE_FORMULAS_MODES,
+        default="off",
+        help=(
+            "Defang CSV cells starting with =/+/-/@/<TAB>/<CR> "
+            "(OWASP CSV Injection). 'off' (default) passes through "
+            "verbatim — backward-compatible. 'quote' prepends `'` "
+            "so Excel renders as literal text. 'strip' replaces "
+            "with empty string. CSV-only: passing to xlsx2json.py "
+            "emits a stderr warning. See also --encoding utf-8-sig "
+            "(both flags address 'what happens when Excel "
+            "double-clicks the CSV')."
+        ),
+    )
+
     # Cross-5 envelope flag (4-skill replicated helper).
     _errors.add_json_errors_argument(parser)
 
@@ -420,6 +478,14 @@ def _validate_flag_combo(args: argparse.Namespace, *, format_lock: str | None) -
             file=sys.stderr,
         )
 
+    # xlsx-8a-04 (R4): `--escape-formulas` is CSV-only.
+    if effective_format == "json" and args.escape_formulas != "off":
+        print(
+            "warning: --escape-formulas has no effect on JSON output "
+            "(CSV-only flag — JSON has its own escape contract).",
+            file=sys.stderr,
+        )
+
 
 # ===========================================================================
 # Path resolution (010-02)
@@ -479,6 +545,7 @@ def _run_with_envelope(
         EncryptedWorkbookError,
         OverlappingMerges,
         SheetNotFound,
+        TooManyMerges,
     )
 
     try:
@@ -525,6 +592,17 @@ def _run_with_envelope(
             str(exc),
             code=2,
             error_type="OverlappingMerges",
+            details={},
+            json_mode=json_mode,
+            stream=sys.stderr,
+        )
+    except TooManyMerges as exc:
+        # xlsx-8a-02 (R2, Sec-MED-3): library raised the cap.
+        # Map to exit 2 with basename-only `details` (no path leak).
+        return _errors.report_error(
+            str(exc),
+            code=2,
+            error_type="TooManyMerges",
             details={},
             json_mode=json_mode,
             stream=sys.stderr,
@@ -672,6 +750,12 @@ def _dispatch_to_emit(
     # honest-scope: large workbook + --include-hyperlinks may need 5-10x the
     # workbook size in RAM. Caller-controlled flag, so the trade-off is opt-in.
     read_only_mode: bool | None = False if args.include_hyperlinks else None
+
+    # xlsx-8a-03 (R3): parse allowlist once per invocation.
+    scheme_allowlist = _parse_scheme_allowlist(
+        args.hyperlink_scheme_allowlist
+    )
+
     with warnings.catch_warnings(record=True) as captured:
         warnings.simplefilter("always")
         with open_workbook(
@@ -679,7 +763,10 @@ def _dispatch_to_emit(
             keep_formulas=args.include_formulas,
             read_only_mode=read_only_mode,
         ) as reader:
-            payloads = dispatch.iter_table_payloads(args, reader, format=effective_format)
+            payloads = dispatch.iter_table_payloads(
+                args, reader, format=effective_format,
+                hyperlink_scheme_allowlist=scheme_allowlist,
+            )
             if effective_format == "json":
                 rc = emit_json.emit_json(
                     payloads,
@@ -706,6 +793,7 @@ def _dispatch_to_emit(
                     encoding=args.encoding,
                     delimiter=args.delimiter,
                     drop_empty_rows=args.drop_empty_rows,
+                    escape_formulas=args.escape_formulas,
                 )
             else:
                 raise ValueError(f"Unknown format: {effective_format!r}")

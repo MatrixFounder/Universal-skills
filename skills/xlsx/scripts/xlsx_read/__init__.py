@@ -72,6 +72,7 @@ from ._exceptions import (
     MacroEnabledWarning,
     OverlappingMerges,
     SheetNotFound,
+    TooManyMerges,
 )
 from ._types import (
     DateFmt,
@@ -98,4 +99,5 @@ __all__ = [
     "OverlappingMerges",
     "AmbiguousHeaderBoundary",
     "SheetNotFound",
+    "TooManyMerges",
 ]

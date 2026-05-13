@@ -24,6 +24,10 @@ F6`` and ``docs/TASK.md §R12 / §R14–§R17``:
   that hard-binds the format.
 * ``PostValidateFailed`` (7) — env-flag opt-in JSON round-trip
   validator detected a corrupted output.
+* ``CollisionSuffixExhausted`` (2) — xlsx-8a-01 Sec-HIGH-3
+  mitigation: per-region filename collision-suffix loop in
+  ``_emit_multi_region`` attempted more than ``_MAX_COLLISION_SUFFIX``
+  variants without finding a unique path.
 """
 from __future__ import annotations
 
@@ -115,6 +119,26 @@ class PostValidateFailed(_AppError):
     CODE = 7
 
 
+class CollisionSuffixExhausted(_AppError):
+    """Per-region filename collision-suffix loop exceeded the cap.
+
+    xlsx-8a-01 (Sec-HIGH-3 DoS mitigation): the
+    ``_emit_multi_region`` collision-suffix loop in
+    :mod:`xlsx2csv2json.emit_csv` is bounded at
+    ``_MAX_COLLISION_SUFFIX`` (= 1000) attempts. A crafted
+    workbook with thousands of regions sharing the same
+    ``(sheet, region_name)`` tuple would otherwise force an
+    unbounded O(N²) ``Path.resolve()`` + ``is_relative_to`` loop
+    before the natural wall-clock timeout. The cap fails loud via
+    this exception, routed through the cross-5 envelope as exit 2.
+
+    Policy-locked at 1000 per TASK §7.3 D1 / ARCH §15.3 D-A14
+    (cap fires on the (cap+1)-th iteration).
+    """
+
+    CODE = 2
+
+
 __all__ = [
     "_AppError",
     "SelfOverwriteRefused",
@@ -125,4 +149,5 @@ __all__ = [
     "OutputPathTraversal",
     "FormatLockedByShim",
     "PostValidateFailed",
+    "CollisionSuffixExhausted",
 ]

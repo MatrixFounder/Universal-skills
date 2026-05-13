@@ -99,7 +99,12 @@ def _accept_gap_only(region: Any) -> bool:
     return region.source == "gap_detect"
 
 
-def _extract_hyperlinks_for_region(reader: Any, region: Any) -> dict[tuple[int, int], str]:
+def _extract_hyperlinks_for_region(
+    reader: Any,
+    region: Any,
+    *,
+    scheme_allowlist: frozenset[str] | None = None,
+) -> dict[tuple[int, int], str]:
     """Parallel pass: extract ``(row_idx, col_idx) -> href`` for the region.
 
     The xlsx_read library's ``include_hyperlinks=True`` mode replaces
@@ -110,8 +115,20 @@ def _extract_hyperlinks_for_region(reader: Any, region: Any) -> dict[tuple[int, 
     Returns a mapping keyed by ``(0-based row within the region,
     0-based column within the region)``. Cells without a hyperlink are
     absent from the map.
+
+    **xlsx-8a-03 (R3, Sec-MED-2)**: if ``scheme_allowlist`` is given,
+    each cell's hyperlink target is parsed via ``urllib.parse.urlparse``
+    and the lower-cased scheme is checked against the allowlist; entries
+    whose scheme is NOT in the allowlist are **dropped from the map
+    entirely** (per D-A11: blocked-scheme cells then traverse the
+    no-hyperlink emit branch unchanged — JSON: bare scalar; CSV: plain
+    text). One ``warnings.warn`` line per distinct blocked scheme
+    (deduped) is emitted before the function returns, picked up by the
+    shim's outer ``warnings.catch_warnings(record=True)`` block per
+    HS-7. ``scheme_allowlist=None`` disables filtering (back-compat).
     """
     result: dict[tuple[int, int], str] = {}
+    blocked_by_scheme: dict[str, int] = {}
     # Access the underlying openpyxl worksheet via reader._wb (private
     # attribute, but the reader exposes no public worksheet handle by
     # design — closed-API purity per xlsx_read §D-A3). This is the one
@@ -121,6 +138,8 @@ def _extract_hyperlinks_for_region(reader: Any, region: Any) -> dict[tuple[int, 
     if wb is None:
         return result
     ws = wb[region.sheet]
+    if scheme_allowlist is not None:
+        from urllib.parse import urlparse
     for row_offset, row_cells in enumerate(
         ws.iter_rows(
             min_row=region.top_row, max_row=region.bottom_row,
@@ -133,8 +152,27 @@ def _extract_hyperlinks_for_region(reader: Any, region: Any) -> dict[tuple[int, 
             if hl is None:
                 continue
             target = getattr(hl, "target", None)
-            if target:
-                result[(row_offset, col_offset)] = str(target)
+            if not target:
+                continue
+            target_str = str(target)
+            if scheme_allowlist is not None:
+                scheme = urlparse(target_str).scheme.lower()
+                if scheme not in scheme_allowlist:
+                    blocked_by_scheme[scheme] = (
+                        blocked_by_scheme.get(scheme, 0) + 1
+                    )
+                    continue
+            result[(row_offset, col_offset)] = target_str
+
+    # xlsx-8a-03 (R3): emit one warning per distinct blocked scheme.
+    # Uses `warnings.warn` so the shim's outer `catch_warnings` block
+    # captures and re-emits via HS-7 (NOT direct `print(file=stderr)`).
+    for scheme, count in blocked_by_scheme.items():
+        warnings.warn(
+            f"skipped {count} hyperlink(s) with disallowed "
+            f"scheme {scheme!r}",
+            UserWarning, stacklevel=2,
+        )
     return result
 
 
@@ -143,6 +181,7 @@ def iter_table_payloads(
     reader: Any,
     *,
     format: str | None = None,
+    hyperlink_scheme_allowlist: frozenset[str] | None = None,
 ) -> Iterator[tuple[str, Any, Any, dict[tuple[int, int], str] | None]]:
     """Yield ``(sheet_name, region, table_data, hyperlinks_map)`` per region.
 
@@ -255,7 +294,10 @@ def iter_table_payloads(
 
             hyperlinks_map: dict[tuple[int, int], str] | None = None
             if args.include_hyperlinks:
-                hyperlinks_map = _extract_hyperlinks_for_region(reader, region)
+                hyperlinks_map = _extract_hyperlinks_for_region(
+                    reader, region,
+                    scheme_allowlist=hyperlink_scheme_allowlist,
+                )
 
             # H2 (vdd-multi): the library appends soft warnings to
             # `TableData.warnings` (list[str]) without calling

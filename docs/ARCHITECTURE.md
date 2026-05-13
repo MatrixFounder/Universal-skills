@@ -1219,7 +1219,9 @@ referenced by §15.4 column 1:
   can symlink-swap between `resolve()` and `open("w")`.
   `O_NOFOLLOW` via `os.open` would close the window. Deferred —
   the threat model is local attacker with write access, not in v1
-  scope.
+  scope. **Documented in detail at**
+  [`skills/xlsx/references/security.md`](../skills/xlsx/references/security.md)
+  §3 (xlsx-8a-05 deferral carrier).
 
 These items are documented here for traceability; the vdd-multi
 verdict was PASS after the 6 fixes above landed.
@@ -1348,7 +1350,7 @@ column carries the §14.7.N anchor introduced by arch-review M2:
 | **§14.7.2** CSV injection on `=`/`+`/`-`/`@`-prefix cells | **Closed via `--escape-formulas`** (R4, D-A13). Default `off` for compat; users opt-in for shared spreadsheet workflows. |
 | **§14.7.3** `javascript:` / `data:` URIs in hyperlinks | **Closed via `--hyperlink-scheme-allowlist`** (R3, D-A11/12). Default deny outside `http`/`https`/`mailto`. |
 | **§14.7.4** JSON full-payload materialisation (PERF-HIGH-2) | **Still accepted** (deferred — see [`docs/KNOWN_ISSUES.md`](KNOWN_ISSUES.md) PERF-HIGH-2). Future `xlsx-8c-perf-streaming`. |
-| **§14.7.5** TOCTOU race in `_emit_multi_region` | **Still accepted; now documented.** xlsx-8a-05 ships [`skills/xlsx/references/security.md`](../skills/xlsx/references/security.md) explaining when this becomes critical (multi-tenant CI) and the fix recipe (`os.open(..., O_NOFOLLOW)` per component). Code-fix deferred to a separate ticket. |
+| **§14.7.5** TOCTOU race in `_emit_multi_region` | **Still accepted; now documented.** xlsx-8a-05 ships [`skills/xlsx/references/security.md`](../skills/xlsx/references/security.md) (≥ 200 lines) explaining when this becomes critical (multi-tenant CI), trust-boundary statement, and the fix recipe (`os.open(..., O_NOFOLLOW)` per component sketch in §3.5). Code-fix deferred to a separate ticket (suggested slug `xlsx-8d-o-nofollow`). |
 
 Two **new** threats surface and are closed in xlsx-8a:
 
@@ -1624,8 +1626,17 @@ def _stream_single_region_json(payload, output_path, ...) -> None:
    to `_stream_single_region_json`; the rest of `_shape_for_payloads`
    (R11.2-4) is unchanged.
 
-Peak RSS on 3M-cell R11.1 workload: ≤ 200 MB (one row-dict in flight
-+ openpyxl working set), vs. 1-1.5 GB on the v1 full-shape path.
+**Design target**: peak RSS on 3M-cell R11.1 workload ≤ 200 MB
+(one row-dict in flight + openpyxl working set), vs. 1-1.5 GB on
+the v1 full-shape path. **As-shipped honest-scope (per /vdd-multi
+2026-05-13)**: the streaming refactor closes the emit-side dict
+allocation, but the upstream `xlsx_read.read_table` +
+`apply_merge_policy` still materialise `table_data.rows`
+(~180 MB on 3M cells). Realistic peak is ~400-600 MB — still
+2-3× win over v1, but not the 200 MB design target. The 200 MB
+budget remains unmeasured at the 3M-cell scale (see §15.10.6
+test-plan honest-scope); future read-side streaming refactor or
+3M-cell `tracemalloc` regression can address it.
 
 **Byte-identity invariant** (unconditional, per arch-review M3
 fix): the streaming output is byte-identical to the v1 path on
@@ -1719,24 +1730,43 @@ commit; PERF-HIGH-2 entry narrowed in 011-08 commit.
 
 ### 15.10.6. Test plan
 
-≥ 11 new tests across R8 + R9 + R10:
+**As-shipped (2026-05-13)**: ≥ 11 new tests across R8 + R9 + R10
+(final count after rename / merge):
 
 - **R8 (`xlsx_read/tests/test_tables.py`):**
-  `test_R8_gap_detect_at_3M_cells_succeeds`,
-  `test_R8_gap_detect_at_50M_plus_one_raises`,
-  `test_R8_bytearray_correctness_vs_listoflist` (parametric
-  same-output on a 100×100 synthetic fixture).
+  `test_R8_gap_detect_cap_value`,
+  `test_R8_build_claimed_mask_empty_returns_None`,
+  `test_R8_build_claimed_mask_non_empty_returns_bytearray`,
+  `test_R8_gap_detect_returns_regions_on_real_fixture`.
+  **Honest-scope deferral**: the spec-originally-listed
+  `test_R8_gap_detect_at_3M_cells_succeeds` / `…_at_50M_plus_one_raises`
+  / `…_bytearray_correctness_vs_listoflist` (3M / 50M synthetic
+  fixtures + parametric list-of-list reference) were collapsed into
+  the lighter cap-value + small-fixture checks above; large-fixture
+  budget tests are deferred to a future perf-regression task that
+  builds the 3M/50M synthetics under `tracemalloc` budget.
 - **R9 (`xlsx2csv2json/tests/test_emit_json.py`):**
-  `test_R9_file_output_no_string_buffer` (tracemalloc-based peak
-  RSS assertion), `test_R9_file_byte_identical_to_v1`.
-- **R10 (`xlsx2csv2json/tests/test_emit_json.py` or new
-  `test_streaming.py`):**
-  `test_R10_stream_byte_identical_to_v1_single_sheet_single_region`,
-  `test_R10_stream_3M_cells_peak_rss_below_200MB`,
+  `test_R9_file_output_drops_string_buffer_copy` (tracemalloc-based
+  RELATIVE peak-RSS assertion on a 4K-row fixture — `r9_peak < v1_peak`,
+  not an absolute MB budget), `test_R9_file_byte_identical_to_v1`.
+- **R10 (`xlsx2csv2json/tests/test_emit_json.py`):**
+  `test_R10_stream_byte_identical_to_v1_simple`,
+  `test_R10_stream_empty_table_v1_byte_identical`,
   `test_R10_stream_with_hyperlinks`,
   `test_R10_stream_array_style`,
-  `test_R10_stream_empty_table`,
-  `test_R10_R11_2_to_4_unchanged`.
+  `test_R10_R11_2_to_4_unchanged`,
+  `test_R10_rows_to_dicts_is_generator`.
+  **Honest-scope deferral**: the spec-originally-listed
+  `test_R10_stream_3M_cells_peak_rss_below_200MB` was not
+  implemented in xlsx-8a — the 200 MB target in §15.10.2 above
+  remains the **design target** but is **unmeasured at the
+  3M-cell scale**. /vdd-multi 2026-05-13 flagged this as HIGH:
+  upstream `read_table` materialises `table_data.rows` (~180 MB
+  on 3M cells) and `apply_merge_policy` returns a fresh row-grid
+  copy, so the realistic peak is ~400-600 MB (still 2-3× win over
+  v1's 1-1.5 GB, but not the advertised 200 MB). Tracked for a
+  future perf-regression task or for `xlsx-8c-multi-sheet-stream`
+  to address alongside its R11.2 streaming work.
 
 Regression gate: every existing test in `xlsx_read/tests/` and
 `xlsx2csv2json/tests/` stays green; `validate_skill.py` exit 0 on

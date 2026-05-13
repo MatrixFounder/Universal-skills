@@ -324,6 +324,46 @@ class TestJsonDelimiterWarning(unittest.TestCase):
             self.assertNotIn("--delimiter", buf.getvalue())
 
 
+class TestEscapeFormulasJsonWarning(unittest.TestCase):
+    """xlsx-8a-04 (R4, Sec-MED-1): `--escape-formulas != off` on the
+    JSON shim emits a stderr no-effect warning (mirror of the
+    `--delimiter` and `--encoding utf-8-sig` patterns).
+    """
+
+    def test_R4_xlsx2json_with_escape_quote_warns(self) -> None:
+        from xlsx2csv2json.cli import main
+        with tempfile.TemporaryDirectory() as td:
+            wb = _make_workbook(Path(td))
+            out = Path(td) / "out.json"
+            buf, restore = _capture_stderr()
+            try:
+                rc = main(
+                    [str(wb), str(out), "--sheet", "Sheet1",
+                     "--escape-formulas", "quote"],
+                    format_lock="json",
+                )
+            finally:
+                restore()
+            self.assertEqual(rc, 0)
+            self.assertIn(
+                "--escape-formulas has no effect on JSON output",
+                buf.getvalue(),
+            )
+
+    def test_R4_xlsx2json_with_escape_off_is_silent(self) -> None:
+        """Default `off` does not emit the no-effect warning."""
+        from xlsx2csv2json.cli import main
+        with tempfile.TemporaryDirectory() as td:
+            wb = _make_workbook(Path(td))
+            out = Path(td) / "out.json"
+            buf, restore = _capture_stderr()
+            try:
+                main([str(wb), str(out)], format_lock="json")
+            finally:
+                restore()
+            self.assertNotIn("--escape-formulas", buf.getvalue())
+
+
 class TestPublicHelperAcceptsDelimiterKwarg(unittest.TestCase):
     """**vdd-adversarial R26 HIGH-3 fix:** the Python public helper
     `convert_xlsx_to_csv(..., delimiter=...)` previously raised

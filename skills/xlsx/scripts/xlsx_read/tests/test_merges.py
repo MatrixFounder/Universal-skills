@@ -7,7 +7,9 @@ import unittest
 
 import openpyxl
 
-from xlsx_read import OverlappingMerges, open_workbook
+from types import SimpleNamespace
+
+from xlsx_read import OverlappingMerges, TooManyMerges, open_workbook
 from xlsx_read import _merges
 from xlsx_read.tests.conftest import FIXTURES_DIR
 
@@ -251,6 +253,52 @@ class TestOverlapMemoSoundnessAcrossRegions(unittest.TestCase):
             # Soundness requires the check be sheet-wide.
             with self.assertRaises(OverlappingMerges):
                 r.read_table(region_a, header_rows=0)
+
+
+# ---------------------------------------------------------------------------
+# xlsx-8a-02 (R2, Sec-MED-3) — `_MAX_MERGES` cap regression
+# ---------------------------------------------------------------------------
+
+
+def _mock_ws_with_n_merges(n: int, title: str = "MockSheet") -> Any:
+    """Build a `SimpleNamespace` worksheet whose `merged_cells.ranges`
+    yields `n` mock-range objects (each is a 1×1 single-cell merge at
+    `(row=1, col=k)` for `k in range(1, n+1)`).
+
+    Used by `_MAX_MERGES` boundary tests — avoids the 5-10s cost of
+    building a real openpyxl Workbook with that many merges, and
+    pinpoints the cap-guard behaviour deterministically.
+    """
+    ranges = [
+        SimpleNamespace(min_row=1, max_row=1, min_col=k, max_col=k)
+        for k in range(1, n + 1)
+    ]
+    return SimpleNamespace(
+        title=title,
+        merged_cells=SimpleNamespace(ranges=ranges),
+    )
+
+
+class TestParseMergesCap(unittest.TestCase):
+    """xlsx-8a-02 (R2): bounded merge-count in `parse_merges(ws)`."""
+
+    def test_R2_parse_merges_at_100000_passes(self) -> None:
+        """Cap allows exactly 100_000 merge entries; no raise."""
+        ws = _mock_ws_with_n_merges(100_000)
+        out = _merges.parse_merges(ws)
+        self.assertEqual(len(out), 100_000)
+
+    def test_R2_parse_merges_at_100001_raises(self) -> None:
+        """The 100_001st merge insertion raises `TooManyMerges`."""
+        ws = _mock_ws_with_n_merges(100_001)
+        with self.assertRaises(TooManyMerges) as ctx:
+            _merges.parse_merges(ws)
+        # Basename-safe message (sheet name is workbook-controlled
+        # but `_validate_sheet_path_components` is downstream of the
+        # library — here we only check the message carries the
+        # title for diagnostic purposes, no absolute paths).
+        self.assertIn("MockSheet", str(ctx.exception))
+        self.assertIn("100000", str(ctx.exception))
 
 
 if __name__ == "__main__":  # pragma: no cover

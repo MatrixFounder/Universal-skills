@@ -305,12 +305,19 @@ def _named_ranges_for_sheet(
 
 
 # Defensive cap on the bounding box we will allocate for gap-detect.
-# Malformed `<dimension ref="A1:XFD1048576"/>` would otherwise force a
-# 137 GB allocation (M8 sibling concern: pathological openpyxl
-# `max_row × max_col` from corrupted-or-malicious workbooks). The cap
-# is generous for real-world inputs (1M cells well above the 10K × 20
-# perf budget) and refuses anything beyond it with a clear error.
-_GAP_DETECT_MAX_CELLS: int = 1_000_000
+# Malformed `<dimension ref="A1:XFD1048576"/>` would otherwise force
+# a multi-GB allocation (M8 sibling concern: pathological openpyxl
+# `max_row × max_col` from corrupted-or-malicious workbooks).
+#
+# **xlsx-8a-06 (R8, 2026-05-13)**: cap raised 1_000_000 → 50_000_000
+# (50×) to support legitimate 100K × 20-30 cols ≈ 2-3M cells
+# large-table workloads. 50M is 1/343 of the XFD1048576 attack
+# envelope (16384 × 1_048_576 ≈ 17.2B cells) — still bounded.
+# Bytearray flat-buffer representation (also xlsx-8a-06) keeps
+# the worst-case transient memory at 50 MB instead of 400 MB.
+# Cap is policy (TASK §7.3 D8 / ARCH §15.10 D-A15); raising
+# requires a code-change PR, NOT a CLI flag / env-var override.
+_GAP_DETECT_MAX_CELLS: int = 50_000_000
 
 
 def _gap_detect(
@@ -354,12 +361,19 @@ def _gap_detect(
             f"mode='tables-only' or mode='whole' on this sheet"
         )
 
+    # xlsx-8a-06 (R8, D-A16): `_build_claimed_mask` may return `None`
+    # when `claimed` is empty (common case for `--tables auto` on a
+    # sheet with no Tier-1 / Tier-2 regions). Consumer below guards
+    # with `if claimed_mask is not None and claimed_mask[...]`.
     claimed_mask = _build_claimed_mask(top, left, bottom, right, claimed)
 
-    # Stream once, mask-and-classify per cell. `values_only=True` keeps
-    # the iterator producing Python primitives (no openpyxl Cell
-    # objects → no random-access cost in read_only mode).
-    occupancy: list[list[bool]] = []
+    # **xlsx-8a-06 (R8, D-A16)**: occupancy is a flat `bytearray` of
+    # length `n_rows * n_cols`, indexed `[r * n_cols + c]`. 8× memory
+    # reduction vs the v1 `list[list[bool]]` representation (1 byte
+    # vs 8 bytes/ref on 64-bit Python). Big-O unchanged. The buffer
+    # is zero-initialised by `bytearray(N)`, so we only set bits to
+    # 1 for occupied cells — no per-row padding step needed.
+    occupancy = bytearray(n_rows * n_cols)
     for r_idx, row in enumerate(
         ws.iter_rows(
             min_row=top, max_row=bottom,
@@ -367,45 +381,57 @@ def _gap_detect(
             values_only=True,
         )
     ):
-        row_occ: list[bool] = []
+        # Guard against `iter_rows` over-shooting in the unlikely
+        # case where openpyxl returns more rows than n_rows.
+        if r_idx >= n_rows:
+            break
         for c_idx, v in enumerate(row):
-            if claimed_mask[r_idx][c_idx]:
-                row_occ.append(False)
-            else:
-                row_occ.append(v is not None and v != "")
-        # Pad if the row is shorter than expected (sparse rows in
-        # streaming mode may yield fewer columns).
-        if len(row_occ) < n_cols:
-            row_occ.extend([False] * (n_cols - len(row_occ)))
-        occupancy.append(row_occ)
-    # Pad missing rows (iter_rows in read_only mode may skip empties).
-    while len(occupancy) < n_rows:
-        occupancy.append([False] * n_cols)
+            if c_idx >= n_cols:
+                break
+            if (
+                claimed_mask is not None
+                and claimed_mask[r_idx * n_cols + c_idx]
+            ):
+                continue  # leave occupancy[r,c] at 0 (claimed)
+            if v is not None and v != "":
+                occupancy[r_idx * n_cols + c_idx] = 1
 
-    # Step 2: find row-bands.
-    row_bands = _split_on_gap(
-        [any(r) for r in occupancy], gap_rows, base_index=top
-    )
+    # Step 2: find row-bands. Aggregate each row to a bool via `any`
+    # over its column-slice in the flat buffer.
+    row_aggregate = [
+        any(occupancy[r * n_cols + c] for c in range(n_cols))
+        for r in range(n_rows)
+    ]
+    row_bands = _split_on_gap(row_aggregate, gap_rows, base_index=top)
     if not row_bands:
         return []
 
     out: list[TableRegion] = []
     counter = 1
     for r_start, r_end in row_bands:
-        # Slice occupancy rows in this band.
-        band_rows = occupancy[r_start - top : r_end - top + 1]
         # Step 3: find col-bands in this row-band — collapse the band
         # vertically: a column is occupied iff *any* row in the band
-        # uses it.
-        col_occupancy = [any(band_rows[i][c] for i in range(len(band_rows)))
-                          for c in range(right - left + 1)]
+        # uses it. Iterate directly over the flat buffer slice.
+        band_top_idx = r_start - top
+        band_bot_idx = r_end - top  # inclusive
+        col_occupancy = [
+            any(
+                occupancy[r * n_cols + c]
+                for r in range(band_top_idx, band_bot_idx + 1)
+            )
+            for c in range(n_cols)
+        ]
         col_bands = _split_on_gap(col_occupancy, gap_cols, base_index=left)
         for c_start, c_end in col_bands:
             # Trim each col-band to the actual tight bbox within the
             # row-band so leading/trailing empty edges don't bloat the
             # region.
-            tight = _tight_bbox(occupancy, r_start - top, r_end - top,
-                                c_start - left, c_end - left)
+            tight = _tight_bbox(
+                occupancy,
+                band_top_idx, band_bot_idx,
+                c_start - left, c_end - left,
+                n_cols=n_cols,
+            )
             if tight is None:
                 continue
             tr, tc, br, bc = tight
@@ -444,14 +470,29 @@ def _resolve_dim_bbox(ws: Any) -> tuple[int, int, int, int] | tuple[None, None, 
 
 def _build_claimed_mask(
     top: int, left: int, bottom: int, right: int, claimed: list[TableRegion]
-) -> list[list[bool]]:
+) -> bytearray | None:
+    """Build a flat `bytearray` claimed-cell mask.
+
+    **xlsx-8a-06 (R8, D-A16)**: returns ``None`` when ``claimed`` is
+    empty (Tier-1 + Tier-2 produced no regions — common for sheets
+    with only gap-detect-able data). Caller in ``_gap_detect`` MUST
+    guard with ``if claimed_mask is not None and claimed_mask[...]``
+    before indexing — see the consumer pattern there.
+
+    For the non-empty case, the mask is a flat ``bytearray(h * w)``
+    indexed ``[r * w + c]``; 8× memory reduction over the v1
+    ``list[list[bool]]`` form. Big-O unchanged at O(h × w) for
+    allocation + O(sum of region areas) for population.
+    """
+    if not claimed:
+        return None
     h, w = bottom - top + 1, right - left + 1
-    mask = [[False] * w for _ in range(h)]
+    mask = bytearray(h * w)
     for region in claimed:
         for r in range(region.top_row, region.bottom_row + 1):
             for c in range(region.left_col, region.right_col + 1):
                 if top <= r <= bottom and left <= c <= right:
-                    mask[r - top][c - left] = True
+                    mask[(r - top) * w + (c - left)] = 1
     return mask
 
 
@@ -489,21 +530,27 @@ def _split_on_gap(
 
 
 def _tight_bbox(
-    occupancy: list[list[bool]],
+    occupancy: bytearray,
     r_lo: int,
     r_hi: int,
     c_lo: int,
     c_hi: int,
+    *,
+    n_cols: int,
 ) -> tuple[int, int, int, int] | None:
     """Return the tightest occupied bbox inside the band, or None if empty.
 
     Returned tuple is `(top, left, bottom, right)` in 0-based grid
     coordinates relative to the occupancy matrix.
+
+    **xlsx-8a-06 (R8, D-A16)**: `occupancy` is a flat `bytearray`
+    indexed `[r * n_cols + c]`. The `n_cols` parameter is keyword-
+    only and required (caller must thread it through).
     """
     tr, tc, br, bc = None, None, None, None
     for r in range(r_lo, r_hi + 1):
         for c in range(c_lo, c_hi + 1):
-            if occupancy[r][c]:
+            if occupancy[r * n_cols + c]:
                 if tr is None or r < tr:
                     tr = r
                 if br is None or r > br:

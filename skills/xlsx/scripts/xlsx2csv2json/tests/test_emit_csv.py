@@ -430,6 +430,222 @@ class TestEmitCsvMultiRegion(unittest.TestCase):
                     include_hyperlinks=False, datetime_format="ISO",
                 )
 
+    def test_R1_collision_suffix_caps_at_1000(self) -> None:
+        """xlsx-8a-01 (R1, Sec-HIGH-3): 1001 payloads sharing the
+        same ``(sheet, region_name)`` trigger ``CollisionSuffixExhausted``
+        before the per-region path-resolve loop blows wall-clock.
+        Cap fires on the 1001st suffix attempt (D-A14 cap+1).
+        """
+        from xlsx2csv2json.emit_csv import emit_csv
+        from xlsx2csv2json.exceptions import CollisionSuffixExhausted
+        # Build 1001 payloads all named ``Table`` on sheet ``S``.
+        payloads = []
+        for _ in range(1001):
+            r, t = _td(["a"], [[1]], sheet="S", region_name="Table",
+                       source="listobject")
+            payloads.append(("S", r, t, None))
+        with tempfile.TemporaryDirectory() as td:
+            out_dir = Path(td) / "out"
+            with self.assertRaises(CollisionSuffixExhausted) as ctx:
+                emit_csv(
+                    iter(payloads),
+                    output=None, output_dir=out_dir,
+                    sheet_selector="S", tables_mode="listobjects",
+                    include_hyperlinks=False, datetime_format="ISO",
+                )
+            # No absolute paths in the message (cross-5 envelope
+            # contract — only basenames / region / sheet names).
+            msg = str(ctx.exception)
+            self.assertNotIn(str(out_dir), msg)
+            self.assertIn("Table", msg)
+            self.assertIn("S", msg)
+            # Exit code is 2 per cross-5 envelope mapping.
+            self.assertEqual(ctx.exception.CODE, 2)
+
+    # ===================================================================
+    # xlsx-8a-04 (R4, Sec-MED-1) — `--escape-formulas` defang transform
+    # ===================================================================
+    # Tests live in TestEmitCsvMultiRegion only for proximity to R1
+    # tests; logically they exercise the single-region + _write_region_csv
+    # path. The 15-test budget per R4 sub-feature (g) is delivered as:
+    #   1 off-noop on 6-sentinel payload
+    #   6 quote-prefix tests (one per sentinel)
+    #   6 strip tests (one per sentinel)
+    #   1 hyperlink-defang interaction (markdown wrapper survives)
+    #   1 end-to-end DDE payload (`=cmd|'/C calc'!A1`)
+    # The JSON-shim no-effect warning is hosted in test_cli.py.
+
+    def _emit_single_csv_capturing(
+        self, value: Any, escape_formulas: str,
+    ) -> str:
+        """Helper: emit a single-cell single-region CSV via emit_csv
+        and return the resulting bytes (header row + 1 data row).
+        """
+        from xlsx2csv2json.emit_csv import emit_csv
+        r, t = _td(["h"], [[value]], sheet="S", region_name="T",
+                   source="listobject")
+        buf = io.StringIO()
+        # We cannot pass buf directly through `output=Path`; route via
+        # stdout-monkeypatch using `emit_csv(payloads, output=None)`.
+        # `_emit_single_region` writes to sys.stdout when output is None.
+        captured: list[str] = []
+        old_stdout = sys.stdout
+        sys.stdout = io.StringIO()
+        try:
+            emit_csv(
+                iter([("S", r, t, None)]),
+                output=None, output_dir=None,
+                sheet_selector="S", tables_mode="whole",
+                include_hyperlinks=False, datetime_format="ISO",
+                escape_formulas=escape_formulas,
+            )
+            captured.append(sys.stdout.getvalue())
+        finally:
+            sys.stdout = old_stdout
+        return captured[0]
+
+    def test_R4_escape_off_no_transform_on_6_sentinels(self) -> None:
+        """`off` (default) leaves all 6 sentinel-prefixed cells
+        verbatim — byte-identical to xlsx-8 baseline.
+        """
+        for sentinel in ("=", "+", "-", "@", "\t", "\r"):
+            payload = sentinel + "cmd"
+            out = self._emit_single_csv_capturing(payload, "off")
+            # The cell appears in the output unchanged (csv may
+            # quote the field if it contains delimiter-conflicting
+            # characters, but the leading sentinel survives).
+            self.assertIn(sentinel, out)
+
+    def test_R4_escape_quote_prefixes_equals(self) -> None:
+        out = self._emit_single_csv_capturing("=cmd", "quote")
+        self.assertIn("'=cmd", out)
+
+    def test_R4_escape_quote_prefixes_plus(self) -> None:
+        out = self._emit_single_csv_capturing("+SUM(1)", "quote")
+        self.assertIn("'+SUM(1)", out)
+
+    def test_R4_escape_quote_prefixes_minus(self) -> None:
+        out = self._emit_single_csv_capturing("-1", "quote")
+        self.assertIn("'-1", out)
+
+    def test_R4_escape_quote_prefixes_at(self) -> None:
+        out = self._emit_single_csv_capturing("@SUM(A1)", "quote")
+        self.assertIn("'@SUM(A1)", out)
+
+    def test_R4_escape_quote_prefixes_tab(self) -> None:
+        out = self._emit_single_csv_capturing("\tHTML", "quote")
+        # CSV will quote the field because it contains a literal
+        # tab/control char — check the quoted form has leading `'`
+        # immediately after the opening quote.
+        self.assertTrue("'\t" in out or '"\'\t' in out)
+
+    def test_R4_escape_quote_prefixes_cr(self) -> None:
+        out = self._emit_single_csv_capturing("\rOK", "quote")
+        self.assertTrue("'\r" in out or '"\'\r' in out)
+
+    def test_R4_escape_strip_drops_equals(self) -> None:
+        out = self._emit_single_csv_capturing("=cmd", "strip")
+        self.assertNotIn("=cmd", out)
+
+    def test_R4_escape_strip_drops_plus(self) -> None:
+        out = self._emit_single_csv_capturing("+SUM(1)", "strip")
+        self.assertNotIn("+SUM(1)", out)
+
+    def test_R4_escape_strip_drops_minus(self) -> None:
+        out = self._emit_single_csv_capturing("-1", "strip")
+        # The bare cell value `-1` becomes empty — no `-1` substring
+        # appears in the data row.
+        # (Header row is "h" and won't contain "-1".)
+        data_row = out.splitlines()[-1] if out.splitlines() else ""
+        self.assertNotIn("-1", data_row)
+
+    def test_R4_escape_strip_drops_at(self) -> None:
+        out = self._emit_single_csv_capturing("@SUM(A1)", "strip")
+        self.assertNotIn("@SUM(A1)", out)
+
+    def test_R4_escape_strip_drops_tab(self) -> None:
+        out = self._emit_single_csv_capturing("\tHTML", "strip")
+        self.assertNotIn("HTML", out)
+
+    def test_R4_escape_strip_drops_cr(self) -> None:
+        out = self._emit_single_csv_capturing("\rOK", "strip")
+        self.assertNotIn("OK", out)
+
+    def test_R4_escape_quote_does_not_mutate_hyperlink_cells(self) -> None:
+        """Hyperlink cells emit as ``[text](url)`` — the leading
+        ``[`` is not a sentinel, so the markdown wrapper naturally
+        defangs any sentinel-prefixed text inside. Locked behaviour
+        per task §1.2 R4 / D-A13.
+        """
+        from xlsx2csv2json.emit_csv import emit_csv
+        r, t = _td(["h"], [["=cmd"]], sheet="S", region_name="T",
+                   source="listobject")
+        hl_map = {(1, 0): "https://example.com"}  # row 1 = data row
+        captured = io.StringIO()
+        old_stdout = sys.stdout
+        sys.stdout = captured
+        try:
+            emit_csv(
+                iter([("S", r, t, hl_map)]),
+                output=None, output_dir=None,
+                sheet_selector="S", tables_mode="whole",
+                include_hyperlinks=True, datetime_format="ISO",
+                escape_formulas="quote",
+            )
+        finally:
+            sys.stdout = old_stdout
+        out = captured.getvalue()
+        # Hyperlink wrapper survives unchanged; embedded `=cmd` is
+        # naturally defanged because the cell starts with `[`.
+        self.assertIn("[=cmd](https://example.com)", out)
+        # No bare `'=cmd` (the embedded text was not re-quoted).
+        self.assertNotIn("'=cmd", out)
+
+    def test_R4_dde_payload_e2e(self) -> None:
+        """End-to-end: a literal `=cmd|'/C calc'!A1` DDE payload is
+        defanged under `--escape-formulas quote`. Reopening the CSV
+        in LibreOffice Calc renders the cell as text, not as a
+        formula (manually verified; pinned by the leading-quote
+        presence in this test).
+        """
+        out = self._emit_single_csv_capturing("=cmd|'/C calc'!A1", "quote")
+        # Defanged form has leading `'`. CSV-quoting wraps the field
+        # in `"..."` because it contains `"` characters from the
+        # embedded `'/C calc'`. Check both possible serialisations:
+        # (a) literal `'=cmd|...` somewhere in the row;
+        # (b) inside a `"..."` quoted field, the leading `'` precedes
+        # the `=`.
+        self.assertTrue(
+            "'=cmd|" in out,
+            f"Expected leading-quote defang in output: {out!r}",
+        )
+
+    def test_R1_collision_suffix_999_succeeds(self) -> None:
+        """xlsx-8a-01 (R1): 999 colliding payloads (one below the cap)
+        write 999 files with suffixes ``__2 .. __999`` plus the
+        un-suffixed first occurrence; no raise.
+        """
+        from xlsx2csv2json.emit_csv import emit_csv
+        payloads = []
+        for _ in range(999):
+            r, t = _td(["a"], [[1]], sheet="S", region_name="Table",
+                       source="listobject")
+            payloads.append(("S", r, t, None))
+        with tempfile.TemporaryDirectory() as td:
+            out_dir = Path(td) / "out"
+            rc = emit_csv(
+                iter(payloads),
+                output=None, output_dir=out_dir,
+                sheet_selector="S", tables_mode="listobjects",
+                include_hyperlinks=False, datetime_format="ISO",
+            )
+            self.assertEqual(rc, 0)
+            # 1 un-suffixed + (999 - 1 = 998) suffixed = 999 files.
+            written = sorted((out_dir / "S").glob("*.csv"))
+            self.assertEqual(len(written), 999)
+            # Last suffixed file is ``Table__999.csv``.
+            self.assertTrue((out_dir / "S" / "Table__999.csv").is_file())
+
 
 # ===========================================================================
 # Hyperlinks

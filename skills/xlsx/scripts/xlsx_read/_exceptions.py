@@ -42,3 +42,25 @@ class AmbiguousHeaderBoundary(UserWarning):
 
 class SheetNotFound(KeyError):
     """Raised by `_sheets.resolve_sheet` for an unknown sheet name."""
+
+
+class TooManyMerges(RuntimeError):
+    """Raised when a worksheet's `<mergeCell>` count exceeds `_MAX_MERGES`.
+
+    xlsx-8a-02 (Sec-MED-3 memory-exhaustion mitigation): a
+    hand-crafted OOXML workbook with millions of `<mergeCell>`
+    entries (legal per the spec, exploitable via hand-rolled XML)
+    would otherwise materialise an unbounded Python dict in RAM
+    before any `apply_merge_policy` work begins. Practical
+    real-world maximum on legitimate workbooks is ~8K merges; the
+    100K cap (in `_merges.py` `_MAX_MERGES`) gives 10× headroom
+    while bounding the resulting `MergeMap` dict at ~6 MiB.
+
+    Caller (`xlsx2csv2json.cli._run_with_envelope`) maps to exit 2
+    via the cross-5 envelope; this exception is a closed-API
+    `RuntimeError` (matches the `OverlappingMerges` precedent —
+    library never writes to stdout/stderr; shim owns the envelope).
+
+    Cap value 100_000 is policy (TASK §7.3 D2 / ARCH §15.3 D-A14).
+    Fires on the (cap+1)-th iteration (100_001st merge insertion).
+    """

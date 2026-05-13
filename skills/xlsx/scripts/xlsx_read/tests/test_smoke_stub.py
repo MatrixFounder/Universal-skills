@@ -51,6 +51,7 @@ EXPECTED_PUBLIC = [
     "TableData",
     "TableDetectMode",
     "TableRegion",
+    "TooManyMerges",  # xlsx-8a-02 (R2, Sec-MED-3) — added 2026-05-13.
     "WorkbookReader",
     "open_workbook",
 ]
@@ -199,10 +200,16 @@ class TestOpenWorkbookSmoke(unittest.TestCase):
 
 
 class TestImportSmoke(unittest.TestCase):
-    """TC-E2E-01: `import xlsx_read` succeeds and exposes 13 names."""
+    """TC-E2E-01: `import xlsx_read` succeeds and exposes 14 names.
+
+    Pre-xlsx-8a-02: 13 names. The `TooManyMerges` exception added by
+    R2 takes the count to 14.
+    """
 
     def test_thirteen_public_names(self) -> None:
-        self.assertEqual(len(xlsx_read.__all__), 13)
+        # Name retained for git-blame continuity; expected count
+        # raised to 14 by xlsx-8a-02 `TooManyMerges` export.
+        self.assertEqual(len(xlsx_read.__all__), 14)
 
     def test_no_macro_warning_filter_collision(self) -> None:
         # The library does not pollute the global warning state. A bare

@@ -18,6 +18,30 @@ if str(_SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(_SCRIPTS_DIR))
 
 
+def _materialised_shape(payloads, **kwargs):
+    """Test helper: call `_shape_for_payloads` and, if it returns
+    the R11.1 streaming sentinel (xlsx-8a-08), materialise the
+    streaming output by routing the single payload through
+    `_rows_to_dicts` and wrapping in `list(...)`. Lets existing
+    R11.1 tests keep their list-comparison assertions without
+    knowing about the sentinel.
+    """
+    from xlsx2csv2json.emit_json import (
+        _R11_1_STREAM_SENTINEL, _rows_to_dicts, _shape_for_payloads,
+    )
+    shape = _shape_for_payloads(payloads, **kwargs)
+    if shape is _R11_1_STREAM_SENTINEL:
+        # R11.1 case: exactly one payload; reconstruct the list form.
+        _, _, table_data, hl_map = payloads[0]
+        return list(_rows_to_dicts(
+            table_data, hl_map,
+            kwargs["header_flatten_style"],
+            kwargs["include_hyperlinks"],
+            kwargs.get("drop_empty_rows", False),
+        ))
+    return shape
+
+
 # ===========================================================================
 # Synthetic-payload helpers — _shape_for_payloads is a pure function so we
 # can test it without spinning up xlsx_read.
@@ -56,9 +80,8 @@ def _td(headers, rows, *, sheet="S", region_name=None, source="gap_detect",
 class TestShapeForPayloads(unittest.TestCase):
 
     def test_rule1_single_sheet_single_region_flat_array(self) -> None:
-        from xlsx2csv2json.emit_json import _shape_for_payloads
         region, td = _td(["a", "b"], [[1, 2], [3, 4]])
-        shape = _shape_for_payloads(
+        shape = _materialised_shape(
             [("S1", region, td, None)],
             sheet_selector="S1", tables_mode="whole",
             header_flatten_style="string", include_hyperlinks=False,
@@ -66,10 +89,9 @@ class TestShapeForPayloads(unittest.TestCase):
         self.assertEqual(shape, [{"a": 1, "b": 2}, {"a": 3, "b": 4}])
 
     def test_rule2_multi_sheet_single_region_each_dict_of_arrays(self) -> None:
-        from xlsx2csv2json.emit_json import _shape_for_payloads
         r1, t1 = _td(["a"], [[1]], sheet="S1")
         r2, t2 = _td(["b"], [[2]], sheet="S2")
-        shape = _shape_for_payloads(
+        shape = _materialised_shape(
             [("S1", r1, t1, None), ("S2", r2, t2, None)],
             sheet_selector="all", tables_mode="whole",
             header_flatten_style="string", include_hyperlinks=False,
@@ -77,11 +99,10 @@ class TestShapeForPayloads(unittest.TestCase):
         self.assertEqual(shape, {"S1": [{"a": 1}], "S2": [{"b": 2}]})
 
     def test_rule3_multi_sheet_multi_region_nested(self) -> None:
-        from xlsx2csv2json.emit_json import _shape_for_payloads
         r1, t1 = _td(["a"], [[1]], sheet="S1", region_name="T1", source="listobject")
         r2, t2 = _td(["b"], [[2]], sheet="S1", region_name="T2", source="listobject")
         r3, t3 = _td(["c"], [[3]], sheet="S2")
-        shape = _shape_for_payloads(
+        shape = _materialised_shape(
             [("S1", r1, t1, None), ("S1", r2, t2, None), ("S2", r3, t3, None)],
             sheet_selector="all", tables_mode="listobjects",
             header_flatten_style="string", include_hyperlinks=False,
@@ -95,10 +116,9 @@ class TestShapeForPayloads(unittest.TestCase):
         )
 
     def test_rule4_single_sheet_multi_region_flat_dict(self) -> None:
-        from xlsx2csv2json.emit_json import _shape_for_payloads
         r1, t1 = _td(["a"], [[1]], sheet="S", region_name="A", source="listobject")
         r2, t2 = _td(["b"], [[2]], sheet="S", region_name="B", source="listobject")
-        shape = _shape_for_payloads(
+        shape = _materialised_shape(
             [("S", r1, t1, None), ("S", r2, t2, None)],
             sheet_selector="S", tables_mode="listobjects",
             header_flatten_style="string", include_hyperlinks=False,
@@ -106,18 +126,16 @@ class TestShapeForPayloads(unittest.TestCase):
         self.assertEqual(shape, {"A": [{"a": 1}], "B": [{"b": 2}]})
 
     def test_empty_payloads_returns_empty_list(self) -> None:
-        from xlsx2csv2json.emit_json import _shape_for_payloads
-        shape = _shape_for_payloads(
+        shape = _materialised_shape(
             [], sheet_selector="all", tables_mode="whole",
             header_flatten_style="string", include_hyperlinks=False,
         )
         self.assertEqual(shape, [])
 
     def test_region_order_preserved(self) -> None:
-        from xlsx2csv2json.emit_json import _shape_for_payloads
         r_a, t_a = _td(["x"], [[1]], sheet="S", region_name="Alpha", source="listobject")
         r_b, t_b = _td(["x"], [[2]], sheet="S", region_name="Beta", source="listobject")
-        shape = _shape_for_payloads(
+        shape = _materialised_shape(
             [("S", r_a, t_a, None), ("S", r_b, t_b, None)],
             sheet_selector="S", tables_mode="listobjects",
             header_flatten_style="string", include_hyperlinks=False,
@@ -143,11 +161,11 @@ class TestDuplicateHeaderDisambiguation(unittest.TestCase):
         'title' and 'title__2' — neither value lost.
         """
         from xlsx2csv2json.emit_json import _rows_to_string_style
-        result = _rows_to_string_style(
+        result = list(_rows_to_string_style(
             headers=["title", "title", ""],
             rows=[["A1", "B1", "C1"], ["A2", "B2", "C2"]],
             hl_map=None, header_band=1, include_hyperlinks=False,
-        )
+        ))
         self.assertEqual(len(result), 2)
         # Row 0: all 3 values preserved across 3 distinct keys.
         self.assertEqual(result[0]["title"], "A1")
@@ -163,11 +181,11 @@ class TestDuplicateHeaderDisambiguation(unittest.TestCase):
         ['title', 'title__2', 'title__3', 'title__4', 'title__5', 'title__6'].
         """
         from xlsx2csv2json.emit_json import _rows_to_string_style
-        result = _rows_to_string_style(
+        result = list(_rows_to_string_style(
             headers=["title"] * 6 + [""],
             rows=[["v1", "v2", "v3", "v4", "v5", "v6", "v7"]],
             hl_map=None, header_band=1, include_hyperlinks=False,
-        )
+        ))
         row = result[0]
         self.assertEqual(row["title"], "v1")
         for i in range(2, 7):
@@ -181,11 +199,11 @@ class TestDuplicateHeaderDisambiguation(unittest.TestCase):
         disambiguation step is a no-op (no surprise __2 suffix).
         """
         from xlsx2csv2json.emit_json import _rows_to_string_style
-        result = _rows_to_string_style(
+        result = list(_rows_to_string_style(
             headers=["Дата", "Часы", "Описание"],
             rows=[["2026-04-01", 8, "task"]],
             hl_map=None, header_band=1, include_hyperlinks=False,
-        )
+        ))
         self.assertEqual(
             result[0],
             {"Дата": "2026-04-01", "Часы": 8, "Описание": "task"},
@@ -214,7 +232,7 @@ class TestDropEmptyRows(unittest.TestCase):
 
     def test_string_style_drops_all_null_row(self) -> None:
         from xlsx2csv2json.emit_json import _rows_to_string_style
-        result = _rows_to_string_style(
+        result = list(_rows_to_string_style(
             headers=["a", "b", "c"],
             rows=[
                 ["x", 1, "y"],     # full row → kept
@@ -224,28 +242,28 @@ class TestDropEmptyRows(unittest.TestCase):
             ],
             hl_map=None, header_band=1, include_hyperlinks=False,
             drop_empty_rows=True,
-        )
+        ))
         self.assertEqual(len(result), 2)
         self.assertEqual(result[0], {"a": "x", "b": 1, "c": "y"})
         self.assertEqual(result[1], {"a": None, "b": "kept", "c": None})
 
     def test_string_style_off_by_default_keeps_all(self) -> None:
         from xlsx2csv2json.emit_json import _rows_to_string_style
-        result = _rows_to_string_style(
+        result = list(_rows_to_string_style(
             headers=["a"],
             rows=[["x"], [None], ["y"]],
             hl_map=None, header_band=1, include_hyperlinks=False,
-        )
+        ))
         self.assertEqual(len(result), 3)  # default: keep all
 
     def test_array_style_drops_all_null_row(self) -> None:
         from xlsx2csv2json.emit_json import _rows_to_array_style
-        result = _rows_to_array_style(
+        result = list(_rows_to_array_style(
             headers=["a", "b"],
             rows=[["x", 1], [None, None]],
             hl_map=None, header_band=1, include_hyperlinks=False,
             drop_empty_rows=True,
-        )
+        ))
         self.assertEqual(len(result), 1)
         self.assertEqual(result[0][0]["value"], "x")
 
@@ -255,22 +273,21 @@ class TestDropEmptyRows(unittest.TestCase):
         predicate honours hyperlink presence.
         """
         from xlsx2csv2json.emit_json import _rows_to_string_style
-        result = _rows_to_string_style(
+        result = list(_rows_to_string_style(
             headers=["a", "b"],
             rows=[[None, None]],
             hl_map={(1, 0): "https://example.com"},
             header_band=1, include_hyperlinks=True,
             drop_empty_rows=True,
-        )
+        ))
         self.assertEqual(len(result), 1)  # NOT dropped
 
 
 class TestHeaderFlattenStyle(unittest.TestCase):
 
     def test_string_style_flat_keys(self) -> None:
-        from xlsx2csv2json.emit_json import _shape_for_payloads
         r, t = _td(["2026 plan › Q1", "2026 plan › Q2"], [[100, 200]])
-        shape = _shape_for_payloads(
+        shape = _materialised_shape(
             [("S", r, t, None)],
             sheet_selector="S", tables_mode="whole",
             header_flatten_style="string", include_hyperlinks=False,
@@ -278,9 +295,8 @@ class TestHeaderFlattenStyle(unittest.TestCase):
         self.assertEqual(shape, [{"2026 plan › Q1": 100, "2026 plan › Q2": 200}])
 
     def test_array_style_splits_on_U203A(self) -> None:
-        from xlsx2csv2json.emit_json import _shape_for_payloads
         r, t = _td(["2026 plan › Q1", "2026 plan › Q2"], [[100, 200]])
-        shape = _shape_for_payloads(
+        shape = _materialised_shape(
             [("S", r, t, None)],
             sheet_selector="S", tables_mode="whole",
             header_flatten_style="array", include_hyperlinks=False,
@@ -295,9 +311,8 @@ class TestHeaderFlattenStyle(unittest.TestCase):
         self.assertEqual(row[1]["value"], 200)
 
     def test_array_style_single_row_header_keeps_one_element(self) -> None:
-        from xlsx2csv2json.emit_json import _shape_for_payloads
         r, t = _td(["a", "b"], [[1, 2]])
-        shape = _shape_for_payloads(
+        shape = _materialised_shape(
             [("S", r, t, None)],
             sheet_selector="S", tables_mode="whole",
             header_flatten_style="array", include_hyperlinks=False,
@@ -313,13 +328,12 @@ class TestHeaderFlattenStyle(unittest.TestCase):
 class TestHyperlinkEmission(unittest.TestCase):
 
     def test_hyperlink_dict_shape(self) -> None:
-        from xlsx2csv2json.emit_json import _shape_for_payloads
         r, t = _td(["text", "label"], [["click", "first"], ["plain", "second"]])
         # Hyperlinks map keyed by (offset_within_region, col_offset).
         # Header is row 0 of the region; data rows start at offset 1.
         # `click` is at (1, 0), `second` is at (2, 1).
         hl = {(1, 0): "https://example.com/a", (2, 1): "https://example.com/b"}
-        shape = _shape_for_payloads(
+        shape = _materialised_shape(
             [("S", r, t, hl)],
             sheet_selector="S", tables_mode="whole",
             header_flatten_style="string", include_hyperlinks=True,
@@ -330,11 +344,10 @@ class TestHyperlinkEmission(unittest.TestCase):
         self.assertEqual(shape[1]["label"], {"value": "second", "href": "https://example.com/b"})
 
     def test_hyperlink_off_by_default(self) -> None:
-        from xlsx2csv2json.emit_json import _shape_for_payloads
         r, t = _td(["text"], [["click"]])
         hl = {(1, 0): "https://example.com"}
         # include_hyperlinks=False ⇒ hl ignored.
-        shape = _shape_for_payloads(
+        shape = _materialised_shape(
             [("S", r, t, hl)],
             sheet_selector="S", tables_mode="whole",
             header_flatten_style="string", include_hyperlinks=False,
@@ -490,6 +503,248 @@ class TestEmitJsonE2E(unittest.TestCase):
             shape[1]["label"],
             {"value": "third", "href": "https://example.com/b"},
         )
+
+
+# ===========================================================================
+# xlsx-8a-07 (R9, PERF-HIGH-2 partial) — `json.dump(fp)` file output
+# ===========================================================================
+
+class TestR9JsonDumpFileOutput(unittest.TestCase):
+    """xlsx-8a-07 (R9): file-output branch switches from
+    `json.dumps(shape, ...) + write_text` to
+    `json.dump(shape, fp, ...) + fp.write('\\n')`. Byte-identical
+    to v1 on every R11.2-4 fixture.
+    """
+
+    def _make_R11_2_payloads(self):
+        """Build a 2-sheet single-region-each payload list (R11.2)."""
+        r_a, td_a = _td(["id", "name"], [[1, "alice"]],
+                        sheet="A", region_name="TA", source="listobject")
+        r_b, td_b = _td(["k", "v"], [[2, "bob"]],
+                        sheet="B", region_name="TB", source="listobject")
+        return [("A", r_a, td_a, None), ("B", r_b, td_b, None)]
+
+    def test_R9_file_byte_identical_to_v1(self) -> None:
+        """Post-R9 file output is byte-identical to the v1 baseline."""
+        from xlsx2csv2json.emit_json import _shape_for_payloads, emit_json
+
+        payloads = self._make_R11_2_payloads()
+        shape = _materialised_shape(
+            payloads,
+            sheet_selector="all", tables_mode="whole",
+            header_flatten_style="string",
+            include_hyperlinks=False, drop_empty_rows=False,
+        )
+        v1_bytes = (
+            json.dumps(shape, ensure_ascii=False, indent=2, sort_keys=False) + "\n"
+        ).encode("utf-8")
+
+        with tempfile.TemporaryDirectory() as td:
+            out_path = Path(td) / "out.json"
+            emit_json(
+                iter(payloads),
+                output=out_path,
+                sheet_selector="all", tables_mode="whole",
+                header_flatten_style="string",
+                include_hyperlinks=False,
+                datetime_format="ISO",
+                drop_empty_rows=False,
+            )
+            r9_bytes = out_path.read_bytes()
+
+        self.assertEqual(r9_bytes, v1_bytes)
+
+    def test_R9_file_output_drops_string_buffer_copy(self) -> None:
+        """tracemalloc-based assertion: the R9 file-output path's
+        peak resident memory is strictly LESS than the v1 path that
+        materialised the full `text = json.dumps(...)` string buffer.
+        """
+        import tracemalloc
+        from xlsx2csv2json.emit_json import _shape_for_payloads, _json_default
+
+        # Build a moderately-sized payload so savings are measurable
+        # above the tracemalloc noise floor.
+        payloads = []
+        for i in range(20):
+            r, td = _td(
+                ["a", "b", "c", "d", "e"],
+                [[r_idx, f"val_{r_idx}", r_idx * 2,
+                  f"x_{r_idx}_{i}", r_idx * 1.5]
+                 for r_idx in range(200)],
+                sheet=f"S{i}", region_name=f"T{i}", source="listobject",
+            )
+            payloads.append((f"S{i}", r, td, None))
+
+        shape = _materialised_shape(
+            payloads,
+            sheet_selector="all", tables_mode="whole",
+            header_flatten_style="string",
+            include_hyperlinks=False, drop_empty_rows=False,
+        )
+
+        with tempfile.TemporaryDirectory() as td:
+            v1_path = Path(td) / "v1.json"
+            tracemalloc.start()
+            text = json.dumps(
+                shape, ensure_ascii=False, indent=2, sort_keys=False,
+                default=_json_default,
+            )
+            v1_path.write_text(text + "\n", encoding="utf-8")
+            _, v1_peak = tracemalloc.get_traced_memory()
+            tracemalloc.stop()
+            del text  # free reference before R9 path measures.
+
+            r9_path = Path(td) / "r9.json"
+            tracemalloc.start()
+            with r9_path.open("w", encoding="utf-8") as fp:
+                json.dump(
+                    shape, fp, ensure_ascii=False, indent=2,
+                    sort_keys=False, default=_json_default,
+                )
+                fp.write("\n")
+            _, r9_peak = tracemalloc.get_traced_memory()
+            tracemalloc.stop()
+
+            self.assertEqual(v1_path.read_bytes(), r9_path.read_bytes())
+            self.assertLess(
+                r9_peak, v1_peak,
+                f"R9 peak {r9_peak} not < v1 peak {v1_peak} "
+                f"(savings: {v1_peak - r9_peak} bytes)",
+            )
+
+
+# ===========================================================================
+# xlsx-8a-08 (R10, PERF-HIGH-2 closure for R11.1) — streaming
+# ===========================================================================
+
+class TestR10R111Streaming(unittest.TestCase):
+    """xlsx-8a-08 (R10): R11.1 single-region streaming via
+    `_stream_single_region_json`. Byte-identity invariant: the file
+    written by the streaming path is byte-identical to the v1
+    `json.dumps(shape, indent=2) + "\\n"` baseline on every R11.1
+    fixture, INCLUDING the empty-payload case (`[]\\n`, per
+    arch-review M3 fix).
+    """
+
+    def _emit_via_streaming(self, payloads, output_path, **kw):
+        from xlsx2csv2json.emit_json import emit_json
+        emit_json(
+            iter(payloads),
+            output=output_path,
+            sheet_selector=kw.get("sheet_selector", "S"),
+            tables_mode=kw.get("tables_mode", "whole"),
+            header_flatten_style=kw.get("header_flatten_style", "string"),
+            include_hyperlinks=kw.get("include_hyperlinks", False),
+            datetime_format="ISO",
+            drop_empty_rows=kw.get("drop_empty_rows", False),
+        )
+
+    def _v1_reference(self, payloads, **kw):
+        """v1 reference path — materialise the full shape and serialise
+        via `json.dumps(shape, indent=2) + "\\n"`. Held inline so the
+        R10 streaming output can be `diff`-ed against it byte-by-byte.
+        """
+        from xlsx2csv2json.emit_json import _rows_to_dicts, _json_default
+        _, _, td, hl = payloads[0]
+        shape = list(_rows_to_dicts(
+            td, hl,
+            kw.get("header_flatten_style", "string"),
+            kw.get("include_hyperlinks", False),
+            kw.get("drop_empty_rows", False),
+        ))
+        return (
+            json.dumps(shape, ensure_ascii=False, indent=2,
+                       sort_keys=False, default=_json_default) + "\n"
+        ).encode("utf-8")
+
+    def test_R10_stream_byte_identical_to_v1_simple(self) -> None:
+        """Single sheet, single region, 2 rows × 2 cols — streaming
+        output byte-identical to v1."""
+        region, td = _td(["a", "b"], [[1, 2], [3, 4]], sheet="S",
+                         region_name="T", source="listobject")
+        payloads = [("S", region, td, None)]
+        with tempfile.TemporaryDirectory() as tdir:
+            out = Path(tdir) / "stream.json"
+            self._emit_via_streaming(payloads, out)
+            stream_bytes = out.read_bytes()
+        v1_bytes = self._v1_reference(payloads)
+        self.assertEqual(stream_bytes, v1_bytes)
+
+    def test_R10_stream_empty_table_v1_byte_identical(self) -> None:
+        """Empty-payload (no rows): streaming emits `[]\\n` (3 bytes)
+        matching v1 `json.dumps([], indent=2) + '\\n'`. M3 fix locks
+        the byte-identity invariant for the degenerate case.
+        """
+        region, td = _td(["a"], [], sheet="S", region_name="T",
+                         source="listobject")
+        payloads = [("S", region, td, None)]
+        with tempfile.TemporaryDirectory() as tdir:
+            out = Path(tdir) / "empty.json"
+            self._emit_via_streaming(payloads, out)
+            stream_bytes = out.read_bytes()
+        self.assertEqual(stream_bytes, b"[]\n")
+
+    def test_R10_stream_with_hyperlinks(self) -> None:
+        """Hyperlink wrapper dicts (`{value, href}`) survive the
+        streaming path unchanged.
+        """
+        region, td = _td(["url"], [["Click"]], sheet="S",
+                         region_name="T", source="listobject")
+        hl_map = {(1, 0): "https://example.com"}
+        payloads = [("S", region, td, hl_map)]
+        with tempfile.TemporaryDirectory() as tdir:
+            out = Path(tdir) / "hl.json"
+            self._emit_via_streaming(payloads, out, include_hyperlinks=True)
+            stream_text = out.read_text(encoding="utf-8")
+            v1_text = self._v1_reference(
+                payloads, include_hyperlinks=True
+            ).decode("utf-8")
+        self.assertEqual(stream_text, v1_text)
+        self.assertIn('"value": "Click"', stream_text)
+        self.assertIn('"href": "https://example.com"', stream_text)
+
+    def test_R10_stream_array_style(self) -> None:
+        """`--header-flatten-style array` routes through
+        `_rows_to_array_style` generator. Output byte-identical to v1.
+        """
+        region, td = _td(["a › b", "c"], [[1, 2]], sheet="S",
+                         region_name="T", source="listobject")
+        payloads = [("S", region, td, None)]
+        with tempfile.TemporaryDirectory() as tdir:
+            out = Path(tdir) / "arr.json"
+            self._emit_via_streaming(
+                payloads, out, header_flatten_style="array"
+            )
+            stream_bytes = out.read_bytes()
+        v1_bytes = self._v1_reference(
+            payloads, header_flatten_style="array"
+        )
+        self.assertEqual(stream_bytes, v1_bytes)
+
+    def test_R10_R11_2_to_4_unchanged(self) -> None:
+        """R11.2 (multi-sheet single-region per sheet) does NOT use
+        streaming — it goes through R9 `json.dump(fp)`. The shape
+        dict-of-arrays form is preserved.
+        """
+        r1, t1 = _td(["a"], [[1]], sheet="A")
+        r2, t2 = _td(["b"], [[2]], sheet="B")
+        payloads = [("A", r1, t1, None), ("B", r2, t2, None)]
+        with tempfile.TemporaryDirectory() as tdir:
+            out = Path(tdir) / "multi.json"
+            self._emit_via_streaming(payloads, out)
+            data = json.loads(out.read_text(encoding="utf-8"))
+        self.assertEqual(data, {"A": [{"a": 1}], "B": [{"b": 2}]})
+
+    def test_R10_rows_to_dicts_is_generator(self) -> None:
+        """`_rows_to_dicts` must return an iterator after the
+        xlsx-8a-08 refactor.
+        """
+        from xlsx2csv2json.emit_json import _rows_to_dicts
+        region, td = _td(["a"], [[1]], sheet="S")
+        result = _rows_to_dicts(
+            td, None, "string", include_hyperlinks=False,
+        )
+        self.assertTrue(hasattr(result, "__next__"))
 
 
 if __name__ == "__main__":

@@ -8,6 +8,7 @@ from __future__ import annotations
 import argparse
 import sys
 import unittest
+import warnings
 from pathlib import Path
 
 _SCRIPTS_DIR = Path(__file__).resolve().parents[2]
@@ -35,6 +36,10 @@ def _args(**overrides) -> argparse.Namespace:
         output_flag=None,
         output_dir=None,
         json_errors=False,
+        # xlsx-8a-03 (R3): allowlist default mirrors argparse default.
+        # Tests that exercise the scheme filter pass the parsed
+        # frozenset directly to `iter_table_payloads`.
+        hyperlink_scheme_allowlist="http,https,mailto",
     )
     base.update(overrides)
     return argparse.Namespace(**base)
@@ -259,6 +264,150 @@ class TestIterTablePayloads(unittest.TestCase):
                 _args(output_dir="/tmp/out"), reader, format="csv"
             ))
         self.assertEqual(len(triples), 1)
+
+
+# ===========================================================================
+# xlsx-8a-03 (R3, Sec-MED-2) — `--hyperlink-scheme-allowlist`
+# ===========================================================================
+
+class TestHyperlinkSchemeAllowlist(unittest.TestCase):
+    """xlsx-8a-03 (R3): scheme-allowlist filter in
+    `_extract_hyperlinks_for_region`.
+
+    Strategy: synthesise a 4-cell fixture with mixed schemes
+    (https, javascript, mailto, two javascripts) and pin the
+    filter behaviour against multiple allowlists.
+    """
+
+    def _build_mixed_fixture(self, tmpdir: Path) -> Path:
+        """Synthesise a workbook with 4 hyperlink cells of different schemes.
+
+        Layout (1-indexed):
+        - A1 header "url"
+        - A2 = "Safe" → https://example.com
+        - A3 = "Run!" → javascript:alert(1)
+        - A4 = "Mail" → mailto:user@example.com
+        - A5 = "Run2" → javascript:other (second javascript — dedup test)
+        """
+        import openpyxl
+        from openpyxl.worksheet.hyperlink import Hyperlink
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = "S"
+        ws["A1"] = "url"
+        ws["A2"] = "Safe"
+        ws["A2"].hyperlink = Hyperlink(ref="A2", target="https://example.com")
+        ws["A3"] = "Run!"
+        ws["A3"].hyperlink = Hyperlink(ref="A3", target="javascript:alert(1)")
+        ws["A4"] = "Mail"
+        ws["A4"].hyperlink = Hyperlink(ref="A4", target="mailto:user@example.com")
+        ws["A5"] = "Run2"
+        ws["A5"].hyperlink = Hyperlink(ref="A5", target="javascript:other")
+        path = tmpdir / "mixed_schemes.xlsx"
+        wb.save(path)
+        return path
+
+    def _extract(self, path: Path, allowlist: frozenset[str] | None):
+        """Open workbook + extract hyperlinks for the only region."""
+        from xlsx2csv2json.dispatch import _extract_hyperlinks_for_region
+        from xlsx_read import open_workbook
+        with open_workbook(path, read_only_mode=False) as reader:
+            sheet_info = reader.sheets()[0]
+            regions = reader.detect_tables(
+                sheet_info.name, mode="whole", gap_rows=2, gap_cols=1,
+            )
+            region = regions[0]
+            return _extract_hyperlinks_for_region(
+                reader, region, scheme_allowlist=allowlist,
+            )
+
+    def test_R3_hyperlink_scheme_https_allowed(self) -> None:
+        """https:// passes through the default allowlist."""
+        import tempfile
+        with tempfile.TemporaryDirectory() as td:
+            path = self._build_mixed_fixture(Path(td))
+            allowlist = frozenset({"http", "https", "mailto"})
+            with warnings.catch_warnings(record=True) as captured:
+                warnings.simplefilter("always")
+                hl_map = self._extract(path, allowlist)
+            # A2 (row offset 1) has https — present in map.
+            self.assertIn((1, 0), hl_map)
+            self.assertEqual(hl_map[(1, 0)], "https://example.com")
+
+    def test_R3_hyperlink_scheme_javascript_blocked(self) -> None:
+        """javascript: is dropped from the map; one warning per scheme."""
+        import tempfile
+        with tempfile.TemporaryDirectory() as td:
+            path = self._build_mixed_fixture(Path(td))
+            allowlist = frozenset({"http", "https", "mailto"})
+            with warnings.catch_warnings(record=True) as captured:
+                warnings.simplefilter("always")
+                hl_map = self._extract(path, allowlist)
+            # A3 (row offset 2) had javascript: → dropped from map.
+            self.assertNotIn((2, 0), hl_map)
+            # A5 (row offset 4) also had javascript: → also dropped.
+            self.assertNotIn((4, 0), hl_map)
+            # Exactly ONE warning for 'javascript' (deduped on scheme,
+            # not per-cell count).
+            js_warnings = [
+                str(w.message) for w in captured
+                if "javascript" in str(w.message)
+            ]
+            self.assertEqual(len(js_warnings), 1)
+            # Count of blocked cells (2) in the warning message.
+            self.assertIn("2 hyperlink", js_warnings[0])
+
+    def test_R3_hyperlink_scheme_mailto_allowed_by_default(self) -> None:
+        """mailto: passes the default allowlist."""
+        import tempfile
+        with tempfile.TemporaryDirectory() as td:
+            path = self._build_mixed_fixture(Path(td))
+            allowlist = frozenset({"http", "https", "mailto"})
+            with warnings.catch_warnings(record=True):
+                hl_map = self._extract(path, allowlist)
+            # A4 (row offset 3) had mailto: → present in map.
+            self.assertIn((3, 0), hl_map)
+            self.assertTrue(hl_map[(3, 0)].startswith("mailto:"))
+
+    def test_R3_hyperlink_scheme_mixed_warning_dedup(self) -> None:
+        """Two javascript: cells produce ONE deduped warning line."""
+        import tempfile
+        with tempfile.TemporaryDirectory() as td:
+            path = self._build_mixed_fixture(Path(td))
+            allowlist = frozenset({"http", "https", "mailto"})
+            with warnings.catch_warnings(record=True) as captured:
+                warnings.simplefilter("always")
+                self._extract(path, allowlist)
+            # Total warning lines mentioning 'javascript': exactly 1
+            # (deduped). Count parameter inside the message should
+            # mention 2 blocked cells.
+            js_warnings = [
+                str(w.message) for w in captured
+                if "javascript" in str(w.message).lower()
+            ]
+            self.assertEqual(len(js_warnings), 1)
+
+
+class TestParseSchemeAllowlist(unittest.TestCase):
+    """xlsx-8a-03 (R3) — `_parse_scheme_allowlist` helper."""
+
+    def test_R3_parse_scheme_allowlist_basic(self) -> None:
+        from xlsx2csv2json.cli import _parse_scheme_allowlist
+        out = _parse_scheme_allowlist("http,https, mailto ")
+        self.assertEqual(out, frozenset({"http", "https", "mailto"}))
+
+    def test_R3_parse_scheme_allowlist_empty(self) -> None:
+        """Empty input → frozenset() blocks ALL schemes."""
+        from xlsx2csv2json.cli import _parse_scheme_allowlist
+        self.assertEqual(_parse_scheme_allowlist(""), frozenset())
+
+    def test_R3_parse_scheme_allowlist_case_fold(self) -> None:
+        """RFC 3986 §3.1: scheme matching is case-insensitive."""
+        from xlsx2csv2json.cli import _parse_scheme_allowlist
+        self.assertEqual(
+            _parse_scheme_allowlist("HTTP,Https"),
+            frozenset({"http", "https"}),
+        )
 
 
 if __name__ == "__main__":

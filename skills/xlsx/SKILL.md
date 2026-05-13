@@ -260,6 +260,7 @@ comments as Excel-365 threaded comments instead of legacy bubbles, add
 - [scripts/_errors.py](scripts/_errors.py) — `--json-errors` envelope helper (schema `v=1`).
 - [scripts/_soffice.py](scripts/_soffice.py) — LibreOffice subprocess wrapper.
 - [scripts/office/](scripts/office/) — OOXML unpack/pack/validate, byte-identical copy from the docx skill (master — see CLAUDE.md §2). Includes deep `XlsxValidator` (sheet chain, sst+styles index bounds, sheet-name uniqueness, orphan parts).
+- [references/security.md](references/security.md) — **Security model & trust boundary** (xlsx-8 / xlsx-8a). Canonical statement of trust-boundary assumptions, accepted-risk catalogue, and the parent-symlink + TOCTOU race in `_emit_multi_region` (deferred code-fix, documented as known-limitation). Read before deploying in shared CI or multi-tenant build farms.
 
 ## 13. Known Limitations & Deferred Refactors
 

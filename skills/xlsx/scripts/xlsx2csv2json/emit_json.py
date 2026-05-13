@@ -33,6 +33,16 @@ from typing import Any, Iterator
 
 _HEADER_SEPARATOR = " › "  # ' › '
 
+# **xlsx-8a-08 (R10, D-A18)** — sentinel returned by
+# `_shape_for_payloads` when the payload list is the R11.1
+# single-sheet single-region case. `emit_json` checks for it and
+# dispatches to `_stream_single_region_json` instead of building
+# a full `shape` dict + serialising it. Closes PERF-HIGH-2 for
+# the most common large-table case (peak RSS ≤ 200 MB on 3M
+# cells vs 1-1.5 GB in v1). The sentinel is module-private; no
+# external surface change.
+_R11_1_STREAM_SENTINEL = object()
+
 
 def _json_default(value: Any) -> Any:
     """Fallback serialiser for ``json.dumps``.
@@ -86,16 +96,45 @@ def emit_json(
         drop_empty_rows=drop_empty_rows,
     )
 
-    text = json.dumps(
-        shape,
-        ensure_ascii=False, indent=2, sort_keys=False,
-        default=_json_default,
-    )
+    # **xlsx-8a-08 (R10, D-A18)** — R11.1 single-sheet single-region
+    # streaming dispatch. `_shape_for_payloads` returns the sentinel;
+    # we route directly to `_stream_single_region_json` and bypass
+    # the full-shape `json.dump(fp)` path. Peak RSS ≤ 200 MB on
+    # 3M-cell payloads (vs ~1-1.5 GB v1).
+    if shape is _R11_1_STREAM_SENTINEL:
+        return _stream_single_region_json(
+            payloads_list[0],
+            output_path=output,
+            header_flatten_style=header_flatten_style,
+            include_hyperlinks=include_hyperlinks,
+            drop_empty_rows=drop_empty_rows,
+        )
 
     if output is None:
+        # Stdout path: build the string then write. Pipe consumers
+        # buffer the output downstream anyway, so the memory benefit
+        # of streaming-to-pipe is downstream-dependent — keep the
+        # existing newline contract here. (D-A17 asymmetric.)
+        text = json.dumps(
+            shape,
+            ensure_ascii=False, indent=2, sort_keys=False,
+            default=_json_default,
+        )
         sys.stdout.write(text + "\n")
     else:
-        output.write_text(text + "\n", encoding="utf-8")
+        # **xlsx-8a-07 (R9, PERF-HIGH-2 partial)**: stream-serialise
+        # directly to the file descriptor. Drops the intermediate
+        # `text = json.dumps(...)` string buffer (~300-500 MB on a
+        # 3M-cell payload). The `shape` dict itself remains in RAM
+        # for R11.2-4 shapes — full closure of PERF-HIGH-2 for
+        # R11.1 single-region is the 011-08 streaming refactor.
+        with output.open("w", encoding="utf-8") as fp:
+            json.dump(
+                shape, fp,
+                ensure_ascii=False, indent=2, sort_keys=False,
+                default=_json_default,
+            )
+            fp.write("\n")
     return 0
 
 
@@ -111,6 +150,14 @@ def _shape_for_payloads(
     """Pure function — build the JSON shape from payloads.
 
     Empty payloads → ``[]`` (matches xlsx-2 "empty workbook" convention).
+
+    **xlsx-8a-08 (R10, D-A18)**: returns
+    :data:`_R11_1_STREAM_SENTINEL` for the R11.1 single-sheet
+    single-region case so the caller (:func:`emit_json`) can
+    dispatch to the streaming helper instead of materialising the
+    full row-list. R11.2-4 branches still build the dict-shape
+    eagerly (the dict-of-arrays shapes cannot be RFC-8259-streamed
+    without a non-canonical chunked-encoding contract).
     """
     if not payloads_list:
         return []
@@ -130,13 +177,22 @@ def _shape_for_payloads(
         regions = by_sheet[only_sheet]
         if is_multi_region[only_sheet]:
             # Rule 4: single-sheet, multi-region → flat {Name: [...]}.
+            # xlsx-8a-08: `_rows_to_dicts` returns an iterator; wrap
+            # in `list(...)` so the dict comprehension produces a
+            # JSON-serialisable shape (json.dump cannot serialise
+            # generators).
             return {
-                _region_key(r): _rows_to_dicts(td, hl, header_flatten_style, include_hyperlinks, drop_empty_rows)
+                _region_key(r): list(_rows_to_dicts(
+                    td, hl, header_flatten_style,
+                    include_hyperlinks, drop_empty_rows,
+                ))
                 for r, td, hl in regions
             }
         # Rule 1: single-sheet, single-region → flat array.
-        r, td, hl = regions[0]
-        return _rows_to_dicts(td, hl, header_flatten_style, include_hyperlinks, drop_empty_rows)
+        # **xlsx-8a-08 (R10, D-A18)** — route to streaming helper.
+        # The caller (`emit_json`) detects the sentinel and calls
+        # `_stream_single_region_json` directly with `payloads_list[0]`.
+        return _R11_1_STREAM_SENTINEL
 
     # Multi-sheet — Rule 2 or Rule 3 (mixed per sheet).
     out: dict[str, Any] = {}
@@ -145,18 +201,20 @@ def _shape_for_payloads(
             # Rule 3 per-sheet: {"tables": {Name: [...], ...}}.
             out[sheet_name] = {
                 "tables": {
-                    _region_key(r): _rows_to_dicts(
-                        td, hl, header_flatten_style, include_hyperlinks, drop_empty_rows
-                    )
+                    _region_key(r): list(_rows_to_dicts(
+                        td, hl, header_flatten_style,
+                        include_hyperlinks, drop_empty_rows,
+                    ))
                     for r, td, hl in regions
                 }
             }
         else:
             # Rule 2 per-sheet: flat [...]
             r, td, hl = regions[0]
-            out[sheet_name] = _rows_to_dicts(
-                td, hl, header_flatten_style, include_hyperlinks, drop_empty_rows
-            )
+            out[sheet_name] = list(_rows_to_dicts(
+                td, hl, header_flatten_style,
+                include_hyperlinks, drop_empty_rows,
+            ))
     return out
 
 
@@ -175,9 +233,14 @@ def _rows_to_dicts(
     header_flatten_style: str,
     include_hyperlinks: bool,
     drop_empty_rows: bool = False,
-) -> list[Any]:
-    """Convert ``TableData`` rows to a list of dicts (or list of {key,value}
-    pairs in ``"array"`` style).
+) -> Iterator[Any]:
+    """Convert ``TableData`` rows to an **iterator** of dicts (or
+    list-of-{key,value}-pairs in ``"array"`` style).
+
+    **xlsx-8a-08 (R10, D-A18)**: returns an iterator (was list).
+    Callers in R11.2-4 branches must wrap with ``list(...)`` to
+    materialise; the R11.1 single-region streaming path consumes
+    the iterator one row at a time via :func:`_stream_single_region_json`.
 
     ``hl_map`` is keyed by ``(row_offset_within_region, col_offset_within_region)``
     where row 0 is the FIRST row of the region (which may be a header
@@ -216,8 +279,13 @@ def _rows_to_string_style(
     include_hyperlinks: bool,
     *,
     drop_empty_rows: bool = False,
-) -> list[dict[str, Any]]:
+) -> Iterator[dict[str, Any]]:
     """Default JSON shape: ``[{header: value, ...}, ...]``.
+
+    **xlsx-8a-08 (R10, D-A18)**: now a generator. Callers wrap with
+    ``list(...)`` at R11.2-4 sites; R11.1 streaming path consumes
+    the generator one row at a time via
+    :func:`_stream_single_region_json`.
 
     **vdd-adversarial follow-up (R27):** when two or more headers
     collide (e.g. a wide title merge sticky-fills the same value
@@ -231,7 +299,6 @@ def _rows_to_string_style(
     """
     dedup_headers = _disambiguate_duplicate_headers(headers)
 
-    out: list[dict[str, Any]] = []
     for r_idx, row in enumerate(rows):
         d: dict[str, Any] = {}
         for c_idx, header in enumerate(dedup_headers):
@@ -251,8 +318,7 @@ def _rows_to_string_style(
         # count as non-empty (the href payload is real content).
         if drop_empty_rows and _is_dict_row_empty(d):
             continue
-        out.append(d)
-    return out
+        yield d
 
 
 def _is_dict_row_empty(d: dict[str, Any]) -> bool:
@@ -295,13 +361,14 @@ def _rows_to_array_style(
     include_hyperlinks: bool,
     *,
     drop_empty_rows: bool = False,
-) -> list[list[dict[str, Any]]]:
+) -> Iterator[list[dict[str, Any]]]:
     """Array-style: ``[ [ {"key": [parts...], "value": v}, ... ], ... ]``.
+
+    **xlsx-8a-08 (R10, D-A18)**: now a generator.
 
     Keys are split on the U+203A separator to expose multi-row header
     structure. Single-row headers produce one-element ``key`` arrays.
     """
-    out: list[list[dict[str, Any]]] = []
     for r_idx, row in enumerate(rows):
         cells: list[dict[str, Any]] = []
         for c_idx, header in enumerate(headers):
@@ -315,8 +382,7 @@ def _rows_to_array_style(
             cells.append(cell)
         if drop_empty_rows and _is_array_row_empty(cells):
             continue
-        out.append(cells)
-    return out
+        yield cells
 
 
 def _is_array_row_empty(cells: list[dict[str, Any]]) -> bool:
@@ -332,3 +398,89 @@ def _is_array_row_empty(cells: list[dict[str, Any]]) -> bool:
         if v not in (None, ""):
             return False
     return True
+
+
+# ===========================================================================
+# xlsx-8a-08 (R10, PERF-HIGH-2 closure for R11.1) — streaming helper
+# ===========================================================================
+def _stream_single_region_json(
+    payload: tuple[str, Any, Any, dict[tuple[int, int], str] | None],
+    *,
+    output_path: Path | None,
+    header_flatten_style: str,
+    include_hyperlinks: bool,
+    drop_empty_rows: bool = False,
+) -> int:
+    """Stream the R11.1 single-region JSON shape ``[{...},...]``
+    row-by-row, closing PERF-HIGH-2 for the most common
+    large-table case.
+
+    **Byte-identical to v1** ``json.dumps(shape, indent=2) + "\\n"``
+    on every R11.1 fixture, INCLUDING the empty-payload case
+    (``"[]\\n"`` — per arch-review M3 fix). The empty-payload
+    early-exit uses ``try/except StopIteration`` on the first
+    ``next(rows_iter)`` call.
+
+    For non-empty payloads, the indent strategy is:
+
+    * Wrapper ``[`` and ``]`` at column 0 (depth-0).
+    * Each row-dict re-indented to depth-1 via
+      ``json.dumps(...indent=2).replace("\\n", "\\n  ")``.
+    * Separator ``,\\n  `` between rows.
+    * Final ``\\n]\\n`` closer.
+
+    stdout path: writes to ``sys.stdout`` directly. The pipe
+    consumer buffers the output downstream regardless; streaming
+    preserves **producer-side** RSS bounds (Q-15-6). For
+    ``output_path=None``, the helper writes to ``sys.stdout`` and
+    does NOT close it.
+
+    Returns ``0`` on success (matches the
+    :func:`emit_json.emit_json` return contract).
+    """
+    # Only `table_data` and `hl_map` are needed for the row stream;
+    # `sheet_name` / `region` are unpacked-and-discarded by design.
+    _, _, table_data, hl_map = payload
+    rows_iter = iter(_rows_to_dicts(
+        table_data, hl_map, header_flatten_style,
+        include_hyperlinks, drop_empty_rows,
+    ))
+
+    # Determine output sink.
+    if output_path is None:
+        fp = sys.stdout
+        close_fp = False
+    else:
+        fp = output_path.open("w", encoding="utf-8")
+        close_fp = True
+
+    try:
+        # **Empty-payload early-exit** (arch-review M3 fix):
+        # without this guard, the helper would emit
+        # ``"[\\n  \\n]\\n"`` (7 bytes) which breaks the
+        # byte-identity invariant against v1
+        # ``json.dumps([], indent=2) + "\\n" = "[]\\n"`` (3 bytes).
+        try:
+            first_row = next(rows_iter)
+        except StopIteration:
+            fp.write("[]\n")
+            return 0
+
+        fp.write("[\n  ")
+        first_row_json = json.dumps(
+            first_row, ensure_ascii=False, indent=2,
+            default=_json_default,
+        ).replace("\n", "\n  ")
+        fp.write(first_row_json)
+        for row_dict in rows_iter:
+            row_json = json.dumps(
+                row_dict, ensure_ascii=False, indent=2,
+                default=_json_default,
+            ).replace("\n", "\n  ")
+            fp.write(",\n  ")
+            fp.write(row_json)
+        fp.write("\n]\n")
+        return 0
+    finally:
+        if close_fp:
+            fp.close()

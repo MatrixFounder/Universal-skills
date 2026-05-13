@@ -26,9 +26,56 @@ from pathlib import Path
 from typing import Any, Iterator
 
 from .exceptions import (
+    CollisionSuffixExhausted,
     MultiTableRequiresOutputDir,
     OutputPathTraversal,
 )
+
+
+# xlsx-8a-01 (R1) — Sec-HIGH-3 DoS mitigation. Bounded suffix loop
+# in ``_emit_multi_region``: a crafted workbook with > 1000
+# regions sharing the same ``(sheet, region_name)`` would force
+# an unbounded O(N²) ``Path.resolve()`` + ``is_relative_to`` loop.
+# Cap fires on the (cap+1)-th iteration per TASK D1 / ARCH D-A14.
+# Policy-locked; no CLI / env-var override (TASK Q-15-1).
+_MAX_COLLISION_SUFFIX: int = 1000
+
+# xlsx-8a-04 (R4) — OWASP CSV-injection sentinels (D-A13).
+# Cells whose stringified form begins with one of these are
+# defanged by `_apply_formula_escape` under ``quote`` / ``strip``
+# modes. Unicode lookalikes (`＝` U+FF1D, `＋` U+FF0B) are out
+# of scope — D-A13 / TASK §6.3 honest-scope.
+_FORMULA_SENTINELS: tuple[str, ...] = ("=", "+", "-", "@", "\t", "\r")
+
+
+def _apply_formula_escape(value: Any, mode: str) -> Any:
+    """Defang CSV-injection-prone cell values per OWASP recipe.
+
+    xlsx-8a-04 (R4, Sec-MED-1):
+
+    - ``mode='off'``: passthrough (caller is expected to bypass
+      this helper, but this branch is defence-in-depth).
+    - ``mode='quote'``: prepend ``'`` if ``str(value)`` begins
+      with a sentinel char. Excel renders the leading ``'`` as
+      a literal-string escape (cell value displays as the
+      original text, NOT as a formula).
+    - ``mode='strip'``: replace the cell with ``""`` if
+      sentinel-prefixed.
+
+    Non-string and ``None`` values are returned unchanged.
+    Numeric cells never start with a sentinel char and are
+    handled by the early-return; that path keeps numeric
+    round-trips byte-identical to xlsx-8 output under ``off``.
+    """
+    if mode == "off" or value is None:
+        return value
+    s = value if isinstance(value, str) else str(value)
+    if not s or s[0] not in _FORMULA_SENTINELS:
+        return value
+    if mode == "quote":
+        return "'" + s
+    # mode == "strip"
+    return ""
 
 
 def emit_csv(
@@ -43,6 +90,7 @@ def emit_csv(
     encoding: str = "utf-8",
     delimiter: str = ",",
     drop_empty_rows: bool = False,
+    escape_formulas: str = "off",
 ) -> int:
     """Drive single-file or multi-file CSV emission.
 
@@ -71,6 +119,7 @@ def emit_csv(
             encoding=encoding,
             delimiter=delimiter,
             drop_empty_rows=drop_empty_rows,
+            escape_formulas=escape_formulas,
         )
         return 0
 
@@ -90,6 +139,7 @@ def emit_csv(
         encoding=encoding,
         delimiter=delimiter,
         drop_empty_rows=drop_empty_rows,
+        escape_formulas=escape_formulas,
     )
     return 0
 
@@ -102,6 +152,7 @@ def _emit_single_region(
     encoding: str = "utf-8",
     delimiter: str = ",",
     drop_empty_rows: bool = False,
+    escape_formulas: str = "off",
 ) -> None:
     """Write one region to ``output`` (or stdout if None).
 
@@ -117,6 +168,7 @@ def _emit_single_region(
             include_hyperlinks=include_hyperlinks,
             delimiter=delimiter,
             drop_empty_rows=drop_empty_rows,
+            escape_formulas=escape_formulas,
         )
     else:
         with output.open("w", encoding=encoding, newline="") as fp:
@@ -125,6 +177,7 @@ def _emit_single_region(
                 include_hyperlinks=include_hyperlinks,
                 delimiter=delimiter,
                 drop_empty_rows=drop_empty_rows,
+                escape_formulas=escape_formulas,
             )
 
 
@@ -136,6 +189,7 @@ def _emit_multi_region(
     encoding: str = "utf-8",
     delimiter: str = ",",
     drop_empty_rows: bool = False,
+    escape_formulas: str = "off",
 ) -> None:
     """Write each region to ``<output_dir>/<sheet>/<table>.csv``.
 
@@ -159,9 +213,19 @@ def _emit_multi_region(
             raise OutputPathTraversal(
                 f"Computed write-path escapes --output-dir: {target}"
             )
-        # Collision suffix loop (bounded by region count).
+        # Collision suffix loop. Bounded at ``_MAX_COLLISION_SUFFIX``
+        # (xlsx-8a-01 R1, Sec-HIGH-3): a crafted workbook with > 1000
+        # regions sharing ``(sheet, region_name)`` would otherwise force
+        # an unbounded O(N²) ``Path.resolve()`` + ``is_relative_to`` loop.
+        # Cap fires on the (cap+1)-th iteration per D-A14 semantics.
         suffix = 2
         while target in written:
+            if suffix > _MAX_COLLISION_SUFFIX:
+                raise CollisionSuffixExhausted(
+                    f"Region {region_name!r} on sheet {sheet_name!r}: "
+                    f"{_MAX_COLLISION_SUFFIX} collision suffixes "
+                    f"exhausted; refusing to keep iterating."
+                )
             target = (
                 output_dir / sheet_name / f"{region_name}__{suffix}.csv"
             ).resolve()
@@ -178,6 +242,7 @@ def _emit_multi_region(
                 include_hyperlinks=include_hyperlinks,
                 delimiter=delimiter,
                 drop_empty_rows=drop_empty_rows,
+                escape_formulas=escape_formulas,
             )
 
 
@@ -189,12 +254,24 @@ def _write_region_csv(
     include_hyperlinks: bool,
     delimiter: str = ",",
     drop_empty_rows: bool = False,
+    escape_formulas: str = "off",
 ) -> None:
-    """Common writer body — emit header row + data rows."""
+    """Common writer body — emit header row + data rows.
+
+    xlsx-8a-04 (R4): ``escape_formulas`` applies the OWASP
+    CSV-injection defang to both header and data cells (a header
+    cell ``="Total"`` is identical in attack surface to a data
+    cell — Q-15-3 locked decision). Default ``"off"`` is
+    byte-identical to xlsx-8 output. Hyperlink-formatted cells
+    (``[text](url)``) are NOT mutated because the leading ``[``
+    is not a sentinel char.
+    """
     writer = csv.writer(
         fp, quoting=csv.QUOTE_MINIMAL, lineterminator="\n", delimiter=delimiter,
     )
     headers = list(table_data.headers)
+    if escape_formulas != "off":
+        headers = [_apply_formula_escape(h, escape_formulas) for h in headers]
     writer.writerow(headers)
 
     region = table_data.region
@@ -203,7 +280,7 @@ def _write_region_csv(
 
     for r_idx, row in enumerate(table_data.rows):
         out_row: list[Any] = []
-        for c_idx in range(len(headers)):
+        for c_idx in range(len(table_data.headers)):
             value = row[c_idx] if c_idx < len(row) else None
             if include_hyperlinks and hl_map is not None:
                 href = hl_map.get((header_band + r_idx, c_idx))
@@ -211,8 +288,19 @@ def _write_region_csv(
                     out_row.append(_format_hyperlink_csv(value, href))
                     continue
             out_row.append(value)
+        # xlsx-8a-04 (R4): apply formula-escape AFTER hyperlink
+        # wrapping. The `[text](url)` markdown form starts with
+        # `[` which is never a sentinel, so wrapped cells are
+        # naturally defanged. Bare cells with sentinel-prefixed
+        # values get quoted / stripped per mode.
+        if escape_formulas != "off":
+            out_row = [
+                _apply_formula_escape(v, escape_formulas) for v in out_row
+            ]
         # **TASK 010 §11.7 R28 fix:** drop rows where every cell is
-        # None/"" — matches the JSON path semantics.
+        # None/"" — matches the JSON path semantics. NOTE: this
+        # runs AFTER `escape_formulas=strip`, so a row that became
+        # all-empty due to stripping is also dropped.
         if drop_empty_rows and all(v in (None, "") for v in out_row):
             continue
         writer.writerow(out_row)

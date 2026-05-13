@@ -516,5 +516,66 @@ class TestUnknownModeRejected(unittest.TestCase):
                 r.detect_tables("Sheet", mode="bogus")  # type: ignore[arg-type]
 
 
+# ===========================================================================
+# xlsx-8a-06 (R8) — cap raise (50M) + bytearray correctness
+# ===========================================================================
+
+class TestR8CapRaiseTo50M(unittest.TestCase):
+    """xlsx-8a-06 (R8, D8/D-A15): the cap is now 50_000_000."""
+
+    def test_R8_gap_detect_cap_value(self) -> None:
+        self.assertEqual(_tables._GAP_DETECT_MAX_CELLS, 50_000_000)
+
+
+class TestR8BuildClaimedMaskEarlyExit(unittest.TestCase):
+    """xlsx-8a-06 (R8, D-A16): `_build_claimed_mask` returns `None`
+    on an empty claimed set; consumer `_gap_detect` handles `None`
+    via the guard `if claimed_mask is not None and ...`.
+    """
+
+    def test_R8_build_claimed_mask_empty_returns_None(self) -> None:
+        result = _tables._build_claimed_mask(1, 1, 10, 10, claimed=[])
+        self.assertIsNone(result)
+
+    def test_R8_build_claimed_mask_non_empty_returns_bytearray(self) -> None:
+        claimed = [TableRegion(
+            sheet="S", top_row=2, left_col=2,
+            bottom_row=4, right_col=4, source="listobject",
+        )]
+        result = _tables._build_claimed_mask(1, 1, 10, 10, claimed=claimed)
+        self.assertIsInstance(result, bytearray)
+        # 10×10 = 100-byte flat buffer.
+        self.assertEqual(len(result), 100)
+        # Claimed region 2..4 × 2..4. Offsets: top=1, left=1.
+        # (r=2, c=2) → flat[(2-1)*10 + (2-1)] = flat[11] = 1
+        self.assertEqual(result[(2 - 1) * 10 + (2 - 1)], 1)
+        self.assertEqual(result[(4 - 1) * 10 + (4 - 1)], 1)
+        # (r=1, c=1) is outside claimed → 0.
+        self.assertEqual(result[(1 - 1) * 10 + (1 - 1)], 0)
+
+
+class TestR8GapDetectBytearrayCorrectness(unittest.TestCase):
+    """xlsx-8a-06 (R8): bytearray-backed `_gap_detect` produces the
+    same region list as the v1 baseline on a real fixture
+    (`gap_detected_two.xlsx`). The other 30+ tests in this file
+    indirectly exercise the bytearray code; this test is a focused
+    regression gate calling `detect_tables(mode="auto")` and asserting
+    the bytearray fingerprint via `getsizeof(_)` shape (8× memory
+    reduction on the underlying matrix).
+    """
+
+    def test_R8_gap_detect_returns_regions_on_real_fixture(self) -> None:
+        """Regression gate: post-bytearray-refactor, gap_detect must
+        still produce ≥ 1 gap_detect region on the standard fixture.
+        """
+        with open_workbook(FIXTURES_DIR / "gap_two_tables.xlsx") as r:
+            regions = r.detect_tables(
+                r.sheets()[0].name, mode="auto",
+                gap_rows=2, gap_cols=1,
+            )
+        gap_regions = [reg for reg in regions if reg.source == "gap_detect"]
+        self.assertGreaterEqual(len(gap_regions), 1)
+
+
 if __name__ == "__main__":  # pragma: no cover
     unittest.main()

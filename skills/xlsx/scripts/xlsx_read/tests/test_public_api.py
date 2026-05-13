@@ -30,6 +30,7 @@ EXPECTED_PUBLIC = [
     "TableData",
     "TableDetectMode",
     "TableRegion",
+    "TooManyMerges",  # xlsx-8a-02 (R2, Sec-MED-3) — added 2026-05-13.
     "WorkbookReader",
     "open_workbook",
 ]
