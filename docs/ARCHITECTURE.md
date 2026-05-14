@@ -1140,6 +1140,7 @@ D1–D14 are from TASK; D-A1–D-A15 are architecture-layer additions.
 | **D-A22** | **GFM angle-bracket form for hyperlinks** with `()` / whitespace / `\n`/`\r`/`\t` / `<>` in the URL: `[text](<url>)` per CommonMark §6.3; the FULL set `<→%3C, >→%3E, \n→%0A, \r→%0D, \t→%09` is percent-encoded inside the angle form to prevent CommonMark-renderer markdown-injection bypass of the scheme allowlist via LF in a permitted URL. |
 | **D-A23** | **Lazy `cell_addr` computation**: `_make_cell_addr(c_idx)` closure invoked only when `hyperlinks_map.get((header_band+r_idx, c_idx))` is non-None (i.e. the warning-path applies). Avoids O(cells) `get_column_letter` + f-string allocations for the 99.999% of cells without hyperlinks. |
 | **D-A24** | **Kwarg validation in `convert_xlsx_to_md`** against `_KNOWN_KWARGS` frozenset (14 names) → raises `TypeError` for unknown kwarg. Prevents `SystemExit(2)` propagation from argparse to Python callers. |
+| **D-A25** | **xlsx-8a-09 auto→smart fallback hot-patch (post-ship 2026-05-14)**: in `iter_table_payloads`, after `read_table(header_rows="auto")` returns, validate header-depth uniformity via `headers.validate_header_depth_uniformity`. On `InconsistentHeaderDepth`, retry the same region with `header_rows="smart"` (xlsx-8a-09 R11) + emit one `UserWarning` per retry; otherwise-identical kwargs (`merge_policy`, `include_hyperlinks`, `include_formulas`, `datetime_format`). Gated to **auto only** — explicit `--header-rows=smart` / `--header-rows=<int>` honour user intent and bypass the retry (downstream defensive raise still fires for explicit cases). Surfaces xlsx-8a-09 transparently for default-flag users on the masterdata banner-and-metadata pattern. |
 
 ---
 
@@ -1217,6 +1218,15 @@ Original §5.2 didn't specify kwarg validation. Argparse's `parser.error()` rais
 | vdd-multi iter-2 logic | critic-logic | 2 MED + 1 LOW + 1 INFO | all MED | 8 |
 | vdd-multi iter-2 security | critic-security | 1 HIGH(esc) + 4 LOW | HIGH only | (subsumed) |
 | vdd-multi iter-2 performance | critic-performance | 0 new | — | — |
-| **Total** | — | 4 HIGH + 10 MED + 13 LOW + 13 INFO | 4 HIGH + 10 MED | **39 new regression tests** |
+| post-ship hot-patch 2026-05-14 | real-world fixture | 1 default-flag UX bug (masterdata `InconsistentHeaderDepth`) | 1 (D-A25 auto→smart fallback) | 4 |
+| **Total** | — | 4 HIGH + 10 MED + 13 LOW + 13 INFO + 1 UX | 4 HIGH + 10 MED + 1 UX | **43 new regression tests** |
 
-277 xlsx2md tests + 1243 xlsx-skill cumulative tests; 5 release gates clean throughout.
+281 xlsx2md tests + 1243 xlsx-skill cumulative tests; 5 release gates clean throughout.
+
+### 14.11. xlsx-8a-09 auto→smart fallback (D-A25)
+
+Originally `iter_table_payloads` invoked `read_table(header_rows=args.header_rows)` once and yielded the result; if `auto` returned headers with non-uniform `_SEP`-count (the masterdata Timesheet banner-and-metadata pattern where columns shift from depth-1 to depth-4 across the data table), the downstream `validate_header_depth_uniformity` defensive raise (D-A11) fired during emit and the whole conversion aborted with exit 1. Users had to know to pass `--header-rows=smart` by hand. The hot-patch wraps the header validation inside dispatch, catches `InconsistentHeaderDepth` for the `auto` case, retries with `header_rows="smart"` (xlsx-8a-09 R11 / D-A13), and emits one `UserWarning` per affected region so the auto-shift is observable in stderr. Explicit `smart` / `<int>` bypass the gate — the user asked for that mode, the defensive raise still surfaces.
+
+Real-world validation: `tmp4/masterdata_report_202604.xlsx` (Timesheet banner + 7-cell metadata block above the real header row) now succeeds on default flags; output byte-identical to the explicit `--header-rows=smart` invocation. 4 sibling workbooks (`Моделирование.xlsx`, `Ярли_cтатус (1).xlsx`, `Книга1.xlsx`, `0931_DarkStore_оценка_20260508_ AP.xlsx`) do NOT trigger the fallback (uniform header depths) — gate is tight.
+
+**Files**: [`dispatch.py:366-394`](../skills/xlsx/scripts/xlsx2md/dispatch.py#L366) (fallback block in `iter_table_payloads`); imports `validate_header_depth_uniformity` from `.headers` and `InconsistentHeaderDepth` from `.exceptions`. **Tests**: 4 in `TestAutoToSmartFallback` (`test_dispatch.py`): retry on nonuniform, no-retry on uniform, explicit-smart no-retry, explicit-int no-retry.

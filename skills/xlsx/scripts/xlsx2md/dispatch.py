@@ -55,6 +55,11 @@ from xlsx_read import (
     WorkbookReader,
 )
 
+from .exceptions import InconsistentHeaderDepth as _InconsistentHeaderDepth
+from .headers import (
+    validate_header_depth_uniformity as _validate_header_depth_uniformity,
+)
+
 
 def _resolve_read_only_mode(args: Any) -> bool | None:
     """Map ``--memory-mode`` to ``open_workbook(read_only_mode=...)``.
@@ -358,6 +363,42 @@ def iter_table_payloads(
                 include_formulas=getattr(args, "include_formulas", False),
                 datetime_format=getattr(args, "datetime_format", "ISO"),
             )
+            # xlsx-8a-09 hot-patch (auto→smart fallback): when the user is on
+            # the default ``--header-rows=auto`` and read_table produced
+            # non-uniform header depths (typical of layout-heavy workbooks
+            # with banner-and-metadata blocks above the real header row,
+            # e.g. masterdata Timesheet), retry the same region with
+            # ``header_rows="smart"`` (xlsx-8a-09 R11 / D-A13). The retry
+            # invokes ``_detect_data_table_offset`` to shift the region past
+            # the metadata banner, then treats the shifted top as a 1-row
+            # header — same library entry point, same code path. Surfaces
+            # xlsx-8a-09 transparently for default-flag users; explicit
+            # ``--header-rows={smart,N}`` callers are not touched.
+            if header_rows == "auto" and table_data.headers:
+                try:
+                    _validate_header_depth_uniformity(table_data.headers)
+                except _InconsistentHeaderDepth as exc:
+                    warnings.warn(
+                        f"auto header detection produced non-uniform depth "
+                        f"on sheet {sheet.name!r} rows "
+                        f"{region.top_row}-{region.bottom_row}; falling "
+                        f"back to --header-rows=smart (xlsx-8a-09 R11). "
+                        f"Detail: {exc}",
+                        UserWarning,
+                        stacklevel=2,
+                    )
+                    table_data = reader.read_table(
+                        region,
+                        header_rows="smart",
+                        merge_policy="anchor-only",
+                        include_hyperlinks=False,
+                        include_formulas=getattr(
+                            args, "include_formulas", False,
+                        ),
+                        datetime_format=getattr(
+                            args, "datetime_format", "ISO",
+                        ),
+                    )
             # H1 fix: use SHIFTED region (`table_data.region`) — `read_table`
             # may shift `region.top_row` when `header_rows="smart"` detects a
             # metadata banner (see xlsx_read/_types.py:174-188). The hyperlinks

@@ -796,5 +796,155 @@ class TestSmartShiftHyperlinkAlignment(unittest.TestCase):
         )
 
 
+class TestAutoToSmartFallback(unittest.TestCase):
+    """xlsx-8a-09 hot-patch: when ``--header-rows=auto`` (the default)
+    produces a TableData with non-uniform header depths (the
+    masterdata Timesheet pattern — banner-and-metadata above the real
+    header row), dispatch must retry the same region with
+    ``header_rows="smart"`` and emit a stderr warning. Without this
+    fallback, the workbook fails with InconsistentHeaderDepth on
+    default flags and the user has to know to pass ``--header-rows=smart``
+    by hand.
+
+    Contract:
+      - Trigger condition: ``args.header_rows == "auto"`` AND the first
+        ``read_table`` call returns headers that fail
+        ``validate_header_depth_uniformity``.
+      - Retry: ``read_table(region, header_rows="smart", ...)`` with
+        otherwise-identical kwargs (merge_policy, include_hyperlinks,
+        include_formulas, datetime_format).
+      - Warning: one ``UserWarning`` per retry, mentioning the sheet
+        name + region row range + "xlsx-8a-09 R11".
+      - Non-trigger: explicit ``--header-rows=smart`` or
+        ``--header-rows=<int>`` is never retried, even if depths are
+        inconsistent (the user asked for that mode).
+    """
+
+    def _make_setup(
+        self,
+        first_headers: list[str],
+        second_headers: list[str] | None = None,
+        argv: list[str] | None = None,
+    ) -> tuple["MockReader", argparse.Namespace, TableRegion]:
+        """Build a MockReader that returns ``first_headers`` on the first
+        ``read_table`` call and ``second_headers`` on subsequent calls.
+        ``second_headers=None`` → no second call expected (or returns
+        ``first_headers`` again as a defensive no-op).
+        """
+        original_region = TableRegion(
+            sheet="Sheet1", top_row=1, left_col=1,
+            bottom_row=10, right_col=len(first_headers),
+            source="listobject",
+        )
+
+        class _DualHeaderReader(MockReader):
+            _call_idx: int = 0
+
+            def read_table(
+                self, region: TableRegion, **kwargs: Any,
+            ) -> TableData:
+                self.read_table_calls.append({"region": region, **kwargs})
+                idx = self._call_idx
+                self._call_idx += 1
+                headers = (
+                    second_headers if (idx >= 1 and second_headers is not None)
+                    else first_headers
+                )
+                return TableData(
+                    region=region, headers=list(headers),
+                    rows=[["x"] * len(headers)],
+                )
+
+        reader = _DualHeaderReader(
+            sheets_data=[SheetInfo(name="Sheet1", index=0, state="visible")],
+            regions_by_sheet={"Sheet1": [original_region]},
+            whole_regions_by_sheet={"Sheet1": [original_region]},
+        )
+        args = _parse(argv or ["dummy.xlsx", "--no-split"])
+        return reader, args, original_region
+
+    def test_auto_with_nonuniform_depth_retries_with_smart(self) -> None:
+        """Default flags + non-uniform depth → second read_table call
+        with header_rows='smart' AND a UserWarning."""
+        # ``"A"`` (depth 1) vs ``"B › sub"`` (depth 2) → InconsistentHeaderDepth.
+        reader, args, _ = self._make_setup(
+            first_headers=["A", "B › sub"],
+            second_headers=["Real", "Header"],  # uniform after retry
+        )
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            payloads = list(iter_table_payloads(reader, args))
+
+        self.assertEqual(len(payloads), 1)
+        # Two read_table calls: first auto, second smart.
+        self.assertEqual(len(reader.read_table_calls), 2)
+        self.assertEqual(reader.read_table_calls[0]["header_rows"], "auto")
+        self.assertEqual(reader.read_table_calls[1]["header_rows"], "smart")
+        # One fallback warning surfaces.
+        msgs = [str(w.message) for w in caught]
+        fallback = [m for m in msgs if "falling back to --header-rows=smart" in m]
+        self.assertEqual(len(fallback), 1, f"caught={msgs!r}")
+        self.assertIn("xlsx-8a-09 R11", fallback[0])
+        self.assertIn("Sheet1", fallback[0])
+
+    def test_auto_with_uniform_depth_no_retry(self) -> None:
+        """Default flags + uniform depth → single read_table call, no warning."""
+        reader, args, _ = self._make_setup(
+            first_headers=["A", "B", "C"],  # uniform depth 1
+        )
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            payloads = list(iter_table_payloads(reader, args))
+
+        self.assertEqual(len(payloads), 1)
+        self.assertEqual(len(reader.read_table_calls), 1)
+        msgs = [str(w.message) for w in caught]
+        self.assertFalse(
+            any("falling back to --header-rows=smart" in m for m in msgs),
+            f"unexpected fallback warning: {msgs!r}",
+        )
+
+    def test_explicit_smart_is_never_retried(self) -> None:
+        """``--header-rows=smart`` + non-uniform depth → NO retry. The
+        user explicitly chose smart; we honour the choice and let the
+        downstream defensive raise fire instead of looping."""
+        reader, args, _ = self._make_setup(
+            first_headers=["A", "B › sub"],  # inconsistent, but explicit smart
+            argv=["dummy.xlsx", "--no-split", "--header-rows=smart"],
+        )
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            payloads = list(iter_table_payloads(reader, args))
+
+        self.assertEqual(len(payloads), 1)
+        # Exactly one read_table call (no retry).
+        self.assertEqual(len(reader.read_table_calls), 1)
+        self.assertEqual(reader.read_table_calls[0]["header_rows"], "smart")
+        msgs = [str(w.message) for w in caught]
+        self.assertFalse(
+            any("falling back to --header-rows=smart" in m for m in msgs),
+            f"unexpected fallback warning under explicit smart: {msgs!r}",
+        )
+
+    def test_explicit_int_is_never_retried(self) -> None:
+        """``--header-rows=2`` + non-uniform depth → NO retry; explicit int wins."""
+        reader, args, _ = self._make_setup(
+            first_headers=["A", "B › sub"],
+            argv=["dummy.xlsx", "--no-split", "--header-rows=2"],
+        )
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            payloads = list(iter_table_payloads(reader, args))
+
+        self.assertEqual(len(payloads), 1)
+        self.assertEqual(len(reader.read_table_calls), 1)
+        self.assertEqual(reader.read_table_calls[0]["header_rows"], 2)
+        msgs = [str(w.message) for w in caught]
+        self.assertFalse(
+            any("falling back to --header-rows=smart" in m for m in msgs),
+            f"unexpected fallback warning under explicit int: {msgs!r}",
+        )
+
+
 if __name__ == "__main__":
     unittest.main()
