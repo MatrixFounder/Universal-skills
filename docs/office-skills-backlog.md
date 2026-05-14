@@ -311,23 +311,24 @@
     `test_legacy_bare_form_includes_disable_reset_and_data_form`,
     `test_csv_stdout_with_utf8_sig_emits_warning`,
     `test_header_rows_leaf_with_array_style`.
-  - **Deferred к отдельным задачам** (pre-existing weaknesses
-    surfaced by review, не introduced by R21-R29): (a) Security
-    HIGH-1 — path-traversal через parent-directory symlinks +
-    TOCTOU между `is_relative_to` guard и `mkdir(parents=True)`;
-    нужен `os.open(..., O_NOFOLLOW)` per-component. (b) Security
-    HIGH-3 — `_emit_multi_region` collision-suffix loop без upper
-    bound; добавить hard cap при suffix > 1000. (c) Security MED-1
-    — CSV-formula-injection усилен `--encoding utf-8-sig`
-    (Excel-double-click amplified); нужен `--escape-formulas`
-    флаг. (d) Security MED-2 — hyperlink scheme injection
-    (`javascript:`/`data:`/`file:` URIs emit'тятся verbatim);
-    нужен scheme-allowlist. (e) Performance HIGH-1 — `_gap_detect`
-    materialises 8 MB occupancy matrix per sheet; bytearray flat
-    buffer = 8x memory reduction. (f) Performance HIGH-2 —
-    `payloads_list = list(payloads)` materialises generator
-    полностью; streaming CSV emit для multi-region. Эти 6
-    deferred items — отдельные задачи в этом backlog'е.
+  - **Deferred → закрыто атомарной цепочкой xlsx-8a (2026-05-13)**:
+    (a) Security HIGH-1 path-traversal/TOCTOU → задокументировано
+    как trust-boundary в `references/security.md` (xlsx-8a-05) —
+    скрипт **trusted-input only**, агент должен валидировать paths
+    выше. (b) Security HIGH-3 collision-suffix loop → hard cap
+    при suffix > 1000 + `CollisionSuffixCapReached` envelope
+    (xlsx-8a-01). (c) Security MED-1 CSV-formula-injection →
+    `--escape-formulas {off,quote,tab}` (default `off` для
+    backward-compat) + stderr warning когда `--encoding utf-8-sig`
+    без `--escape-formulas` (xlsx-8a-04). (d) Security MED-2
+    hyperlink scheme injection → `--hyperlink-scheme-allowlist`
+    (default `http,https,mailto`) + `BlockedHyperlinkScheme`
+    envelope (xlsx-8a-03). (e+f) Performance HIGH-1/HIGH-2 →
+    **отложены permanent** в [docs/KNOWN_ISSUES.md](KNOWN_ISSUES.md):
+    `_gap_detect` 8 MB occupancy matrix + `payloads_list = list(...)`
+    generator materialisation; not needed at < 50 MB scale,
+    fixable via bytearray flat buffer + streaming emit когда
+    станет real pain.
 - **JSON keys-bloat на layout-heavy отчётах** ✅ FIXED 2026-05-13
   (TASK 010 §11.7 R29): `--header-rows auto` корректно детектил
   N-уровневый header band на отчётах вида «title-banner + customer
@@ -382,19 +383,45 @@
   rejection (3 в `TestCliDelimiterRejection`) + JSON warning (2 в
   `TestJsonDelimiterWarning`) + Python helper (3 в
   `TestPublicHelperAcceptsDelimiterKwarg`).
-- **CSV-formula-injection в xlsx2csv** (discovered 2026-05-12 via
-  `/vdd-multi` Phase-2 security review of xlsx-8 §11.7 v2): ячейки,
-  начинающиеся с `=` / `+` / `-` / `@` / `\t` / `\r`, при импорте
-  CSV в Excel или LibreOffice интерпретируются как формулы (DDE
-  command-exec на Excel-Windows, hyperlink callback на LibreOffice
-  — CVE-2014-3524 family). Пред-существующая weakness, но
-  `--encoding utf-8-sig` (R25) делает её более reachable: Excel
-  теперь auto-detect'ит CSV из workbook'а с Cyrillic content и
-  открывает «дабл-кликом», где формула-payload отрабатывает. OWASP
-  CSV-Injection guidance: prefix leading `=`/`+`/`-`/`@` с
-  одиночным tab или apostrophe. Возможное решение — flag
-  `--sanitize-formulas {off|prefix-tab|prefix-quote}` (default
-  `off` для backward-compat) либо отдельная xlsx-2N задача.
+- **CSV-formula-injection в xlsx2csv** ✅ FIXED 2026-05-13
+  (xlsx-8a-04, discovered 2026-05-12 via `/vdd-multi` Phase-2
+  security review of xlsx-8 §11.7 v2): ячейки, начинающиеся с
+  `=` / `+` / `-` / `@` / `\t` / `\r`, при импорте CSV в Excel
+  или LibreOffice интерпретируются как формулы (DDE command-exec
+  на Excel-Windows, hyperlink callback на LibreOffice —
+  CVE-2014-3524 family). Пред-существующая weakness, но
+  `--encoding utf-8-sig` (R25) сделал её более reachable: Excel
+  auto-detect'ит CSV из workbook'а с Cyrillic content и
+  открывает «дабл-кликом», где формула-payload отрабатывает.
+  OWASP CSV-Injection guidance: prefix leading `=`/`+`/`-`/`@`
+  с одиночным tab или apostrophe. Fix: `--escape-formulas
+  {off,quote,tab}` (default `off` для backward-compat) + stderr
+  warning когда юзер комбинирует `--encoding utf-8-sig` без
+  `--escape-formulas` (явная подсказка про Excel-double-click
+  amplified surface).
+- **xlsx-8a-09 auto→smart fallback** ✅ FIXED 2026-05-14
+  (post-ship hot-patch, ARCHITECTURE.md §14.11 / D-A25): после
+  xlsx-9 ship реальная фикстура `tmp4/masterdata_report_202604.xlsx`
+  (Timesheet sheet: banner-row + 7-cell metadata block над
+  настоящими headers row 7) запросилась с default flag'ами и
+  упала с `InconsistentHeaderDepth` — `read_table(header_rows=
+  "auto")` возвращал headers с non-uniform `_SEP`-count, и
+  downstream `validate_header_depth_uniformity` D-A11 raise
+  валил всю конверсию (exit 1). Пользователь должен был знать
+  про `--header-rows=smart` руками. Fix: `iter_table_payloads`
+  в `xlsx2md/dispatch.py:366-394` оборачивает `read_table` в
+  try/except, ловит `InconsistentHeaderDepth` **только для
+  `header_rows="auto"`**, retries с `header_rows="smart"`
+  (xlsx-8a-09 R11 / D-A13) и emit'ит один `UserWarning` per
+  region. Explicit `--header-rows=smart` / `<int>` обход —
+  юзер уже выбрал mode, defensive raise сохраняется. 4 теста
+  `TestAutoToSmartFallback` (`test_dispatch.py`): retry на
+  nonuniform, no-retry на uniform, explicit-smart no-retry,
+  explicit-int no-retry. 4 sibling workbooks (Моделирование,
+  Ярли, Книга1, DarkStore) не триггерят fallback — gate
+  достаточно tight. 281 xlsx2md tests / 1243 cumulative;
+  output байт-идентичен явному `--header-rows=smart` на
+  trigger-фикстуре.
 - **xlsx layout-heavy reports — banner-row vs column-header
   auto-detection** (discovered 2026-05-12 via masterdata_report
   fixture): `--tables whole --header-rows 1` (defaults) на отчёте
@@ -415,14 +442,16 @@
   follow-up — switch на `values_only=False` + read `cell.row`
   для абсолютной корректности при openpyxl version drift.
 - **`_overlapping_merges_check` O(n²) на больших merge-наборах**
-  (discovered 2026-05-12 via `/vdd-multi` Phase-2 security
-  review): пред-существующий quadratic pairwise intersection
-  test в `_merges.py:106-131` без cap'а на merge count. Workbook
-  с 1M `<mergeCell>` → 1e12 ops → minutes-to-hours DoS. Не
-  introduced этим патчем, но обнаружено при адверсариальном
-  обзоре flatten_headers merge-iteration cost. Возможное
-  решение — interval-tree O(N log N) или cap на merge count с
-  fail-loud envelope `TooManyMerges`.
+  ✅ FIXED 2026-05-13 (xlsx-8a-02): пред-существующий quadratic
+  pairwise intersection test в `_merges.py:106-131` без cap'а на
+  merge count. Workbook с 1M `<mergeCell>` → 1e12 ops →
+  minutes-to-hours DoS. Не introduced R21-R29 патчем, но
+  обнаружено при адверсариальном обзоре flatten_headers
+  merge-iteration cost. Fix: hard cap на merge count (default
+  100K через `XLSX_MAX_MERGES` env override) + fail-loud
+  `TooManyMerges` envelope (exit 2) до запуска O(n²) loop'а.
+  Interval-tree O(N log N) отвергнут как premature (cap покрывает
+  realistic adversarial input без архитектурных изменений).
 - **html2pdf/html2docx — типичная цена универсального HTML-конвертера**:
   каждая платформа (Confluence DC, GitBook, Mintlify, Fern, Docusaurus,
   vc.ru, Habr) приносит свой набор site-specific WTFs — hashed CSS
@@ -571,8 +600,11 @@
 | xlsx-3 | `md_tables2xlsx.py` | ✅ 2026-05-11 |
 | docx-6 + docx-6.5/6.6/6.7 | `docx_replace.py` + relocators + scope filter | ✅ 2026-05-12 |
 | xlsx-10.A | `xlsx_read/` foundation library | ✅ 2026-05-12 |
+| xlsx-8 (+ v1/v2/R21-R29 patches) | `xlsx2csv.py` / `xlsx2json.py` (read-back) | ✅ 2026-05-12 |
+| xlsx-8a (01..05 chain) | xlsx-8 production hardening: collision-cap, merges-cap, hyperlink scheme allowlist, `--escape-formulas`, trust-boundary doc | ✅ 2026-05-13 |
+| xlsx-9 (+ 8a-09 hot-patch) | `xlsx2md.py` + auto→smart fallback on `InconsistentHeaderDepth` | ✅ 2026-05-14 |
 
-### Текущая приоритезация (2026-05-12) — 9 оставшихся open задач
+### Текущая приоритезация (2026-05-14) — 7 оставшихся open задач
 
 Прогон через линзу «универсальный агент: анализ, редактирование,
 преобразование данных». Полный анализ —
@@ -580,15 +612,17 @@
 В пакет 9 «старых» open задач (pptx-2, pptx-5, xlsx-2, xlsx-3,
 xlsx-4, pdf-3, pdf-4, pdf-7, cross-2) добавлены **3 задачи
 агентского read/edit-loop'а** (docx-6, xlsx-8, pdf-12) + **xlsx-9
-`xlsx2md.py`** (2026-05-11, обратное к xlsx-3, замыкает
-xlsx ↔ md round-trip) + **xlsx-10.A / xlsx-10.B `xlsx_read/`** (2026-05-11,
-foundation reader library — извлекает общую читающую логику
-xlsx-7 / xlsx-8 / xlsx-9 в один package, закрывает code-duplication
-gap до того, как он возникнет; **R3-M3 фикс split**: 10.A foundation
-для xlsx-8/9 ships immediately; 10.B refactor xlsx-7 — отдельный
-WSJF, ownership-bounded, acceptable-debt-если-skipped). xlsx-2,
-xlsx-3 закрыты 2026-05-11; docx-6 (+ 6.5/6.6/6.7) и **xlsx-10.A**
-закрыты 2026-05-12.
+`xlsx2md.py`** (обратное к xlsx-3, замыкает xlsx ↔ md round-trip) +
+**xlsx-10.A / xlsx-10.B `xlsx_read/`** (foundation reader library —
+извлекает общую читающую логику xlsx-7 / xlsx-8 / xlsx-9 в один
+package; **R3-M3 фикс split**: 10.A foundation для xlsx-8/9 ships
+immediately; 10.B refactor xlsx-7 — отдельный WSJF,
+ownership-bounded, acceptable-debt-если-skipped). xlsx-2, xlsx-3
+закрыты 2026-05-11; docx-6 (+ 6.5/6.6/6.7) и **xlsx-10.A** закрыты
+2026-05-12; **xlsx-8** (+ v1/v2/R21-R29) закрыт 2026-05-12,
+**xlsx-8a** (5-step production hardening chain) закрыт 2026-05-13;
+**xlsx-9** + **xlsx-8a-09 hot-patch** (auto→smart fallback на
+real-world masterdata fixture) закрыты 2026-05-14.
 
 **P0 — universal hit-rate, прямой агентский запрос:**
 
@@ -600,19 +634,25 @@ xlsx-3 закрыты 2026-05-11; docx-6 (+ 6.5/6.6/6.7) и **xlsx-10.A**
   в тонкие emit-shim'ы. См. [docs/TASK.md](TASK.md) (Task 009),
   [docs/ARCHITECTURE.md §13 Post-merge adaptations](ARCHITECTURE.md),
   [skills/xlsx/scripts/.AGENTS.md §xlsx_read](../skills/xlsx/scripts/.AGENTS.md).
-- **xlsx-8** `xlsx2csv.py` / `xlsx2json.py` (S, поверх xlsx-10.A) —
-  **closes critical gap**: csv2xlsx односторонний, агент сейчас
-  не может прочитать пользовательский xlsx без ручного XML-unpack'а.
+- **xlsx-8** `xlsx2csv.py` / `xlsx2json.py` (S, поверх xlsx-10.A)
+  ✅ **DONE 2026-05-12** (+ xlsx-8a hardening chain 2026-05-13) —
+  **closed critical gap**: csv2xlsx был односторонним, агент не
+  мог прочитать пользовательский xlsx без ручного XML-unpack'а.
   Bread-and-butter для «проанализируй мою таблицу». Полная parity
   с xlsx-9 на complex-tables (merges + multi-sheet + multi-table-
-  per-sheet) через xlsx-10.A.
-- **xlsx-9** `xlsx2md.py` (M, **R3-M4 фикс** — initial S→S оптимистично против
-  xlsx-2/xlsx-3 baseline; emit-only surface всё ещё M-scale) — **closes
+  per-sheet) через xlsx-10.A. **xlsx-8a** chain (5 steps) закрыл
+  4 из 7 deferred security/perf items из vdd-multi-3 review,
+  оставшиеся 2 (PERF-HIGH-1/2) задокументированы в KNOWN_ISSUES.md.
+- **xlsx-9** `xlsx2md.py` (M, **R3-M4 фикс** — initial S→S оптимистично
+  против xlsx-2/xlsx-3 baseline; emit-only surface всё ещё M-scale)
+  ✅ **DONE 2026-05-14** (+ xlsx-8a-09 hot-patch same day) — **closed
   round-trip gap**: симметричная пара к xlsx-3 (`md_tables2xlsx.py`).
-  Закрывает edit-loop **xlsx → md → AI-правки → xlsx**. Покрывает
+  Закрыла edit-loop **xlsx → md → AI-правки → xlsx**. Покрывает
   merged cells (HTML colspan/rowspan), multi-sheet (H2-секции) и
   multiple-tables-per-sheet (ListObjects + gap-detection) через
-  тот же xlsx-10.A reader.
+  тот же xlsx-10.A reader. Hot-patch добавил auto→smart fallback
+  на `InconsistentHeaderDepth` для default-flag UX на real-world
+  masterdata фикстурах (D-A25 в ARCHITECTURE.md §14.11).
 - **pdf-12** `pdf_extract_text.py` / `pdf_extract_tables.py` (M) —
   **closes critical gap**: для не-scanned PDF нет программного
   извлечения. Покрывает «прочитай этот отчёт / контракт». pypdf +
@@ -669,48 +709,53 @@ xlsx-3 закрыты 2026-05-11; docx-6 (+ 6.5/6.6/6.7) и **xlsx-10.A**
 
 ```
 day 1:    xlsx-2 (S) ✅ → xlsx-3 (S) ✅ → xlsx-10.A (M) ✅           ← foundation reader
-day 2:    xlsx-8 (S) → xlsx-9 (M, R3-M4)                            ← emit-shim'ы поверх готового lib
+day 2:    xlsx-8 (S) ✅ → xlsx-9 (M, R3-M4) ✅                       ← emit-shim'ы поверх готового lib
+          + xlsx-8a hardening chain ✅ + xlsx-8a-09 hot-patch ✅
 day 2.5:  xlsx-10.B (M)   ← R2-H2 closing step: refactor xlsx-7 на  ← duplication-window close
-                            xlsx_read/ сразу после xlsx-9 merge,
-                            пока reader-context свежий и R2-H2 clock
-                            (14 дней) не успел тикнуть; плюс
-                            no-behavior-change gate на xlsx-7 suite.
+                            xlsx_read/, окно открыто 2026-05-14 от
+                            xlsx-9 merge; R2-H2 clock (14 дней)
+                            истекает ≈ 2026-05-28; no-behavior-
+                            change gate на xlsx-7 suite.
 day 3:    pdf-12 (M) → pdf-4 (M) → pdf-7 (S)                        ← read-loop для PDF
 day 4:    xlsx-4-аудит (M) ИЛИ pptx-5 (S)                           ← integrity / round-trip
 day 5+:   pdf-3 (M), pptx-2 (L), cross-2 (M) — P3, по заказу
 ~~docx-6 (M)~~ ✅ shipped 2026-05-12 (вместе с docx-6.5/6.6/6.7)
+~~xlsx-8 / xlsx-9~~ ✅ shipped 2026-05-12 / 2026-05-14
 ```
 
-**Критическая последовательность 1 (reader epic):**
-xlsx-10.A ✅ → (xlsx-8 + xlsx-9 параллельно) → **xlsx-10.B**. Без
+**Критическая последовательность 1 (reader epic) — закрыта частично:**
+xlsx-10.A ✅ → xlsx-8 ✅ + xlsx-9 ✅ → **xlsx-10.B** (open). Без
 библиотеки xlsx-8 и xlsx-9 дублировали бы ≥ 80% reader-логики (merge
 resolution, multi-row headers, ListObjects + gap-detection, hyperlinks,
-stale-cache). С библиотекой (shipped 2026-05-12) оба shim'а
-превращаются в emit-only слои поверх единого dataclass-API. **xlsx-10.B
-закрывает эпик** — устраняет duplication-window между `xlsx_read/` и
-`xlsx_check_rules/` internal reader. Объём refactor'а определяется в
-xlsx-10.B planning pass на основе фактических reader-границ в xlsx-7
-(R1-M1 ~600 LOC claim был unmeasured).
+stale-cache). С библиотекой (shipped 2026-05-12) оба shim'а оказались
+emit-only слоями поверх единого dataclass-API (xlsx-8 = 144 unit/E2E,
+xlsx-9 = 281 unit). **xlsx-10.B закрывает эпик** — устраняет
+duplication-window между `xlsx_read/` и `xlsx_check_rules/` internal
+reader. Объём refactor'а определяется в xlsx-10.B planning pass на
+основе фактических reader-границ в xlsx-7 (R1-M1 ~600 LOC claim был
+unmeasured).
 
-**Почему xlsx-10.B идёт _сразу_ после xlsx-9, а не «когда время будет»:**
+**Почему xlsx-10.B идёт _сейчас_, а не «когда время будет»:**
 
-1. **R2-H2 ownership clock** — 14 дней с xlsx-9 merge. Откладывание
-   повышает риск permanent tech debt (auto-promotion в SKILL.md §13).
-2. **xlsx_read API проверен на двух callers** (xlsx-8 + xlsx-9) — если
-   API расширения нужны (например, write-path стрелки, новый header
-   detection mode), они выясняются _до_ xlsx-7 refactor. Иначе риск
-   двойного движения API.
+1. **R2-H2 ownership clock** — 14 дней с xlsx-9 merge (2026-05-14).
+   Дедлайн ≈ **2026-05-28**. Откладывание повышает риск permanent
+   tech debt (auto-promotion в SKILL.md §13).
+2. **xlsx_read API проверен на двух callers** (xlsx-8 + xlsx-9
+   ✅) — write-path сюрпризы (например, sticky-fill merge-scoped
+   semantic, smart vs auto header detection) уже выявлены _до_
+   xlsx-7 refactor. Риск двойного движения API минимизирован.
 3. **Drift-risk** между `xlsx_read/` и `xlsx_check_rules/` internal
    reader (edge-cases на merge handling / stale-cache / hyperlink)
    растёт со временем.
 4. **Context cost** — refactor xlsx-7 reader logic дешевле, когда
-   `xlsx_read/` API свежий в голове разработчика.
+   `xlsx_read/` API свежий (post xlsx-8a-09 hot-patch — auto→smart
+   fallback семантика только что осела в dispatch layer).
 
 **Альтернативный сценарий** — если pdf-12 (read-loop для PDF) станет
-блокером пользовательского запроса до xlsx-9 merge: вставить pdf-12
-между xlsx-8 и xlsx-9, оставив xlsx-10.B на закрывающую позицию.
-**Не рекомендуется** откладывать xlsx-10.B позднее day 4 — R2-H2 clock
-истекает.
+блокером пользовательского запроса до **2026-05-28**: вставить
+pdf-12 параллельно xlsx-10.B, оставив xlsx-10.B на закрывающую
+позицию. **Не рекомендуется** откладывать xlsx-10.B позднее
+2026-05-28 — R2-H2 clock истекает.
 
 Параллельный лёгкий трек: pptx-5 (S) — в любое окно рядом с
 docx/pptx-related работой.
