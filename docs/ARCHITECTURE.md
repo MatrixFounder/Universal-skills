@@ -1131,3 +1131,92 @@ D1–D14 are from TASK; D-A1–D-A15 are architecture-layer additions.
 | **D-A13** | `--header-rows smart` inherited from xlsx-8a-09; pass-through to `read_table(header_rows="smart")`; no re-implementation of heuristic in xlsx-9 |
 | **D-A14** | `--memory-mode {auto,streaming,full}` inherited from xlsx-8a-11; CLI flag → `open_workbook(read_only_mode=...)` pass-through; `auto` uses ≥ 100 MiB size threshold |
 | **D-A15** | `--hyperlink-scheme-allowlist` default-enabled in v1 (NOT v2-deferred); default `http,https,mailto`; scheme-filtered hyperlinks emit text-only + warning; supersedes A-A4 v2-deferral |
+| **D-A16** | **Path C′ — parallel hyperlink-extraction pass** via `dispatch._extract_hyperlinks_for_region` (mirrors xlsx-8 pattern). Crosses `reader._wb` to access `cell.hyperlink.target`; `read_table` called with `include_hyperlinks=False` so display text survives in `TableData.rows`. Yields `(SheetInfo, TableRegion, TableData, hyperlinks_map)` **4-tuple** (not 3-tuple as originally specified). Closes the "URL replaces display text" gap from §5.3 honest-scope; allowlist filter applied at dispatch boundary (D-A15 enforcement point). |
+| **D-A17** | **Streaming-warnings `showwarning` hook** via `cli._streaming_warnings_to_stderr` context manager — replaces the original `warnings.catch_warnings(record=True)` buffering pattern (which silently dropped warnings on exception paths and defeated D-A7 streaming UX). Each `warnings.warn(...)` writes immediately to stderr + flush; survives any exception from `emit_workbook_md`. |
+| **D-A18** | **Atomic temp-file write** via `<output>.partial` sibling + `os.replace(temp, final)`; validation (D-A19) runs against TEMP **before** publish so a failing M2 gate does NOT leave bogus content at `output_path`. On any failure (emit or validate) temp is unlinked. Stdout mode unchanged. |
+| **D-A19** | **Env-flag re-parse gate `XLSX_XLSX2MD_POST_VALIDATE`** (`1/true/yes/on`) re-reads the temp file pre-publish; raises `PostValidateFailed` (code 7) on empty / unrecognised-as-markdown content. Default off. |
+| **D-A20** | **Effective-streaming detection** via `reader._read_only` post-open. The hyperlink-unreliability warning fires for either explicit `--memory-mode=streaming` OR library auto-streaming (size threshold ≥ 100 MiB on `--memory-mode=auto`); previously only fired on explicit. Second documented D-A5 closed-API crossing (first being `reader._wb` in D-A16). |
+| **D-A21** | **`--include-formulas` wiring**: `cli.main` passes `keep_formulas=args.include_formulas` to `open_workbook`; `emit_html._emit_tbody` detects formula strings (`value.startswith("=")`) → emits `data-formula` attribute + `class="stale-cache"`. When BOTH formula AND hyperlink are present on the same cell, both are preserved: `<td data-formula="..."><a href="...">=formula</a></td>` (was: silent link loss in iter-1). |
+| **D-A22** | **GFM angle-bracket form for hyperlinks** with `()` / whitespace / `\n`/`\r`/`\t` / `<>` in the URL: `[text](<url>)` per CommonMark §6.3; the FULL set `<→%3C, >→%3E, \n→%0A, \r→%0D, \t→%09` is percent-encoded inside the angle form to prevent CommonMark-renderer markdown-injection bypass of the scheme allowlist via LF in a permitted URL. |
+| **D-A23** | **Lazy `cell_addr` computation**: `_make_cell_addr(c_idx)` closure invoked only when `hyperlinks_map.get((header_band+r_idx, c_idx))` is non-None (i.e. the warning-path applies). Avoids O(cells) `get_column_letter` + f-string allocations for the 99.999% of cells without hyperlinks. |
+| **D-A24** | **Kwarg validation in `convert_xlsx_to_md`** against `_KNOWN_KWARGS` frozenset (14 names) → raises `TypeError` for unknown kwarg. Prevents `SystemExit(2)` propagation from argparse to Python callers. |
+
+---
+
+## 14. Post-merge adaptations (vdd-multi 2026-05-14)
+
+The body of §1–§13 documents the **design-time specification**. The
+shipped implementation differs in nine documented ways — all
+introduced during VDD adversarial review (Sarcasmotron + vdd-multi
+iterations 1 + 2). The deltas below are LIVE in the merged code; the
+upstream §1–§13 prose is preserved verbatim for historical reference.
+Each subsection cross-links to its D-A decision row.
+
+### 14.1. Path C′ — 4-tuple dispatch yield (D-A16)
+
+Originally `iter_table_payloads` yielded `(SheetInfo, TableRegion, TableData)` triples and `read_table` was called with `include_hyperlinks=True`. Probing `xlsx_read._values.extract_cell` revealed that `include_hyperlinks=True` REPLACES the cell value with the URL — display text is lost. The Path C′ refactor (mirrors xlsx-8 `_extract_hyperlinks_for_region` at `xlsx2csv2json/dispatch.py:102-176`) does a parallel openpyxl pass via `reader._wb` to extract `cell.hyperlink.target` while `read_table(include_hyperlinks=False)` preserves display text. Result: emit produces `[click here](https://...)` with both pieces intact.
+
+**Files**: [`dispatch.py:221-281`](../skills/xlsx/scripts/xlsx2md/dispatch.py#L221) (`_extract_hyperlinks_for_region`), `iter_table_payloads` now yields **4-tuple**. Consumers: `emit_hybrid.emit_workbook_md` unpacks 4-tuple; `emit_gfm_table` and `emit_html_table` accept new `hyperlinks_map=` param.
+
+### 14.2. Streaming `showwarning` hook (D-A17)
+
+Original §5 prose specified `with warnings.catch_warnings(record=True)` + post-loop drain. This pattern silently dropped the captured list on any exception path AND deferred user-facing stderr output until workbook completion (defeating D-A7 per-table flush UX). The shipped implementation replaces it with `cli._streaming_warnings_to_stderr()` — a context manager installing a custom `warnings.showwarning` that writes each warning to stderr + flush IMMEDIATELY. Restores `original_showwarning` + `filters[:]` in `finally:` (no global state leak).
+
+**Files**: [`cli.py:420-463`](../skills/xlsx/scripts/xlsx2md/cli.py#L420) (`_streaming_warnings_to_stderr`).
+
+### 14.3. Atomic temp-file write (D-A18) + post-validate ordering
+
+Original §5 prose said `_resolve_output_stream(output_path)` returns a stream opened on `output_path` directly. The shipped version returns `(stream, temp_path)` where `temp_path = output_path.with_suffix(output_path.suffix + ".partial")` — a sibling tempfile in the same directory (atomic `os.replace` semantics). M-NEW-2 iter-2 patch reordered validation: `_post_validate_output(temp_path)` runs BEFORE `os.replace`; failure → unlink temp + propagate. Result: validation failures NEVER publish bogus content to `output_path`. Stdout mode unchanged (`temp_path is None`).
+
+**Files**: [`cli.py:355-373`](../skills/xlsx/scripts/xlsx2md/cli.py#L355) (`_resolve_output_stream`), [`cli.py:540-578`](../skills/xlsx/scripts/xlsx2md/cli.py#L540) (`main` finally block).
+
+### 14.4. Env-flag re-parse gate (D-A19)
+
+Original §2.1 F8 catalogue listed `PostValidateFailed (CODE=7)` as "env-flag post-validate gate" but provided no wiring. The shipped implementation adds `_post_validate_output(output_path)` consulted by `XLSX_XLSX2MD_POST_VALIDATE=1/true/yes/on` (case-insensitive). Re-reads the just-written markdown; asserts non-empty AND contains at least one `## ` / `|---` / `<table` marker; raises `PostValidateFailed` envelope code 7 on failure.
+
+**Files**: [`cli.py:376-417`](../skills/xlsx/scripts/xlsx2md/cli.py#L376) (`_post_validate_output`).
+
+### 14.5. Effective-streaming detection (D-A20)
+
+Original §5.1 specified the hyperlink-unreliability warning fires when `args.memory_mode == "streaming"`. The shipped implementation reads `reader._read_only` post-open (after `open_workbook` returned) and sets `args._read_only_effective` — so the warning ALSO fires on `--memory-mode=auto` when the library auto-streamed for a ≥ 100 MiB workbook. Second documented D-A5 closed-API crossing (after `_wb` for Path C′).
+
+**Files**: [`cli.py:531-533`](../skills/xlsx/scripts/xlsx2md/cli.py#L531), [`dispatch.py:315-323`](../skills/xlsx/scripts/xlsx2md/dispatch.py#L315) (gate consumes `_effective` with fallback to `_resolved is True`).
+
+### 14.6. `--include-formulas` wiring (D-A21)
+
+Original §5 had `--include-formulas` forwarding to `read_table(include_formulas=True)` but missed `keep_formulas=True` on `open_workbook` — so openpyxl's `data_only=True` default discarded formula strings before the library could surface them. M1 iter-2 patch: `cli.main` passes `keep_formulas=args.include_formulas`; `emit_html._emit_tbody` detects formula strings (`value.startswith("=")`) → emits `<td data-formula="=A1+B1" class="stale-cache">` with empty content per §1.4(g). M-NEW-1 iter-2 patch: when the same cell has BOTH a formula AND a hyperlink, the hyperlink-rendered `<a href="...">=A1+B1</a>` is preserved as cell content (was: silent link loss because `cell_text=""` blindly overwrote the link).
+
+**Files**: [`cli.py:520-525`](../skills/xlsx/scripts/xlsx2md/cli.py#L520) (`keep_formulas` wiring), [`emit_html.py:247-272`](../skills/xlsx/scripts/xlsx2md/emit_html.py#L247) (formula + hyperlink preservation).
+
+### 14.7. GFM angle-bracket completeness (D-A22)
+
+Original M8 spec patched `[text](url)` → `[text](<url>)` for parens. Iter-2 sec-HIGH review surfaced that LF/CR/Tab/`<` in the URL ended the angle-form destination prematurely, allowing markdown-injection bypass of the scheme allowlist via `\n[evil](javascript:alert(1))` planted in a permitted https URL. The shipped patch percent-encodes the FULL set `<→%3C, >→%3E, \n→%0A, \r→%0D, \t→%09` inside the angle form.
+
+**Files**: [`inline.py:221-235`](../skills/xlsx/scripts/xlsx2md/inline.py#L221).
+
+### 14.8. Lazy cell_addr (D-A23)
+
+Original M6 spec was "compute cell_addr per cell, pass to inline.render_cell_value for warning messages". The shipped version uses a `_make_cell_addr(c_idx)` closure invoked ONLY when `hl_href is not None` (the warning-path applies). Saves O(cells) `get_column_letter` + f-string allocations on workbooks without dense hyperlinks (3M unnecessary ops at R20a worst case).
+
+**Files**: [`emit_gfm.py:228-240`](../skills/xlsx/scripts/xlsx2md/emit_gfm.py#L228), [`emit_html.py:214-224`](../skills/xlsx/scripts/xlsx2md/emit_html.py#L214).
+
+### 14.9. Kwarg validation in `convert_xlsx_to_md` (D-A24)
+
+Original §5.2 didn't specify kwarg validation. Argparse's `parser.error()` raised `SystemExit(2)` which `BaseException` — caught NEITHER by the Python-helper's documented integer-return contract NOR by `except Exception`. M4 iter-1 patch: validate kwargs against `_KNOWN_KWARGS` frozenset BEFORE building argv; raise `TypeError` for unknown.
+
+**Files**: [`__init__.py:101-128`](../skills/xlsx/scripts/xlsx2md/__init__.py#L101).
+
+### 14.10. Cumulative VDD review trail
+
+| Round | Critic | Findings | Patched | Tests added |
+|---|---|---|---|---|
+| Sarcasmotron iter-1 | code-reviewer | 5 blockers | 5 | 0 (orchestrator) |
+| vdd-multi iter-1 logic | critic-logic | 1 HIGH + 7 MED + 4 LOW + 5 INFO | HIGH+MED | 5 + 18 |
+| vdd-multi iter-1 security | critic-security | 1 HIGH + 2 MED + 1 LOW + 4 INFO | HIGH+MED | (subsumed) |
+| vdd-multi iter-1 performance | critic-performance | 2 HIGH + 3 MED + 2 LOW + 4 INFO | HIGH+MED | (subsumed) |
+| vdd-multi iter-2 logic | critic-logic | 2 MED + 1 LOW + 1 INFO | all MED | 8 |
+| vdd-multi iter-2 security | critic-security | 1 HIGH(esc) + 4 LOW | HIGH only | (subsumed) |
+| vdd-multi iter-2 performance | critic-performance | 0 new | — | — |
+| **Total** | — | 4 HIGH + 10 MED + 13 LOW + 13 INFO | 4 HIGH + 10 MED | **39 new regression tests** |
+
+277 xlsx2md tests + 1243 xlsx-skill cumulative tests; 5 release gates clean throughout.

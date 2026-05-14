@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import inspect
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -1299,6 +1300,210 @@ class TestVddMultiFixes(unittest.TestCase):
         from md_tables2xlsx.coerce import coerce_column, CoerceOptions
         out = coerce_column(["-007", "-008", "-009"], CoerceOptions())
         self.assertEqual(out, ["-007", "-008", "-009"])
+
+
+# ============================================================
+# xlsx-9 round-trip helpers and tests (task-012-07)
+# ============================================================
+
+def xlsx2md_available() -> bool:
+    """Return True iff xlsx-9 (xlsx2md package) is implemented (not just stubbed).
+
+    Probe:
+        1. ``import xlsx2md`` must succeed (passes after 012-01).
+        2. ``convert_xlsx_to_md`` on a tiny fixture must return 0
+           AND produce non-empty markdown (passes after 012-06).
+
+    Cross-reference: ARCH §3.2 C6; xlsx-md-shapes.md §8.1.
+    """
+    try:
+        import xlsx2md  # noqa: F401
+        from xlsx2md import convert_xlsx_to_md
+    except ImportError:
+        return False
+    # Probe with the round-trip fixture in
+    # `xlsx2md/tests/fixtures/single_cell.xlsx` (012-02 deliverable).
+    fixture = (
+        Path(__file__).resolve().parents[1]
+        / "xlsx2md/tests/fixtures/single_cell.xlsx"
+    )
+    if not fixture.exists():
+        return False
+    out_md = None  # Sarcasmotron audit-smell fix: prevent UnboundLocalError
+    try:                                    # in `finally` if NamedTemporaryFile
+        out_md = tempfile.NamedTemporaryFile(  # itself raises (disk full, EMFILE).
+            suffix=".md", delete=False, mode="w", encoding="utf-8"
+        )
+        out_md.close()
+        exit_code = convert_xlsx_to_md(fixture, out_md.name)
+        if exit_code != 0:
+            return False
+        text = Path(out_md.name).read_text(encoding="utf-8")
+        return bool(text.strip())
+    except Exception:  # noqa: BLE001
+        return False
+    finally:
+        if out_md is not None:
+            Path(out_md.name).unlink(missing_ok=True)
+
+
+def _extract_table_bodies(text: str) -> list:
+    """Extract table-body lines from xlsx-9 markdown output.
+
+    Splits ``text`` into chunks per ``## H2`` heading. For each chunk,
+    drops the H2 heading line and any ``### H3`` lines. Returns a flat
+    list of remaining non-empty lines (the pipe-table rows).
+
+    This is the D9-lock comparison normaliser: sheet names and table-name
+    H3s vary across xlsx-3 sanitisation; cell content inside the table
+    body MUST match. Cross-reference: xlsx-md-shapes.md §6 and §8.2.
+    """
+    chunks: list = []
+    current: list = []
+    for line in text.splitlines():
+        if line.startswith("## "):
+            if current:
+                chunks.append(current)
+            current = []
+        else:
+            current.append(line)
+    if current:
+        chunks.append(current)
+
+    result: list = []
+    for chunk in chunks:
+        body_lines = [ln for ln in chunk if not ln.startswith("### ")]
+        body_lines = [ln for ln in body_lines if ln.strip()]
+        result.extend(body_lines)
+    return result
+
+
+# ============================================================
+# TestRoundTripXlsx9 — xlsx-9 <-> xlsx-3 live round-trip
+# ============================================================
+class TestRoundTripXlsx9(unittest.TestCase):
+    """Live round-trip xlsx-9 <-> xlsx-3 — content byte-identity.
+
+    Cross-reference: xlsx-md-shapes.md §8; ARCH task row 012-07; UC-12.
+    These tests are guarded by @skipUnless(xlsx2md_available(), ...) and
+    activate automatically when xlsx2md is wired (after task 012-06).
+    """
+
+    @unittest.skipUnless(
+        xlsx2md_available(),
+        "xlsx2md not yet implemented (xlsx-9 / TASK 012)",
+    )
+    def test_live_roundtrip_xlsx_md(self) -> None:
+        """xlsx -> md -> xlsx -> md -> assert cell content unchanged.
+
+        Uses ``roundtrip_basic.xlsx`` (strings, integers, ISO dates —
+        no merges, no formulas, no styles). Asserts cell-content
+        byte-equality between stages 1 and 3 via the D9-lock normaliser
+        ``_extract_table_bodies`` (sheet-name drift is explicitly excluded
+        from the assertion per xlsx-md-shapes.md §6).
+
+        Cross-reference: ARCH §3.2 C6; xlsx-md-shapes.md §8.2.
+        """
+        from xlsx2md import convert_xlsx_to_md
+
+        fixture = (
+            Path(__file__).resolve().parents[1]
+            / "xlsx2md/tests/fixtures/roundtrip_basic.xlsx"
+        )
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tdp = Path(tmpdir)
+            # Stage 1: xlsx -> md
+            md1 = tdp / "first.md"
+            self.assertEqual(convert_xlsx_to_md(fixture, md1), 0)
+            # Stage 2: md -> xlsx (via md_tables2xlsx)
+            xlsx2 = tdp / "roundtrip.xlsx"
+            self.assertEqual(convert_md_tables_to_xlsx(md1, xlsx2), 0)
+            # Stage 3: xlsx -> md (second pass)
+            md2 = tdp / "second.md"
+            self.assertEqual(convert_xlsx_to_md(xlsx2, md2), 0)
+            # Assert cell-content byte-equality between stages 1 and 3
+            # (sheet-name asymmetry is documented in xlsx-md-shapes.md §6
+            # — NOT asserted here; only table bodies are compared).
+            text1 = md1.read_text(encoding="utf-8")
+            text2 = md2.read_text(encoding="utf-8")
+            table1 = _extract_table_bodies(text1)
+            table2 = _extract_table_bodies(text2)
+            self.assertEqual(
+                table1,
+                table2,
+                "cell content drift after xlsx-9 <-> xlsx-3 round-trip",
+            )
+
+    @unittest.skipUnless(
+        xlsx2md_available(),
+        "xlsx2md not yet implemented (xlsx-9 / TASK 012)",
+    )
+    def test_live_roundtrip_cell_newline_br(self) -> None:
+        """T-cell-newline-br-roundtrip (TASK 012-07 UC-12, T-21).
+
+        Uses ``cell_with_newline.xlsx`` (cell A2 = "first line\\nsecond line").
+        Asserts:
+        1. xlsx2md output contains ``<br>`` for the embedded newline.
+        2. md_tables2xlsx write-back cell A2 reads "first line\\nsecond line"
+           byte-identical (xlsx-3 R9.c converts <br> back to \\n).
+
+        Cross-reference: xlsx-md-shapes.md §5.1 and §8.3; ARCH §2.1 F4 R16.
+        """
+        from xlsx2md import convert_xlsx_to_md
+
+        fixture = (
+            Path(__file__).resolve().parents[1]
+            / "xlsx2md/tests/fixtures/cell_with_newline.xlsx"
+        )
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tdp = Path(tmpdir)
+            md1 = tdp / "first.md"
+            self.assertEqual(convert_xlsx_to_md(fixture, md1), 0)
+            text = md1.read_text(encoding="utf-8")
+            self.assertIn("<br>", text, "embedded newline not converted to <br>")
+            xlsx2 = tdp / "roundtrip.xlsx"
+            self.assertEqual(convert_md_tables_to_xlsx(md1, xlsx2), 0)
+            # Open xlsx2 and assert cell A2 contains the original
+            # "first line\nsecond line" content (xlsx-3 R9.c converts
+            # <br> back to \n on write-back).
+            import openpyxl  # noqa: PLC0415 (import inside test — D-A5 ban is production-only)
+            wb = openpyxl.load_workbook(xlsx2)
+            ws = wb[wb.sheetnames[0]]
+            cell_value = ws.cell(row=2, column=1).value
+            self.assertEqual(
+                cell_value,
+                "first line\nsecond line",
+                "cell newline not preserved through xlsx-9 <-> xlsx-3 round-trip",
+            )
+
+
+# ============================================================
+# Meta-test — gate sanity check after xlsx-9 merge (task-012-07)
+# ============================================================
+class TestXlsx2mdGateSanity(unittest.TestCase):
+    """Sanity checks for the xlsx2md availability gate.
+
+    TC-UNIT-03: after xlsx-9 / task-012-07 lands, xlsx2md_available()
+    must return True. If this test is red, the round-trip tests in
+    TestRoundTripXlsx9 will silently skip, giving a false green.
+
+    Cross-reference: xlsx-md-shapes.md §8.4; ARCH task row 012-07 §Notes.
+    """
+
+    def test_xlsx2md_available_returns_true_after_xlsx9_lands(self) -> None:
+        """xlsx2md_available() must return True (gate helper is wired).
+
+        If False, TestRoundTripXlsx9 tests skip silently — a hidden
+        failure mode. This test exposes the wiring state explicitly.
+        Cross-reference: TASK 012-07 TC-UNIT-03; xlsx-md-shapes.md §8.4.
+        """
+        self.assertTrue(
+            xlsx2md_available(),
+            "xlsx2md_available() returned False — either the xlsx2md "
+            "package is not installed in this venv, or convert_xlsx_to_md "
+            "is still a stub (TASK 012-06 not yet merged). "
+            "TestRoundTripXlsx9 tests are silently skipping.",
+        )
 
 
 if __name__ == "__main__":
