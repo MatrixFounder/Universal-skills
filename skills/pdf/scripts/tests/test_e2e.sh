@@ -751,6 +751,135 @@ echo "$err" | grep -q "encryption pre-flight is unavailable" \
     && ok "OOXML→pdf-preview: emits encryption-skip note (LOW-3)" \
     || nok "OOXML→pdf-preview note" "no note in stderr: $err"
 
+# --- pdf-7: PDF outline (TOC bookmarks) -----------------------------------
+# weasyprint emits a PDF outline (the navigable bookmark sidebar) from
+# <h1>-<h6> automatically via its UA stylesheet (bookmark-level) — no CSS
+# flag needed. These blocks LOCK that behaviour so a future CSS edit cannot
+# silently strip it. tests/_outline_probe.py reads the outline back via
+# pypdf and prints it depth-indented. (pdf-7 / TASK 014, R1-R3.)
+echo "pdf-7 outline (weasyprint):"
+
+# Block A — md2pdf.py outline (R2): non-empty, nested, titled.
+cat > "$TMP/outline.md" <<'MD'
+# Chapter One
+
+Intro text.
+
+## Section 1.1
+
+Body.
+
+### Subsection 1.1.1
+
+More.
+
+## Section 1.2
+
+Body.
+
+# Chapter Two
+
+End.
+MD
+set +e
+"$PY" md2pdf.py "$TMP/outline.md" "$TMP/outline_md.pdf" --no-mermaid >/dev/null 2>&1
+ol=$("$PY" tests/_outline_probe.py "$TMP/outline_md.pdf" 2>/dev/null)
+rc=$?
+set -e
+if [ "$rc" -eq 0 ] \
+   && echo "$ol" | grep -q '^Chapter One$' \
+   && echo "$ol" | grep -q '^  Section 1.1$' \
+   && echo "$ol" | grep -q '^    Subsection 1.1.1$' \
+   && echo "$ol" | grep -q '^Chapter Two$'; then
+    ok "md2pdf → non-empty nested PDF outline (R2)"
+else
+    nok "md2pdf outline" "probe rc=$rc; output: $ol"
+fi
+
+# Block B — html2pdf.py weasyprint-engine outline (R3). Plain content, no
+# fixed-position chrome — this fixture is reused by the chrome block below.
+cat > "$TMP/outline.html" <<'HTML'
+<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>Outline test</title></head><body>
+<h1>Alpha</h1><p>alpha body</p>
+<h2>Alpha One</h2><p>a1 body</p>
+<h2>Alpha Two</h2><p>a2 body</p>
+<h1>Beta</h1><p>beta body</p>
+</body></html>
+HTML
+set +e
+"$PY" html2pdf.py "$TMP/outline.html" "$TMP/outline_html.pdf" >/dev/null 2>&1
+ol=$("$PY" tests/_outline_probe.py "$TMP/outline_html.pdf" 2>/dev/null)
+rc=$?
+set -e
+if [ "$rc" -eq 0 ] \
+   && echo "$ol" | grep -q '^Alpha$' \
+   && echo "$ol" | grep -q '^  Alpha One$' \
+   && echo "$ol" | grep -q '^Beta$'; then
+    ok "html2pdf (weasyprint) → non-empty nested PDF outline (R3)"
+else
+    nok "html2pdf weasyprint outline" "probe rc=$rc; output: $ol"
+fi
+
+# --no-default-css must NOT disable the outline — the outline is owned by
+# weasyprint's UA stylesheet, not the bundled DEFAULT_CSS.
+set +e
+"$PY" html2pdf.py "$TMP/outline.html" "$TMP/outline_nocss.pdf" --no-default-css >/dev/null 2>&1
+"$PY" tests/_outline_probe.py "$TMP/outline_nocss.pdf" >/dev/null 2>&1
+rc=$?
+set -e
+[ "$rc" -eq 0 ] \
+    && ok "html2pdf --no-default-css → outline still present (R3.2)" \
+    || nok "html2pdf --no-default-css outline" "outline missing or empty"
+
+# Block C — chrome-engine outline parity (R4/R6). The chrome engine is an
+# opt-in dependency (install.sh --with-chrome); soft-skip when Playwright /
+# Chromium is unavailable, mirroring the mermaid_renders soft-skip. The
+# capability probe (R6.4) runs FIRST so an under-floor Playwright fails on
+# the cheap signature check, not a confusing mid-render TypeError.
+echo "pdf-7 outline (chrome engine):"
+chrome_probe=$("$PY" - <<'PY'
+import inspect
+try:
+    from playwright.sync_api import Page
+except ImportError:
+    print("no-playwright")
+else:
+    print("ok" if "outline" in inspect.signature(Page.pdf).parameters else "no-outline")
+PY
+)
+if [ "$chrome_probe" = "no-playwright" ]; then
+    skip "chrome outline — Playwright not installed (opt-in: bash install.sh --with-chrome)"
+elif [ "$chrome_probe" = "no-outline" ]; then
+    nok "chrome outline capability (R6.4)" \
+        "installed Playwright's page.pdf() lacks the 'outline' kwarg — upgrade to >=1.42 (re-run: bash install.sh --with-chrome)"
+else
+    # Reuse the plain-content fixture from Block B ($TMP/outline.html) — no
+    # position:fixed chrome, so _DOM_NORMALIZE_SCRIPT cannot hide a heading.
+    set +e
+    "$PY" html2pdf.py "$TMP/outline.html" "$TMP/outline_chrome.pdf" --engine chrome >/dev/null 2>&1
+    render_rc=$?
+    set -e
+    if [ "$render_rc" -ne 0 ] || [ ! -s "$TMP/outline_chrome.pdf" ]; then
+        skip "chrome outline — engine unavailable at render time (Chromium binary not installed?)"
+    else
+        set +e
+        ol=$("$PY" tests/_outline_probe.py "$TMP/outline_chrome.pdf" 2>/dev/null)
+        rc=$?
+        set -e
+        # A non-empty + nested outline here also confirms TASK A-6: the chrome
+        # engine's emulate_media("screen") does NOT suppress the outline (it
+        # is built from the DOM heading structure, media-independently).
+        if [ "$rc" -eq 0 ] \
+           && echo "$ol" | grep -q 'Alpha' \
+           && echo "$ol" | grep -qE '^  '; then
+            ok "html2pdf --engine chrome → non-empty nested PDF outline (R4/R6)"
+        else
+            nok "chrome outline" "probe rc=$rc; output: $ol"
+        fi
+    fi
+fi
+
 # --- q-2: visual regression on the produced PDFs --------------------------
 echo "q-2 visual regression:"
 visual_check "$TMP/out.pdf"     "fixture-base"

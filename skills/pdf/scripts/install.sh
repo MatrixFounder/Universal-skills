@@ -104,7 +104,10 @@ fi
 # the playwright install command is a no-op when the binary is current.
 if [ "$WITH_CHROME" -eq 1 ]; then
     say "Installing Playwright (chrome engine) ..."
-    ./.venv/bin/pip install --quiet -r requirements-chrome.txt
+    # --upgrade so a re-run lifts an already-present too-old Playwright to the
+    # requirements-chrome.txt floor (>=1.42 — needed for page.pdf outline,
+    # pdf-7). Plain `pip install -r` does not upgrade a satisfied package.
+    ./.venv/bin/pip install --quiet --upgrade -r requirements-chrome.txt
     say "Downloading Chromium (~150 MB; cached after first run) ..."
     if ./.venv/bin/playwright install chromium; then
         say "Playwright + Chromium: OK"

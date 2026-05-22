@@ -1,49 +1,67 @@
-# ARCHITECTURE: TASK 013 (backlog row `pdf-12`) — PDF → Markdown extraction guidance + `pdf_extract.py`
+# ARCHITECTURE: TASK 014 (backlog row `pdf-7`) — PDF outline (TOC bookmarks)
 
-> **Prior `docs/ARCHITECTURE.md`** (xlsx-9 — `xlsx2md.py`) **is archived
-> verbatim at** [`docs/architectures/architecture-009-xlsx-9-xlsx2md.md`](architectures/architecture-009-xlsx-9-xlsx2md.md).
->
-> **Status:** SPECIFIED 2026-05-21 (TASK 013 — `docs/TASK.md`). Implementation
-> pending; this document defines the contract.
->
-> **Template:** `architecture-format-core`, with §5 (Interfaces), §7 (Security),
-> §8 (Scalability), §9 (Cross-skill replication) selectively extended — mirrors
-> the precedent set by xlsx-8 / xlsx-9. This is a **small, single-script**
-> addition to an existing skill (not a new system, not a >3-component refactor),
-> so the Core template suffices.
+> **Mode:** VDD (Verification-Driven Development).
+> **Status:** DRAFT v2 — **amended 2026-05-22** during development: Chromium
+> emits the PDF outline only with `page.pdf(tagged=True)` set alongside
+> `outline=True` (empirically verified). §1, §5.2, §6, §8, §10(c), §12 Q-3, §13
+> D2 revised to add `tagged=True` (user-confirmed scope amendment). See TASK
+> 014 §1.1a.
+> **TASK:** [TASK.md](TASK.md) (TASK 014, slug `pdf-outline-bookmarks`, backlog
+> row `pdf-7`).
+> **Living document:** updated in place. The prior content (TASK 013 / `pdf-12`
+> `pdf_extract.py`) was completed and merged; its design is preserved in the
+> archived task/plan pair `docs/tasks/task-013-pdf-to-markdown-master.md` +
+> `docs/plans/plan-013-pdf-to-markdown.md` and in git history. Per the
+> living-document rule this file is **not** per-task snapshotted (it is 603 →
+> well under the 1500-line Index-Mode threshold).
+> **Template:** `architecture-format-core` (Core) — this is a small,
+> well-bounded modification of one existing module, not a new system; the
+> Extended template's TIER-2 triggers (new system / >3-component refactor) do
+> not apply.
 
 ---
 
 ## 1. Task Description
 
-**TASK:** [`docs/TASK.md`](TASK.md) — TASK 013, slug `pdf-to-markdown`.
+A PDF **outline** (a.k.a. *bookmarks* / *document outline*) is the navigable
+heading tree a PDF viewer shows in its sidebar. Backlog row `pdf-7` asks a
+verification question: does the pdf skill already emit an outline from
+`<h1>`–`<h6>`, or is a CSS flag / code change required?
 
-The `pdf` skill ships no PDF→Markdown extraction script by deliberate design
-(`SKILL.md` §3 / §7.1: extraction is document-dependent → prompt-first). The
-agent therefore improvises a `pdfplumber` script on every "convert PDF to md"
-request, with two failure modes: (1) quality variance; (2) **silent empty
-output on scanned PDFs** — `pdfplumber` returns empty text without raising.
+**Verification outcome (Analysis-phase reconnaissance, 2026-05-22):**
 
-This task delivers, **only inside `skills/pdf/`**:
+| Render path | Outline today? | Mechanism |
+|-------------|----------------|-----------|
+| `md2pdf.py` (weasyprint) | ✅ emitted | weasyprint UA stylesheet `bookmark-level`/`bookmark-label` on `h1`–`h6` |
+| `html2pdf.py` default engine (weasyprint) | ✅ emitted | same |
+| `html2pdf.py --engine chrome` (Playwright) | ❌ absent | `render_chrome()` `page.pdf()` omits `outline=True` **and the `tagged=True` Chromium requires alongside it** |
 
-- **E1 (Part 1, mandatory)** — `references/pdf-to-markdown.md`: a prompt-first
-  reference standardising the extraction *approach* (decision tree, recipe,
-  pitfalls). No code.
-- **E2 (Part 2, user-confirmed in scope)** — `scripts/pdf_extract.py`: a
-  structured **dump** (per-page text + tables as JSON), **not** a converter.
-  Its defining feature is **scan detection** — turning the silent-empty failure
-  into a loud, machine-readable signal.
-- **E3** — test fixtures, E2E tests, and skill-integration edits.
+The two weasyprint paths produce a correct nested outline **out of the box** —
+no CSS flag needed, and the bundled `DEFAULT_CSS` does not override the UA
+`bookmark-*` properties. The single gap is the opt-in chrome engine (pdf-11).
 
-**Design tenets (from TASK §1.2 Non-goals — architecturally binding):**
-- No `pdf2md.py`; the helper emits JSON only, never Markdown.
-- No bundled OCR — scans are *detected*, the agent is *pointed at* OCR / the
-  Read tool.
-- No auto-inference of heading hierarchy / reading order / table stitching —
-  final Markdown composition stays agent judgement.
+> **Development finding (2026-05-22, amended into the design).** A controlled
+> Playwright probe during Task 014-02 established that Chromium's
+> `page.pdf(outline=True)` emits an outline **only when `tagged=True` is also
+> passed** (`outline=True` alone → 0 bookmarks; `outline=True, tagged=True` →
+> the correct nested outline). Chromium builds the outline from the tagged-PDF
+> structure tree. The chrome engine therefore passes **both** flags, and a
+> chrome-rendered PDF is now a *tagged PDF* — an accepted, necessary
+> side-effect (user-confirmed scope amendment; TASK 014 §1.1a / Q-3). The
+> weasyprint paths are unaffected (their `bookmark-level` outline needs no
+> tagging).
 
-This architecture covers UC-1 (digital PDF → Markdown), UC-2 (scanned PDF →
-loud signal), UC-3 (maintainer validation) from TASK §3.
+This task therefore has two architecturally distinct halves:
+
+- **Part A — verify & lock (no behaviour change):** add regression tests that
+  pin the weasyprint outline so a future CSS edit cannot silently strip it.
+- **Part B — chrome parity (two-keyword behaviour change):** add `outline=True`
+  **and `tagged=True`** to the chrome engine's `page.pdf()` call; raise the
+  Playwright floor to the release that introduced those options; make the
+  installer upgrade an already-present too-old Playwright.
+
+Full requirement set: TASK 014 §2 (R1–R9, 3 Epics). Non-goals (no PDF/UA
+*conformance* claim, no `--no-outline` flag, no custom labelling): TASK §1.2.
 
 ---
 
@@ -51,79 +69,36 @@ loud signal), UC-3 (maintainer validation) from TASK §3.
 
 ### 2.1. Functional Components
 
-**FC1 — `pdf-to-markdown.md` reference (E1)**
-- **Purpose:** standardise the extraction approach so the agent stops
-  improvising. Pure documentation artifact.
-- **Functions:** decision tree (R1), extraction recipe (R2), pitfalls catalogue
-  (R3), "MD assembly is agent's job" framing + Non-goals (R4), linkage (R5).
-- **Dependencies:** none at runtime. Cross-links `library-selection.md` and
-  `forms.md`; is linked back from `SKILL.md` §7.1/§12.
-
-**FC2 — CLI front-end (`main` / argparse) (E2)**
-- **Purpose:** parse argv, dispatch, own the top-level error boundary and the
-  process exit code.
-- **Functions:** argument parsing; `--json-errors` wiring; map outcomes /
-  exceptions to exit codes {0,1,2,10}; idempotent output handoff.
-- **Input:** `argv`. **Output:** process exit code; JSON dump to stdout/file;
-  human or JSON-envelope errors to stderr.
-- **Related UC:** UC-1, UC-2 (all scenarios), UC-3/A1.
-- **Dependencies:** FC3, FC5, `_errors` (read-only import).
-
-**FC3 — PDF extraction core (E2)**
-- **Purpose:** open the PDF (incl. encryption handling) and produce the raw
-  per-page data.
-- **Functions:** `extract_pdf` (orchestrate), `_open_pdf` (open + encryption),
-  `_extract_page` (per-page text + tables + `char_count` + `has_images`).
-- **Input:** PDF path, optional password, `layout` flag.
-  **Output:** the dump `dict` (pre-classification pages list).
-- **Related UC:** UC-1 main, UC-1/A1-A3, UC-2/A1.
-- **Dependencies:** `pdfplumber`.
-
-**FC4 — Scan classifier (E2)**
-- **Purpose:** the feature's reason for existing — decide per-page `scanned`
-  and document-level `doc_scanned` / `scanned_pages`.
-- **Functions:** `_classify_page` (per-page predicate, owns the threshold
-  constant), `_classify_document` (aggregate + the blank-page rule R8.2a).
-- **Input:** per-page `char_count` + `has_images`; the pages list.
-  **Output:** `bool` per page; `(doc_scanned, scanned_pages)` for the document.
-- **Related UC:** UC-2 main + A2 (mixed) + A3 (all-blank).
-- **Dependencies:** none (pure functions).
-
-**FC5 — JSON emitter (E2)**
-- **Purpose:** serialise the dump; route to stdout or `-o` file; idempotent.
-- **Functions:** `_emit` — `json.dump(ensure_ascii=False, indent=2)`; overwrite
-  on `-o`.
-- **Related UC:** UC-1 main, UC-3/idempotency.
-
-**FC6 — Fixtures + builder (E3)**
-- **Purpose:** reproducible test inputs.
-- **Functions:** build a digital PDF (text + table), a scan-like PDF
-  (image-only page, `char_count` clearly ≤ threshold), an encrypted PDF.
-- **Dependencies:** `reportlab` (draw), `Pillow` (rasterise text → image),
-  `pypdf` (encrypt). All already pdf-skill dependencies.
-
-**FC7 — Skill integration (E3)**
-- **Purpose:** wire the two new artifacts into the skill so they are
-  discoverable and `validate_skill.py` stays green.
-- **Functions:** edit `SKILL.md` (§2/§4/§10/§12, review §1/§3); cross-link
-  `references/library-selection.md`; update the existing `pdf-12` backlog row
-  to the refined single-script design.
+| # | Component | Responsibility | Change |
+|---|-----------|----------------|--------|
+| F1 | weasyprint outline (md2pdf) | `md2pdf.py` → weasyprint → PDF outline from `h1`–`h6` | **none** (verified path) |
+| F2 | weasyprint outline (html2pdf) | `html2pdf_lib/render.py` weasyprint branch → PDF outline | **none** (verified path) |
+| F3 | chrome outline | `html2pdf_lib/chrome_engine.py` `render_chrome()` → `page.pdf(outline=True)` | **modified** (Part B) |
+| F4 | Playwright floor + installer | `requirements-chrome.txt` floor `>=1.42`; `install.sh --with-chrome` installs with `--upgrade` | **modified** (Part B) |
+| F5 | outline regression tests | render a multi-heading fixture per path, read the PDF outline back, assert non-empty + nested + titled | **new** |
+| F6 | outline probe helper | `tests/_outline_probe.py` — read a PDF's outline via `pypdf`, emit a deterministic depth-indented dump for shell assertions | **new** |
+| F7 | documentation | `SKILL.md` §2; `references/html-conversion.md` note; backlog `pdf-7` row | **modified** |
 
 ### 2.2. Functional Components Diagram
 
-```mermaid
-flowchart TD
-    A[agent: convert PDF to md] -->|reads| FC1[FC1 pdf-to-markdown.md]
-    FC1 -->|digital branch| FC2[FC2 pdf_extract.py CLI]
-    FC1 -.->|scan / complex branch| OCR[OCR / Read tool — NOT bundled]
-    FC2 --> FC3[FC3 extraction core]
-    FC3 --> FC4[FC4 scan classifier]
-    FC4 --> FC5[FC5 JSON emitter]
-    FC5 -->|JSON dump| A
-    FC2 -->|exit 10 + stderr| A
-    FC6[FC6 fixtures] -.->|test inputs| FC2
-    FC7[FC7 SKILL.md / library-selection.md] -.->|links| FC1
-    FC7 -.->|links| FC2
+```
+            ┌──────────────── verify & lock (Part A) ────────────────┐
+ md2pdf.py ─┤                                                        │
+            │  weasyprint  ──► PDF (outline already present) ──┐      │
+html2pdf.py ┤  (UA bookmark-level)                             │      │
+ (engine=   │                                                  ▼      │
+  weasyprint)                                          F5 regression  │
+            └──────────────────────────────────────────► tests ◄──────┘
+                                                            ▲
+            ┌──────────────── chrome parity (Part B) ────────┘
+html2pdf.py ┤  chrome_engine.render_chrome()
+ (engine=   │     page.pdf(outline=True)  ──► PDF (outline now present)
+  chrome)   │  requirements-chrome.txt: playwright>=1.42
+            │  install.sh --with-chrome: pip install --upgrade
+            └─────────────────────────────────────────────────────────
+
+ F6 _outline_probe.py: PDF ──pypdf.PdfReader.outline──► depth-indented dump
+                              consumed by F5 test blocks in test_e2e.sh
 ```
 
 ---
@@ -132,266 +107,206 @@ flowchart TD
 
 ### 3.1. Architectural Style
 
-**Single self-contained CLI script** + a standalone Markdown reference.
+Single-skill, script-level modification. No new module, no package, no new
+process boundary. The pdf skill keeps its existing shape: standalone CLI
+scripts (`md2pdf.py`, `html2pdf.py`) + the `html2pdf_lib/` package + a
+bash-driven E2E harness (`tests/test_e2e.sh`) with inline `python -c`
+assertions.
 
-**Justification (YAGNI):** the sibling pdf scripts `pdf_split.py`,
-`pdf_merge.py`, `pdf_watermark.py`, `pdf_fill_form.py` are each a single file;
-only `html2pdf.py` warranted a `html2pdf_lib/` package because it is ~2 000 LOC.
-`pdf_extract.py` is estimated ≤ ~350 LOC — a single file
-`skills/pdf/scripts/pdf_extract.py` is correct and consistent. No package, no
-new sub-directory for the script. (Tests already live in `scripts/tests/`;
-fixtures get a new `scripts/tests/fixtures/` directory.)
+**Stub-First adaptation.** This task has no large new surface to stub. The
+Stub-First discipline maps onto the **test-first** ordering:
+
+1. F6 (`_outline_probe.py`) + F5 (test blocks) are written **first**. Against
+   the weasyprint paths they pass immediately — that *is* the Part-A
+   verification (Green confirms F1/F2 already work).
+2. The chrome test block is **RED** at this point (chrome omits `outline=True`).
+3. F3 (the `page.pdf(outline=True)` change) turns the chrome block **GREEN**.
+
+So the natural Red→Green gate is: chrome outline test RED → F3 → GREEN.
 
 ### 3.2. System Components
 
-**Component: `skills/pdf/scripts/pdf_extract.py`**
-- **Type:** Python 3 CLI script.
-- **Purpose:** structured per-page dump of a PDF as JSON, with scan detection.
-- **Implemented functions:** FC2 + FC3 + FC4 + FC5.
-- **Technologies:** Python 3, `pdfplumber`, stdlib `argparse` / `json` /
-  `pathlib`; `_errors` (sibling module, read-only import).
-- **Interfaces — Inbound:** invoked from the shell / agent:
-  `python3 scripts/pdf_extract.py INPUT.pdf [...]`.
-- **Interfaces — Outbound:** reads the input PDF; writes JSON to stdout or the
-  `-o` path; writes errors/warnings to stderr.
-- **Dependencies:** `pdfplumber` (declared in `requirements.txt`); `_errors.py`.
-
-**Component: `skills/pdf/references/pdf-to-markdown.md`**
-- **Type:** Markdown reference document.
-- **Purpose:** FC1.
-- **Interfaces:** linked from `SKILL.md` §7.1/§12 and
-  `references/library-selection.md`; back-links `library-selection.md`,
-  `forms.md`.
-
-**Component: `skills/pdf/scripts/tests/` additions**
-- **Type:** test code + fixture builder + binary fixtures.
-- **Files:** `test_pdf_extract.py` (unittest), `_pdf_extract_fixtures.py`
-  (builder — mirrors the existing `_acroform_fixture.py` pattern),
-  `fixtures/*.pdf` (committed), a smoke block appended to `test_e2e.sh`.
-
-**Unchanged components (explicitly NOT touched):** `md2pdf.py`, `html2pdf.py`,
-`html2pdf_lib/`, `pdf_merge.py`, `pdf_split.py`, `pdf_watermark.py`,
-`pdf_fill_form.py`, `preview.py`, `_errors.py`, `requirements*.txt`.
+| Component | Path | Kind | Notes |
+|-----------|------|------|-------|
+| md2pdf converter | `skills/pdf/scripts/md2pdf.py` | unchanged | weasyprint render; outline already emitted |
+| html2pdf render orchestration | `skills/pdf/scripts/html2pdf_lib/render.py` | unchanged | weasyprint branch already emits outline |
+| chrome engine | `skills/pdf/scripts/html2pdf_lib/chrome_engine.py` | **modified** | `render_chrome()` `page.pdf(...)` gains `outline=True` |
+| chrome dependency pin | `skills/pdf/scripts/requirements-chrome.txt` | **modified** | floor `playwright>=1.40` → `>=1.42` (+ rationale comment) |
+| installer | `skills/pdf/scripts/install.sh` | **modified** | `--with-chrome` block installs `requirements-chrome.txt` with `--upgrade` |
+| outline probe helper | `skills/pdf/scripts/tests/_outline_probe.py` | **new** | test-only; reads `PdfReader.outline`, emits depth-indented dump |
+| E2E harness | `skills/pdf/scripts/tests/test_e2e.sh` | **modified** | new outline test blocks (md2pdf / html2pdf-weasyprint / html2pdf-chrome) |
+| skill manifest | `skills/pdf/SKILL.md` | **modified** | §2 Capabilities; §10/§12 reviewed |
+| reference doc | `skills/pdf/references/html-conversion.md` | **modified** | outline note (engine-agnostic, automatic from headings) |
+| backlog | `docs/office-skills-backlog.md` | **modified** | `pdf-7` row → ✅ DONE; stale note corrected |
 
 ### 3.3. Components Diagram
 
-```mermaid
-flowchart LR
-    CLI["main() / argparse — FC2"] --> CORE["extract_pdf() — FC3"]
-    CORE --> OPEN["_open_pdf() — pdfplumber + encryption"]
-    CORE --> PAGE["_extract_page() ×N"]
-    PAGE --> CLSP["_classify_page() — FC4"]
-    CORE --> CLSD["_classify_document() — FC4"]
-    CLI --> EMIT["_emit() — FC5"]
-    CLI --> ERR["_errors.report_error / add_json_errors_argument"]
+```
+skills/pdf/scripts/
+├── md2pdf.py                      ← F1  (unchanged — verified)
+├── html2pdf.py                    ←     (unchanged)
+├── html2pdf_lib/
+│   ├── render.py                  ← F2  (unchanged — verified, weasyprint)
+│   └── chrome_engine.py           ← F3  (MODIFIED — page.pdf(outline=True))
+├── requirements-chrome.txt        ← F4  (MODIFIED — playwright>=1.42)
+├── install.sh                     ← F4  (MODIFIED — pip install --upgrade)
+└── tests/
+    ├── _outline_probe.py          ← F6  (NEW — outline dump helper)
+    └── test_e2e.sh                ← F5  (MODIFIED — 3 outline test blocks)
+
+skills/pdf/SKILL.md                ← F7  (MODIFIED — §2)
+skills/pdf/references/
+└── html-conversion.md             ← F7  (MODIFIED — outline note)
+docs/office-skills-backlog.md      ← F7  (MODIFIED — pdf-7 row)
 ```
 
 ---
 
 ## 4. Data Model (Conceptual)
 
-There is no persistent store. The single data entity is the **dump document** —
-the JSON object `pdf_extract.py` emits. It is the public contract (TASK R7.1).
+There is no persisted data model. The single domain entity is the **PDF
+outline** — produced *by the render engine*, not constructed by skill code.
+It is modelled here only to fix the **contract the F5 regression tests assert
+against**.
 
-### 4.1. Entity: `DumpDocument`
+### 4.1. Entity: `PdfOutline`
 
-```jsonc
-{
-  "page_count":    12,        // int   — number of pages in the PDF
-  "doc_scanned":   false,     // bool  — whole-document scan verdict (see 4.3)
-  "scanned_pages": [9, 10],   // int[] — 1-indexed pages with scanned==true
-  "pages": [ /* PageRecord, document order */ ]
-}
+The document outline embedded in a generated PDF.
+
+| Attribute | Type | Description |
+|-----------|------|-------------|
+| `items` | ordered list of `OutlineItem` | top-level bookmarks, in document order |
+| `is_empty` | bool (derived) | `len(items) == 0` — true for a headingless source (valid; not an error — TASK UC-1/A2) |
+
+### 4.2. Entity: `OutlineItem`
+
+One bookmark node.
+
+| Attribute | Type | Description |
+|-----------|------|-------------|
+| `title` | str | bookmark label = the heading's text content (`<h1>`–`<h6>` inner text) |
+| `depth` | int ≥ 0 | nesting depth in the outline tree (0 = top level) |
+| `children` | ordered list of `OutlineItem` | nested bookmarks (a deeper heading following a shallower one) |
+| `target` | page reference | the page the bookmark jumps to |
+
+**Read interface (tests only).** `pypdf.PdfReader.outline` returns this tree as
+nested Python lists of `Destination` objects (`.title` = label). `pypdf` is
+already a declared pdf-skill dependency (`requirements.txt`, used by
+`pdf_merge.py`) — **no new test dependency** (TASK A-4).
+
+### 4.3. Derived rule: outline well-formedness (test contract)
+
+For a source document whose headings are `h1 → h2 → h3 → h2 → h1` the produced
+`PdfOutline` MUST satisfy:
+
+```
+is_empty            == False
+len(items)          == 2          # two top-level h1
+items[0].title      == "<text of first h1>"
+items[0].children   non-empty     # the h2/h3 nest under the first h1
+depth strictly increases by 1 for each heading-level increase
 ```
 
-**Business rules:**
-- All four top-level keys are contract fields — always present (TASK R7.1).
-  `scanned_pages` is `[]` when no page is scanned (never omitted).
-- `page_count == len(pages)`.
-
-### 4.2. Entity: `PageRecord`
-
-```jsonc
-{
-  "n":          1,             // int  — 1-indexed page number, document order
-  "text":       "…",           // str  — extract_text() result; "" if page yields None
-  "tables":     [ [ ["a","b"], ["c",null] ] ],  // raw extract_tables() form
-  "char_count": 412,           // int  — len(text.strip()); the classification input
-  "has_images": false,         // bool — bool(page.images)
-  "scanned":    false          // bool — _classify_page(char_count, has_images)
-}
-```
-
-**Business rules:**
-- `text` — `page.extract_text(layout=<--layout>) or ""`. Empty pages → `""`.
-- `char_count = len(text.strip())` — leading/trailing whitespace removed so a
-  whitespace-only page scores 0. **Honest-scope note:** with `--layout`,
-  `extract_text` pads *internal* gaps with spaces that `.strip()` does not
-  remove, so `char_count` is inflated on column-bearing pages — harmless,
-  because the threshold (10) has wide margin and a genuine scan still scores ≈0.
-- `tables` — `page.extract_tables()` raw output verbatim: a list of tables,
-  each a list of row-lists of `str | None`; `None` (empty cell) → JSON `null`.
-  Default `extract_tables()` settings only (TASK §1.4(c) — no tuning).
-- `has_images = bool(page.images)`.
-
-### 4.3. Derived rule: `scanned` and `doc_scanned`
-
-Module constant: **`_SCANNED_CHAR_THRESHOLD = 10`** (TASK R8.1a, Q-3 →
-absolute extractable-char count per page).
-
-> **Rationale for 10** (must be reproduced in the helper docstring AND
-> `pdf-to-markdown.md`, per TASK R8.1a): an image-only page's only extractable
-> text is the occasional digitally-stamped page number or Bates number — a
-> handful of characters. The threshold is `10` rather than `0` precisely to
-> tolerate such real-world stamping. A digital page carrying genuine content
-> essentially always exceeds 10 stripped characters. The dual `has_images`
-> condition prevents a sparse digital page from being misread as scanned.
->
-> **Interaction with `--layout` (reviewer M-4):** a genuinely image-only page
-> has *no* character objects at all, so `extract_text` returns `""` and
-> `char_count` is `0` under **both** default and `--layout` extraction — the
-> §4.2 layout-padding inflation applies only to pages that *already* contain
-> text. The classification is therefore stable across modes. The scan-like
-> fixture (FC6) MUST contain **zero selectable text** (no stamped page number)
-> so its score is unambiguously `0` — well clear of the threshold and
-> independent of `--layout`.
-
-```python
-# per page
-scanned = (char_count <= _SCANNED_CHAR_THRESHOLD) and has_images
-
-# document
-scanned_pages = [p.n for p in pages if p.scanned]
-no_meaningful_text = all(p.char_count <= _SCANNED_CHAR_THRESHOLD for p in pages)
-doc_scanned = bool(scanned_pages) and no_meaningful_text
-```
-
-**Boundary cases (TASK R8.2 / R8.2a, reviewer M-2) — locked truth table:**
-
-| Document | `scanned_pages` | `doc_scanned` | exit |
-|----------|-----------------|---------------|------|
-| All pages image-only, ≈0 text | all pages | **true** | **10** |
-| Single-page PDF, that page image-only ≈0 text | `[1]` | **true** | **10** |
-| Digital pages + some image-only pages | the image pages | false | 0 |
-| Every page has images, but ≥1 page also has >10 chars text | the ≤10-char image pages | false | 0 |
-| All pages blank (no text, **no images**) | `[]` | **false** | 0 |
-| Empty PDF (0 pages) | `[]` | false | 0 |
-| ≥1 image-only page + remaining pages blank | the image pages | true | 10 |
-
-Two guards make the verdict robust:
-- **`bool(scanned_pages)`** — a document with **zero** scanned pages is **never**
-  `doc_scanned` (an all-blank PDF must not be sent to OCR).
-- **`no_meaningful_text`** — a page carrying genuine text (`char_count > 10`),
-  *even one that also has images*, keeps `doc_scanned` false: such a document is
-  still text-extractable and must not be routed to OCR. A digital page therefore
-  never forces `doc_scanned`, regardless of `has_images`.
+This is the **engine-agnostic** assertion granularity. Per TASK §1.4(d), the
+tests assert *"a non-empty, hierarchically nested outline whose titles match
+the headings"* — **not** byte-identical trees across weasyprint vs. Chromium
+(the two engines' grouping algorithms may differ in edge cases).
 
 ---
 
 ## 5. Interfaces
 
-### 5.1. CLI contract (TASK R9.1)
+### 5.1. Render-engine outline interfaces (existing, external)
 
-```
-python3 scripts/pdf_extract.py INPUT.pdf [-o OUT.json] [--layout]
-                               [--password PW] [--json-errors]
-```
+| Engine | Interface | Status |
+|--------|-----------|--------|
+| weasyprint | UA stylesheet sets `bookmark-level: N` + `bookmark-label: content(...)` on `h1`–`h6`; `HTML.write_pdf()` emits the outline. No skill code calls it — it is automatic. | already active |
+| Chromium (Playwright) | `page.pdf(outline=True)` → Chromium derives the outline from the document heading structure and embeds it. | **activated by this task** |
 
-| Arg | Meaning |
-|-----|---------|
-| `INPUT.pdf` | positional, required — path to the PDF |
-| `-o OUT.json` | optional — write the dump to this file (overwrite); default = stdout |
-| `--layout` | pass-through → `extract_text(layout=True)` (column-preserving) |
-| `--password PW` | password for an encrypted PDF |
-| `--json-errors` | emit failures as the `_errors` JSON envelope (schema `v=1`) |
+### 5.2. `render_chrome()` change (F3)
 
-`--help` and the module docstring MUST state plainly: *produces a structured
-dump, not finished Markdown — final Markdown composition is the caller's job*
-(TASK R10.2/R10.3).
-
-### 5.2. Exit codes (TASK R9.3)
-
-| Code | Constant | Meaning | Envelope `type` |
-|------|----------|---------|-----------------|
-| `0` | `_EXIT_OK` | Success — dump emitted (digital, mixed, or all-blank PDF) | — |
-| `1` | `_EXIT_FAIL` | Input missing / not a PDF or corrupt / encrypted-without-valid-password / `-o` unwritable / unexpected internal error | `InputNotFound` · `CorruptPdf` · `EncryptedPDF` · `OutputWriteFailed` · `InternalError` |
-| `2` | `_EXIT_USAGE` | argparse usage error (routed through the envelope) | `UsageError` |
-| `6` | `_EXIT_SELF_OVERWRITE` | `-o` output path resolves to the input PDF (cross-7 parity) | `SelfOverwriteRefused` |
-| `10` | `_EXIT_SCANNED` | Whole-document scan — dump still emitted, stderr points at OCR / Read tool | `DocumentScanned` |
-
-- An unexpected exception reaching the top-level boundary → exit `1`, type
-  `InternalError` (defensive catch-all; should never fire in tests).
-- A non-PDF / structurally-broken file is reported as `CorruptPdf` — there is no
-  separate `NotAPdf` type, since from pdfplumber's view a non-PDF *is* a
-  failed-open; one honest type, message conveys "corrupt or not a PDF".
-- **`6 = SelfOverwriteRefused`** (vdd-multi security finding) — `main` resolves
-  `INPUT` and `-o` (symlinks followed via `Path.resolve()`); if they are the
-  same file it refuses before opening, so the dump never truncates the input.
-  Mirrors the cross-7 same-path guard the sibling pdf CLIs (`pdf_watermark.py`,
-  `html2pdf.py`) already ship.
-- **Whole-doc scan is not an "error":** the dump is still written to its normal
-  sink — **stdout or `-o`** — and exit `10` + the stderr message is the loud
-  signal (TASK R8.5).
-- **stdout vs `--json-errors` (reviewer M-3):** `--json-errors` governs **only
-  the stderr channel** — it switches the human error message for the JSON
-  envelope. **stdout always carries the JSON dump, never the envelope**, on
-  every exit path including a whole-doc scan. A scanned-input pipeline should
-  prefer `-o OUT.json` so the dump file and the stderr `DocumentScanned` signal
-  never interleave on one stream.
-- **Exit codes are per-script, not a shared pdf-skill namespace.**
-  `pdf_fill_form.py` already defines `10`/`11`/`12` (`EXIT_FILL_ERROR` /
-  `EXIT_XFA` / `EXIT_NO_FORM`) — this is **not** a collision, because each
-  script owns its own exit-code space. `pdf_extract.py` defines
-  `10 = DocumentScanned`; the only skill-wide rule is "custom codes ≥ 10 (0–9
-  reserved for argparse / shell)", which `10` satisfies. The `--json-errors`
-  `type` field is the unambiguous discriminator if a wrapper drives both
-  scripts.
-
-### 5.3. `--json-errors` envelope
-
-Wired via `_errors.add_json_errors_argument(parser)` and
-`_errors.report_error(...)` — identical usage to `pdf_split.py` /
-`pdf_fill_form.py`. Envelope: `{"v":1,"error":…,"code":…,"type":…,"details":…}`.
-The whole-doc-scan signal under `--json-errors` is
-`{"v":1,"error":…,"code":10,"type":"DocumentScanned","details":{"page_count":N}}`.
-
-### 5.4. Internal interfaces (function contracts)
+`skills/pdf/scripts/html2pdf_lib/chrome_engine.py`, inside `render_chrome()`,
+the existing `page.pdf(...)` call gains one keyword argument:
 
 ```python
-_SCANNED_CHAR_THRESHOLD = 10
-_EXIT_OK, _EXIT_FAIL, _EXIT_USAGE, _EXIT_SCANNED = 0, 1, 2, 10
-
-def main(argv: list[str] | None = None) -> int
-    # parse → extract → classify → emit → return exit code. Owns the
-    # try/except boundary that maps exceptions to 1/2/10.
-
-def _build_parser() -> argparse.ArgumentParser
-    # argparse + add_json_errors_argument().
-
-def extract_pdf(pdf_path: Path, *, password: str | None, layout: bool) -> dict
-    # open → per-page extract → classify document → return DumpDocument dict.
-    # OWNS the pdfplumber handle: opens it inside a `with _open_pdf(...) as pdf:`
-    # block so the file descriptor is released even if a mid-extraction
-    # exception is raised. The handle never escapes this function.
-
-def _open_pdf(pdf_path: Path, password: str | None)  # -> pdfplumber.PDF (context manager)
-    # opens via pdfplumber and returns the PDF object for use as a context
-    # manager by extract_pdf (the SOLE caller, which owns closing it);
-    # translates pdfminer password exceptions into a caller-visible
-    # EncryptedPDF failure; never returns a silently-empty doc.
-
-def _extract_page(page, *, layout: bool) -> dict
-    # one PageRecord (incl. char_count, has_images, scanned via _classify_page).
-
-def _classify_page(char_count: int, has_images: bool) -> bool
-    # scanned predicate — the ONLY site that reads _SCANNED_CHAR_THRESHOLD.
-
-def _classify_document(pages: list[dict]) -> tuple[bool, list[int]]
-    # (doc_scanned, scanned_pages) per §4.3 — incl. the blank-page guard.
-
-def _emit(dump: dict, out_path: Path | None) -> None
-    # json.dump(ensure_ascii=False, indent=2) to stdout or out_path (overwrite).
+page.pdf(
+    path=str(output_path),
+    format=fmt,
+    print_background=print_background,
+    scale=pdf_scale,
+    margin={"top": "1cm", "right": "1cm",
+            "bottom": "1cm", "left": "1cm"},
+    outline=True,                       # ← ADDED (TASK R4.1)
+    tagged=True,                        # ← ADDED — REQUIRED for the outline:
+                                        #   Chromium builds the outline from
+                                        #   the tagged structure tree; outline=
+                                        #   True alone emits 0 bookmarks.
+)
 ```
+
+- **Appended last, existing five arguments unchanged in order** — the diff adds
+  two lines (TASK R4.4).
+- **`tagged=True` is mandatory, not optional** — empirically, `outline=True`
+  alone produces an empty outline (TASK §1.1a, A-3). A chrome-rendered PDF
+  consequently becomes a tagged PDF — an accepted side-effect (TASK §1.2).
+- **No new `render_chrome()` parameter.** Both flags are hardcoded at the call
+  site. There is no `--no-outline` CLI flag (TASK Q-2 resolved: no opt-out), so
+  no caller needs to vary them — parameters would be unused surface (YAGNI).
+  Decision D2.
+
+### 5.3. Dependency + installer interface (F4)
+
+`requirements-chrome.txt`:
+
+```
+playwright>=1.42,<2.0    # 1.42 added page.pdf(outline=True); see pdf-7 / TASK 014
+```
+
+`install.sh` `--with-chrome` block: the `pip install ... -r
+requirements-chrome.txt` invocation gains `--upgrade` so a re-run upgrades an
+already-present too-old Playwright (1.40/1.41 from a pdf-11-era install) —
+plain `pip install -r` does not upgrade an already-satisfied package
+(TASK R5.3 / M-1).
+
+### 5.4. Test helper interface (F6) — `tests/_outline_probe.py`
+
+A test-only helper (peer of the existing `tests/_acroform_fixture.py`).
+
+```
+python3 tests/_outline_probe.py <PDF>
+  → stdout: one line per bookmark, depth-indented:
+        "Chapter One"
+        "  Section 1.1"
+        "    Subsection 1.1.1"
+        "  Section 1.2"
+        "Chapter Two"
+  → exit 0 if the PDF has a non-empty outline; exit 3 if the outline is empty.
+```
+
+Exit 3 is a **private test-harness sentinel**, not an `_errors.py`-style code —
+`_outline_probe.py` is a test-only helper and deliberately stays outside the
+`--json-errors` envelope convention; its docstring states this so a future
+reader does not assume alignment.
+
+`test_e2e.sh` blocks render a fixture, call `_outline_probe.py`, and assert
+on its exit code (non-empty) + `grep` its output for expected titles and the
+indentation that proves nesting. Keeping the `pypdf` traversal in one helper
+avoids brittle multi-line `python -c` strings in the bash harness.
+
+### 5.5. E2E test blocks (F5) — added to `test_e2e.sh`
+
+| Block | Engine / flags | Asserts | Skip rule |
+|-------|----------------|---------|-----------|
+| `md2pdf outline` | `md2pdf.py` (weasyprint) | non-empty, nested, titled (R2) | none — always runs |
+| `html2pdf outline` | `html2pdf.py` default + a second run with `--no-default-css` | non-empty, nested; outline survives `--no-default-css` (R3) | none — always runs |
+| `html2pdf chrome outline` | `html2pdf.py --engine chrome` | `outline` kwarg present in `Page.pdf` signature (R6.4); non-empty + nested (R6.1/6.3) | **soft-skip** when Playwright/Chromium absent — mirrors the `mermaid_renders` pattern (R6.2) |
+
+Fixtures are written inline (heredoc) into the harness `$TMP` dir, exactly as
+the existing mermaid block writes `with_mermaid.md` — no committed fixture
+files, no committed `.pdf` (the skill `.gitignore` ignores `*.pdf` outside
+`examples/`). The chrome fixture is **plain content with no fixed-position
+chrome** so the assertion is not coupled to `_DOM_NORMALIZE_SCRIPT` hiding a
+heading inside `position:fixed` chrome (TASK R4.3 / §1.4(b)).
 
 ---
 
@@ -399,205 +314,147 @@ def _emit(dump: dict, out_path: Path | None) -> None
 
 | Concern | Choice | Justification |
 |---------|--------|---------------|
-| PDF text/table extraction | `pdfplumber` | Already a declared pdf-skill dependency (`SKILL.md` §6); the skill's documented tool for layout-aware extraction (`library-selection.md`). |
-| Encryption handling | `pdfplumber` native `password=` kwarg | `pdfplumber.open(path, password=…)`; pdfminer raises on a bad/missing password — caught and re-reported. No separate `pypdf` round-trip needed for *reading*. |
-| Error envelope | `_errors.py` (sibling, read-only) | Cross-skill uniform `--json-errors` contract. **Imported, never modified** → no CLAUDE.md §2 replication. |
-| CLI / JSON | stdlib `argparse`, `json`, `pathlib` | Zero new dependency. |
-| Fixture building | `reportlab` (draw) · `Pillow` (text→image raster) · `pypdf` (encrypt) | All already pdf-skill dependencies; reused only in `tests/`. |
+| weasyprint outline | weasyprint UA stylesheet (`bookmark-*`) | already in use; produces the outline automatically — nothing to add |
+| chrome outline | Playwright `page.pdf(outline=True, tagged=True)` | the engine's native options; **both** required — Chromium derives the outline from the tagged structure tree (`outline` alone → 0 bookmarks); introduced in Playwright 1.42 |
+| outline read-back (tests) | `pypdf` `PdfReader.outline` | already a declared dependency (`requirements.txt`); no new test dependency |
+| test harness | bash `test_e2e.sh` + inline assertions + `_outline_probe.py` | matches the established pdf-skill E2E style |
 
-**No new runtime dependency.** `requirements.txt`, `requirements-chrome.txt`,
-`LICENSE`, `NOTICE`, and root `THIRD_PARTY_NOTICES.md` are unchanged.
+**No new runtime dependency.** `requirements-chrome.txt` receives a version
+**floor bump** on an already-declared package — not a new dependency —
+therefore **no `THIRD_PARTY_NOTICES.md` change** is required by this task
+(TASK R5.4 / C-4).
 
 ---
 
 ## 7. Security
 
-The trust model matches the other pdf scripts: a local CLI operating on
-caller-named paths. No authN/authZ surface (no network, no multi-tenant state).
+No new attack surface.
 
-- **No remote fetch.** `pdfplumber` reads only the local input path. The script
-  issues no network call.
-- **Path scope.** Only `INPUT.pdf` and `-o OUT.json` are touched. `-o`
-  overwrites without prompting — consistent with every other pdf script and
-  documented in `SKILL.md` §5 (destructive actions).
-- **Encrypted input — never silent.** `_open_pdf` detects an encrypted PDF and
-  fails loudly (`EncryptedPDF`, exit 1) rather than returning empty pages. This
-  is itself a security property: it closes the same silent-failure class the
-  whole feature targets. PDF *decryption-cracking* is out of scope.
-- **`--password` on argv** is visible in `ps`/process listings. Accepted for the
-  local-CLI trust model and **documented** in `--help` and `SKILL.md`; an env-var
-  password source is a possible future hardening (§12 Q-2), not v1.
-- **Untrusted PDF text is data, not code.** Extracted `text` / `tables` may
-  contain arbitrary strings (including Markdown/HTML metacharacters). The dump
-  is `json.dump`-escaped — safe as JSON. The *downstream* risk (the agent
-  pasting cell text into Markdown verbatim) is a **composition** concern: the
-  reference doc (`pdf-to-markdown.md`) MUST flag that extracted content is
-  untrusted and the agent owns escaping. The helper itself emits JSON only and
-  performs no Markdown rendering (TASK R10.4) — so it introduces no injection
-  sink.
-- **Malformed / adversarial PDF.** A corrupt PDF raises inside `pdfplumber`;
-  caught at the boundary → `CorruptPdf`, exit 1. Decompression-bomb / pathologic
-  PDFs are not specifically hardened (see §8 + §10): there is no timeout or
-  page-count cap, so a pathological PDF can **hang** (not just crash) — same
-  posture as the other pdf extraction tooling, accepted for v1.
-- **Output path.** `main` refuses (`SelfOverwriteRefused`, exit 6) when `-o`
-  resolves to the input PDF — `Path.resolve()` follows symlinks, so a symlinked
-  `-o` pointing back at the input is also caught. Beyond that, `-o` writes
-  wherever the caller names it (single-user local-CLI trust model).
-- **Owner-only encryption.** The "encryption is never silent" property covers
-  PDFs that *require* a password to open. A PDF encrypted with only an *owner*
-  password (blank user password — common "open freely, restrict editing")
-  opens without a password and is treated as a normal digital PDF; no
-  encryption signal is raised because the content is genuinely extractable.
-  Recorded in §10 honest-scope.
+- `outline=True` is a static boolean literal at the `page.pdf()` call site — no
+  file content, user input, or path is interpolated into it.
+- The chrome engine's existing offline guarantees are unchanged: remote-route
+  blocking (`_block_remote_routes`), `<base>` stripping, `<script>` stripping.
+  Outline generation runs on the already-loaded local DOM.
+- weasyprint paths are untouched — their existing `_offline_url_fetcher` and
+  SIGALRM watchdog behaviour is preserved bit-for-bit.
+- AuthN/AuthZ: not applicable — these are local file-conversion CLIs with no
+  account model, consistent with every other pdf-skill script.
+- `_outline_probe.py` is a test-only helper; it opens a PDF the test itself
+  just produced in a private `$TMP` dir.
 
 ---
 
 ## 8. Scalability and Performance
 
-- **Expected scale:** documents up to ~50–100 pages; sub-second to a few
-  seconds. No throughput target (TASK §4).
-- **Single open pass (success path).** On a successful extraction there is one
-  `pdfplumber.open()`; pages iterated once; no double text extraction even with
-  `--layout` (one `extract_text` call per page, mode chosen by the flag). Note:
-  each page still pays one `extract_text` **plus** one `extract_tables`
-  geometry pass — both are needed, this is not double work. On the **failure**
-  path the cost is two parses: `pdfplumber.open()` fails, then `_is_encrypted`
-  constructs a `pypdf.PdfReader` (a second parse) purely to label the error
-  `EncryptedPDF` vs `CorruptPdf`. This is a cold path (the open already failed)
-  — accepted; `_is_encrypted`'s docstring states it is not cheap.
-- **Memory honest-scope.** The `DumpDocument` holds every page's `text` +
-  `tables` in memory before emit — `O(total extractable content)`. For ordinary
-  documents this is negligible; a pathologically large PDF (thousands of
-  text-dense pages) would peak proportionally. Streaming the dump page-by-page
-  is **out of scope for v1** (§10) — recorded, not built. `_emit` serialises
-  straight to the sink with `json.dump` (no intermediate full-string copy).
-- **No caching, no concurrency** — a one-shot CLI; YAGNI.
+- weasyprint paths: **zero** performance change (no code change).
+- chrome path: `outline=True` + `tagged=True` add negligible cost — Chromium
+  builds the outline and the structure tree from the layout tree it already
+  computes. No extra DOM pass, no extra navigation. A tagged PDF is marginally
+  larger (structure metadata) but not materially so for the documents the
+  chrome engine targets.
+- Test cost: three small renders (a few KB of HTML/MD each) — sub-second on
+  weasyprint; the chrome block adds one ~1–3 s Chromium render *only* when the
+  opt-in engine is installed, and soft-skips otherwise.
 
 ---
 
 ## 9. Cross-Skill Replication Boundary (CLAUDE.md §2)
 
-**This task triggers NO cross-skill replication.**
+**This task replicates nowhere.** Every file it edits or creates is pdf-only:
 
-- All new/edited files live under `skills/pdf/` only:
-  `scripts/pdf_extract.py`, `references/pdf-to-markdown.md`,
-  `scripts/tests/test_pdf_extract.py`, `scripts/tests/_pdf_extract_fixtures.py`,
-  `scripts/tests/fixtures/*`, plus edits to `skills/pdf/SKILL.md`,
-  `skills/pdf/references/library-selection.md`, and `docs/office-skills-backlog.md`.
-- `pdf_extract.py` **imports `_errors`** (the 4-skill byte-identical
-  `--json-errors` helper) **read-only** — exactly as `pdf_split.py` etc. do. It
-  does **not** modify `_errors.py`, `preview.py`, `office/`, `_soffice.py`, or
-  `office_passwd.py`.
-- The replicated-file invariant MUST stay silent after this task:
-  ```bash
-  diff -q skills/docx/scripts/_errors.py  skills/pdf/scripts/_errors.py
-  diff -q skills/docx/scripts/preview.py  skills/pdf/scripts/preview.py
-  ```
-  Both produce no output. This is asserted in the final integration task.
+| File | Replication class |
+|------|-------------------|
+| `html2pdf_lib/chrome_engine.py` | pdf-only package module (no docx/xlsx/pptx peer) |
+| `requirements-chrome.txt` | pdf-only (chrome engine; not in any replication set) |
+| `install.sh` | pdf-only (explicitly out-of-scope per CLAUDE.md §2) |
+| `tests/_outline_probe.py`, `tests/test_e2e.sh` | pdf-only test surface |
+| `SKILL.md`, `references/html-conversion.md` | pdf-only docs |
+| `docs/office-skills-backlog.md` | repo doc |
+
+The replicated files — `office/`, `_soffice.py`, `_errors.py`, `preview.py`,
+`office_passwd.py` — are **not touched**. The CLAUDE.md §2 protocol is **not
+triggered**. Post-task invariant (TASK R9.3):
+
+```bash
+diff -q skills/docx/scripts/_errors.py  skills/pdf/scripts/_errors.py   # silent
+diff -q skills/docx/scripts/preview.py  skills/pdf/scripts/preview.py   # silent
+```
+
+(pdf has no `office/` directory, so the `office/` `diff -qr` is N/A.)
 
 ---
 
 ## 10. Honest Scope (v1)
 
-Each item is documented in the relevant file (helper docstring and/or
-`pdf-to-markdown.md`) so documentation never overstates the deliverable
-(root `CLAUDE.md` §3 "Honest scope, not aspirational").
+Each item is documented in the named file by the named component.
 
-- **(a)** Final Markdown composition — heading levels, reading order, cross-page
-  table stitching, image/diagram prose — is **agent judgement**, not scripted.
-- **(b)** OCR is not bundled — detection + pointer only.
-- **(c)** Non-default table-detection tuning (`snap_tolerance`, text-vs-lines
-  strategy, explicit edges) — the helper uses default `extract_tables()`; the
-  reference tells the agent to drop to inline `pdfplumber` when defaults miss a
-  borderless table.
-- **(d)** Image bytes are not extracted — only `has_images` is reported.
-- **(e)** `--layout` preserves columns as whitespace; it does **not** reflow
-  multi-column text into logical reading order.
-- **(f)** `char_count` is inflated by layout padding when `--layout` is set
-  (§4.2) — accepted; classification is robust regardless.
-- **(g)** No streaming emit — the whole dump is built in memory (§8).
-- **(h)** Decompression-bomb / adversarial-PDF hardening is not specifically
-  addressed beyond the corrupt-PDF catch (§7): there is **no timeout or
-  page-count cap**, so a pathological PDF can *hang*, not only crash.
-- **(i)** `--password` is read from argv only — no env-var / prompt source in v1
-  (§12 Q-2).
-- **(j)** "Encryption never silent" covers PDFs that *require* a password. A
-  PDF encrypted with only an *owner* password (blank user password) opens
-  without a password and is treated as a normal digital PDF — no encryption
-  signal, because the content is genuinely extractable (vdd-multi logic finding;
-  documented in the helper docstring + `pdf-to-markdown.md`).
+- **(a)** Outline derives **only** from real `<h1>`–`<h6>` tags; styled
+  `<p>`/`<div>` "visual headings" do not appear → `SKILL.md` §2 + reference.
+- **(b)** `--reader-mode`, the preprocessing pipeline, and (chrome)
+  `_DOM_NORMALIZE_SCRIPT` may remove/hide chrome headings → outline reflects
+  what survives **visible**; this is correct → reference note.
+- **(c)** The chrome engine emits a **tagged PDF** (Chromium's mechanism for
+  the outline — `tagged=True` is required). This is an accepted side-effect,
+  **not** a PDF/UA conformance claim; tagging quality is not validated, and the
+  weasyprint paths stay untagged → `SKILL.md` §2 + reference.
+- **(d)** Cross-engine outline trees are not byte-identical; tests assert
+  *non-empty + nested + titled*, not tree equality → §4.3 + test comments.
+- **(e)** The chrome engine stays opt-in; its outline test soft-skips when
+  Playwright/Chromium is absent → `test_e2e.sh` block comment.
+- **(f)** A heading inside DOM-normalised hidden chrome (`display:none`d
+  `position:fixed` element) is intentionally absent from the chrome outline →
+  the chrome test fixture deliberately uses plain content (§5.5).
+- **(g)** Open verification point A-6: `emulate_media("screen")` is assumed not
+  to alter which headings reach the chrome outline; the chrome test records the
+  observation → test comment + TASK A-6.
 
 ---
 
 ## 11. Atomic-Chain Skeleton (Planner handoff)
 
-Suggested decomposition under **Stub-First** (TIER 1 `tdd-stub-first`). The
-Planner owns the final cut; this is the architect's hint. Estimated 6 beads:
+Suggested decomposition (the Planner finalises). All beads are within a 2–4 h
+budget; the chain is short because the task is small.
 
-| # | Bead | Type | Covers | Notes |
-|---|------|------|--------|-------|
-| 013-01 | `pdf_extract.py` skeleton + test scaffolding + fixture builder | **[STUB CREATION]** | R6/R7/R9 signatures; R11 fixtures | All functions stubbed (hardcoded returns); `test_pdf_extract.py` written RED; `_pdf_extract_fixtures.py` + the 3 fixtures (digital, scan-like, encrypted) built and committed. Verify imports + argparse parse. |
-| 013-02 | Extraction core | **[LOGIC]** | R6, R7.1–7.4 | `_open_pdf` (incl. encryption → `EncryptedPDF`), `_extract_page`, `extract_pdf`. Green: digital-fixture dump correct. |
-| 013-03 | Scan classifier | **[LOGIC]** | R8 (all), §4.3 truth table | `_classify_page`, `_classify_document`, threshold constant + documented rationale, blank-page guard. Green: scan-like → doc_scanned; all-blank → not. |
-| 013-04 | CLI glue + emitter | **[LOGIC]** | R9, R7.3/7.5, R10 | `main`, `_emit`, `--json-errors`, exit-code matrix {0,1,2,10}, idempotency, `--password` success path, honest-name docstring. Green: full E2E incl. R12.7. |
-| 013-05 | Reference doc | **[DOC]** | E1 — R1–R5 | `references/pdf-to-markdown.md`. Independent of code; may run in parallel after 013-01 fixes the CLI contract. Must restate the threshold rationale (R8.1a). |
-| 013-06 | Skill integration + validation | **[INTEGRATION]** | R5, R12.6, R13 | `SKILL.md` §2/§4/§10/§12 (+ review §1/§3); `library-selection.md` cross-link; existing `pdf-12` backlog row updated to the refined design; `test_e2e.sh` smoke block; `validate_skill.py` exit 0; cross-skill `diff -q` silent. |
+| Bead | Type | Scope | RTM | Dep |
+|------|------|-------|-----|-----|
+| **014-01** | VERIFY + TEST | `tests/_outline_probe.py` (F6) + `test_e2e.sh` md2pdf & html2pdf-weasyprint outline blocks (F5) — Part A. Weasyprint blocks pass on first run = the verification (Green). | R1, R2, R3 | none |
+| **014-02** | LOGIC | `page.pdf(outline=True)` in `chrome_engine.py` (F3); `requirements-chrome.txt` floor `>=1.42` (F4); `install.sh --upgrade` (F4); `test_e2e.sh` chrome outline block incl. R6.4 capability probe + soft-skip (F5). The R6.4 `inspect.signature` probe runs **before** the render so an under-floor Playwright fails loudly on the cheap check rather than mid-render. Chrome block RED→GREEN. | R4, R5, R6 | 014-01 |
+| **014-03** | DOC + INTEGRATION | `SKILL.md` §2 (+ §10/§12 review); `references/html-conversion.md` note; `docs/office-skills-backlog.md` `pdf-7` row; `validate_skill.py skills/pdf` exit 0; full `test_e2e.sh` green; cross-skill `diff -q` silent. | R7, R8, R9 | 014-02 |
 
-Dependency order: 013-01 → {013-02 → 013-03 → 013-04} ; 013-05 after 013-01 ;
-013-06 last.
-
-> **RTM-coverage note (reviewer m-3):** the R8.1a threshold *rationale* is
-> deliberately dual-homed — bead 013-03 places it in the `pdf_extract.py` module
-> docstring, bead 013-05 places the same rationale in
-> `references/pdf-to-markdown.md`. Both copies are required by TASK R8.1a; the
-> Planner should treat them as one logical requirement satisfied in two files,
-> not two independent items.
+**Execution order:** `014-01 → 014-02 → 014-03` (strict linear; 014-03 needs
+both prior beads' artifacts to exist before docs link them and validation runs).
 
 ---
 
 ## 12. Open Questions
 
-All resolved with a documented default — non-blocking; the Architecture-Reviewer
-/ Planner may confirm or override.
+All resolved upstream in TASK 014 §6 (Q-1..Q-4); none block design.
 
-- **Q-1 (resolved → §4.3):** scan-detection threshold value. Resolved:
-  `_SCANNED_CHAR_THRESHOLD = 10` extractable chars per page, with the rationale
-  recorded in §4.3 (and to be reproduced in the helper docstring + reference per
-  TASK R8.1a). Override only if a real fixture proves misclassification.
-- **Q-2 (resolved → §7, §10(i)):** `--password` source. Resolved: argv only in
-  v1; argv visibility documented; env-var source deferred. Override if a
-  pipeline needs to avoid argv-visible secrets.
-- **Q-3 (resolved → §3.1):** single script vs package. Resolved: single file
-  `pdf_extract.py` (YAGNI; consistent with the sibling pdf scripts). Revisit
-  only if the file exceeds ~400 LOC in implementation.
-- **Q-4 (resolved → §5.4):** JSON formatting. Resolved: `indent=2`,
-  `ensure_ascii=False` — the dump is meant to be read by the agent; readability
-  beats compactness at the expected document scale.
-
-No question blocks the Planning phase.
+- **Q-1 (resolved):** chrome-engine fix in scope — user-confirmed (TASK A-2).
+- **Q-2 (resolved):** no `--no-outline` flag → `outline=True` hardcoded, no
+  `render_chrome()` parameter (D2).
+- **Q-3 (resolved — amended 2026-05-22):** `tagged=True` **is** set on the
+  chrome engine — it is *required* for the outline (Chromium couples them);
+  the chrome PDF becomes a tagged PDF, an accepted side-effect. No PDF/UA
+  *conformance* is claimed (Honest Scope (c)). User-confirmed amendment.
+- **Q-4 (resolved):** Playwright **floor bump** to 1.42, not a runtime probe;
+  the F5 chrome block additionally probes the `outline` kwarg's presence
+  (R6.4) as a defence-in-depth diagnostic.
+- **A-6 (open verification point, non-blocking):** `emulate_media("screen")`
+  vs. chrome outline — confirmed empirically by the 014-02 chrome test and
+  recorded; no design decision pends on it.
 
 ---
 
 ## 13. Decision-Record Summary
 
-> **Identifier note (reviewer m-2):** this work has two identifiers, both
-> correct. **`TASK 013`** is the global task-sequence ID (drives `docs/TASK.md`,
-> the `docs/tasks/task-013-*` archive name, and the `013-NN` bead IDs).
-> **`pdf-12`** is the *backlog row* in `docs/office-skills-backlog.md` — it
-> **pre-exists** (P0 "agentic read-loop" tier, originally scoped as two scripts
-> with a `--format markdown` mode); bead 013-06 *updates* it to TASK 013's
-> refined single-`pdf_extract.py`-dump + reference-doc design — it is not newly
-> created. The architecture title carries both. There is no `pdf-13`.
-
 | ID | Decision | Rationale |
 |----|----------|-----------|
-| D1 | `docs/ARCHITECTURE.md` archived per-task → `architectures/architecture-009-…`; fresh doc for TASK 013 | Established, self-documented repo practice (architecture-001..009); overrides the generic framework "living document" rule per `core-principles` §0. |
-| D2 | Single file `scripts/pdf_extract.py`, no package | YAGNI; matches `pdf_split.py` / `pdf_fill_form.py`; est. ≤ 350 LOC. |
-| D3 | Helper emits **JSON only**, never Markdown; named `pdf_extract.py` | TASK Non-goal — no "magic converter"; the name must not promise finished MD. |
-| D4 | Scan = `char_count ≤ 10 AND has_images`; `doc_scanned` guarded by `bool(scanned_pages)` | Dual condition avoids misclassifying sparse digital pages; the guard prevents an all-blank PDF being sent to OCR (reviewer M-2). |
-| D5 | Whole-doc scan → exit `10` + stderr + dump still emitted on stdout/`-o` | Strongest loud signal a wrapper cannot miss (TASK Q-2/A-3). Exit codes are per-script; `10` satisfies the skill-wide "custom codes ≥ 10" rule. `pdf_fill_form.py` independently uses 10/11/12 — not a collision, since each script owns its own code space (`type` field disambiguates). |
-| D6 | `_errors.py` imported read-only | Uniform `--json-errors`; no CLAUDE.md §2 replication triggered. |
-| D7 | `char_count = len(text.strip())`, single extraction even with `--layout` | Simplicity; threshold margin keeps classification robust despite layout padding. |
-| D8 | Encryption handled via `pdfplumber` native `password=`; bad/absent password → `EncryptedPDF` exit 1 | No silent-empty on encrypted input — the same failure class the feature exists to kill. |
-| D9 | Fixtures built by a committed `_pdf_extract_fixtures.py` (reportlab + Pillow + pypdf) | Reproducible, no opaque binary blobs; mirrors the existing `_acroform_fixture.py` pattern. |
+| **D1** | weasyprint paths get **no code change** — verify-and-lock only | They already emit the outline (reconnaissance); the risk is silent *regression*, which F5 tests pin |
+| **D2** | `outline=True` **and `tagged=True`** hardcoded at the `page.pdf()` call site — no new `render_chrome()` parameter | `tagged=True` is required for the outline (§1, TASK §1.1a — Chromium couples them); no `--no-outline` CLI flag (Q-2), so a parameter no caller varies is unused surface (YAGNI) |
+| **D3** | Playwright floor `>=1.42` (not a runtime version probe) | 1.42 introduced `page.pdf(outline=True)`; per project memory feedback "prefer dependency upgrades on a version mismatch" |
+| **D4** | `install.sh --with-chrome` installs `requirements-chrome.txt` with `--upgrade` | A floor bump alone does not upgrade an already-satisfied package; closes the pdf-11-era-install gap (M-1) |
+| **D5** | New test-only helper `tests/_outline_probe.py` | Keeps the `pypdf` outline traversal out of brittle multi-line `python -c` strings; mirrors `_acroform_fixture.py` |
+| **D6** | Fixtures written inline (heredoc) into `$TMP`; no committed fixture/`.pdf` files | Matches the existing mermaid-block convention; the skill `.gitignore` ignores `*.pdf` outside `examples/` |
+| **D7** | Chrome outline test soft-skips when Playwright/Chromium absent | The chrome engine is opt-in; a missing optional dependency is a coverage gap, not a suite failure — mirrors the `mermaid_renders` pattern |
+| **D8** | Chrome test fixture is plain content (no `position:fixed` chrome) | Decouples the assertion from `_DOM_NORMALIZE_SCRIPT` hiding headings inside hidden chrome (Honest Scope (b)/(f)) |

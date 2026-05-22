@@ -721,6 +721,18 @@ def render_chrome(
                         scale=pdf_scale,
                         margin={"top": "1cm", "right": "1cm",
                                 "bottom": "1cm", "left": "1cm"},
+                        # pdf-7 / TASK 014: emit a PDF outline (bookmarks)
+                        # from the document headings — parity with the
+                        # weasyprint engine, which does this automatically
+                        # via its UA stylesheet's bookmark-level.
+                        # tagged=True is REQUIRED, not optional: Chromium
+                        # builds the outline from the tagged-PDF structure
+                        # tree, so outline=True alone emits 0 bookmarks. The
+                        # chrome PDF is consequently a tagged PDF — an
+                        # accepted side-effect. Both options need Playwright
+                        # >= 1.42 (see requirements-chrome.txt).
+                        outline=True,
+                        tagged=True,
                     )
                 except PlaywrightTimeoutError as exc:
                     raise RenderTimeout(

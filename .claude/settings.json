@@ -218,7 +218,12 @@
       "Bash(PYTHONPATH=tests:. ./.venv/bin/python -m unittest tests.test_xlsx_add_comment.TestGoldenDiff -v)",
       "Bash(PYTHONPATH=tests ./.venv/bin/python -m unittest tests.test_xlsx_add_comment.TestGoldenDiff -v)",
       "Bash(./.venv/bin/python xlsx_add_comment.py tests/golden/inputs/with_legacy.xlsx /tmp/g-existing.xlsx --cell C5 --author Validator --text new_finding --date 2026-01-01T00:00:00Z)",
-      "Bash(PYTHONPATH=tests ./.venv/bin/python -c ' *)"
+      "Bash(PYTHONPATH=tests ./.venv/bin/python -c ' *)",
+      "Bash(/Users/sergey/dev-projects/Universal-skills/skills/pdf/scripts/.venv/bin/python /Users/sergey/dev-projects/Universal-skills/skills/pdf/scripts/html2pdf.py /tmp/pdf7_outline.html /tmp/pdf7_chrome_green.pdf --engine chrome)",
+      "Bash(./.venv/bin/python tests/_outline_probe.py /tmp/pdf7_chrome_green.pdf)",
+      "Bash(sed -n '213,215p' docs/office-skills-backlog.md)",
+      "Bash(sed -n '688,692p' docs/office-skills-backlog.md)",
+      "Bash(sed -n '719,722p' docs/office-skills-backlog.md)"
     ],
     "additionalDirectories": [
       "/tmp/vdd_preview",

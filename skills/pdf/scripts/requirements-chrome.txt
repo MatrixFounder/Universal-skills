@@ -13,4 +13,12 @@
 #
 # We pin a major version range, not a release tag — Playwright itself is
 # stable and the chromium revision is what changes from release to release.
-playwright>=1.40,<2.0
+#
+# Floor is 1.42 (not 1.40): Playwright 1.42 added the page.pdf() outline= and
+# tagged= options. render_chrome() passes BOTH to emit a PDF outline (TOC
+# bookmarks) — Chromium builds the outline from the tagged-PDF structure tree,
+# so tagged=True is required alongside outline=True (pdf-7 / TASK 014). On
+# 1.40/1.41, page.pdf(outline=True, tagged=True) raises TypeError. install.sh
+# --with-chrome installs this file with --upgrade so a re-run lifts a
+# pre-existing too-old Playwright to the floor.
+playwright>=1.42,<2.0

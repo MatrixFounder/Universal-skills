@@ -277,6 +277,38 @@ Honest scope (deferred to pdf-11a):
 - **Cross-platform** (honest scope): validated on **macOS Apple Silicon only**. The chrome engine is OPT-IN (requires `bash install.sh --with-chrome` to download ~150 MB Chromium); CI workflow does NOT pass `--with-chrome` and the `TestChromeE2ENegativeRegression` test class is gated on Playwright availability (`@unittest.skipUnless(_HAS_PLAYWRIGHT, ...)`), so it skips in CI. **Ubuntu 22.04 validation is deferred** — needs either workflow change to install Playwright + run chrome E2E, or a separate manual Linux verification pass. Other platforms (Linux Alpine/RHEL/Arch) require manual system-package setup beyond `playwright install-deps`. Docker containers need `--cap-add=SYS_ADMIN` or the Chromium `--no-sandbox` flag. AWS Lambda / serverless need `chrome-aws-lambda` or `chromium-min` (bundled Chromium exceeds 250 MB Lambda layer limit).
 - **html2docx parity**: chrome engine is HTML→PDF only. The `--engine chrome` path for html2docx (Word output via Chromium) is a separate follow-up.
 
+## PDF outline (bookmarks)
+
+Both render engines emit a **PDF outline** — the navigable bookmark tree a
+viewer shows in its sidebar — from the document's `<h1>`–`<h6>` headings. No
+CSS flag or CLI option is required; the same applies to `md2pdf.py`.
+
+- **weasyprint** (default engine, and `md2pdf.py`): the outline is produced
+  automatically by weasyprint's user-agent stylesheet, which sets
+  `bookmark-level` / `bookmark-label` on `h1`–`h6`. `--no-default-css` does
+  **not** disable it — the bundled `DEFAULT_CSS` does not own those properties.
+- **chrome** (`--engine chrome`): `render_chrome()` passes
+  `page.pdf(outline=True, tagged=True)`. `tagged=True` is **required** —
+  Chromium builds the outline from the tagged-PDF structure tree, so
+  `outline=True` alone emits no bookmarks. A chrome-rendered PDF is therefore a
+  **tagged PDF**. Needs Playwright ≥ 1.42 (see `requirements-chrome.txt`).
+
+**Honest scope:**
+
+- The outline derives from **real `<h1>`–`<h6>` tags only**. Visually
+  "heading-like" content built from styled `<p>` / `<div>` does not appear.
+- `--reader-mode`, the preprocessing pipeline, and (chrome) the DOM-normalise
+  step may remove or hide chrome/nav headings before render; the outline
+  reflects whatever headings survive **visible** in the rendered document —
+  this is correct, not a bug (hidden chrome should not pollute the outline).
+- Cross-engine outline trees are not byte-identical: weasyprint's
+  `bookmark-level` algorithm and Chromium's grouping may differ in edge cases.
+- The chrome engine emits a **tagged PDF** as the mechanism for the outline.
+  This incidentally aids accessibility, but `html2pdf.py` makes **no PDF/UA
+  conformance claim** and does not validate the tagged structure's quality.
+  The weasyprint paths are **not** tagged — their `bookmark-level` outline
+  needs no tagging.
+
 ## Honest scope (limitations)
 
 - **Code-block syntax highlighting is monochrome** in flattened table-rendered code blocks (Fern / Mintlify / Docusaurus). Trade-off for content completeness: weasyprint's `<table>`-inside-`<pre>` pagination bug means we either flatten and lose colour, or keep colour and risk content cut-off.
