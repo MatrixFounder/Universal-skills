@@ -314,12 +314,21 @@ dump, not finished Markdown — final Markdown composition is the caller's job*
 | Code | Constant | Meaning | Envelope `type` |
 |------|----------|---------|-----------------|
 | `0` | `_EXIT_OK` | Success — dump emitted (digital, mixed, or all-blank PDF) | — |
-| `1` | `_EXIT_FAIL` | Input missing / not a PDF / corrupt / encrypted-without-valid-password / unexpected internal error | `InputNotFound` · `NotAPdf` · `CorruptPdf` · `EncryptedPDF` · `InternalError` |
+| `1` | `_EXIT_FAIL` | Input missing / not a PDF or corrupt / encrypted-without-valid-password / `-o` unwritable / unexpected internal error | `InputNotFound` · `CorruptPdf` · `EncryptedPDF` · `OutputWriteFailed` · `InternalError` |
 | `2` | `_EXIT_USAGE` | argparse usage error (routed through the envelope) | `UsageError` |
+| `6` | `_EXIT_SELF_OVERWRITE` | `-o` output path resolves to the input PDF (cross-7 parity) | `SelfOverwriteRefused` |
 | `10` | `_EXIT_SCANNED` | Whole-document scan — dump still emitted, stderr points at OCR / Read tool | `DocumentScanned` |
 
 - An unexpected exception reaching the top-level boundary → exit `1`, type
   `InternalError` (defensive catch-all; should never fire in tests).
+- A non-PDF / structurally-broken file is reported as `CorruptPdf` — there is no
+  separate `NotAPdf` type, since from pdfplumber's view a non-PDF *is* a
+  failed-open; one honest type, message conveys "corrupt or not a PDF".
+- **`6 = SelfOverwriteRefused`** (vdd-multi security finding) — `main` resolves
+  `INPUT` and `-o` (symlinks followed via `Path.resolve()`); if they are the
+  same file it refuses before opening, so the dump never truncates the input.
+  Mirrors the cross-7 same-path guard the sibling pdf CLIs (`pdf_watermark.py`,
+  `html2pdf.py`) already ship.
 - **Whole-doc scan is not an "error":** the dump is still written to its normal
   sink — **stdout or `-o`** — and exit `10` + the stderr message is the loud
   signal (TASK R8.5).
@@ -428,8 +437,19 @@ caller-named paths. No authN/authZ surface (no network, no multi-tenant state).
   sink.
 - **Malformed / adversarial PDF.** A corrupt PDF raises inside `pdfplumber`;
   caught at the boundary → `CorruptPdf`, exit 1. Decompression-bomb / pathologic
-  PDFs are not specifically hardened (see §8 + §10) — same posture as the other
-  pdf extraction tooling.
+  PDFs are not specifically hardened (see §8 + §10): there is no timeout or
+  page-count cap, so a pathological PDF can **hang** (not just crash) — same
+  posture as the other pdf extraction tooling, accepted for v1.
+- **Output path.** `main` refuses (`SelfOverwriteRefused`, exit 6) when `-o`
+  resolves to the input PDF — `Path.resolve()` follows symlinks, so a symlinked
+  `-o` pointing back at the input is also caught. Beyond that, `-o` writes
+  wherever the caller names it (single-user local-CLI trust model).
+- **Owner-only encryption.** The "encryption is never silent" property covers
+  PDFs that *require* a password to open. A PDF encrypted with only an *owner*
+  password (blank user password — common "open freely, restrict editing")
+  opens without a password and is treated as a normal digital PDF; no
+  encryption signal is raised because the content is genuinely extractable.
+  Recorded in §10 honest-scope.
 
 ---
 
@@ -437,15 +457,21 @@ caller-named paths. No authN/authZ surface (no network, no multi-tenant state).
 
 - **Expected scale:** documents up to ~50–100 pages; sub-second to a few
   seconds. No throughput target (TASK §4).
-- **Single open pass.** One `pdfplumber.open()`; pages iterated once. No double
-  extraction even with `--layout` (one `extract_text` call per page, mode chosen
-  by the flag).
+- **Single open pass (success path).** On a successful extraction there is one
+  `pdfplumber.open()`; pages iterated once; no double text extraction even with
+  `--layout` (one `extract_text` call per page, mode chosen by the flag). Note:
+  each page still pays one `extract_text` **plus** one `extract_tables`
+  geometry pass — both are needed, this is not double work. On the **failure**
+  path the cost is two parses: `pdfplumber.open()` fails, then `_is_encrypted`
+  constructs a `pypdf.PdfReader` (a second parse) purely to label the error
+  `EncryptedPDF` vs `CorruptPdf`. This is a cold path (the open already failed)
+  — accepted; `_is_encrypted`'s docstring states it is not cheap.
 - **Memory honest-scope.** The `DumpDocument` holds every page's `text` +
   `tables` in memory before emit — `O(total extractable content)`. For ordinary
   documents this is negligible; a pathologically large PDF (thousands of
   text-dense pages) would peak proportionally. Streaming the dump page-by-page
-  is **out of scope for v1** (§10) — recorded, not built. The JSON is assembled
-  fully then `json.dump`-ed.
+  is **out of scope for v1** (§10) — recorded, not built. `_emit` serialises
+  straight to the sink with `json.dump` (no intermediate full-string copy).
 - **No caching, no concurrency** — a one-shot CLI; YAGNI.
 
 ---
@@ -492,9 +518,15 @@ Each item is documented in the relevant file (helper docstring and/or
   (§4.2) — accepted; classification is robust regardless.
 - **(g)** No streaming emit — the whole dump is built in memory (§8).
 - **(h)** Decompression-bomb / adversarial-PDF hardening is not specifically
-  addressed beyond the corrupt-PDF catch (§7).
+  addressed beyond the corrupt-PDF catch (§7): there is **no timeout or
+  page-count cap**, so a pathological PDF can *hang*, not only crash.
 - **(i)** `--password` is read from argv only — no env-var / prompt source in v1
   (§12 Q-2).
+- **(j)** "Encryption never silent" covers PDFs that *require* a password. A
+  PDF encrypted with only an *owner* password (blank user password) opens
+  without a password and is treated as a normal digital PDF — no encryption
+  signal, because the content is genuinely extractable (vdd-multi logic finding;
+  documented in the helper docstring + `pdf-to-markdown.md`).
 
 ---
 

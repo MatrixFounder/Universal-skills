@@ -47,6 +47,12 @@ Built on top of `pdfminer.six`, tuned for extraction:
 
 Weakness: creation. `pdfplumber` is read-only.
 
+> For the specific **PDF → Markdown** task, see
+> [pdf-to-markdown.md](pdf-to-markdown.md) — the digital-vs-scanned decision
+> tree, the per-page extraction recipe, the common pitfalls (multi-column
+> reading order, borderless / cross-page tables), and the `pdf_extract.py`
+> structured-dump helper with scan detection.
+
 ## What `weasyprint` does well
 
 - HTML + CSS (including `@page`, `@media print`, counters, columns) →

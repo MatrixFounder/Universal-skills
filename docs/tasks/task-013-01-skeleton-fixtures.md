@@ -83,8 +83,12 @@ Mirrors the existing `tests/_acroform_fixture.py` pattern. Functions:
 
 #### `skills/pdf/scripts/tests/fixtures/digital.pdf`, `scanlike.pdf`, `encrypted.pdf`
 
-The 3 committed fixtures, produced by `_pdf_extract_fixtures.py build_all`
-(provenance = the builder; TASK R11.3). `encrypted.pdf` password: `test-pw`.
+The 3 fixtures, produced by `_pdf_extract_fixtures.py build_all`. **Resolved
+deviation D-01:** the pdf skill `.gitignore` ignores all `*.pdf` outside
+`examples/`, so these are **build-at-runtime runtime artifacts**, NOT committed
+binaries — the committed builder script is the reproducible provenance (matches
+the `_acroform_fixture.py` convention; TASK R11.3 updated to match).
+`encrypted.pdf` password: `test-pw`.
 
 #### `skills/pdf/scripts/tests/test_pdf_extract.py` (test scaffolding)
 
@@ -144,7 +148,8 @@ None. `requirements.txt` is **NOT** touched (ARCH §6 — `pdfplumber` /
       disclaimer ([R10]).
 - [ ] `_pdf_extract_fixtures.py` exists and `build_all` regenerates the 3
       fixtures deterministically.
-- [ ] `tests/fixtures/{digital,scanlike,encrypted}.pdf` committed ([R11]).
+- [ ] `tests/fixtures/{digital,scanlike,encrypted}.pdf` are built by the
+      builder (build-at-runtime; gitignored per D-01) ([R11]).
 - [ ] All 6 unit tests + the smoke E2E pass on the stubs.
 - [ ] `python3 pdf_extract.py --help` exit 0.
 - [ ] Cross-skill `diff -q` silent gate (ARCH §9):

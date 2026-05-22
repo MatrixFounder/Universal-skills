@@ -18,6 +18,7 @@ scripts that embed those choices removes the variance.
 
 **STOP and READ THIS if you are thinking:**
 - "I'll use `pypdf` to extract the text." → **WRONG** for layout-dependent content. `pypdf`'s text extraction is famously unreliable on anything with columns or complex layout; use `pdfplumber`. See [references/library-selection.md](references/library-selection.md).
+- "I'll improvise a `pdfplumber` script to convert this PDF to Markdown." → **WRONG** to improvise from scratch. Run `pdf_extract.py` for the structured dump and follow [references/pdf-to-markdown.md](references/pdf-to-markdown.md) — and never skip the scan check: on a scanned PDF `pdfplumber` returns empty text *silently*; `pdf_extract.py` exits `10` instead.
 - "I'll reach for `playwright` for Markdown → PDF because it handles everything." → **WRONG**. Playwright pulls a 200 MB Chromium install. `weasyprint` handles 95% of Markdown/HTML inputs with a fraction of the footprint.
 - "I'll fill this XFA form with `pypdf`." → **WRONG**. `pypdf` doesn't fill XFA — only AcroForm. Detect the form type first (see [references/forms.md](references/forms.md)) and fail loudly if it's XFA rather than silently writing an unchanged file.
 - "I'll skip checking exit codes from `pdf_merge.py`." → **WRONG**. Missing an input file produces exit 1 and the output is absent — silently assuming success ships a broken deliverable.
@@ -30,12 +31,14 @@ scripts that embed those choices removes the variance.
 - **Stamp a text or image watermark on every (or selected) page** via `pdf_watermark.py` (drafts, "CONFIDENTIAL", brand stamps). `--position center|top-left|top-right|bottom-left|bottom-right|diagonal`, `--opacity`, `--rotation`, `--pages "1-5,8"`. Builds one overlay per unique page mediabox, so heterogeneous decks (Letter+A4) keep correct proportions.
 - **Detect, inspect, and fill AcroForm fields** via `pdf_fill_form.py` — three modes: `--check` (form-type triage with exit codes 0/11/12 = AcroForm/XFA/none), `--extract-fields` (dump field schema as JSON for editing), and fill mode (`INPUT.pdf DATA.json -o OUT.pdf [--flatten]`). XFA forms are detected and refused with a clear message.
 - Extract text, tables, and layout via `pdfplumber` (documented; inline usage from the agent is fine).
+- **Dump a PDF's per-page text + tables to structured JSON** via `pdf_extract.py` — a structured *dump*, NOT a Markdown converter (it never emits Markdown). Its defining feature is **scan detection**: an image-only document exits `10` with a `DocumentScanned` signal instead of silently yielding empty text. Pairs with [references/pdf-to-markdown.md](references/pdf-to-markdown.md) for the PDF→Markdown decision tree and recipe; final Markdown composition stays agent judgement.
 - Render any `.pdf` (or peer-skill `.docx`/`.xlsx`/`.pptx`) into a single PNG-grid preview via `preview.py` (uses Poppler directly for `.pdf`; LibreOffice + Poppler for OOXML).
 - Emit failures as machine-readable JSON to stderr with `--json-errors` (uniform across all four office skills).
 
 ## 3. Execution Mode
 - **Mode**: `script-first` for the bundled operations, `prompt-first` with library references for extraction and form filling.
 - **Why this mode**: The bundled operations (render, merge, split) are stable recipes. Extraction and form filling depend heavily on the specific document and deserve inspection before running — the references guide the inline work.
+- **`pdf_extract.py` — the bounded exception**: extracting per-page text + tables to a JSON *dump* IS a stable recipe, so it is bundled (it also closes the silent-scan failure with code). Markdown *composition* — heading levels, reading order, table stitching — stays `prompt-first` agent judgement: there is no Markdown-converter script, by design. See [references/pdf-to-markdown.md](references/pdf-to-markdown.md).
 
 ## 4. Script Contract
 
@@ -51,6 +54,7 @@ scripts that embed those choices removes the variance.
   - `python3 scripts/pdf_fill_form.py --extract-fields INPUT.pdf -o fields.json`
   - `python3 scripts/pdf_fill_form.py INPUT.pdf DATA.json -o OUTPUT.pdf [--flatten]`
   - `python3 scripts/preview.py INPUT OUTPUT.jpg [--cols 3] [--dpi 110] [--gap 12] [--padding 24] [--label-font-size 14] [--soffice-timeout 240] [--pdftoppm-timeout 60]`
+  - `python3 scripts/pdf_extract.py INPUT.pdf [-o OUT.json] [--layout] [--password PW] [--json-errors]` — dumps per-page text + tables as structured JSON (NOT Markdown). Exit codes: `0` success; `1` failure (missing / not-a-PDF / corrupt / encrypted-without-password); `2` usage error; `6` `SelfOverwriteRefused` (`-o` resolves to the input PDF); **`10` `DocumentScanned`** — the whole document is image-only, run OCR or read the pages as images. On exit 10 the dump is still emitted; exit 10 + stderr is the loud signal. Default output is stdout; `-o` writes a file (idempotent). See [references/pdf-to-markdown.md](references/pdf-to-markdown.md).
   - All scripts above accept `--json-errors` to emit failures as a single line of JSON on stderr (`{v, error, code, type?, details?}`). The schema version `v` is currently `1`; argparse usage errors are routed through the same envelope (`type:"UsageError"`).
 - **Inputs**: positional paths; optional flags per command.
 - **Outputs**: single PDF files (`md2pdf`, `pdf_merge`) or multiple PDFs under a directory (`pdf_split`). All stdout goes to the output path list.
@@ -80,10 +84,13 @@ scripts that embed those choices removes the variance.
 
 ### 7.1 Pick the library, not the script first
 
-Extraction and form filling are not in the bundled scripts deliberately.
+A full PDF→Markdown *converter* is deliberately not bundled — Markdown
+composition (heading levels, reading order, stitching a table across pages) is
+agent judgement. Form filling likewise depends on the document.
 1. Check [references/library-selection.md](references/library-selection.md) for which library matches the task.
-2. For extraction: write inline `pdfplumber` code in your response.
-3. For form filling: follow [references/forms.md](references/forms.md) — detect AcroForm vs XFA first.
+2. For **PDF → Markdown**: follow [references/pdf-to-markdown.md](references/pdf-to-markdown.md) — its decision tree picks digital-vs-scanned, and `pdf_extract.py` gives a structured dump. You compose the Markdown from that dump; the script never emits Markdown.
+3. For other extraction (a one-off text/table grab): write inline `pdfplumber` code, or run `pdf_extract.py` for a quick structured dump.
+4. For form filling: follow [references/forms.md](references/forms.md) — detect AcroForm vs XFA first.
 
 ### 7.2 Creating PDFs from Markdown
 
@@ -187,6 +194,8 @@ Extract text (inline, no bundled script):
 | Extract field schema as JSON | `python3 scripts/pdf_fill_form.py --extract-fields form.pdf -o fields.json` |
 | Fill AcroForm from JSON | `python3 scripts/pdf_fill_form.py form.pdf data.json -o filled.pdf [--flatten]` |
 | Preview as PNG-grid | `python3 scripts/preview.py file.pdf preview.jpg [--cols 3] [--dpi 110]` |
+| Dump PDF text + tables to JSON | `python3 scripts/pdf_extract.py in.pdf -o dump.json` |
+| PDF → Markdown (approach + recipe) | follow [references/pdf-to-markdown.md](references/pdf-to-markdown.md) |
 | Machine-readable failures | append `--json-errors` to any of the above |
 
 ## 11. Examples (Few-Shot)
@@ -236,6 +245,7 @@ python3 scripts/pdf_watermark.py contract.pdf contract-draft.pdf --text "DRAFT"
 ## 12. Resources
 
 - [references/library-selection.md](references/library-selection.md) — which PDF library for which task, installation shortcuts.
+- [references/pdf-to-markdown.md](references/pdf-to-markdown.md) — PDF → Markdown: decision tree (digital vs scanned), extraction recipe, pitfalls (multi-column, borderless tables, cross-page tables, headings), and why Markdown composition stays agent judgement.
 - [references/forms.md](references/forms.md) — AcroForm vs XFA, filling with pypdf, flattening, visual overlay fallback.
 - [references/weasyprint-setup.md](references/weasyprint-setup.md) — install platform notes, `@page` recipes, font embedding, page breaks.
 - [references/html-conversion.md](references/html-conversion.md) — `html2pdf.py` deep dive: 10-step preprocessing pipeline, `_NORMALIZE_CSS` rules, reader-mode candidate list with body-ratio guard, render-time hardening (offline URL fetcher + SIGALRM watchdog), per-platform notes (Fern / Mintlify / GitBook / Confluence / Хабр / vc.ru), honest-scope limitations.
@@ -246,5 +256,6 @@ python3 scripts/pdf_watermark.py contract.pdf contract-draft.pdf --text "DRAFT"
 - [scripts/pdf_watermark.py](scripts/pdf_watermark.py) — text/image watermark overlay via reportlab + pypdf; per-mediabox overlay caching for heterogeneous decks; cross-7 same-path guard.
 - [scripts/pdf_fill_form.py](scripts/pdf_fill_form.py) — AcroForm inspect/extract/fill/flatten via pypdf; XFA forms detected and refused.
 - [scripts/preview.py](scripts/preview.py) — universal `INPUT → PNG-grid` renderer for `.pdf` (via Poppler) and `.docx`/`.xlsx`/`.pptx` (via LibreOffice + Poppler). Byte-identical across all four office skills.
+- [scripts/pdf_extract.py](scripts/pdf_extract.py) — dumps a PDF's per-page text + tables to structured JSON via `pdfplumber`, with scan detection (image-only document → exit `10`). A dump, not a Markdown converter.
 - [scripts/mermaid-config.json](scripts/mermaid-config.json) — bundled office-friendly mermaid config (Cyrillic-capable font stack, auto-applied unless overridden via `--mermaid-config`).
 - [scripts/_errors.py](scripts/_errors.py) — `--json-errors` envelope helper (schema `v=1`).
