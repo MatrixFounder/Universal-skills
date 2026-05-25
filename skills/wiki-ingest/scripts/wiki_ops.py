@@ -238,8 +238,51 @@ def insert_section_before(content: str, anchor_header_text: str,
 PLACEHOLDER_RE = re.compile(r"^_Additional .*?_$", re.M)
 
 
+def _strip_quotes(s: str) -> str:
+    s = s.strip()
+    if len(s) >= 2 and s[0] == s[-1] and s[0] in ('"', "'"):
+        return s[1:-1]
+    return s
+
+
+def _parse_flow_list(value: str) -> list[str]:
+    """Parse YAML flow-style list: `[a, "b, c", d]` → ['a', 'b, c', 'd']."""
+    inner = value[1:-1]
+    items: list[str] = []
+    cur: list[str] = []
+    in_q: str | None = None
+    for ch in inner:
+        if in_q:
+            if ch == in_q:
+                in_q = None
+            else:
+                cur.append(ch)
+        elif ch in ("'", '"'):
+            in_q = ch
+        elif ch == ",":
+            items.append("".join(cur).strip())
+            cur = []
+        else:
+            cur.append(ch)
+    if cur:
+        items.append("".join(cur).strip())
+    return [_strip_quotes(it) for it in items if it]
+
+
 def split_frontmatter(content: str) -> tuple[dict, str]:
-    """Naive YAML frontmatter parser — handles flat scalars and list items only."""
+    """YAML frontmatter parser with limited nested-mapping support.
+
+    Handles:
+    - flat `key: value`
+    - `key:` followed by indented `- value` items (list of strings)
+    - `key:` followed by `- subkey: value` + indented continuations (list of dicts)
+    - flow-style lists: `key: [a, b, "c, d"]`
+    - quoted strings (single or double)
+    - comment lines `#` (skipped)
+
+    Does NOT handle: multi-line scalars (`|`, `>`), deeply nested mappings
+    beyond `list-item-dict`, anchors, references.
+    """
     if not content.startswith("---"):
         return {}, content
     end = content.find("\n---", 3)
@@ -248,48 +291,81 @@ def split_frontmatter(content: str) -> tuple[dict, str]:
     fm_raw = content[3:end].strip("\n")
     body = content[end + 4:].lstrip("\n")
     fm: dict = {}
-    current_key = None
+
+    current_key: str | None = None       # last top-level key with a list value
+    list_item_dict: dict | None = None   # the dict we're currently filling inside a list
+    list_item_indent: int = -1           # indent of the '- ' marker for current list
+
+    key_re = re.compile(r"^([A-Za-z_][\w-]*)\s*:\s*(.*)$")
+
     for line in fm_raw.splitlines():
         if not line.strip():
             continue
-        stripped = line.lstrip()
-        if stripped.startswith("- ") and current_key is not None:
-            fm.setdefault(current_key, [])
-            if isinstance(fm[current_key], list):
-                value = stripped[2:].strip().strip('"').strip("'")
-                fm[current_key].append(value)
+        # skip YAML comments
+        if line.lstrip().startswith("#"):
             continue
-        m = re.match(r"^([A-Za-z_][\w-]*)\s*:\s*(.*)$", line)
-        if m:
-            key, value = m.group(1), m.group(2).strip()
-            current_key = key
-            if value == "":
-                fm[key] = []
-            elif value.startswith("[") and value.endswith("]"):
-                # YAML flow-style list: [a, b, "c, d"]
-                inner = value[1:-1]
-                items = []
-                # split on commas not inside quotes
-                cur = []
-                in_q: str | None = None
-                for ch in inner:
-                    if in_q:
-                        if ch == in_q:
-                            in_q = None
-                        else:
-                            cur.append(ch)
-                    elif ch in ("'", '"'):
-                        in_q = ch
-                    elif ch == ",":
-                        items.append("".join(cur).strip())
-                        cur = []
-                    else:
-                        cur.append(ch)
-                if cur:
-                    items.append("".join(cur).strip())
-                fm[key] = [it.strip('"').strip("'") for it in items if it]
+
+        indent = len(line) - len(line.lstrip(" \t"))
+        stripped = line.lstrip(" \t").rstrip()
+
+        # CASE A: top-level key:value (indent 0)
+        if indent == 0:
+            m = key_re.match(stripped)
+            if m:
+                key, value = m.group(1), m.group(2).strip()
+                current_key = key
+                list_item_dict = None
+                list_item_indent = -1
+                if value == "":
+                    fm[key] = []   # list to be filled by subsequent indented '- ...'
+                elif value.startswith("[") and value.endswith("]"):
+                    fm[key] = _parse_flow_list(value)
+                else:
+                    fm[key] = _strip_quotes(value)
+                continue
+            # unknown top-level construct — skip
+            continue
+
+        # CASE B: list item `- ...` at indent > 0
+        if stripped.startswith("- ") and current_key is not None:
+            item_text = stripped[2:].strip()
+            fm.setdefault(current_key, [])
+            if not isinstance(fm[current_key], list):
+                # key was assigned a scalar earlier; do not corrupt
+                continue
+            # Inline mapping start: `- key: value`
+            inline = key_re.match(item_text)
+            if inline:
+                sub_key = inline.group(1)
+                sub_val = inline.group(2).strip()
+                new_dict: dict = {sub_key: _strip_quotes(sub_val) if sub_val else ""}
+                fm[current_key].append(new_dict)
+                list_item_dict = new_dict
+                list_item_indent = indent
             else:
-                fm[key] = value.strip('"').strip("'")
+                fm[current_key].append(_strip_quotes(item_text))
+                list_item_dict = None
+                list_item_indent = -1
+            continue
+
+        # CASE C: indented `key: value` continuation of current list-item dict
+        if list_item_dict is not None and indent > list_item_indent:
+            m = key_re.match(stripped)
+            if m:
+                k = m.group(1)
+                v = m.group(2).strip()
+                list_item_dict[k] = _strip_quotes(v) if v else ""
+                continue
+
+        # If we drop below list-item indent, exit the list-item-dict context
+        if list_item_dict is not None and indent <= list_item_indent:
+            list_item_dict = None
+            list_item_indent = -1
+            # re-evaluate this line as a non-list-item (fall through)
+            if stripped.startswith("- ") and current_key is not None:
+                # rare case: shouldn't happen if logic is right, but be safe
+                continue
+
     return fm, body
 
 
@@ -1281,10 +1357,9 @@ def _count_md_structure(path: Path) -> tuple[int, int, int, bool]:
 def _filename_hint_score(stem_lower: str) -> int:
     """Segment-aware hint score. Right-most segment is most discriminative.
 
-    Splits stem on common separators (./-/_/whitespace), scores each segment
-    against primary/non-primary hints with last-segment weighted 3x. This
-    handles cases like `lesson.description` where the meaningful signal is
-    `description` (not the shared prefix `lesson`).
+    Splits stem on common separators (./-/_/whitespace), then EACH SEGMENT
+    must EXACTLY match a hint word — no substring matching. Substring caused
+    false positives like `speculation` matching `spec`.
     """
     segments = re.split(r"[\s\-_.]+", stem_lower)
     segments = [s for s in segments if s]
@@ -1293,12 +1368,10 @@ def _filename_hint_score(stem_lower: str) -> int:
     score = 0
     for i, seg in enumerate(reversed(segments)):
         weight = 3 if i == 0 else 1
-        for hint in _PRIMARY_HINTS:
-            if seg == hint or (len(seg) > 3 and hint in seg):
-                score += 2 * weight
-        for hint in _NON_PRIMARY_HINTS:
-            if seg == hint or (len(seg) > 3 and hint in seg):
-                score -= 2 * weight
+        if seg in _PRIMARY_HINTS:
+            score += 2 * weight
+        if seg in _NON_PRIMARY_HINTS:
+            score -= 2 * weight
     return score
 
 
@@ -1307,6 +1380,24 @@ _OUTPUT_NAME_RE = re.compile(
     r"^(summary|output|result|generated|_?wiki|index|log)(\b|[_\-.])",
     re.IGNORECASE,
 )
+
+# Extensionless filenames that ARE text and should be treated as text-readable
+_EXTENSIONLESS_TEXT_NAMES = {
+    "Makefile", "README", "LICENSE", "AUTHORS", "CONTRIBUTORS",
+    "CHANGELOG", "TODO", "NOTES", "Dockerfile", "Procfile",
+    ".envrc", ".gitignore", ".dockerignore",
+}
+
+
+def _looks_like_wiki_summary(path: Path) -> bool:
+    """Read the file's first ~1KB and check for wiki-summary frontmatter."""
+    try:
+        head = path.read_text(encoding="utf-8", errors="replace")[:1024]
+    except OSError:
+        return False
+    return ("type: lesson-summary" in head
+            or "type: meeting-summary" in head
+            or "kind: source" in head)
 
 
 def _classify_one_file(path: Path) -> tuple[str, str]:
@@ -1321,7 +1412,11 @@ def _classify_one_file(path: Path) -> tuple[str, str]:
     stem_lower = path.stem.lower()
 
     if name in _SKIP_NAMES or name.startswith("."):
-        return ("skip", "hidden/system file")
+        # extensionless dotfiles that are nonetheless text (.envrc, .gitignore)
+        if name in _EXTENSIONLESS_TEXT_NAMES:
+            pass  # fall through to text-readable handling
+        else:
+            return ("skip", "hidden/system file")
     if ext in _SKIP_EXTS:
         return ("skip", f"skip-extension {ext}")
     if ext in _OFFICE_EXTS:
@@ -1337,28 +1432,24 @@ def _classify_one_file(path: Path) -> tuple[str, str]:
             return ("metadata", f"structured-data file ({ext}, {size}B) → frontmatter")
         return ("link", f"large structured-data file ({ext}, {size}B) → link")
 
-    if not _is_text_readable(ext):
+    # Extensionless text whitelist (Makefile, README, LICENSE, etc.)
+    is_text = _is_text_readable(ext) or name in _EXTENSIONLESS_TEXT_NAMES
+    if not is_text:
         return ("link", f"non-text-readable extension ({ext}) → link by default")
 
     size, h2, fences, prose = _count_md_structure(path)
     if size == 0:
         return ("skip", "empty file")
 
-    # Detect previously-generated wiki output (summary.md, generated.md, etc.)
-    if _OUTPUT_NAME_RE.match(name):
-        # Sanity check: does the file have wiki-summary-style frontmatter?
-        try:
-            head = path.read_text(encoding="utf-8", errors="replace")[:500]
-        except OSError:
-            head = ""
-        looks_like_summary = ("type: lesson-summary" in head
-                              or "type: meeting-summary" in head
-                              or "kind: source" in head)
-        if looks_like_summary:
-            return ("derived-output",
-                    f"previously-generated wiki summary ({name}); skip from ingest")
+    # Derived-output detection: content-first (filename is a hint, not a gate).
+    # ATTACK-19 fix: if a previously-generated summary is renamed to a
+    # non-pattern filename, it must STILL be detected as derived via content.
+    if _looks_like_wiki_summary(path):
+        return ("derived-output",
+                f"previously-generated wiki summary "
+                f"(frontmatter has type: lesson-summary / kind: source)")
 
-    # All text-readable files become candidates; group-pass picks primary
+    # All other text-readable files become candidates; per-group pass picks primary
     return ("text-candidate",
             f"text-readable ({size}B, {h2} ## headings, fences={fences}, prose={prose})")
 
@@ -1473,18 +1564,43 @@ def cmd_classify_folder(args: argparse.Namespace) -> int:
     if not folder.is_dir():
         die(f"folder not a directory: {folder}")
 
-    all_files = sorted(f.name for f in folder.iterdir() if f.is_file())
+    # MED-4: refuse running on a vault root unless --force.
+    # A vault root has WIKI_SCHEMA.md at top level — classify-folder would
+    # otherwise mis-treat schema/index/log as source files.
+    if (folder / SCHEMA_FILE).exists() and not args.force:
+        die(f"refusing to classify-folder on a vault root ({folder} contains "
+            f"{SCHEMA_FILE}) — pass --force if you really mean it, or point at "
+            f"a raw-source folder instead", code=2)
+
+    all_entries = sorted(folder.iterdir(), key=lambda p: p.name)
+    all_files = [e.name for e in all_entries if e.is_file()]
+    subdirs = [e.name for e in all_entries
+               if e.is_dir() and not e.name.startswith(".")]
+
+    # MED-2: warn about subdirectories that classify-folder won't recurse into
+    top_warnings: list[str] = []
+    if subdirs:
+        top_warnings.append(
+            f"found {len(subdirs)} subdirectory(ies) in this folder — "
+            f"classify-folder does NOT recurse. Run separately on each: "
+            f"{subdirs[:5]}{'...' if len(subdirs) > 5 else ''}"
+        )
+
     if args.group_by:
+        # LOW-2: validate the user regex has exactly one capture group
         try:
             user_regex = re.compile(args.group_by)
         except re.error as e:
             die(f"invalid --group-by regex: {e}")
+        if user_regex.groups != 1:
+            die(f"--group-by regex must contain exactly one capture group, "
+                f"got {user_regex.groups} in {args.group_by!r}")
         pattern_name = "prefix"
         pattern_info = {"regex": args.group_by, "source": "operator-override"}
         groups: dict[str, list[str]] = {}
         for f in all_files:
             m = user_regex.match(f)
-            key = m.group(1) if m and m.groups() else "_ungrouped"
+            key = m.group(1) if m else "_ungrouped"
             groups.setdefault(key, []).append(f)
     else:
         pattern_name, pattern_info = _detect_grouping(all_files)
@@ -1561,6 +1677,8 @@ def cmd_classify_folder(args: argparse.Namespace) -> int:
     plan = {
         "source_folder": str(folder),
         "grouping": {"pattern": pattern_name, "info": pattern_info},
+        "warnings": top_warnings,
+        "subdirs": subdirs,
         "groups": output_groups,
     }
     print(json.dumps(plan, indent=2, ensure_ascii=False))
@@ -1675,12 +1793,14 @@ def build_parser() -> argparse.ArgumentParser:
 
     s = sub.add_parser("classify-folder",
                        help="Phase 0 of folder-ingest: detect grouping pattern + classify "
-                            "each file into primary/metadata/merge/link/skip; emit a plan JSON")
+                            "each file into primary/metadata/merge/link/derived-output; emit a plan JSON")
     s.add_argument("folder",
                    help="path to a folder containing one-or-more sources to ingest")
     s.add_argument("--group-by",
-                   help="optional regex with one capture group to override grouping pattern "
+                   help="optional regex with EXACTLY ONE capture group to override grouping pattern "
                         "(e.g. '^(\\d+)\\s*-\\s*' for 'NN - name.ext' files)")
+    s.add_argument("--force", action="store_true",
+                   help="bypass vault-root check (refuses if WIKI_SCHEMA.md is present in target)")
     s.set_defaults(func=cmd_classify_folder)
 
     return p
