@@ -13,6 +13,11 @@ returned stat record carries a ``quality_flag`` of
 A ``quality_flag`` of ``"encoding_recovered"`` is set when the VTT
 itself was not valid UTF-8 and a codec fallback was needed.
 
+With ``with_description=True`` the adapter also runs yt-dlp once more
+with ``--write-info-json --skip-download`` to fetch metadata (title,
+uploader, upload date, duration, description) and writes a
+``<out>.description.md`` sidecar — see :mod:`_description`.
+
 This module is import-safe (no network calls at import time). The
 ``yt-dlp`` import is deferred until :func:`fetch_youtube_transcript`
 runs, so unit tests for the VTT converter do not require yt-dlp to be
@@ -25,10 +30,16 @@ import re
 import shutil
 import subprocess
 import tempfile
-from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Iterable, Optional
 
+from ._description import description_path_for, write_description_md
+from ._stat import (
+    SourceRateLimitError,  # re-exported for callers # noqa: F401
+    TranscriptFetchError,
+    TranscriptStat,
+    write_stat_sidecar,
+)
 from ._vtt_to_text import count_speaker_turns, vtt_file_to_plain_meta
 
 
@@ -65,30 +76,6 @@ _RATE_LIMIT_PATTERNS = (
 # --------------------------------------------------------------------- #
 
 
-@dataclass
-class TranscriptStat:
-    """Machine-readable record describing one fetched transcript.
-
-    Emitted as one line of JSON on stdout by ``fetch.py`` (or written
-    to ``<output>.stat.json``). Schema is intentionally flat and
-    string-keyed for easy consumption by downstream pipelines.
-    """
-
-    source: str  # "youtube"
-    url: str
-    video_id: Optional[str]
-    output_path: str
-    chosen_track_kind: Optional[str]  # "manual" | "auto"
-    chosen_track_lang: Optional[str]  # "ru" | "ru-orig" | "en" | ...
-    char_count: int
-    speaker_turn_count: int
-    quality_flag: Optional[str] = None  # e.g. "english_auto_translation"
-    notes: list[str] = field(default_factory=list)
-
-    def to_dict(self) -> dict:
-        return asdict(self)
-
-
 def extract_video_id(url: str) -> Optional[str]:
     """Best-effort extraction of the 11-char YouTube video id from a URL.
 
@@ -119,6 +106,9 @@ def fetch_youtube_transcript(
     yt_dlp_bin: Optional[str] = None,
     workdir: Optional[Path] = None,
     timeout_sec: int = DEFAULT_TIMEOUT_SEC,
+    cookies_file: Optional[Path] = None,
+    with_description: bool = False,
+    description_only: bool = False,
 ) -> TranscriptStat:
     """Fetch a YouTube transcript, write plain text, return a stat record.
 
@@ -141,18 +131,33 @@ def fetch_youtube_transcript(
         timeout_sec: Per-attempt timeout for each yt-dlp subprocess
             call. Default 180s. Increase for very long videos or flaky
             networks.
+        cookies_file: Optional Netscape cookies.txt to pass to yt-dlp
+            via ``--cookies``. Required for age-gated or unlisted videos.
+        with_description: If True, fetch metadata via ``--write-info-json``
+            and write a ``<out>.description.md`` sidecar. Populates
+            ``stat.title``, ``stat.uploader``, ``stat.upload_date``,
+            ``stat.duration_sec``, ``stat.description_path``.
+        description_only: Skip the transcript download entirely; only
+            fetch metadata and write the description sidecar. The
+            returned stat's ``output_path`` still points at ``out_path``
+            (the plain-text file is NOT created), and
+            ``char_count``/``speaker_turn_count`` are ``0``.
+            ``with_description`` is implied. Requires the caller already
+            validated ``with_description`` at the CLI layer.
 
     Returns:
         A :class:`TranscriptStat` describing what was fetched.
 
     Raises:
         TranscriptFetchError: If no track in the fallback ladder could be
-            downloaded.
+            downloaded (raised only when ``description_only=False``).
     """
     out_path = Path(out_path)
     video_id = extract_video_id(url)
     # Materialise once so the error path can re-iterate without exhaustion.
     ladder: tuple[tuple[str, str], ...] = tuple(fallback_ladder)
+    if description_only:
+        with_description = True
 
     cleanup_workdir = False
     if workdir is None:
@@ -164,49 +169,60 @@ def fetch_youtube_transcript(
 
     # Snapshot of pre-existing VTT files so we never return a stale one.
     pre_existing = {p.resolve() for p in workdir.glob("*.vtt")}
+    # Snapshot pre-existing info.json files — yt-dlp writes one per
+    # subtitle call when ``--write-info-json`` is set, and we reuse it
+    # (saving an extra subprocess round-trip) when ``with_description``
+    # is requested.
+    pre_existing_info = {p.resolve() for p in workdir.glob("*.info.json")}
 
     try:
         chosen_kind: Optional[str] = None
         chosen_lang: Optional[str] = None
         vtt_path: Optional[Path] = None
         notes: list[str] = []
+        plain = ""
+        codec_used = "utf-8"
 
-        for kind, lang in ladder:
-            ok, vtt_path, msg = _try_download_subtitle(
-                url=url,
-                lang=lang,
-                kind=kind,
-                workdir=workdir,
-                pre_existing=pre_existing,
-                yt_dlp_bin=yt_dlp_bin,
-                timeout_sec=timeout_sec,
-            )
-            if msg:
-                notes.append(msg)
-            if ok and vtt_path is not None:
-                chosen_kind = kind
-                chosen_lang = lang
-                break
+        if not description_only:
+            for kind, lang in ladder:
+                ok, vtt_path, msg = _try_download_subtitle(
+                    url=url,
+                    lang=lang,
+                    kind=kind,
+                    workdir=workdir,
+                    pre_existing=pre_existing,
+                    yt_dlp_bin=yt_dlp_bin,
+                    timeout_sec=timeout_sec,
+                    cookies_file=cookies_file,
+                    with_info_json=with_description,
+                )
+                if msg:
+                    notes.append(msg)
+                if ok and vtt_path is not None:
+                    chosen_kind = kind
+                    chosen_lang = lang
+                    break
 
-        if vtt_path is None or chosen_lang is None:
-            tried = [f"{k}:{l}" for k, l in ladder]
-            raise TranscriptFetchError(
-                f"No caption track available for {url}: tried {tried}. "
-                f"Notes: {notes[-3:] if notes else '[]'}"
-            )
+            if vtt_path is None or chosen_lang is None:
+                tried = [f"{k}:{l}" for k, l in ladder]
+                raise TranscriptFetchError(
+                    f"No caption track available for {url}: tried {tried}. "
+                    f"Notes: {notes[-3:] if notes else '[]'}"
+                )
 
-        plain, codec_used = vtt_file_to_plain_meta(vtt_path)
-        out_path.parent.mkdir(parents=True, exist_ok=True)
-        out_path.write_text(plain, encoding="utf-8")
+            plain, codec_used = vtt_file_to_plain_meta(vtt_path)
+            out_path.parent.mkdir(parents=True, exist_ok=True)
+            out_path.write_text(plain, encoding="utf-8")
 
         quality_flag: Optional[str] = None
-        if chosen_kind == "auto" and chosen_lang == "en":
-            quality_flag = "english_auto_translation"
-        elif codec_used not in ("utf-8", "utf-8-sig"):
-            quality_flag = "encoding_recovered"
-            notes.append(f"VTT was decoded as {codec_used}, not utf-8")
+        if not description_only:
+            if chosen_kind == "auto" and chosen_lang == "en":
+                quality_flag = "english_auto_translation"
+            elif codec_used not in ("utf-8", "utf-8-sig"):
+                quality_flag = "encoding_recovered"
+                notes.append(f"VTT was decoded as {codec_used}, not utf-8")
 
-        return TranscriptStat(
+        stat = TranscriptStat(
             source="youtube",
             url=url,
             video_id=video_id,
@@ -214,35 +230,52 @@ def fetch_youtube_transcript(
             chosen_track_kind=chosen_kind,
             chosen_track_lang=chosen_lang,
             char_count=len(plain),
-            speaker_turn_count=count_speaker_turns(plain),
+            speaker_turn_count=count_speaker_turns(plain) if plain else 0,
             quality_flag=quality_flag,
             notes=notes,
         )
+
+        if with_description:
+            # Prefer the info.json that piggy-backed onto a successful
+            # subtitle download (saves a second yt-dlp call). Only when
+            # the ladder never produced one (e.g. description_only, or
+            # all ladder steps failed) do we run a dedicated fetch.
+            info: Optional[dict] = _pick_fresh_info_json(workdir, pre_existing_info)
+            if info is None:
+                info = _fetch_video_info(
+                    url=url,
+                    workdir=workdir,
+                    yt_dlp_bin=yt_dlp_bin,
+                    timeout_sec=timeout_sec,
+                    cookies_file=cookies_file,
+                )
+            if info is not None:
+                stat.title = info.get("title")
+                stat.uploader = info.get("uploader") or info.get("channel")
+                stat.upload_date = _format_upload_date(info.get("upload_date"))
+                stat.duration_sec = _coerce_int(info.get("duration"))
+                desc_path = _write_youtube_description(
+                    info=info, url=url, out_path=out_path
+                )
+                stat.description_path = str(desc_path)
+                stat.notes.append("description: wrote .description.md")
+            else:
+                stat.notes.append("description: yt-dlp info.json not available")
+                if description_only:
+                    raise TranscriptFetchError(
+                        f"description_only requested but yt-dlp could not "
+                        f"fetch metadata for {url}"
+                    )
+
+        return stat
     finally:
         if cleanup_workdir:
             shutil.rmtree(workdir, ignore_errors=True)
 
 
-def write_stat_sidecar(stat: TranscriptStat, plain_path: Path) -> Path:
-    """Write the JSON stat record next to the plain-text output.
-
-    The sidecar path is ``<plain_path>.stat.json``. Returns that path.
-    """
-    sidecar = Path(str(plain_path) + ".stat.json")
-    sidecar.write_text(
-        json.dumps(stat.to_dict(), ensure_ascii=False, indent=2) + "\n",
-        encoding="utf-8",
-    )
-    return sidecar
-
-
 # --------------------------------------------------------------------- #
 # Internal helpers
 # --------------------------------------------------------------------- #
-
-
-class TranscriptFetchError(RuntimeError):
-    """Raised when no caption track in the fallback ladder is available."""
 
 
 def _yt_dlp_command(yt_dlp_bin: Optional[str]) -> list[str]:
@@ -272,11 +305,25 @@ def _classify_failure(stderr: str) -> Optional[str]:
 
 
 def _stderr_tail(stderr: str, n_lines: int = 5) -> str:
-    """Return the last n non-empty lines of stderr, joined by ' | '."""
+    """Return the last n non-empty *signal* lines of stderr, joined by ' | '.
+
+    yt-dlp leaks a lot of advisory ``WARNING:`` lines (ffmpeg missing,
+    impersonation-target absent, …) ahead of the actual ``ERROR:``.
+    Including them in the tail bloats ``stat.notes`` and confuses
+    downstream parsers, so warnings are filtered out — if the filtered
+    result is empty we fall back to the raw tail so a pure-warning
+    failure mode is still surfaced.
+    """
     if not stderr:
         return ""
-    lines = [line.strip() for line in stderr.splitlines() if line.strip()]
-    return " | ".join(lines[-n_lines:])
+    all_lines = [line.strip() for line in stderr.splitlines() if line.strip()]
+    signal = [
+        ln for ln in all_lines
+        if not ln.startswith("WARNING:")
+        and "WARNING: " not in ln[:24]
+    ]
+    chosen = signal if signal else all_lines
+    return " | ".join(chosen[-n_lines:])
 
 
 def _try_download_subtitle(
@@ -288,6 +335,8 @@ def _try_download_subtitle(
     pre_existing: set[Path],
     yt_dlp_bin: Optional[str],
     timeout_sec: int,
+    cookies_file: Optional[Path] = None,
+    with_info_json: bool = False,
 ) -> tuple[bool, Optional[Path], Optional[str]]:
     """Attempt to download one (kind, lang) subtitle track.
 
@@ -305,6 +354,14 @@ def _try_download_subtitle(
         "--sub-langs", lang,
         "--output", out_tmpl,
     ]
+    if cookies_file is not None:
+        args.extend(["--cookies", str(cookies_file)])
+    if with_info_json:
+        # Piggy-back the info-json on the subtitle call so a successful
+        # ladder step yields both the .vtt and the metadata in one
+        # subprocess round-trip — saves a second yt-dlp invocation for
+        # the common --with-description case.
+        args.append("--write-info-json")
     if kind == "manual":
         args.append("--write-subs")
     elif kind == "auto":
@@ -373,3 +430,135 @@ def _find_new_vtt(
     # Prefer the most recently modified file when multiple match.
     candidates.sort(key=lambda p: p.stat().st_mtime, reverse=True)
     return candidates[0]
+
+
+def _pick_fresh_info_json(
+    workdir: Path, pre_existing: set[Path]
+) -> Optional[dict]:
+    """Return the most recent ``*.info.json`` written into ``workdir``.
+
+    Used by :func:`fetch_youtube_transcript` to consume the info-json
+    that piggy-backed on the subtitle call. Filters out any file that
+    was already present before the call (snapshot semantics).
+    """
+    candidates = [
+        p for p in workdir.glob("*.info.json")
+        if p.resolve() not in pre_existing
+    ]
+    if not candidates:
+        return None
+    candidates.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+    try:
+        return json.loads(candidates[0].read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+
+
+def _fetch_video_info(
+    *,
+    url: str,
+    workdir: Path,
+    yt_dlp_bin: Optional[str],
+    timeout_sec: int,
+    cookies_file: Optional[Path],
+) -> Optional[dict]:
+    """Run yt-dlp ``--write-info-json --skip-download`` and load the JSON.
+
+    Returns the parsed info-json dict, or ``None`` if yt-dlp failed or
+    no file was produced. yt-dlp writes the file as
+    ``<id>.info.json`` in ``workdir``; we discover it by mtime so
+    a pre-existing one from a prior call doesn't get re-claimed.
+    """
+    pre = {p.resolve() for p in workdir.glob("*.info.json")}
+    args = [
+        *_yt_dlp_command(yt_dlp_bin),
+        "--skip-download",
+        "--write-info-json",
+        "--no-write-subs",
+        "--no-write-auto-subs",
+        "--output", str(workdir / "%(id)s.%(ext)s"),
+    ]
+    if cookies_file is not None:
+        args.extend(["--cookies", str(cookies_file)])
+    args.append("--")
+    args.append(url)
+    try:
+        proc = subprocess.run(
+            args,
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=timeout_sec,
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return None
+    if proc.returncode != 0:
+        # yt-dlp may leave a partial / stale .info.json on failure; do not
+        # trust the FS when the process didn't exit cleanly.
+        return None
+    candidates = [
+        p for p in workdir.glob("*.info.json") if p.resolve() not in pre
+    ]
+    if not candidates:
+        return None
+    candidates.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+    try:
+        return json.loads(candidates[0].read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+
+
+def _write_youtube_description(
+    *, info: dict, url: str, out_path: Path
+) -> Path:
+    """Write the ``.description.md`` sidecar from a yt-dlp info-json dict."""
+    title = info.get("title") or "(untitled)"
+    body = (info.get("description") or "").strip()
+    frontmatter: dict = {
+        "source": "youtube",
+        "url": url,
+        "video_id": info.get("id"),
+        "title": title,
+        "uploader": info.get("uploader") or info.get("channel"),
+        "uploader_url": info.get("uploader_url") or info.get("channel_url"),
+        "upload_date": _format_upload_date(info.get("upload_date")),
+        "duration_sec": _coerce_int(info.get("duration")),
+        "view_count": _coerce_int(info.get("view_count")),
+        "like_count": _coerce_int(info.get("like_count")),
+    }
+    return write_description_md(
+        out_path, frontmatter=frontmatter, title=title, body=body
+    )
+
+
+def _format_upload_date(raw: object) -> Optional[str]:
+    """yt-dlp emits ``upload_date`` as ``YYYYMMDD`` — reshape to ISO."""
+    if not isinstance(raw, str) or len(raw) != 8 or not raw.isdigit():
+        return None
+    return f"{raw[0:4]}-{raw[4:6]}-{raw[6:8]}"
+
+
+def _coerce_int(value: object) -> Optional[int]:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        return int(value)
+    if isinstance(value, str) and value.isdigit():
+        return int(value)
+    return None
+
+
+# Backwards-compat: a name that was importable before extraction lives
+# on for one minor version. Remove when no in-tree callers remain.
+__all__ = (
+    "DEFAULT_FALLBACK_RU",
+    "DEFAULT_TIMEOUT_SEC",
+    "TranscriptFetchError",
+    "TranscriptStat",
+    "extract_video_id",
+    "fetch_youtube_transcript",
+    "write_stat_sidecar",
+    "description_path_for",
+)

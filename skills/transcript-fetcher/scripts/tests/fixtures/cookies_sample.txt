@@ -1,0 +1,5 @@
+# Netscape HTTP Cookie File
+# This is a generated file synthesized for unit testing.
+
+.skool.com	TRUE	/	TRUE	1999999999	session	fake-session-token-do-not-use
+www.skool.com	FALSE	/	FALSE	1999999999	_skool_pref	en

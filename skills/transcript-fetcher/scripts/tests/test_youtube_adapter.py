@@ -285,6 +285,43 @@ class TestRateLimitSurfacedInNote(unittest.TestCase):
         self.assertNotEqual(note, "no subtitle returned for auto:ru")
 
 
+class TestDescriptionMetadata(unittest.TestCase):
+    """The --with-description path enriches the stat and writes a sidecar."""
+
+    def test_description_only_writes_sidecar_and_zeros_transcript(self) -> None:
+        info = json.loads(
+            (_HERE / "fixtures" / "youtube_info_sample.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        with tempfile.TemporaryDirectory() as td:
+            out = Path(td) / "out.txt"
+            workdir = Path(td) / "wd"
+            workdir.mkdir()
+            with mock.patch.object(yt, "_fetch_video_info", return_value=info):
+                stat = fetch_youtube_transcript(
+                    "https://youtu.be/NSVTpCfBMK8",
+                    out,
+                    workdir=workdir,
+                    with_description=True,
+                    description_only=True,
+                )
+            self.assertEqual(stat.char_count, 0)
+            self.assertEqual(stat.title, "Sample Lecture for Test Fixture")
+            self.assertEqual(stat.uploader, "Sample Channel")
+            self.assertEqual(stat.upload_date, "2025-01-14")
+            self.assertEqual(stat.duration_sec, 3120)
+            self.assertTrue(stat.description_path)
+            self.assertFalse(out.exists())
+            md = Path(stat.description_path).read_text(encoding="utf-8")
+            self.assertIn("source: youtube", md)
+            self.assertIn("# Sample Lecture for Test Fixture", md)
+            self.assertIn("A short description.", md)
+
+
+_HERE = Path(__file__).resolve().parent
+
+
 @unittest.skipUnless(
     os.environ.get("TRANSCRIPT_FETCHER_E2E") == "1",
     "E2E network test disabled (set TRANSCRIPT_FETCHER_E2E=1 to enable)",

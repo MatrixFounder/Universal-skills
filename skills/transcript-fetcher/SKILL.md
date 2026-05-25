@@ -2,13 +2,22 @@
 name: transcript-fetcher
 description: >-
   Use when the user wants a clean plain-text transcript of a video URL
-  (YouTube today; Vimeo/Zoom/podcast slots reserved). Fetches captions
-  via yt-dlp, applies a manual->auto language fallback, dedups rolling
-  captions, preserves >> speaker turns, and emits a JSON stat sidecar.
+  (YouTube, Vimeo) or a Skool classroom lesson. Skool cookies are
+  optional (public communities work without; private ones accept
+  Netscape cookies.txt). Manual->auto language fallback, rolling
+  caption dedup, >> speaker turns preserved, JSON stat sidecar plus
+  optional .description.md sidecar.
 tier: 2
-version: 1.0
+version: 1.1
 status: active
-changelog: Initial release — YouTube adapter, ru/ru-orig/en fallback ladder, offline tests.
+changelog: >-
+  v1.1 — Add Vimeo + Skool adapters; opt-in --with-description /
+  --description-only producing a <out>.description.md (YAML front-
+  matter + Markdown body) for YouTube & Skool. Skool delegates
+  embedded YouTube/Vimeo to those adapters automatically and uses
+  cookies.txt for private/paid communities; public ones work without.
+  v1.0 — Initial release — YouTube adapter, ru/ru-orig/en fallback
+  ladder, offline tests.
 ---
 
 # Transcript Fetcher
@@ -31,13 +40,21 @@ first, then feed the resulting `.txt` to that skill).
 
 ## 2. Capabilities
 
-- **Fetch** YouTube captions via `yt-dlp` (no audio download).
+- **Fetch** YouTube and Vimeo captions via `yt-dlp` (no audio download).
+- **Fetch** Skool lesson pages via a stdlib HTML scrape — public
+  communities work without auth; private/paid ones accept an optional
+  Netscape `cookies.txt`. Then **delegate** embedded YouTube/Vimeo
+  videos to those adapters; capture author-supplied transcript field
+  when present.
 - **Fall back** through a configurable ladder (default for ru: manual ru -> auto ru-orig -> auto ru -> auto en).
 - **Clean** WebVTT to plain text: strip timestamps, inline timing tags, and rolling-caption overlap; decode HTML entities.
 - **Preserve** `>>` speaker-turn markers as paragraph breaks.
-- **Emit** a JSON stat sidecar (chosen track, char count, speaker-turn count, quality flag).
+- **Emit** a JSON stat sidecar (chosen track, char count, speaker-turn count, quality flag, plus optional title/uploader/duration metadata).
+- **Optionally write** `<out>.description.md` (YAML frontmatter +
+  Markdown body) when `--with-description` is passed — gives you a
+  ready-to-ingest description for RAG / Obsidian / human review.
 - **Batch** mode for processing multiple URLs from a text file.
-- **Source-agnostic** architecture: each platform is one file under `scripts/sources/`. Slots reserved for Vimeo/Zoom/podcast.
+- **Source-agnostic** architecture: each platform is one file under `scripts/sources/`. Zoom and podcast slots remain reserved.
 
 ## 3. Execution Mode
 
@@ -55,27 +72,40 @@ first, then feed the resulting `.txt` to that skill).
   cd skills/transcript-fetcher
   ./scripts/.venv/bin/python scripts/fetch.py <URL> --out <path/to/output.txt>
   ```
-  Optional flags: `--lang ru` (default), `--prefer manual|auto` (default `manual`), `--json-errors`.
+  Optional flags: `--lang ru` (default), `--prefer manual|auto` (default `manual`), `--with-description`, `--description-only`, `--cookies-file PATH`, `--json-errors`.
+- **Skool lesson** (cookies needed ONLY for private / paid communities — public ones work without):
+  ```bash
+  ./scripts/.venv/bin/python scripts/fetch.py \
+      "https://www.skool.com/<community>/classroom/<id>?md=<lesson-id>" \
+      --out lesson.txt --with-description \
+      --cookies-file ~/.config/skool-cookies.txt
+  ```
 - **Batch**:
   ```bash
   ./scripts/.venv/bin/python scripts/fetch.py --batch urls.txt --out-dir transcripts/
   ```
-- **Inputs**: A YouTube URL (or a file with one URL per line). Empty lines and `#` comments in the batch file are ignored.
+- **Inputs**: A YouTube / Vimeo / Skool-lesson URL (or a file with one URL per line). Empty lines and `#` comments in the batch file are ignored.
 - **Outputs**:
   - `<out>.txt` — clean plain text, UTF-8.
-  - `<out>.txt.stat.json` — sidecar with the chosen track and quality flag.
+  - `<out>.txt.stat.json` — sidecar with the chosen track, quality flag, plus optional title / uploader / upload_date / duration_sec / embed_source / embed_url metadata.
+  - `<out>.description.md` — only when `--with-description` is passed; YAML frontmatter + Markdown body.
   - One JSON stat record per URL on stdout.
-- **Failure semantics**: Non-zero exit. With `--json-errors`, stderr carries a single JSON line `{v, error, code, type, details?}`. Exit codes: `2` usage error, `3` no caption track in fallback ladder, `4` partial batch failure, `1` unexpected.
+- **Failure semantics**: Non-zero exit. With `--json-errors`, stderr carries a single JSON line `{v, error, code, type, details?}`. Exit codes: `2` usage error (incl. malformed Skool URL, cookies file path missing on disk), `3` no caption track in fallback ladder, `4` partial batch failure, `5` source-auth error (HTTP 401/403 — private Skool community needs cookies, or supplied cookies expired), `6` source rate-limit (HTTP 429), `1` unexpected.
 - **Idempotency**: Re-running overwrites the output file and sidecar. yt-dlp itself caches nothing the skill depends on; behaviour is reproducible given network availability.
 - **Dry-run support**: Not currently exposed as a flag. Inspect the fallback ladder via `_build_ladder` if needed.
 
 ## 5. Safety Boundaries
 
-- **Allowed scope**: Reads from the network (yt-dlp HTTPS to YouTube). Writes ONLY to the user-specified `--out` / `--out-dir` path and a `.stat.json` sidecar next to it.
-- **Default exclusions**: Never downloads the video itself (only `--skip-download` + subtitle tracks). Never writes to any path the user did not explicitly pass via `--out` / `--out-dir`.
+- **Allowed scope**: Reads from the network (yt-dlp HTTPS to YouTube/Vimeo; stdlib HTTPS to Skool). Writes ONLY to the user-specified `--out` / `--out-dir` path plus a `.stat.json` sidecar (and optionally a `.description.md` sidecar) next to it.
+- **Default exclusions**: Never downloads the video itself (only `--skip-download` + subtitle tracks / `--write-info-json` for metadata). Never writes to any path the user did not explicitly pass via `--out` / `--out-dir`.
 - **Destructive actions**: None. The script does not delete or modify any pre-existing files outside the chosen output paths. In batch mode, output path collisions are handled per `--on-collision={error,skip,suffix}` (default: `error`).
-- **Optional artifacts**: The JSON stat sidecar is mandatory in single-URL mode (it is the audit trail for which track was used).
-- **URL allowlist**: Source dispatch is hostname-based against an explicit allowlist (`youtu.be`, `youtube.com`, `m.youtube.com`, `music.youtube.com`, `youtube-nocookie.com`). URLs that merely contain `youtube.com` as a substring elsewhere are rejected.
+- **Optional artifacts**: The JSON stat sidecar is mandatory in single-URL mode (it is the audit trail for which track was used). The `.description.md` sidecar is written only when `--with-description` is passed.
+- **URL allowlist**: Source dispatch is hostname-based against an explicit allowlist:
+  - YouTube — `youtu.be`, `youtube.com`, `m.youtube.com`, `music.youtube.com`, `youtube-nocookie.com` (plus `www.` variants).
+  - Vimeo — `vimeo.com`, `www.vimeo.com`, `player.vimeo.com`.
+  - Skool — `skool.com`, `www.skool.com`, `app.skool.com`; additionally URLs must match `/<community>/classroom/<id>?md=<lesson-id>`. Landing / `/about` / `/calendar` pages are rejected.
+  URLs that merely contain a supported host as a substring elsewhere are rejected.
+- **Auth credentials**: `--cookies-file <path>` accepts a Netscape `cookies.txt` and is **ALWAYS OPTIONAL** for every source. The file is read once at startup, never copied or re-emitted. For Skool, public communities (e.g. `zero-one`) serve lessons without auth; private / paid communities respond with HTTP 401/403 and the user then needs to supply cookies. YouTube/Vimeo optionally forward the file to yt-dlp's `--cookies` for age-gated or unlisted videos. The skill **never blocks on missing cookies up-front** — it tries the fetch and surfaces a `SourceAuthError` (exit 5) only if the source returns 401/403.
 
 ## 6. Validation Evidence
 
@@ -191,14 +221,23 @@ See `examples/`:
 ## 11. Resources
 
 - `scripts/fetch.py` — CLI entry point.
-- `scripts/sources/youtube.py` — YouTube adapter (yt-dlp orchestration + fallback ladder).
+- `scripts/sources/youtube.py` — YouTube adapter (yt-dlp orchestration + fallback ladder + description path).
+- `scripts/sources/vimeo.py` — minimal Vimeo adapter (yt-dlp).
+- `scripts/sources/skool.py` — Skool lesson adapter (cookies.txt + Next.js scrape + embed delegation).
 - `scripts/sources/_vtt_to_text.py` — pure-Python WebVTT cleaner.
+- `scripts/sources/_stat.py` — shared `TranscriptStat` + sidecar writer + error classes.
+- `scripts/sources/_description.py` — `.description.md` writer (YAML frontmatter + Markdown body).
+- `scripts/sources/_cookies.py` — Netscape cookies.txt loader + authenticated opener.
+- `scripts/sources/_prosemirror.py` — ProseMirror/TipTap v2 JSON → Markdown for Skool lesson bodies.
 - `scripts/install.sh` — venv bootstrap.
 - `scripts/requirements.txt` — pinned deps (single source of truth for the yt-dlp version range).
 - `scripts/tests/` — offline unit tests + opt-in E2E network test.
+- `scripts/tests/_sanitize_fixture.py` — utility for scrubbing PII from Skool HTML snapshots before they become fixtures.
 - `references/youtube_caption_format.md` — what `>>`, `&gt;`, rolling captions, and `ru-orig` actually mean.
 - `references/fallback_policy.md` — the language ladder and why it is in this order.
 - `references/supported_sources.md` — current and planned source slots.
+- `references/skool_adapter.md` — Skool auth flow, schema notes, embed delegation rules.
+- `references/description_metadata.md` — `.description.md` format for YouTube and Skool.
 - [`docs/Manuals/transcript-fetcher_manual.md`](../../docs/Manuals/transcript-fetcher_manual.md) — user-facing manual with quick reference, troubleshooting, and composition recipes.
 
 ## 12. Composition

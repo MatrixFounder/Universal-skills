@@ -51,9 +51,26 @@ class TestSourceDetect(unittest.TestCase):
         with self.assertRaises(ValueError):
             fetch._detect_source("https://phishing-youtu.be.evil.com/abc")
 
-    def test_unsupported_host_rejected(self) -> None:
+    def test_vimeo_host(self) -> None:
+        self.assertEqual(fetch._detect_source("https://vimeo.com/12345"), "vimeo")
+
+    def test_player_vimeo_host(self) -> None:
+        self.assertEqual(
+            fetch._detect_source("https://player.vimeo.com/video/12345"),
+            "vimeo",
+        )
+
+    def test_skool_host(self) -> None:
+        self.assertEqual(
+            fetch._detect_source(
+                "https://www.skool.com/foo/classroom/bar?md=baz"
+            ),
+            "skool",
+        )
+
+    def test_truly_unsupported_host_rejected(self) -> None:
         with self.assertRaises(ValueError):
-            fetch._detect_source("https://vimeo.com/12345")
+            fetch._detect_source("https://example.com/video/12345")
 
 
 class TestBatchCollisionResolution(unittest.TestCase):
@@ -166,6 +183,73 @@ class TestCliArgValidation(unittest.TestCase):
         rc = fetch.main(["https://youtu.be/abc"])
         self.assertEqual(rc, 2)
 
+    def test_description_only_without_with_description_rejected(self) -> None:
+        rc = fetch.main([
+            "https://youtu.be/abc", "--out", "/tmp/x",
+            "--description-only",
+        ])
+        self.assertEqual(rc, 2)
+
+    def test_missing_cookies_file_rejected(self) -> None:
+        rc = fetch.main([
+            "https://www.skool.com/foo/classroom/bar?md=baz",
+            "--out", "/tmp/x",
+            "--cookies-file", "/no/such/file.txt",
+        ])
+        self.assertEqual(rc, 2)
+
+
+class TestFetchOneDispatch(unittest.TestCase):
+    """Verify _fetch_one routes by hostname through the right adapter."""
+
+    def test_youtube_routes_to_youtube_fetcher(self) -> None:
+        captured = {}
+
+        def fake(url, out_path, **kw):
+            captured["url"] = url
+            captured["kw"] = kw
+            from sources._stat import TranscriptStat
+            return TranscriptStat(
+                source="youtube", url=url, video_id="abc",
+                output_path=str(out_path),
+                chosen_track_kind="auto", chosen_track_lang="en",
+                char_count=0, speaker_turn_count=0,
+            )
+
+        with tempfile.TemporaryDirectory() as td:
+            out = Path(td) / "o.txt"
+            with mock.patch.object(fetch, "fetch_youtube_transcript",
+                                    side_effect=fake) as patched:
+                result = fetch._fetch_one(
+                    "https://youtu.be/abc", out,
+                    lang="ru", prefer="manual", timeout_sec=30,
+                )
+            self.assertTrue(patched.called)
+            self.assertEqual(result["source"], "youtube")
+
+    def test_skool_routes_to_skool_fetcher(self) -> None:
+        def fake(url, out_path, **kw):
+            from sources._stat import TranscriptStat
+            return TranscriptStat(
+                source="skool", url=url, video_id="lid",
+                output_path=str(out_path),
+                chosen_track_kind=None, chosen_track_lang=None,
+                char_count=0, speaker_turn_count=0,
+                quality_flag="no_transcript_field",
+            )
+
+        with tempfile.TemporaryDirectory() as td:
+            out = Path(td) / "o.txt"
+            with mock.patch.object(fetch, "fetch_skool_transcript",
+                                    side_effect=fake) as patched:
+                result = fetch._fetch_one(
+                    "https://www.skool.com/x/classroom/y?md=z", out,
+                    lang="ru", prefer="manual", timeout_sec=30,
+                    with_description=True,
+                )
+            self.assertTrue(patched.called)
+            self.assertEqual(result["source"], "skool")
+
 
 class TestBatchMode(unittest.TestCase):
     """Integration test for batch mode with mocked transcript fetching."""
@@ -184,7 +268,7 @@ class TestBatchMode(unittest.TestCase):
 
             captured_calls: list = []
 
-            def fake_fetch_one(url, out_path, *, lang, prefer, timeout_sec):
+            def fake_fetch_one(url, out_path, **kwargs):
                 captured_calls.append(url)
                 # Pretend each URL produced a 100-char transcript.
                 Path(out_path).parent.mkdir(parents=True, exist_ok=True)
@@ -218,12 +302,12 @@ class TestBatchMode(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            def fake_fetch_one(*args, **kwargs):
+            def fake_fetch_one(url, out_path, **kwargs):
                 # First call succeeds; second won't be reached because
                 # the resolver raises on duplicate.
                 return {
                     "source": "youtube",
-                    "url": args[0],
+                    "url": url,
                     "char_count": 5,
                     "speaker_turn_count": 0,
                 }

@@ -6,11 +6,32 @@ small JSON stat record alongside.
 
 Currently supported sources:
     - YouTube (via yt-dlp)
+    - Vimeo   (via yt-dlp)
+    - Skool   (via authenticated HTML scrape + delegated YouTube/Vimeo)
 
 Single-URL example::
 
     python3 scripts/fetch.py https://youtu.be/NSVTpCfBMK8 \\
         --out /tmp/talk.txt
+
+With description sidecar::
+
+    python3 scripts/fetch.py https://youtu.be/NSVTpCfBMK8 \\
+        --out /tmp/talk.txt --with-description
+
+Skool lesson (cookies OPTIONAL — only needed for private/paid
+communities; public ones work without)::
+
+    # Public community — no cookies needed.
+    python3 scripts/fetch.py \\
+        "https://www.skool.com/zero-one/classroom/AAA?md=BBB" \\
+        --out /tmp/lesson.txt --with-description
+
+    # Private / paid community — pass cookies.txt.
+    python3 scripts/fetch.py \\
+        "https://www.skool.com/private-foo/classroom/AAA?md=BBB" \\
+        --out /tmp/lesson.txt --with-description \\
+        --cookies-file ~/.config/skool-cookies.txt
 
 Batch example (one URL per line)::
 
@@ -18,9 +39,9 @@ Batch example (one URL per line)::
 
 The CLI emits one JSON line per URL on stdout with the stat record
 (source, picked subtitle language/track, char count, speaker-turn
-count, quality flag). On failure, exits non-zero. With
-``--json-errors``, failure messages are emitted as a single JSON line
-on stderr to keep the contract machine-readable.
+count, quality flag, optionally description metadata). On failure,
+exits non-zero. With ``--json-errors``, failure messages are emitted
+as a single JSON line on stderr to keep the contract machine-readable.
 """
 from __future__ import annotations
 
@@ -36,13 +57,26 @@ _HERE = Path(__file__).resolve().parent
 if str(_HERE) not in sys.path:
     sys.path.insert(0, str(_HERE))
 
+from sources._stat import (  # noqa: E402
+    SourceAuthError,
+    SourceRateLimitError,
+    TranscriptFetchError,
+    write_stat_sidecar,
+)
+from sources.skool import (  # noqa: E402
+    SkoolSchemaError,
+    SkoolUrlError,
+    fetch_skool_transcript,
+)
+from sources.vimeo import (  # noqa: E402
+    DEFAULT_FALLBACK_VIMEO,
+    fetch_vimeo_transcript,
+)
 from sources.youtube import (  # noqa: E402  (after sys.path tweak)
     DEFAULT_FALLBACK_RU,
     DEFAULT_TIMEOUT_SEC,
-    TranscriptFetchError,
     extract_video_id,
     fetch_youtube_transcript,
-    write_stat_sidecar,
 )
 
 
@@ -82,17 +116,26 @@ def _emit_error(
 # --------------------------------------------------------------------- #
 
 
+_SOURCE_BY_HOST: dict[str, str] = {}
+for _h in (
+    "youtu.be",
+    "www.youtu.be",
+    "youtube.com",
+    "www.youtube.com",
+    "m.youtube.com",
+    "music.youtube.com",
+    "youtube-nocookie.com",
+    "www.youtube-nocookie.com",
+):
+    _SOURCE_BY_HOST[_h] = "youtube"
+for _h in ("vimeo.com", "www.vimeo.com", "player.vimeo.com"):
+    _SOURCE_BY_HOST[_h] = "vimeo"
+for _h in ("skool.com", "www.skool.com", "app.skool.com"):
+    _SOURCE_BY_HOST[_h] = "skool"
+
+# Retained for backwards-compat with existing tests that imported the set.
 _YOUTUBE_HOSTS = frozenset(
-    {
-        "youtu.be",
-        "www.youtu.be",
-        "youtube.com",
-        "www.youtube.com",
-        "m.youtube.com",
-        "music.youtube.com",
-        "youtube-nocookie.com",
-        "www.youtube-nocookie.com",
-    }
+    h for h, s in _SOURCE_BY_HOST.items() if s == "youtube"
 )
 
 
@@ -105,8 +148,9 @@ def _detect_source(url: str) -> str:
     """
     parsed = urlparse(url)
     host = (parsed.hostname or "").lower()
-    if host in _YOUTUBE_HOSTS:
-        return "youtube"
+    source = _SOURCE_BY_HOST.get(host)
+    if source is not None:
+        return source
     raise ValueError(f"Unsupported source for URL: {url}")
 
 
@@ -151,18 +195,55 @@ def _fetch_one(
     lang: str,
     prefer: str,
     timeout_sec: int,
+    with_description: bool = False,
+    description_only: bool = False,
+    cookies_file: Optional[Path] = None,
 ) -> dict:
     source = _detect_source(url)
-    if source != "youtube":
+    ladder = _build_ladder(prefer=prefer, lang=lang)
+
+    if source == "youtube":
+        stat = fetch_youtube_transcript(
+            url,
+            out_path,
+            fallback_ladder=ladder,
+            timeout_sec=timeout_sec,
+            cookies_file=cookies_file,
+            with_description=with_description,
+            description_only=description_only,
+        )
+    elif source == "vimeo":
+        # Vimeo has no ``<lang>-orig`` quirk; strip those from the ladder.
+        # Always retain the user's --lang/--prefer choice; only synthesize
+        # the English tail if it was missing (Vimeo auto-en is the
+        # last-ditch fallback when explicit lang has no track).
+        vimeo_ladder = tuple((k, l) for k, l in ladder if not l.endswith("-orig"))
+        if ("auto", "en") not in vimeo_ladder:
+            vimeo_ladder = vimeo_ladder + (("auto", "en"),)
+        if not vimeo_ladder:
+            vimeo_ladder = DEFAULT_FALLBACK_VIMEO
+        stat = fetch_vimeo_transcript(
+            url,
+            out_path,
+            fallback_ladder=vimeo_ladder,
+            timeout_sec=timeout_sec,
+            cookies_file=cookies_file,
+            with_description=with_description,
+            description_only=description_only,
+        )
+    elif source == "skool":
+        stat = fetch_skool_transcript(
+            url,
+            out_path,
+            cookies_file=cookies_file,
+            fallback_ladder=ladder,
+            timeout_sec=timeout_sec,
+            with_description=with_description,
+            description_only=description_only,
+        )
+    else:  # pragma: no cover — _detect_source guards this
         raise ValueError(f"Source {source!r} not yet implemented")
 
-    ladder = _build_ladder(prefer=prefer, lang=lang)
-    stat = fetch_youtube_transcript(
-        url,
-        out_path,
-        fallback_ladder=ladder,
-        timeout_sec=timeout_sec,
-    )
     write_stat_sidecar(stat, out_path)
     return stat.to_dict()
 
@@ -177,7 +258,7 @@ def _build_parser() -> argparse.ArgumentParser:
         prog="fetch.py",
         description=(
             "Fetch a clean plain-text transcript from a video URL "
-            "(YouTube only at the moment)."
+            "(YouTube, Vimeo, or Skool lesson)."
         ),
     )
     p.add_argument(
@@ -233,6 +314,29 @@ def _build_parser() -> argparse.ArgumentParser:
         "Default: error.",
     )
     p.add_argument(
+        "--with-description",
+        action="store_true",
+        help="Also fetch the video description / lesson body and write a "
+        "<out>.description.md sidecar. Populates title/uploader/upload_date/"
+        "duration_sec in the stat. Off by default for backward compat.",
+    )
+    p.add_argument(
+        "--description-only",
+        action="store_true",
+        help="Skip the transcript download entirely; produce only the "
+        "<out>.description.md sidecar. Requires --with-description.",
+    )
+    p.add_argument(
+        "--cookies-file",
+        type=Path,
+        help="Path to a Netscape cookies.txt with an authenticated "
+        "session. ALWAYS OPTIONAL. For Skool, public communities "
+        "work without cookies; only private/paid ones need them "
+        "(SourceAuthError with exit code 5 if the server returns "
+        "HTTP 401/403). For YouTube/Vimeo, forwarded to yt-dlp's "
+        "--cookies for age-gated or unlisted videos.",
+    )
+    p.add_argument(
         "--json-errors",
         action="store_true",
         help="On failure, emit a single JSON line on stderr "
@@ -282,6 +386,22 @@ def main(argv: Optional[list[str]] = None) -> int:
             json_mode=json_errors,
         )
 
+    if args.description_only and not args.with_description:
+        return _emit_error(
+            "--description-only requires --with-description.",
+            code=2,
+            error_type="UsageError",
+            json_mode=json_errors,
+        )
+
+    if args.cookies_file is not None and not args.cookies_file.exists():
+        return _emit_error(
+            f"--cookies-file not found: {args.cookies_file}",
+            code=2,
+            error_type="UsageError",
+            json_mode=json_errors,
+        )
+
     # Single-URL mode
     if args.url:
         if not args.out:
@@ -298,12 +418,39 @@ def main(argv: Optional[list[str]] = None) -> int:
                 lang=args.lang,
                 prefer=args.prefer,
                 timeout_sec=args.timeout_sec,
+                with_description=args.with_description,
+                description_only=args.description_only,
+                cookies_file=args.cookies_file,
             )
         except TranscriptFetchError as e:
             return _emit_error(
                 str(e),
                 code=3,
                 error_type="TranscriptFetchError",
+                details={"url": args.url},
+                json_mode=json_errors,
+            )
+        except SourceAuthError as e:
+            return _emit_error(
+                str(e),
+                code=5,
+                error_type="SourceAuthError",
+                details={"url": args.url},
+                json_mode=json_errors,
+            )
+        except SourceRateLimitError as e:
+            return _emit_error(
+                str(e),
+                code=6,
+                error_type="SourceRateLimitError",
+                details={"url": args.url},
+                json_mode=json_errors,
+            )
+        except (SkoolUrlError, SkoolSchemaError) as e:
+            return _emit_error(
+                str(e),
+                code=2,
+                error_type=type(e).__name__,
                 details={"url": args.url},
                 json_mode=json_errors,
             )
@@ -369,6 +516,9 @@ def main(argv: Optional[list[str]] = None) -> int:
                 lang=args.lang,
                 prefer=args.prefer,
                 timeout_sec=args.timeout_sec,
+                with_description=args.with_description,
+                description_only=args.description_only,
+                cookies_file=args.cookies_file,
             )
             sys.stdout.write(json.dumps(stat, ensure_ascii=False) + "\n")
         except _BatchCollisionError as e:
