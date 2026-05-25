@@ -316,6 +316,7 @@ The agent uses Phase 2-alt instead of Phase 2: `wiki_ops.py register-summary <va
 ## 11. Resources
 
 - `scripts/wiki_ops.py` — deterministic vault operations across all four modes: `scan`, `init`, `upsert-page`, `update-index`, `append-log`, `log-event`, `find`, `lint`, `reindex`. Mutating subcommands support `--dry-run`.
+- `references/karpathy-llm-wiki.md` — foundational methodology by Andrej Karpathy (imported verbatim from [github.com/karpathy/llm-wiki](https://github.com/karpathy/llm-wiki)). Read this when you need to remember WHY the skill is structured the way it is — raw vs wiki vs schema layers, the ingest/query/lint operations, the "compounding artifact" thesis. This skill is an implementation of that pattern.
 - `references/wiki_schema.md` — full default vault conventions (paths, frontmatter, footnote style, page sections). Read when interpreting an existing vault's `WIKI_SCHEMA.md` or deciding how to upsert.
 - `references/ingest_workflow.md` — judgement-heavy steps for ingest: concept-vs-entity classification rules, contradiction detection patterns, new-fact extraction heuristics.
 - `references/query_lint_workflow.md` — judgement-heavy steps for query, lint, reindex: term extraction, hit filtering, lint action playbook (orphans → dangling → contradictions → missing-pages), reindex safety pattern.
