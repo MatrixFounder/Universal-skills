@@ -46,7 +46,31 @@ following the selected template from `assets/`.
 - `duration`: Duration (from timestamps or mark `⚠️ UNKNOWN`)
 - `languages`: Meeting languages
 - `tags`: Add relevant tags (MUST be from `references/tag_taxonomy.md`)
-- `related`: If documents/meetings are mentioned — add `[[wiki-links]]`
+- `related`: If documents/meetings/concepts mentioned in the wiki are referenced — add `[[wiki-links]]`. Every `[[X]]` here is a *promise that X is (or should be) a wiki page* — only use this syntax when X is a real concept/entity worth a dedicated page.
+
+### 3a. Meta-Fields — Plain Strings, NOT Wiki-Links
+
+If the summary uses educational/lesson meta-fields like `prerequisites`, `glossary_terms`, `read_before`, `read_after`, `dependencies`, list their values as **plain strings**, NOT `[[wiki-links]]`. Rationale:
+
+- These describe *prerequisite knowledge the reader should already have* or *related concepts mentioned in passing*, NOT promises of dedicated wiki pages.
+- Wrapping them in `[[ ]]` creates ghost-nodes in Obsidian's graph view and makes lint flag them as dangling links forever.
+- Reserve `[[ ]]` syntax for `related:` and inline body links, where it means "this page exists in the wiki" (or should exist).
+
+✅ Correct:
+```yaml
+prerequisites:
+  - "Basic shell + Python on Mac/Linux/WSL2"
+  - "An Anthropic API key"
+glossary_terms:
+  - "MCP — Model Context Protocol"
+```
+
+❌ Wrong:
+```yaml
+prerequisites:
+  - "[[Basic shell + Python on Mac/Linux/WSL2]]"   # not a wiki page; creates orphan
+  - "[[An Anthropic API key]]"                      # not a wiki page; creates orphan
+```
 
 ### 4. "Agent Metadata" Block
 
