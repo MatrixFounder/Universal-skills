@@ -1,0 +1,133 @@
+# Default Wiki Schema (Reference)
+
+This is the *reference* version of the schema the skill scaffolds into a fresh vault. The bundled `assets/WIKI_SCHEMA.template.md` is what gets copied. This file exists so an agent can read the conventions without needing access to the target vault.
+
+## When to read this
+
+- The vault's own `WIKI_SCHEMA.md` is missing AND you cannot scaffold it (e.g., dry-run mode).
+- You need to remember the default conventions because the vault's schema only shows deltas from default.
+- You are deciding how to classify a new page (concept vs entity vs source).
+
+## The conventions
+
+### Directory layout
+
+```
+<vault>/
+├── WIKI_SCHEMA.md       # conventions (overrides this default)
+├── index.md              # catalog
+├── log.md                # chronological log
+├── _sources/              # per-source summary pages
+├── _concepts/             # abstract concepts
+├── _entities/             # concrete entities
+└── raw/                  # (optional) immutable raw files
+```
+
+### Page kinds and their sections
+
+**Source page** (`_sources/<slug>.md`):
+- Owned by `summarizing-meetings`; do not write its body directly.
+- Frontmatter: `title, date, meeting_type, participants, duration, languages, tags, related, concepts, ...`
+
+**Concept page** (`_concepts/<Name>.md`):
+- Frontmatter: `name, kind: concept, created`
+- Sections: `## Definition` → `## Facts` → `## Contradictions` (only if any) → `## Sources mentioning this`
+- Footnotes at the bottom: `[^src-<slug>]: [[<slug>]] — <Source Title>`
+
+**Entity page** (`_entities/<Name>.md`):
+- Same shape as concept page, with `kind: entity`.
+
+### Concept vs Entity — disambiguation rules
+
+| Marker | Concept | Entity |
+|--------|---------|--------|
+| Generalisable idea | ✅ | ❌ |
+| Has a Wikipedia article on the *idea itself* | ✅ | ❌ |
+| Proper noun (capitalised name of a thing) | ❌ | ✅ |
+| Specific product/person/org/place | ❌ | ✅ |
+| Acronym referring to a single product | ❌ | ✅ |
+| Acronym referring to a general technique | ✅ | ❌ |
+
+Examples:
+- `Sharpe Score` → concept
+- `Hermes Agent` → entity (specific product)
+- `Reinforcement Learning` → concept
+- `Railway` (hosting platform) → entity
+- `Bittensor` → entity
+- `Bittensor Subnet Trading` → concept (general activity), even though "Bittensor" is an entity
+- `Andrej Karpathy` → entity
+
+**Tie-breaker**: when genuinely uncertain, choose `entity`. It's less likely to mis-classify, and entity pages are still valid wiki nodes.
+
+### Slugs
+
+- **Source slug**: kebab-case from the title. `"AI Trading Agent Holy Grail: Self-Improving Agent with Hermes"` → `ai-trading-agent-holy-grail-self-improving-agent-hermes`. Keep it under ~60 chars; truncate at a word boundary if longer.
+- **Concept/entity slug**: not used — the page filename is the canonical name verbatim (with spaces). Obsidian resolves `[[Hermes Agent]]` to `_entities/Hermes Agent.md`.
+
+### Citation footnotes
+
+Format: `[^src-<source-slug>]`
+
+Example on a concept page:
+
+```markdown
+## Facts
+
+- Risk-adjusted return: `Sharpe = (R_p − R_f) / σ_p`. [^src-hermes-trading-agent]
+- A min Sharpe of 1 is a sensible floor for self-improving trading agents. [^src-hermes-trading-agent]
+- For crypto strategies, R_f is often treated as 0 due to absence of clear baseline. [^src-quant-crypto-handbook]
+
+## Sources mentioning this
+
+- [[hermes-trading-agent]] — 2026-05-25 — AI Trading Agent Holy Grail
+- [[quant-crypto-handbook]] — 2026-03-12 — Quant Crypto Handbook chapter 4
+
+---
+
+[^src-hermes-trading-agent]: [[hermes-trading-agent]] — AI Trading Agent Holy Grail
+[^src-quant-crypto-handbook]: [[quant-crypto-handbook]] — Quant Crypto Handbook chapter 4
+```
+
+This is the canonical shape — `wiki_ops.py upsert-page` produces exactly this layout.
+
+### Contradiction markup
+
+```markdown
+## Contradictions
+
+> ⚠️ **Contradiction flagged** — operator review needed.
+> - Existing claim: <quoted text>
+> - New claim from [[<new-source-slug>]]: <new claim> [^src-<new-source-slug>]
+```
+
+When the same page accumulates multiple contradictions, they stack as separate `> ⚠️` blocks under the same `## Contradictions` header.
+
+### log.md entry format
+
+```markdown
+## [2026-05-25] ingest | AI Trading Agent Holy Grail
+- Source path: `transcripts/01-systems-hermes.txt`
+- Summary page: [[ai-trading-agent-holy-grail]]
+- Pages touched: [[Sharpe Score]], [[Reinforcement Learning]]
+- Pages created: [[Hermes Agent]], [[Railway]], [[Bittensor Subnets]], [[Scientific Method for Strategy Iteration]]
+- Contradictions flagged: 0
+```
+
+Grep-friendly prefix `## [YYYY-MM-DD] ingest|query|lint` is non-negotiable.
+
+### index.md layout
+
+```markdown
+## Sources
+- [[ai-trading-agent-holy-grail]] — 2026-05-25 — AI Trading Agent Holy Grail — one-line TL;DR
+
+## Concepts
+- [[Sharpe Score]] — introduced by [[ai-trading-agent-holy-grail]]
+- [[Reinforcement Learning]] — introduced by [[ai-trading-agent-holy-grail]]
+
+## Entities
+- [[Hermes Agent]] — introduced by [[ai-trading-agent-holy-grail]]
+- [[Railway]] — introduced by [[ai-trading-agent-holy-grail]]
+```
+
+The agent can extend each row with extra metadata over time, but the first column (`[[slug]]`) is the dedupe key.

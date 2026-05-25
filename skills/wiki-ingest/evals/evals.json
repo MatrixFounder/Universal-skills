@@ -1,0 +1,144 @@
+{
+  "skill_name": "wiki-ingest",
+  "notes": "Evals exercise the four modes (ingest, query, lint, reindex) plus adversarial inputs. Each test starts from an empty <vault> temp dir unless a fixture preloads it. Subagents have access to the wiki-ingest skill and may invoke summarizing-meetings when needed. Fixtures live in evals/fixtures/.",
+  "evals": [
+    {
+      "id": 1,
+      "name": "fresh-vault-ingest-raw-transcript",
+      "prompt": "Ingest this trading-bot transcript into a fresh Obsidian llm-wiki vault at <vault>. Set up the vault, generate a summary via summarizing-meetings, then upsert concept/entity pages, update the index, and append a log entry. The transcript discusses Self-Improving AI Agents, Hermes Agent, Sharpe Score, Bittensor Subnet Trading, Railway, and Claude Code.",
+      "files": ["evals/fixtures/transcript-trading-bot.txt"],
+      "expectations": [
+        "Vault is initialized: WIKI_SCHEMA.md, index.md, log.md, _sources/, _concepts/, _entities/ all exist",
+        "_sources/ contains exactly one .md file with type:lesson-summary or kind:source frontmatter",
+        "_concepts/ contains pages for at least 3 of: Self-Improving AI Agent, Sharpe Score, Scientific Method for Strategy Iteration, Four Rules for a Good Trading Agent, Bittensor Subnet Trading",
+        "_entities/ contains pages for at least 2 of: Hermes Agent, Claude Code, Railway Hosting/Railway, Bittensor Subnets",
+        "Each concept/entity page has a ## Sources mentioning this section with a wiki-link to the new source",
+        "Each concept/entity page has a [^src-...] footnote citing the new source",
+        "index.md has a row under ## Sources linking to the new source page",
+        "log.md has an entry starting with '## [YYYY-MM-DD] ingest |'",
+        "No file was created outside the vault root"
+      ]
+    },
+    {
+      "id": 2,
+      "name": "register-pre-made-summary-skip-summarizing",
+      "prompt": "I already have a summary file at <fixture>. Ingest it into my vault at <vault> via register-summary — do NOT call summarizing-meetings since the summary is already done. Then upsert its concepts/entities, update index, append log.",
+      "files": ["evals/fixtures/summary-pre-made.md"],
+      "expectations": [
+        "summarizing-meetings skill was NOT invoked (verifiable from agent transcript)",
+        "_sources/quant-crypto-handbook-ch-4-risk-adjusted-metrics.md exists (or a slug derivable from the title)",
+        "_concepts/Sharpe Score.md exists with a footnote citing the new source",
+        "_concepts/Sortino Ratio.md exists",
+        "_concepts/Max Drawdown.md exists",
+        "log.md has an ingest entry referencing the registered source slug",
+        "The summary's `concepts: [Sharpe Score, Sortino Ratio, Max Drawdown]` were extracted correctly"
+      ]
+    },
+    {
+      "id": 3,
+      "name": "second-ingest-additive-on-existing-concept",
+      "prompt": "Vault at <vault> already has _concepts/Sharpe Score.md from an earlier ingest of the Quant Crypto Handbook. Now ingest this DIFFERENT summary (summary-contradicting.md) which also mentions Sharpe Score but with a contradicting threshold claim. The Sharpe Score page must be ADDITIVELY updated: keep the existing definition, add a new fact under ## Facts, add a new row under ## Sources mentioning this, add a new footnote, AND flag the contradiction.",
+      "files": ["evals/fixtures/summary-contradicting.md"],
+      "preload_vault": "init + register-summary fixtures/summary-pre-made.md (yields one source 'Quant Crypto Handbook', Sharpe Score concept with 'min Sharpe of 1 recommended')",
+      "expectations": [
+        "_concepts/Sharpe Score.md was NOT overwritten — original definition substring present",
+        "Sharpe Score has 2 [^src-*] footnotes (one per source)",
+        "## Sources mentioning this has 2 unique source rows, no duplicates",
+        "_concepts/Max Drawdown.md exists (concept from the contradicting summary)",
+        "BONUS: ## Contradictions block on Sharpe Score (new 'min 0.5 sufficient' vs existing 'min 1')"
+      ]
+    },
+    {
+      "id": 4,
+      "name": "contradiction-flagged-not-resolved",
+      "prompt": "Vault at <vault> has _concepts/Sharpe Score.md with a claim 'min 1 recommended'. Now ingest this conservative-trading summary which claims 'min Sharpe of 0.5 is sufficient'. Upsert must flag the contradiction (## Contradictions block citing both sources). Do NOT pick a winner.",
+      "files": ["evals/fixtures/summary-contradicting.md"],
+      "preload_vault": "Pre-existing Sharpe Score page with definition mentioning 'min 1 recommended' and one source row",
+      "expectations": [
+        "_concepts/Sharpe Score.md contains a ## Contradictions section",
+        "The Contradictions block has '⚠️' marker and quotes both the existing claim and the new claim",
+        "Original 'min 1 recommended' claim is still present (not overwritten)",
+        "Operator-action language present: 'operator review needed' or similar"
+      ]
+    },
+    {
+      "id": 5,
+      "name": "query-mode-find-and-cite",
+      "prompt": "Vault at <vault> is preloaded with 3 sources covering trading-agents topics. Answer the question: 'What does the wiki say about Sharpe Score?'. Use wiki_ops.py find to locate relevant pages, read top hits, and synthesize a 4-8 sentence answer with [[wiki-link]] citations for every claim.",
+      "files": [],
+      "preload_vault": "Init + ingest 3 fixture summaries covering Sharpe Score and adjacent concepts",
+      "expectations": [
+        "Agent invoked `wiki_ops.py find` with terms including 'sharpe'",
+        "Answer cites at least 2 distinct sources via [[<slug>]] syntax",
+        "Answer is 4-8 sentences (focused, not a regurgitation of full pages)",
+        "If sources disagree, the answer surfaces the disagreement explicitly",
+        "Agent ran log-event --event query to record the interaction"
+      ]
+    },
+    {
+      "id": 6,
+      "name": "lint-reports-known-issues",
+      "prompt": "Run lint on the vault at <vault>. Report findings to the operator: orphan pages, dangling [[wiki-links]], open contradictions, missing concept pages.",
+      "files": [],
+      "preload_vault": "Pre-seeded with: 2 source pages, 1 concept page (orphan: no inbound), 1 dangling [[NonexistentTarget]] in a source body, 1 concept mentioned in both source-A and source-B frontmatter `concepts:` but no _concepts/ page exists",
+      "expectations": [
+        "Lint JSON shows orphans count >= 1 with the right page listed",
+        "Lint JSON shows dangling_link_targets >= 1 including 'NonexistentTarget'",
+        "Lint JSON shows missing_concept_pages >= 1 (concept mentioned in 2 sources without page)",
+        "Agent presents a categorized summary to the operator (not just the raw JSON)",
+        "Agent does NOT auto-fix — only reports"
+      ]
+    },
+    {
+      "id": 7,
+      "name": "reindex-preserves-custom-sections",
+      "prompt": "Reindex the vault at <vault>. The operator has added `## Notes` and `## Pinned` sections to index.md with personal content. Both must survive the reindex.",
+      "files": [],
+      "preload_vault": "Vault with 2 sources + manually added '## Notes' (with text 'Personal notes here') and '## Pinned' (with text 'Pinned: Sharpe Score page')",
+      "expectations": [
+        "After reindex, index.md still contains 'Personal notes here'",
+        "After reindex, index.md still contains 'Pinned: Sharpe Score page'",
+        "_sources/_concepts/Entities sections in index.md are rebuilt from on-disk pages",
+        "JSON output includes preserved_sections list with at least ['Notes', 'Pinned']"
+      ]
+    },
+    {
+      "id": 8,
+      "name": "idempotent-reingest",
+      "prompt": "Vault at <vault> already has source-X ingested. Re-run the same ingest. Nothing should change: no duplicate source rows, no duplicate footnotes, no duplicate log entry.",
+      "files": [],
+      "preload_vault": "Vault with one source already ingested via register-summary + upsert-page + update-index + append-log",
+      "expectations": [
+        "_sources/<slug>.md not duplicated (single file with single content)",
+        "Concept pages have exactly ONE row per source under ## Sources mentioning this",
+        "Footnote section has exactly ONE [^src-<slug>] definition",
+        "log.md has exactly ONE entry for this slug (append-log dedupes by default)",
+        "index.md ## Sources has exactly ONE row for the slug"
+      ]
+    },
+    {
+      "id": 9,
+      "name": "adversarial-path-traversal-rejected",
+      "prompt": "An adversarial user (or buggy upstream agent) tries to ingest with --name '../../etc/passwd' or --slug '../escape'. The skill MUST refuse and report a clear error. No file should be written outside the vault subdirs.",
+      "files": [],
+      "expectations": [
+        "wiki_ops.py upsert-page --name '../../etc/passwd-pwn' exits non-zero with an error message",
+        "No file named 'passwd-pwn.md' exists at <vault>/../etc/ or anywhere outside the vault",
+        "Agent surfaces the rejection to the operator rather than silently retrying with a sanitised name",
+        "Error message mentions traversal/path safety"
+      ]
+    },
+    {
+      "id": 10,
+      "name": "unicode-title-handled",
+      "prompt": "Ingest this Cyrillic-titled summary (title: 'Анализ торговых стратегий'). The skill must produce a valid slug (not empty), create a _sources/ page, and not crash on non-ASCII.",
+      "files": ["evals/fixtures/summary-unicode-title.md"],
+      "expectations": [
+        "register-summary succeeded (action: copied or in-place)",
+        "Generated slug contains Cyrillic characters or a sensible romanisation, not an empty string",
+        "_sources/<slug>.md exists and has non-empty content",
+        "index.md row references the new source"
+      ]
+    }
+  ]
+}

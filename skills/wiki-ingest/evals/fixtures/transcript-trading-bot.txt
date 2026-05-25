@@ -1,0 +1,13 @@
+Speaker 1: Welcome back to the channel. Today we're building a trading bot that uses Claude Code as the brain and connects to Bittensor subnets through Railway 24/7 deployment.
+
+Speaker 1: The whole idea is to take the Self-Improving AI Agent pattern we discussed last time and apply it concretely. We'll use the Hermes Agent framework because it has the self-learning loop built in, unlike OpenClaw which needs more glue code.
+
+Speaker 1: First, let's talk about the Four Rules for a Good Trading Agent. Number one: accuracy. The agent must validate its data feed. Number two: reliability — must run 24/7, which is why we use Railway. Number three: a well-defined goal — for us, a minimum Sharpe Score of 1 and max drawdown of 30%. Number four: self-improvement — the agent must apply the Scientific Method for Strategy Iteration, changing one variable at a time.
+
+Speaker 1: We're testing on Bittensor Subnet Trading with a starting capital of $5000. The strategy fires every 30 minutes. The first cycle is read-only — Hermes produces a markdown review with no writes until I flip the mode.
+
+Speaker 1: For the One-Shot Prompt approach, copy this paste from the community and run it in Claude Code with the dangerously-skip-permissions flag. Phase 1 is environment check, phase 2 is strategy definition, phase 3 is Hermes install.
+
+Speaker 1: One thing to note: this lesson recommends a minimum Sharpe of 1, but some quant funds prefer 1.5 as the actual production threshold. We'll discuss that nuance later.
+
+Speaker 1: Let's wrap up. Run it, watch it for a week, then flip to live. That's how you ship a Self-Improving AI Agent without blowing up your capital.

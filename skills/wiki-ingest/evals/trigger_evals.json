@@ -1,0 +1,22 @@
+[
+  {"query": "Add this transcript to my Obsidian llm-wiki and update the concept pages. Path: /Users/me/notes/transcript-2026-05-12.txt; vault: /Users/me/wiki", "should_trigger": true},
+  {"query": "I have a summary file already at notes/summary.md — drop it into my Obsidian vault as a wiki entry, register the source, upsert concept and entity pages", "should_trigger": true},
+  {"query": "ingest this lesson into my wiki", "should_trigger": true},
+  {"query": "compound my notes — process the new sources I just added under raw/ into the Obsidian wiki, updating index.md and concept pages additively", "should_trigger": true},
+  {"query": "run a wiki maintenance pass: lint my llm-wiki for orphans, dangling links, contradictions, and missing concept pages", "should_trigger": true},
+  {"query": "reindex my Obsidian llm-wiki — the index.md is stale and out of sync with the on-disk pages", "should_trigger": true},
+  {"query": "answer this question against my llm-wiki and cite the sources: what does my wiki say about Sharpe Score in crypto?", "should_trigger": true},
+  {"query": "I just dropped 5 new transcripts under raw/ — set up the llm-wiki pattern Karpathy described and ingest them, building concept and entity pages with cross-references", "should_trigger": true},
+  {"query": "ingest this article into wiki, additively update concept pages, flag contradictions if any", "should_trigger": true},
+  {"query": "process this transcript into llm-wiki — generate the summary then wire it into the concept graph", "should_trigger": true},
+  {"query": "register the existing summary at lesson1/summary.md into my Obsidian vault — don't regenerate, just plumb it in and upsert the concept pages", "should_trigger": true},
+  {"query": "update my concept pages from this new source. each concept mentioned should get a row added to its 'Sources mentioning this' section, with a footnote citation", "should_trigger": true},
+  {"query": "just summarise this meeting recording into a markdown document — no wiki, no index, just the summary file", "should_trigger": false},
+  {"query": "write a blog post for my LinkedIn about the trade-agents project", "should_trigger": false},
+  {"query": "create a slide deck from this transcript", "should_trigger": false},
+  {"query": "download a YouTube transcript for me — the URL is https://youtu.be/abc123", "should_trigger": false},
+  {"query": "make a PDF out of this markdown report", "should_trigger": false},
+  {"query": "open my Obsidian vault and show me which page has the most backlinks", "should_trigger": false},
+  {"query": "do a security review of this branch — any path-traversal vulnerabilities in the upsert logic?", "should_trigger": false},
+  {"query": "set up a new Python project for a wiki-management tool", "should_trigger": false}
+]
