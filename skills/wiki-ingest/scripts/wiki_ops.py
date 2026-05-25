@@ -1231,6 +1231,342 @@ def cmd_reindex(args: argparse.Namespace) -> int:
     return 0
 
 
+# ---------- classify-folder (Phase 0 of folder-ingest) ----------
+
+# File extensions and their default classification roles
+_OFFICE_EXTS = {".docx", ".pptx", ".xlsx", ".pdf"}
+_IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp", ".bmp"}
+_METADATA_EXTS = {".json", ".yaml", ".yml", ".toml"}
+_TEXT_EXTS = {".txt", ".md", ".markdown", ".rst"}
+_SKIP_EXTS = {".lock", ".swp", ".pyc", ".pyo"}
+_SKIP_NAMES = {".DS_Store", "Thumbs.db", "desktop.ini"}
+
+# Filename hints for primary-vs-non-primary tie-breaking within a group
+_PRIMARY_HINTS = (
+    "transcript", "main", "content", "intro", "lesson",
+    "phase", "recording", "talk", "session",
+)
+_NON_PRIMARY_HINTS = (
+    "slides", "notes", "template", "appendix", "specification", "spec",
+    "ricef", "glossary", "cheatsheet", "outline", "agenda",
+    "description", "metadata",
+)
+
+# Default grouping regex: "01 - ", "02-", "1.2.", etc.
+_PREFIX_REGEX = re.compile(r"^(\d+(?:\.\d+)*)[\s\-_.]+")
+
+
+def _is_text_readable(ext: str) -> bool:
+    return ext.lower() in _TEXT_EXTS
+
+
+def _count_md_structure(path: Path) -> tuple[int, int, int, bool]:
+    """Return (size_bytes, h2_count, fence_count, is_prose).
+
+    `is_prose` is heuristic: file is text-readable AND not just lists/JSON-like.
+    """
+    try:
+        size = path.stat().st_size
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return (0, 0, 0, False)
+    h2_count = sum(1 for line in text.splitlines() if line.startswith("## "))
+    fence_count = text.count("```")  # raw fence-line count; pairs of 2 = 1 block
+    # rough prose check: has at least one full sentence-like line
+    has_prose = any(len(line) > 60 and line.rstrip()[-1:] in ".!?»\"'"
+                    for line in text.splitlines())
+    return (size, h2_count, fence_count, has_prose)
+
+
+def _filename_hint_score(stem_lower: str) -> int:
+    """Segment-aware hint score. Right-most segment is most discriminative.
+
+    Splits stem on common separators (./-/_/whitespace), scores each segment
+    against primary/non-primary hints with last-segment weighted 3x. This
+    handles cases like `lesson.description` where the meaningful signal is
+    `description` (not the shared prefix `lesson`).
+    """
+    segments = re.split(r"[\s\-_.]+", stem_lower)
+    segments = [s for s in segments if s]
+    if not segments:
+        return 0
+    score = 0
+    for i, seg in enumerate(reversed(segments)):
+        weight = 3 if i == 0 else 1
+        for hint in _PRIMARY_HINTS:
+            if seg == hint or (len(seg) > 3 and hint in seg):
+                score += 2 * weight
+        for hint in _NON_PRIMARY_HINTS:
+            if seg == hint or (len(seg) > 3 and hint in seg):
+                score -= 2 * weight
+    return score
+
+
+# Filename patterns indicating a previously-generated wiki output (not a source)
+_OUTPUT_NAME_RE = re.compile(
+    r"^(summary|output|result|generated|_?wiki|index|log)(\b|[_\-.])",
+    re.IGNORECASE,
+)
+
+
+def _classify_one_file(path: Path) -> tuple[str, str]:
+    """Per-file independent classification.
+
+    Returns (role, rationale) — role in {text-candidate, derived-output, merge,
+    link, metadata, skip}. Note: text-candidate is provisional — the per-group
+    pass (PHASE 2b) decides which text-candidate becomes primary vs link vs merge.
+    """
+    name = path.name
+    ext = path.suffix.lower()
+    stem_lower = path.stem.lower()
+
+    if name in _SKIP_NAMES or name.startswith("."):
+        return ("skip", "hidden/system file")
+    if ext in _SKIP_EXTS:
+        return ("skip", f"skip-extension {ext}")
+    if ext in _OFFICE_EXTS:
+        return ("link", f"binary office file ({ext}) — cannot inline, link only")
+    if ext in _IMAGE_EXTS:
+        return ("link", f"image asset ({ext})")
+    if ext in _METADATA_EXTS:
+        try:
+            size = path.stat().st_size
+        except OSError:
+            size = 0
+        if size < 4096:
+            return ("metadata", f"structured-data file ({ext}, {size}B) → frontmatter")
+        return ("link", f"large structured-data file ({ext}, {size}B) → link")
+
+    if not _is_text_readable(ext):
+        return ("link", f"non-text-readable extension ({ext}) → link by default")
+
+    size, h2, fences, prose = _count_md_structure(path)
+    if size == 0:
+        return ("skip", "empty file")
+
+    # Detect previously-generated wiki output (summary.md, generated.md, etc.)
+    if _OUTPUT_NAME_RE.match(name):
+        # Sanity check: does the file have wiki-summary-style frontmatter?
+        try:
+            head = path.read_text(encoding="utf-8", errors="replace")[:500]
+        except OSError:
+            head = ""
+        looks_like_summary = ("type: lesson-summary" in head
+                              or "type: meeting-summary" in head
+                              or "kind: source" in head)
+        if looks_like_summary:
+            return ("derived-output",
+                    f"previously-generated wiki summary ({name}); skip from ingest")
+
+    # All text-readable files become candidates; group-pass picks primary
+    return ("text-candidate",
+            f"text-readable ({size}B, {h2} ## headings, fences={fences}, prose={prose})")
+
+
+def _detect_grouping(filenames: list[str]) -> tuple[str, dict | None]:
+    """Detect grouping pattern from a list of filenames.
+
+    Returns (pattern_name, info_dict). pattern_name in {"prefix", "sibling", "flat"}.
+    info_dict has metadata about the pattern (e.g., regex used, base-name mapping).
+    """
+    if not filenames:
+        return ("flat", None)
+
+    # 1. Try filename-prefix pattern (NN-, NN.M-, etc.)
+    matched = [(f, _PREFIX_REGEX.match(f)) for f in filenames]
+    prefix_hits = [(f, m.group(1)) for f, m in matched if m]
+    if len(prefix_hits) >= max(2, len(filenames) // 2):
+        return ("prefix", {"regex": _PREFIX_REGEX.pattern,
+                           "matched": f"{len(prefix_hits)}/{len(filenames)}"})
+
+    # 2. Try sibling-sidecar pattern: a shared base before the first '.'
+    #    e.g. {lesson.txt, lesson.description.md, lesson.txt.stat.json} share base "lesson"
+    bases: dict[str, list[str]] = {}
+    for f in filenames:
+        base = f.split(".", 1)[0]
+        bases.setdefault(base, []).append(f)
+    # if at least one base has ≥2 files AND it covers most filenames → sibling
+    big_groups = [(b, fs) for b, fs in bases.items() if len(fs) >= 2]
+    if big_groups:
+        total_covered = sum(len(fs) for _, fs in big_groups)
+        if total_covered >= max(2, len(filenames) // 2):
+            return ("sibling", {"shared_bases": [b for b, _ in big_groups]})
+
+    return ("flat", None)
+
+
+def _group_files(filenames: list[str], pattern: str) -> dict[str, list[str]]:
+    """Group filenames by their detected pattern. Returns {group_key: [files...]}."""
+    if pattern == "prefix":
+        groups: dict[str, list[str]] = {}
+        for f in filenames:
+            m = _PREFIX_REGEX.match(f)
+            key = m.group(1) if m else "_ungrouped"
+            groups.setdefault(key, []).append(f)
+        return groups
+    elif pattern == "sibling":
+        groups = {}
+        for f in filenames:
+            base = f.split(".", 1)[0]
+            groups.setdefault(base, []).append(f)
+        return groups
+    else:  # flat
+        return {"_all": list(filenames)}
+
+
+def _pick_primary(folder: Path, candidates: list[str]) -> tuple[str | None, str]:
+    """From multiple text-candidates, pick THE primary.
+
+    Strategy:
+    1. Score each by filename-hint (segment-aware).
+    2. If pool has BOTH positive- and negative-hint files → only non-negative
+       files compete (categorical discrimination, hint wins over size).
+    3. Within the eligible pool, pick by log-size + prose bonus.
+
+    Returns (chosen_file_or_None, rationale).
+    """
+    if not candidates:
+        return (None, "no text-readable primary-candidate in group")
+    if len(candidates) == 1:
+        return (candidates[0], "only text-readable file in group")
+
+    import math
+    # Phase A: collect signals per file
+    signals = []
+    for f in candidates:
+        size, h2, fences, prose = _count_md_structure(folder / f)
+        hint = _filename_hint_score(Path(f).stem.lower())
+        signals.append({"file": f, "size": size, "hint": hint, "prose": prose,
+                        "h2": h2, "fences": fences})
+
+    # Phase B: filter pool — if mixed-hint, only positive/neutral compete
+    pos = [s for s in signals if s["hint"] > 0]
+    neg = [s for s in signals if s["hint"] < 0]
+    if pos and neg:
+        pool = [s for s in signals if s["hint"] >= 0]
+        pool_explain = (f"hint-pool: kept {len(pool)} non-negative files "
+                        f"(dropped {len(neg)} with non-primary hints)")
+    else:
+        pool = signals
+        pool_explain = "size-only ranking (no discriminating filename hints)"
+
+    # Phase C: score within pool — size + hint + prose
+    scored = []
+    for s in pool:
+        score = math.log10(max(s["size"], 1)) * 10 + s["hint"] + (5 if s["prose"] else 0)
+        scored.append((score, s))
+    scored.sort(reverse=True, key=lambda x: x[0])
+
+    top = scored[0][1]
+    top_score = scored[0][0]
+    runner_up = scored[1] if len(scored) > 1 else None
+    rationale = (f"{pool_explain}; top: {top['file']} "
+                 f"({top['size']}B, hint={top['hint']:+d})")
+    if runner_up and top_score - runner_up[0] < 5:
+        rationale += (f"; close runner-up {runner_up[1]['file']} "
+                      f"({runner_up[1]['size']}B) — review")
+    return (top["file"], rationale)
+
+
+def cmd_classify_folder(args: argparse.Namespace) -> int:
+    folder = Path(args.folder).resolve()
+    if not folder.is_dir():
+        die(f"folder not a directory: {folder}")
+
+    all_files = sorted(f.name for f in folder.iterdir() if f.is_file())
+    if args.group_by:
+        try:
+            user_regex = re.compile(args.group_by)
+        except re.error as e:
+            die(f"invalid --group-by regex: {e}")
+        pattern_name = "prefix"
+        pattern_info = {"regex": args.group_by, "source": "operator-override"}
+        groups: dict[str, list[str]] = {}
+        for f in all_files:
+            m = user_regex.match(f)
+            key = m.group(1) if m and m.groups() else "_ungrouped"
+            groups.setdefault(key, []).append(f)
+    else:
+        pattern_name, pattern_info = _detect_grouping(all_files)
+        groups = _group_files(all_files, pattern_name)
+
+    output_groups = []
+    for key in sorted(groups):
+        group_files = groups[key]
+        roles: dict[str, list[str]] = {
+            "primary": [], "metadata": [], "merge": [], "link": [],
+            "derived_output": [], "skip": [],
+        }
+        rationales: dict[str, str] = {}
+        text_candidates = []
+        for f in group_files:
+            role, rat = _classify_one_file(folder / f)
+            rationales[f] = rat
+            if role == "text-candidate":
+                text_candidates.append(f)
+            elif role == "derived-output":
+                roles["derived_output"].append(f)
+            elif role == "skip":
+                roles["skip"].append(f)
+            else:
+                roles[role].append(f)
+
+        # PHASE 2b — pick primary from text candidates
+        warnings: list[str] = []
+        if not text_candidates:
+            warnings.append(
+                "no text-readable primary in this group — manual review needed "
+                "(consider running an extraction skill on a binary file first)"
+            )
+        elif len(text_candidates) == 1:
+            f = text_candidates[0]
+            roles["primary"].append(f)
+            rationales[f] = "primary — only text-readable file in group"
+        else:
+            # multiple candidates: score + pick
+            primary_file, primary_rat = _pick_primary(folder, text_candidates)
+            if primary_file:
+                roles["primary"].append(primary_file)
+                rationales[primary_file] = f"primary — {primary_rat}"
+                # Remaining text-candidates: classify as link or merge by structure
+                for f in text_candidates:
+                    if f == primary_file:
+                        continue
+                    p = folder / f
+                    size, h2, fences, _ = _count_md_structure(p)
+                    if size >= 2048 and h2 >= 3 and fences >= 2:
+                        roles["link"].append(f)
+                        rationales[f] = (f"unchosen primary → link "
+                                         f"(standalone: {size}B, {h2} headings, "
+                                         f"{fences} fence-lines)")
+                    elif size < 5120 and h2 < 2:
+                        roles["merge"].append(f)
+                        rationales[f] = (f"unchosen primary → merge "
+                                         f"(small/flat: {size}B, {h2} headings)")
+                    else:
+                        roles["link"].append(f)
+                        rationales[f] = (f"unchosen primary → link "
+                                         f"(default for unchosen: {size}B)")
+
+        output_groups.append({
+            "group_key": key,
+            "files": {k: v for k, v in roles.items()
+                      if v and k not in ("skip", "derived_output")},
+            "derived_outputs": roles["derived_output"],
+            "skipped": roles["skip"],
+            "rationale": rationales,
+            "warnings": warnings,
+        })
+
+    plan = {
+        "source_folder": str(folder),
+        "grouping": {"pattern": pattern_name, "info": pattern_info},
+        "groups": output_groups,
+    }
+    print(json.dumps(plan, indent=2, ensure_ascii=False))
+    return 0
+
+
 # ---------- argparse ----------
 
 def build_parser() -> argparse.ArgumentParser:
@@ -1336,6 +1672,16 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("vault")
     s.add_argument("--dry-run", action="store_true")
     s.set_defaults(func=cmd_reindex)
+
+    s = sub.add_parser("classify-folder",
+                       help="Phase 0 of folder-ingest: detect grouping pattern + classify "
+                            "each file into primary/metadata/merge/link/skip; emit a plan JSON")
+    s.add_argument("folder",
+                   help="path to a folder containing one-or-more sources to ingest")
+    s.add_argument("--group-by",
+                   help="optional regex with one capture group to override grouping pattern "
+                        "(e.g. '^(\\d+)\\s*-\\s*' for 'NN - name.ext' files)")
+    s.set_defaults(func=cmd_classify_folder)
 
     return p
 

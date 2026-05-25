@@ -75,6 +75,7 @@ The skill supports four modes. Most uses invoke `ingest` (the default); `query`,
   - `python3 scripts/wiki_ops.py find <vault> --terms "<space-separated>" [--limit N] [--kinds source,concept,entity]` → ranked JSON hits for the keyword search backing `query` mode
   - `python3 scripts/wiki_ops.py lint <vault> [--threshold N]` → JSON health report (orphans, dangling links, open contradictions, missing concept pages)
   - `python3 scripts/wiki_ops.py reindex <vault>` → rebuild `index.md` from on-disk pages (preserves `## Notes`)
+  - `python3 scripts/wiki_ops.py classify-folder <folder> [--group-by <regex>]` → Phase 0 of folder-ingest: detect grouping pattern + classify each file into primary/metadata/merge/link/derived-output; emit a plan JSON. Pure read-only; no vault required.
 - **Inputs**: vault root path; for upserts, the source's slug/title/date and the concept name and either a definition (stub-creation) or a fact (additive update).
 - **Outputs**: stdout JSON for `scan`; mutated markdown files for the rest; non-zero exit on missing required args or invalid vault.
 - **Failure semantics**: exits 1 with stderr message on invalid args / missing vault; exits 2 if `WIKI_SCHEMA.md` is absent and `init` was not run first (prevents improvised conventions).
@@ -109,12 +110,42 @@ The skill supports four modes. Most uses invoke `ingest` (the default); `query`,
 
 1. **Required from user / inferred from context**:
    - One of:
-     - `<source>` — path to a **raw source file** (transcript, article markdown, paper text). Triggers Phase 2 (delegate to `summarizing-meetings`).
+     - `<source-folder>` — path to a **folder** containing one or more related source files (transcript + slides + notes + binaries). Triggers Phase 0-folder (classify-folder), then per-group Phases 2-6.
+     - `<source>` — path to a **single raw source file** (transcript, article markdown, paper text). Triggers Phase 2 (delegate to `summarizing-meetings`).
      - `<summary>` — path to a **pre-made summary file** (e.g., already produced by an earlier `summarizing-meetings` run). Triggers Phase 2-alt (`register-summary`).
    - `<vault>` — path to the Obsidian vault root.
-2. **Distinguishing source vs summary**: if the file path the operator provided contains expected summary-style frontmatter fields (`type: lesson-summary` / `type: meeting-summary` / `kind: source`, or both `concepts:` and `related:` arrays), treat it as a pre-made summary and use Phase 2-alt. Otherwise treat it as a raw source and use Phase 2. When uncertain, ask the operator once.
+2. **Distinguishing the three input shapes**:
+   - **Folder** → Phase 0-folder (see below).
+   - **File with summary-style frontmatter** (`type: lesson-summary` / `type: meeting-summary` / `kind: source`, OR both `concepts:` AND `related:` arrays) → Phase 2-alt.
+   - **Any other file** → Phase 2.
+   - When uncertain, ask the operator once.
 3. **If `<vault>` not provided**: ask the user. Do NOT guess. Common defaults to *propose* (not assume): the parent directory of the source/summary file, `~/obsidian-vault`, or a vault the user mentioned earlier in the conversation.
 4. **If `<source>` is a URL**, refuse and instruct: "Fetch first with `transcript-fetcher`, then re-invoke `wiki-ingest` with the local path." This skill operates on local files only.
+
+### Phase 0-folder — Classify-folder (when input is a directory)
+
+When `<source-folder>` is a directory containing multiple files (e.g., a transcript + slides + notes bundle, or a numbered course like `01 - intro.md` + `01 - intro - slides.pptx`):
+
+1. **Run `python3 scripts/wiki_ops.py classify-folder <folder>`** — outputs JSON plan with:
+   - Detected grouping pattern (`prefix` / `sibling` / `flat`)
+   - Per-group classification: `primary` / `metadata` / `merge` / `link` / `derived_outputs` / `skipped`
+   - Per-file rationale + warnings
+2. **Present the plan to the operator** in human-readable form. Surface warnings (e.g., groups with no text-readable primary).
+3. **Apply LLM judgement** on ambiguous classifications:
+   - If rationale shows "close runner-up — review" → ask operator to pick primary
+   - If a file's role seems wrong (e.g., a substantial recipe got `merge` instead of `link`) → propose override
+   - Operator can re-run with `--group-by '<regex>'` to force a custom grouping
+4. **For each group** with a confirmed `primary`:
+   - Run Phases 2-6 below (treating the group's `primary` file as `<source>` and `merge` files as supplementary context for the `summarizing-meetings` call)
+   - After Phase 5 (`update-index` + `append-log`), **post-process** the generated summary to inject:
+     - `companion_links:` frontmatter list — one entry per `link` file with `path`, `kind`, one-line `description`
+     - `metadata:` frontmatter fields — flatten the `metadata` files' contents (e.g., `url`, `duration_sec`, `embed_url` from a `*.stat.json`)
+     - For prefix-grouped courses: `course:`, `lesson_number:`, `previous:`, `next:` cross-references
+     - `## Companion Material` body section — one bullet per `link` file with a Markdown link to its raw location
+5. **NEVER copy `link` files into the wiki.** They live in the raw layer. Wiki only references them by path. (Karpathy invariant: raw is immutable.)
+6. **`derived_outputs`** (previously-generated summary files like `summary.md`) are **skipped** entirely — they're outputs of a prior ingest, not sources.
+
+Detailed algorithm, examples, edge cases: [`references/folder_ingest_workflow.md`](references/folder_ingest_workflow.md).
 
 ### Phase 1 — Scan + scaffold
 
@@ -320,6 +351,7 @@ The agent uses Phase 2-alt instead of Phase 2: `wiki_ops.py register-summary <va
 - `references/wiki_schema.md` — full default vault conventions (paths, frontmatter, footnote style, page sections). Read when interpreting an existing vault's `WIKI_SCHEMA.md` or deciding how to upsert.
 - `references/ingest_workflow.md` — judgement-heavy steps for ingest: concept-vs-entity classification rules, contradiction detection patterns, new-fact extraction heuristics.
 - `references/query_lint_workflow.md` — judgement-heavy steps for query, lint, reindex: term extraction, hit filtering, lint action playbook (orphans → dangling → contradictions → missing-pages), reindex safety pattern.
+- `references/folder_ingest_workflow.md` — Phase 0-folder algorithm: grouping pattern detection (prefix / sibling / flat), per-file role classification (primary / metadata / merge / link / derived-output), primary selection within a group with segment-aware filename hints + pool filter. Read when ingesting multi-file folders.
 - `assets/WIKI_SCHEMA.template.md` — bundled default schema; copied into the vault by `wiki_ops.py init`.
 - `assets/index.template.md` — bundled empty index; copied by `init`.
 - `assets/log.template.md` — bundled empty log; copied by `init`.
