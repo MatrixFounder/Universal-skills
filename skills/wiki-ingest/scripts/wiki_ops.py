@@ -60,14 +60,15 @@ def slugify(text: str) -> str:
     return text.strip("-_")
 
 
-_UNSAFE_NAME_RE = re.compile(r"[\x00-\x1f/\\]")
+_UNSAFE_NAME_RE = re.compile(r"[\x00-\x1f/\\\[\]|^]")
 
 
 def _safe_name(name: str, kind: str = "name") -> str:
     """Validate that `name` is safe to use as a filename component.
 
     Rejects: empty, leading dot, path separators, traversal, control chars,
-    and template placeholders that would confuse stub rendering.
+    markdown wiki-link metacharacters (`[`, `]`, `|`) that would break
+    `[[name]]` round-trip, and template placeholders.
     Returns the name unchanged if safe; calls die() otherwise.
     """
     if not name or not name.strip():
@@ -76,7 +77,8 @@ def _safe_name(name: str, kind: str = "name") -> str:
     if name in (".", "..") or name.startswith("."):
         die(f"--{kind}={name!r}: must not start with '.' or be a traversal token")
     if _UNSAFE_NAME_RE.search(name):
-        die(f"--{kind}={name!r}: must not contain '/', '\\', or control chars")
+        die(f"--{kind}={name!r}: must not contain '/', '\\', control chars, "
+            f"or markdown link metacharacters ('[', ']', '|', '^')")
     if ".." in name:
         die(f"--{kind}={name!r}: must not contain '..'")
     if "{{" in name or "}}" in name:
@@ -84,6 +86,29 @@ def _safe_name(name: str, kind: str = "name") -> str:
     if len(name) > 200:
         die(f"--{kind}: too long ({len(name)} chars; max 200)")
     return name
+
+
+_INLINE_FORBIDDEN_RE = re.compile(r"[\r\n]|^---\s*$|^## ", re.M)
+
+
+def _safe_inline(text: str, field: str) -> str:
+    """Validate that `text` is safe to inline into a markdown page body.
+
+    Rejects newlines (would break list-item rows), `## ` line-starts (would
+    spoof real section headers), and standalone `---` lines (would spoof
+    frontmatter or section separators).
+    Returns trimmed text if safe; calls die() otherwise.
+    """
+    if text is None:
+        return text
+    s = text.strip("\n").rstrip()
+    if "\r" in s or "\n" in s:
+        die(f"--{field}: newlines are not allowed (would break markdown structure)")
+    if s.lstrip().startswith("## "):
+        die(f"--{field}: must not start with '## ' (would spoof a section header)")
+    if s.lstrip().rstrip() == "---":
+        die(f"--{field}: must not be a bare '---' (would spoof a separator)")
+    return s
 
 
 def _check_case_collision(target_dir: Path, name: str) -> str | None:
@@ -201,13 +226,22 @@ def get_section_body(content: str, header_text: str) -> str | None:
 
 
 def replace_section_body(content: str, header_text: str, new_body: str) -> str:
-    """Replace the body of an existing section. Preserves surrounding whitespace."""
+    """Replace the body of an existing section. Preserves surrounding whitespace.
+
+    Empty body case is special-cased to avoid emitting `\\n\\n\\n` (triple
+    blank line) between an empty section and the next `## ` header.
+    """
     loc = find_section(content, header_text)
     if loc is None:
         return content
     _, body_start, body_end = loc
-    # normalise: exactly one blank line above/below body
-    normalised = "\n" + new_body.strip("\n") + "\n\n"
+    stripped = new_body.strip("\n")
+    if stripped:
+        # normalise: one leading + one trailing blank line around body
+        normalised = "\n" + stripped + "\n\n"
+    else:
+        # empty body: just one blank line between the header and what follows
+        normalised = "\n"
     return content[:body_start] + normalised + content[body_end:].lstrip("\n")
 
 
@@ -235,7 +269,17 @@ def insert_section_before(content: str, anchor_header_text: str,
     return content.rstrip() + "\n\n" + new_section_md.strip("\n") + "\n"
 
 
-PLACEHOLDER_RE = re.compile(r"^_Additional .*?_$", re.M)
+# Exact placeholder lines emitted by `render_stub_page` for empty sections.
+# Keep this list short and literal — the previous broad pattern
+# `^_Additional .*?_$` swallowed user-authored italic notes that happened
+# to start with "Additional".
+_PLACEHOLDER_LINES = frozenset({
+    "_Definition pending — first ingest did not extract a one-sentence summary._",
+})
+
+
+def _is_placeholder_line(line: str) -> bool:
+    return line.strip() in _PLACEHOLDER_LINES
 
 
 def _strip_quotes(s: str) -> str:
@@ -283,6 +327,10 @@ def split_frontmatter(content: str) -> tuple[dict, str]:
     Does NOT handle: multi-line scalars (`|`, `>`), deeply nested mappings
     beyond `list-item-dict`, anchors, references.
     """
+    # Strip a leading UTF-8 BOM that some Windows editors prepend; otherwise
+    # the `---` frontmatter delimiter check would silently fail.
+    if content.startswith("﻿"):
+        content = content[1:]
     if not content.startswith("---"):
         return {}, content
     end = content.find("\n---", 3)
@@ -298,6 +346,19 @@ def split_frontmatter(content: str) -> tuple[dict, str]:
 
     key_re = re.compile(r"^([A-Za-z_][\w-]*)\s*:\s*(.*)$")
 
+    def _strip_trailing_comment(v: str) -> str:
+        """Strip ` # comment` suffix from a YAML scalar value (respects quotes)."""
+        in_q = None
+        for i, ch in enumerate(v):
+            if in_q:
+                if ch == in_q:
+                    in_q = None
+            elif ch in ("'", '"'):
+                in_q = ch
+            elif ch == "#" and (i == 0 or v[i - 1] in (" ", "\t")):
+                return v[:i].rstrip()
+        return v.rstrip()
+
     for line in fm_raw.splitlines():
         if not line.strip():
             continue
@@ -308,11 +369,31 @@ def split_frontmatter(content: str) -> tuple[dict, str]:
         indent = len(line) - len(line.lstrip(" \t"))
         stripped = line.lstrip(" \t").rstrip()
 
+        # Zero-indent list item: attach to most recent open list-valued key.
+        # PyYAML's default block-style output for `key:\n- a\n- b` produces
+        # zero-indent list items, which is valid YAML — must be supported.
+        if indent == 0 and stripped.startswith("- ") and current_key is not None \
+                and isinstance(fm.get(current_key), list):
+            item_text = stripped[2:].strip()
+            inline = key_re.match(item_text)
+            if inline:
+                sub_key = inline.group(1)
+                sub_val = _strip_trailing_comment(inline.group(2).strip())
+                new_dict: dict = {sub_key: _strip_quotes(sub_val) if sub_val else ""}
+                fm[current_key].append(new_dict)
+                list_item_dict = new_dict
+                list_item_indent = indent
+            else:
+                fm[current_key].append(_strip_quotes(item_text))
+                list_item_dict = None
+                list_item_indent = -1
+            continue
+
         # CASE A: top-level key:value (indent 0)
         if indent == 0:
             m = key_re.match(stripped)
             if m:
-                key, value = m.group(1), m.group(2).strip()
+                key, value = m.group(1), _strip_trailing_comment(m.group(2).strip())
                 current_key = key
                 list_item_dict = None
                 list_item_indent = -1
@@ -337,7 +418,7 @@ def split_frontmatter(content: str) -> tuple[dict, str]:
             inline = key_re.match(item_text)
             if inline:
                 sub_key = inline.group(1)
-                sub_val = inline.group(2).strip()
+                sub_val = _strip_trailing_comment(inline.group(2).strip())
                 new_dict: dict = {sub_key: _strip_quotes(sub_val) if sub_val else ""}
                 fm[current_key].append(new_dict)
                 list_item_dict = new_dict
@@ -353,7 +434,7 @@ def split_frontmatter(content: str) -> tuple[dict, str]:
             m = key_re.match(stripped)
             if m:
                 k = m.group(1)
-                v = m.group(2).strip()
+                v = _strip_trailing_comment(m.group(2).strip())
                 list_item_dict[k] = _strip_quotes(v) if v else ""
                 continue
 
@@ -370,7 +451,13 @@ def split_frontmatter(content: str) -> tuple[dict, str]:
 
 
 def load_vault_pages(vault: Path) -> dict:
-    """Walk the vault and collect frontmatter from every .md page."""
+    """Walk the vault and collect frontmatter from every .md page.
+
+    Pages are keyed by filename stem (which IS unique on a case-sensitive
+    filesystem), not by `title:` — two files with the same `title:` should
+    both surface in `scan`/known-concepts. The displayed name carries the
+    title separately so callers can render it.
+    """
     pages = {"concepts": {}, "entities": {}, "sources": {}, "other": []}
     for kind, subdir, bucket in (
         ("concept", "_concepts", "concepts"),
@@ -383,8 +470,9 @@ def load_vault_pages(vault: Path) -> dict:
         for md in d.glob("*.md"):
             fm, _ = split_frontmatter(read_text(md))
             title = fm.get("title") or md.stem
-            pages[bucket][title] = {
+            pages[bucket][md.stem] = {
                 "path": str(md.relative_to(vault)),
+                "title": title,
                 "frontmatter": fm,
             }
     # also scan root-level pages that aren't index/log/schema
@@ -519,13 +607,46 @@ def render_stub_page(kind: str, name: str, definition: str | None,
 
 
 def _existing_lines(body: str) -> list[str]:
-    """Return existing non-placeholder, non-blank list items in a section body."""
-    out = []
+    """Return existing non-placeholder, non-blank list items in a section body.
+
+    Multi-line list items (lines indented under a `- ` parent) are STITCHED
+    back into one entry preserving original indentation, so a markdown renderer
+    still folds the continuation. Pure indented continuations without a `-`
+    parent are kept verbatim (e.g. blockquote bodies).
+    """
+    out: list[str] = []
+    current: list[str] | None = None
     for line in body.splitlines():
-        s = line.strip()
-        if not s or PLACEHOLDER_RE.match(s):
+        stripped = line.strip()
+        if not stripped:
+            # blank line: terminate any open multi-line item
+            if current is not None:
+                out.append("\n".join(current))
+                current = None
             continue
-        out.append(s)
+        if _is_placeholder_line(line):
+            if current is not None:
+                out.append("\n".join(current))
+                current = None
+            continue
+        indent = len(line) - len(line.lstrip(" \t"))
+        is_list_marker = line.lstrip().startswith(("- ", "* ", "> "))
+        if is_list_marker and indent == 0:
+            # new top-level list item
+            if current is not None:
+                out.append("\n".join(current))
+            current = [line.rstrip()]
+        elif current is not None and indent > 0:
+            # continuation line under the open item
+            current.append(line.rstrip())
+        else:
+            # standalone line (e.g. paragraph row), no continuation tracking
+            if current is not None:
+                out.append("\n".join(current))
+                current = None
+            out.append(stripped)
+    if current is not None:
+        out.append("\n".join(current))
     return out
 
 
@@ -557,6 +678,9 @@ def append_fact(content: str, fact: str, source_slug: str) -> str:
                 return insert_section_before(content, anchor, new_section)
         return content.rstrip() + "\n\n" + new_section
     rows = _existing_lines(body)
+    # idempotent: don't duplicate the exact same fact+source pairing
+    if line in rows:
+        return content
     rows.append(line)
     return replace_section_body(content, "Facts", "\n".join(rows))
 
@@ -575,6 +699,12 @@ def append_contradiction(content: str, existing_claim: str, new_fact: str,
             if get_section_body(content, anchor) is not None:
                 return insert_section_before(content, anchor, new_section)
         return content.rstrip() + "\n\n" + new_section
+    # idempotent: skip if the same (existing_claim, new_fact, source_slug) tuple
+    # is already present. Check by looking for the unique "New claim from" line.
+    new_claim_line = (f"> - New claim from [[{source_slug}]]: "
+                      f"{new_fact.strip()} [^src-{source_slug}]")
+    if new_claim_line in body:
+        return content
     existing = body.strip("\n")
     return replace_section_body(content, "Contradictions", existing + "\n\n" + block)
 
@@ -604,6 +734,14 @@ def cmd_upsert_page(args: argparse.Namespace) -> int:
     safe_name = _safe_name(args.name, kind="name")
     # also sanitize source_slug since it's embedded into paths/links
     safe_slug = _safe_name(args.source_slug, kind="source-slug")
+    # Reject newlines / structural-markup in user-supplied prose fields —
+    # otherwise an attacker can spoof fake section headers or separators
+    # via crafted --definition / --fact / --contradicts / --source-title.
+    safe_title = _safe_inline(args.source_title, "source-title")
+    safe_date = _safe_inline(args.source_date, "source-date")
+    safe_definition = _safe_inline(args.definition, "definition") if args.definition else None
+    safe_fact = _safe_inline(args.fact, "fact") if args.fact else None
+    safe_contradicts = _safe_inline(args.contradicts, "contradicts") if args.contradicts else None
 
     target_dir = vault / KIND_TO_SUBDIR[args.kind]
     collision = _check_case_collision(target_dir, safe_name)
@@ -621,35 +759,35 @@ def cmd_upsert_page(args: argparse.Namespace) -> int:
 
     # verify --contradicts text actually appears on the page (unless creating)
     contradiction_warning = None
-    if args.contradicts and not created:
+    if safe_contradicts and not created:
         page_text = read_text(target)
-        if args.contradicts.strip() not in page_text:
+        if safe_contradicts not in page_text:
             if not args.force:
-                die(f"--contradicts text {args.contradicts!r} not found on "
+                die(f"--contradicts text {safe_contradicts!r} not found on "
                     f"{target.relative_to(vault)}; pass --force to record anyway",
                     code=5)
             contradiction_warning = "contradicted text not found on page; recorded anyway via --force"
 
     if created:
         content = render_stub_page(
-            kind=args.kind, name=safe_name, definition=args.definition,
-            source_slug=safe_slug, source_title=args.source_title,
-            source_date=args.source_date,
+            kind=args.kind, name=safe_name, definition=safe_definition,
+            source_slug=safe_slug, source_title=safe_title,
+            source_date=safe_date,
         )
     else:
         content = read_text(target)
         content = upsert_source_row(
-            content, safe_slug, args.source_title, args.source_date
+            content, safe_slug, safe_title, safe_date
         )
-        content = upsert_footnote(content, safe_slug, args.source_title)
+        content = upsert_footnote(content, safe_slug, safe_title)
 
-    if args.fact:
-        content = append_fact(content, args.fact, safe_slug)
+    if safe_fact:
+        content = append_fact(content, safe_fact, safe_slug)
 
-    if args.contradicts:
-        if not args.fact:
+    if safe_contradicts:
+        if not safe_fact:
             die("--contradicts requires --fact (the new claim that disagrees)")
-        content = append_contradiction(content, args.contradicts, args.fact, safe_slug)
+        content = append_contradiction(content, safe_contradicts, safe_fact, safe_slug)
 
     write_text(target, content, args.dry_run)
     result = {
@@ -674,13 +812,18 @@ INDEX_SECTIONS = {
 
 
 def add_index_row(content: str, section_header_text: str, row: str, slug_key: str) -> str:
-    """Add row under '## <section_header_text>' if not already present (deduped by slug_key)."""
+    """Add row under '## <section_header_text>' if not already present.
+
+    Dedup is case-INSENSITIVE on `slug_key` (matches `upsert-page`'s on-disk
+    case-collision check), preventing a second row for what's the same file on
+    case-insensitive filesystems (macOS APFS / Windows NTFS).
+    """
     body = get_section_body(content, section_header_text)
     if body is None:
         # append section at end of file
         return content.rstrip() + f"\n\n## {section_header_text}\n\n{row}\n"
-    if slug_key in body:
-        return content  # already present
+    if slug_key.lower() in body.lower():
+        return content  # already present (case-insensitive)
     rows = _existing_lines(body)
     rows.append(row)
     return replace_section_body(content, section_header_text, "\n".join(rows))
@@ -713,21 +856,32 @@ def cmd_update_index(args: argparse.Namespace) -> int:
     index = vault / INDEX_FILE
     content = read_text(index) or load_asset("index.template.md")
 
-    source_row = (f"- [[{args.source_slug}]] — {args.source_date} — "
-                  f"{args.source_title} — {args.summary}")
+    safe_slug = _safe_name(args.source_slug, kind="source-slug")
+    safe_title = _safe_inline(args.source_title, "source-title")
+    safe_date = _safe_inline(args.source_date, "source-date")
+    safe_summary = _safe_inline(args.summary, "summary")
+
+    source_row = (f"- [[{safe_slug}]] — {safe_date} — "
+                  f"{safe_title} — {safe_summary}")
     content = add_index_row(content, INDEX_SECTIONS["sources"], source_row,
-                            slug_key=f"[[{args.source_slug}]]")
+                            slug_key=f"[[{safe_slug}]]")
 
     concept_names = _collect_names(args.new_concepts, args.new_concept)
     entity_names = _collect_names(args.new_entities, args.new_entity)
 
+    # Validate each new concept/entity name is filesystem-safe before writing
+    # it into the index — otherwise the index acquires links to pages that
+    # `upsert-page` will later refuse to create.
+    concept_names = [_safe_name(n, kind="new-concept") for n in concept_names]
+    entity_names = [_safe_name(n, kind="new-entity") for n in entity_names]
+
     for name in concept_names:
-        row = f"- [[{name}]] — introduced by [[{args.source_slug}]]"
+        row = f"- [[{name}]] — introduced by [[{safe_slug}]]"
         content = add_index_row(content, INDEX_SECTIONS["concepts"], row,
                                 slug_key=f"[[{name}]]")
 
     for name in entity_names:
-        row = f"- [[{name}]] — introduced by [[{args.source_slug}]]"
+        row = f"- [[{name}]] — introduced by [[{safe_slug}]]"
         content = add_index_row(content, INDEX_SECTIONS["entities"], row,
                                 slug_key=f"[[{name}]]")
 
@@ -744,9 +898,26 @@ def cmd_append_log(args: argparse.Namespace) -> int:
     log = vault / LOG_FILE
     content = read_text(log) or load_asset("log.template.md")
 
-    date = args.date or datetime.today().strftime("%Y-%m-%d")
-    heading = f"## [{date}] ingest | {args.title}"
-    summary_line = f"- Summary page: [[{args.slug}]]"
+    # Reject newlines, pipes (would break the heading format) and a leading
+    # '## [' that could spoof a fake log entry — same validation as log-event.
+    safe_title = args.title.strip()
+    if _LOG_FORBIDDEN_IN_DETAIL.search(safe_title) or "|" in safe_title:
+        die("--title: newlines, pipes, or log-header prefixes are not allowed "
+            "(would break grep-friendly log format)")
+    safe_slug = _safe_name(args.slug, kind="slug")
+    # `--source-path` is rendered inside a backtick code span; reject newlines
+    # but otherwise let the path stand (backticks already neutralise most
+    # markdown metacharacters).
+    safe_source_path = args.source_path.strip()
+    if "\n" in safe_source_path or "\r" in safe_source_path or "`" in safe_source_path:
+        die("--source-path: newlines and backticks are not allowed")
+
+    date = (args.date or datetime.today().strftime("%Y-%m-%d")).strip()
+    if _LOG_FORBIDDEN_IN_DETAIL.search(date):
+        die("--date: newlines and log-header prefixes are not allowed")
+
+    heading = f"## [{date}] ingest | {safe_title}"
+    summary_line = f"- Summary page: [[{safe_slug}]]"
 
     # Idempotency: if an entry with the same date+ingest+title heading AND the
     # same summary-page line already exists, skip (unless --force-log).
@@ -763,15 +934,24 @@ def cmd_append_log(args: argparse.Namespace) -> int:
             }, indent=2))
             return 0
 
+    # Collect names from comma-separated --touched/--created (back-compat) and
+    # repeatable --touch-name/--create-name (safe for names containing commas).
+    touched_names = _collect_names(args.touched, args.touch_name)
+    created_names = _collect_names(args.created, args.create_name)
+    # Validate each name is filesystem-safe so injection through name lists
+    # cannot fabricate `## [`-prefixed headers or break wiki-links.
+    touched_names = [_safe_name(n, kind="touched") for n in touched_names]
+    created_names = [_safe_name(n, kind="created") for n in created_names]
+
     entry = [
         f"\n{heading}",
-        f"- Source path: `{args.source_path}`",
+        f"- Source path: `{safe_source_path}`",
         summary_line,
     ]
-    if args.touched:
-        entry.append("- Pages touched: " + ", ".join(f"[[{x.strip()}]]" for x in args.touched.split(",") if x.strip()))
-    if args.created:
-        entry.append("- Pages created: " + ", ".join(f"[[{x.strip()}]]" for x in args.created.split(",") if x.strip()))
+    if touched_names:
+        entry.append("- Pages touched: " + ", ".join(f"[[{x}]]" for x in touched_names))
+    if created_names:
+        entry.append("- Pages created: " + ", ".join(f"[[{x}]]" for x in created_names))
     entry.append(f"- Contradictions flagged: {args.contradictions}")
     entry.append("")
 
@@ -829,16 +1009,33 @@ def cmd_register_summary(args: argparse.Namespace) -> int:
 
     warnings = []
     if name_rewrites:
-        # apply the rewrites to the in-memory text BEFORE writing to _sources/
-        for old, new in name_rewrites.items():
-            text = text.replace(old, new)
+        # Apply rewrites ONLY inside the frontmatter region (between the
+        # leading `---` lines), not body prose. Unscoped str.replace would
+        # corrupt code blocks or paragraphs containing the same literal.
+        if text.startswith("---"):
+            fm_end = text.find("\n---", 3)
+            if fm_end != -1:
+                fm_region = text[:fm_end]
+                rest = text[fm_end:]
+                for old, new in name_rewrites.items():
+                    fm_region = fm_region.replace(old, new)
+                text = fm_region + rest
         # re-parse fm so downstream code sees the normalized values
         fm, _ = split_frontmatter(text)
         warnings.append(
             "auto-normalized concept/entity names containing '/' or '\\' "
-            "(filesystem-unsafe): " + ", ".join(f"{o!r} → {n!r}"
-                                                for o, n in name_rewrites.items())
+            "(filesystem-unsafe, frontmatter-only): "
+            + ", ".join(f"{o!r} → {n!r}" for o, n in name_rewrites.items())
         )
+
+    # Reject frontmatter values containing newlines — they would propagate
+    # to subsequent `append-log --title` / `update-index --source-title`
+    # calls and break the grep-friendly log/index formats.
+    for fm_key in ("title", "slug", "date"):
+        v = fm.get(fm_key)
+        if isinstance(v, str) and ("\n" in v or "\r" in v):
+            die(f"frontmatter `{fm_key}` contains newlines; clean the summary "
+                f"file before registering")
 
     fm_title = fm.get("title")
     if args.title:
@@ -1031,7 +1228,13 @@ def cmd_find(args: argparse.Namespace) -> int:
 # ---------- lint (health check) ----------
 
 def _extract_wikilinks(body: str) -> set[str]:
-    return {m.group(1).strip() for m in WIKILINK_RE.finditer(body)}
+    """Extract `[[Name]]` targets from `body`, ignoring links inside code fences.
+
+    Wiki-links shown in markdown examples (inside ``` blocks) are not real
+    references and should not produce dangling-link false positives.
+    """
+    masked = _mask_code_fences(body)
+    return {m.group(1).strip() for m in WIKILINK_RE.finditer(masked)}
 
 
 def _page_exists_anywhere(vault: Path, name: str) -> str | None:
@@ -1074,6 +1277,14 @@ def cmd_lint(args: argparse.Namespace) -> int:
         # collect concept mentions from source-page frontmatter
         if SUBDIR_TO_KIND.get(md.parent.name) == "source":
             for c in (fm.get("concepts") or []):
+                if not isinstance(c, str):
+                    continue
+                # Strip whitespace so frontmatter entries like "  X  " match
+                # the on-disk page "X.md" — matches the inbound-link path
+                # below, which already strips.
+                c = c.strip()
+                if not c:
+                    continue
                 concept_freq.setdefault(c, []).append(name)
 
     # inbound link counts — scan FULL text (body + frontmatter wiki-links)
@@ -1085,11 +1296,19 @@ def cmd_lint(args: argparse.Namespace) -> int:
         # frontmatter implicit inbounds
         fm = info["fm"]
         for entry in (fm.get("concepts") or []):
-            targets.add(entry.strip())
+            if not isinstance(entry, str):
+                continue
+            e = entry.strip()
+            if e:
+                targets.add(e)
         for entry in (fm.get("related") or []):
+            if not isinstance(entry, str):
+                continue
             m = re.match(r"^\[\[([^\]|#]+?)(?:#[^\]|]+)?(?:\|[^\]]+)?\]\]$",
                          entry.strip())
-            targets.add((m.group(1) if m else entry).strip())
+            t = (m.group(1) if m else entry).strip()
+            if t:
+                targets.add(t)
         for t in targets:
             if not t or t == name:
                 continue  # self-reference doesn't count as inbound
@@ -1331,6 +1550,13 @@ _NON_PRIMARY_HINTS = (
 # Default grouping regex: "01 - ", "02-", "1.2.", etc.
 _PREFIX_REGEX = re.compile(r"^(\d+(?:\.\d+)*)[\s\-_.]+")
 
+# Distinct in-memory sentinel for the "did not match the grouping regex"
+# bucket, so a literal regex capture of e.g. `"_ungrouped"` cannot collide
+# with the fallback bucket. The JSON-facing label uses angle brackets so it
+# cannot equal any regex capture (regex captures never contain `<` or `>`).
+_UNGROUPED_SENTINEL = object()
+_UNGROUPED_LABEL = "<ungrouped>"
+
 
 def _is_text_readable(ext: str) -> bool:
     return ext.lower() in _TEXT_EXTS
@@ -1486,13 +1712,19 @@ def _detect_grouping(filenames: list[str]) -> tuple[str, dict | None]:
     return ("flat", None)
 
 
-def _group_files(filenames: list[str], pattern: str) -> dict[str, list[str]]:
-    """Group filenames by their detected pattern. Returns {group_key: [files...]}."""
+def _group_files(filenames: list[str], pattern: str) -> dict:
+    """Group filenames by detected pattern.
+
+    Returns a dict whose keys are either str (regex capture) OR the
+    `_UNGROUPED_SENTINEL` object for files that didn't match the regex.
+    The sentinel cannot collide with any literal regex capture, so even
+    `--group-by '^(__ungrouped__)'` won't merge real and fallback buckets.
+    """
     if pattern == "prefix":
-        groups: dict[str, list[str]] = {}
+        groups: dict = {}
         for f in filenames:
             m = _PREFIX_REGEX.match(f)
-            key = m.group(1) if m else "_ungrouped"
+            key = m.group(1) if m else _UNGROUPED_SENTINEL
             groups.setdefault(key, []).append(f)
         return groups
     elif pattern == "sibling":
@@ -1597,18 +1829,27 @@ def cmd_classify_folder(args: argparse.Namespace) -> int:
                 f"got {user_regex.groups} in {args.group_by!r}")
         pattern_name = "prefix"
         pattern_info = {"regex": args.group_by, "source": "operator-override"}
-        groups: dict[str, list[str]] = {}
+        groups: dict = {}
         for f in all_files:
             m = user_regex.match(f)
-            key = m.group(1) if m else "_ungrouped"
+            # Use sentinel object so a literal capture of `__ungrouped__` cannot
+            # collide with the fallback bucket.
+            key = m.group(1) if m else _UNGROUPED_SENTINEL
             groups.setdefault(key, []).append(f)
     else:
         pattern_name, pattern_info = _detect_grouping(all_files)
         groups = _group_files(all_files, pattern_name)
 
+    # Sort: real string keys alphabetically, sentinel always last.
+    str_keys = sorted(k for k in groups if isinstance(k, str))
+    sorted_keys = str_keys + ([_UNGROUPED_SENTINEL] if _UNGROUPED_SENTINEL in groups else [])
     output_groups = []
-    for key in sorted(groups):
+    for key in sorted_keys:
         group_files = groups[key]
+        # Emit the sentinel as a stable bracketed label that's distinguishable
+        # from any regex capture (rejected by _safe_name due to `__` prefix
+        # heuristic? no — but no regex capture can produce a Python object).
+        emit_key: str = _UNGROUPED_LABEL if key is _UNGROUPED_SENTINEL else key
         roles: dict[str, list[str]] = {
             "primary": [], "metadata": [], "merge": [], "link": [],
             "derived_output": [], "skip": [],
@@ -1665,7 +1906,7 @@ def cmd_classify_folder(args: argparse.Namespace) -> int:
                                          f"(default for unchosen: {size}B)")
 
         output_groups.append({
-            "group_key": key,
+            "group_key": emit_key,
             "files": {k: v for k, v in roles.items()
                       if v and k not in ("skip", "derived_output")},
             "derived_outputs": roles["derived_output"],
@@ -1738,8 +1979,14 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--title", required=True)
     s.add_argument("--slug", required=True)
     s.add_argument("--source-path", required=True)
-    s.add_argument("--touched", help="comma-separated slugs")
-    s.add_argument("--created", help="comma-separated slugs")
+    s.add_argument("--touched",
+                   help="comma-separated slugs (DEPRECATED for names containing commas — use --touch-name instead)")
+    s.add_argument("--created",
+                   help="comma-separated slugs (DEPRECATED for names containing commas — use --create-name instead)")
+    s.add_argument("--touch-name", action="append", default=[],
+                   help="one touched slug; repeat the flag for each (safe for names containing commas)")
+    s.add_argument("--create-name", action="append", default=[],
+                   help="one created slug; repeat the flag for each (safe for names containing commas)")
     s.add_argument("--contradictions", type=int, default=0)
     s.add_argument("--date", help="YYYY-MM-DD (default: today)")
     s.add_argument("--force-log", action="store_true",

@@ -14,8 +14,10 @@ Read this first when answering any query — it's the catalog of everything in t
 
 ## Entities
 
+## Notes
+
 <!--
-  Add your own sections below (e.g. `## Notes`, `## Pinned`, `## Reading Queue`).
+  Add your own sections below (e.g. `## Pinned`, `## Reading Queue`).
   reindex preserves any section whose name is NOT in {Sources, Concepts, Entities}.
   If you use a duplicate name across the vault, their bodies are MERGED (with a
   separator) and a warning is emitted.
