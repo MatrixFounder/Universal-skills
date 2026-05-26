@@ -1,67 +1,24 @@
-# ARCHITECTURE: TASK 014 (backlog row `pdf-7`) — PDF outline (TOC bookmarks)
+# ARCHITECTURE: TASK 015 — wiki-ingest modular refactor
 
-> **Mode:** VDD (Verification-Driven Development).
-> **Status:** DRAFT v2 — **amended 2026-05-22** during development: Chromium
-> emits the PDF outline only with `page.pdf(tagged=True)` set alongside
-> `outline=True` (empirically verified). §1, §5.2, §6, §8, §10(c), §12 Q-3, §13
-> D2 revised to add `tagged=True` (user-confirmed scope amendment). See TASK
-> 014 §1.1a.
-> **TASK:** [TASK.md](TASK.md) (TASK 014, slug `pdf-outline-bookmarks`, backlog
-> row `pdf-7`).
-> **Living document:** updated in place. The prior content (TASK 013 / `pdf-12`
-> `pdf_extract.py`) was completed and merged; its design is preserved in the
-> archived task/plan pair `docs/tasks/task-013-pdf-to-markdown-master.md` +
-> `docs/plans/plan-013-pdf-to-markdown.md` and in git history. Per the
-> living-document rule this file is **not** per-task snapshotted (it is 603 →
-> well under the 1500-line Index-Mode threshold).
-> **Template:** `architecture-format-core` (Core) — this is a small,
-> well-bounded modification of one existing module, not a new system; the
-> Extended template's TIER-2 triggers (new system / >3-component refactor) do
-> not apply.
+> **Living document.** Replaces the prior task-014 / pdf-7 architecture
+> snapshot (archived under git history). This document is the source of
+> truth for the wiki-ingest **internal layout** going forward.
 
 ---
 
 ## 1. Task Description
 
-A PDF **outline** (a.k.a. *bookmarks* / *document outline*) is the navigable
-heading tree a PDF viewer shows in its sidebar. Backlog row `pdf-7` asks a
-verification question: does the pdf skill already emit an outline from
-`<h1>`–`<h6>`, or is a CSS flag / code change required?
+See [`docs/TASK.md`](TASK.md) for the full TASK 015 specification.
 
-**Verification outcome (Analysis-phase reconnaissance, 2026-05-22):**
+**One-liner**: split [`skills/wiki-ingest/scripts/wiki_ops.py`](../skills/wiki-ingest/scripts/wiki_ops.py)
+(currently 2661 LoC) into a `wiki_ingest/` Python package alongside it, with
+strict module boundaries and a ≤200-LoC argparse shim. **No behavioural change
+to the CLI.** Each subcommand becomes its own module; cross-cutting helpers
+form five domain modules with a documented one-way dependency graph.
 
-| Render path | Outline today? | Mechanism |
-|-------------|----------------|-----------|
-| `md2pdf.py` (weasyprint) | ✅ emitted | weasyprint UA stylesheet `bookmark-level`/`bookmark-label` on `h1`–`h6` |
-| `html2pdf.py` default engine (weasyprint) | ✅ emitted | same |
-| `html2pdf.py --engine chrome` (Playwright) | ❌ absent | `render_chrome()` `page.pdf()` omits `outline=True` **and the `tagged=True` Chromium requires alongside it** |
-
-The two weasyprint paths produce a correct nested outline **out of the box** —
-no CSS flag needed, and the bundled `DEFAULT_CSS` does not override the UA
-`bookmark-*` properties. The single gap is the opt-in chrome engine (pdf-11).
-
-> **Development finding (2026-05-22, amended into the design).** A controlled
-> Playwright probe during Task 014-02 established that Chromium's
-> `page.pdf(outline=True)` emits an outline **only when `tagged=True` is also
-> passed** (`outline=True` alone → 0 bookmarks; `outline=True, tagged=True` →
-> the correct nested outline). Chromium builds the outline from the tagged-PDF
-> structure tree. The chrome engine therefore passes **both** flags, and a
-> chrome-rendered PDF is now a *tagged PDF* — an accepted, necessary
-> side-effect (user-confirmed scope amendment; TASK 014 §1.1a / Q-3). The
-> weasyprint paths are unaffected (their `bookmark-level` outline needs no
-> tagging).
-
-This task therefore has two architecturally distinct halves:
-
-- **Part A — verify & lock (no behaviour change):** add regression tests that
-  pin the weasyprint outline so a future CSS edit cannot silently strip it.
-- **Part B — chrome parity (two-keyword behaviour change):** add `outline=True`
-  **and `tagged=True`** to the chrome engine's `page.pdf()` call; raise the
-  Playwright floor to the release that introduced those options; make the
-  installer upgrade an already-present too-old Playwright.
-
-Full requirement set: TASK 014 §2 (R1–R9, 3 Epics). Non-goals (no PDF/UA
-*conformance* claim, no `--no-outline` flag, no custom labelling): TASK §1.2.
+**Why now**: three VDD passes have grown the file faster than its structure
+absorbed; future critic loops, unit tests, and feature additions are all
+gated on per-module ergonomics.
 
 ---
 
@@ -69,37 +26,118 @@ Full requirement set: TASK 014 §2 (R1–R9, 3 Epics). Non-goals (no PDF/UA
 
 ### 2.1. Functional Components
 
-| # | Component | Responsibility | Change |
-|---|-----------|----------------|--------|
-| F1 | weasyprint outline (md2pdf) | `md2pdf.py` → weasyprint → PDF outline from `h1`–`h6` | **none** (verified path) |
-| F2 | weasyprint outline (html2pdf) | `html2pdf_lib/render.py` weasyprint branch → PDF outline | **none** (verified path) |
-| F3 | chrome outline | `html2pdf_lib/chrome_engine.py` `render_chrome()` → `page.pdf(outline=True)` | **modified** (Part B) |
-| F4 | Playwright floor + installer | `requirements-chrome.txt` floor `>=1.42`; `install.sh --with-chrome` installs with `--upgrade` | **modified** (Part B) |
-| F5 | outline regression tests | render a multi-heading fixture per path, read the PDF outline back, assert non-empty + nested + titled | **new** |
-| F6 | outline probe helper | `tests/_outline_probe.py` — read a PDF's outline via `pypdf`, emit a deterministic depth-indented dump for shell assertions | **new** |
-| F7 | documentation | `SKILL.md` §2; `references/html-conversion.md` note; backlog `pdf-7` row | **modified** |
+The system has **three** functional layers; the refactor renders them as
+distinct module groups.
+
+#### F1. Safety & I/O Primitives
+
+**Purpose**: every operation that touches the filesystem or accepts external
+data goes through a single hardened layer — atomic writes, size-capped reads,
+symlink refusal, NFKC normalisation, sanitised JSON output. These are the
+defenses installed during the 2026-05-25 VDD-multi pass and must not regress.
+
+**Functions**:
+- `read_text(path, *, follow_symlink=False, max_bytes=MAX_PAGE_BYTES)` — bounded read.
+- `write_text(path, content, dry_run)` → `_atomic_write_text` — tempfile + `os.replace` + `flock`.
+- `_safe_name(name, kind)` — NFKC normalise + reject path separators, control chars, traversal, template placeholders.
+- `_safe_inline(text, field)` — reject newlines + `## ` line-starts + bare `---`.
+- `_safe_for_json(value, max_bytes=MAX_VALUE_BYTES)` — strip control chars + cap scalar length.
+- `_is_relative_to(child, parent)` — backport-safe containment check.
+- `_skip_symlink(path)` — directory-walk filter.
+- `_check_case_collision(target_dir, name)` — case-fold + slug-collision check.
+- `slugify(text)` — NFKC + Unicode-aware kebab-case.
+- `die(msg, code=1)` — fatal error → stderr + exit.
+
+**Inputs**: arbitrary user-supplied strings, filesystem paths.
+**Outputs**: validated strings, file descriptors, atomic writes, sanitised JSON-safe values.
+
+**Related Use Cases**: every subcommand (UC-1..UC-3 indirectly).
+
+**Dependencies**: stdlib only (`os`, `tempfile`, `fcntl` on POSIX, `unicodedata`, `re`, `pathlib`, `errno`).
+
+#### F2. Markdown / Frontmatter Engine
+
+**Purpose**: parse + mutate Obsidian-flavour markdown deterministically.
+Sections, wiki-links, YAML frontmatter — the three things every wiki op
+touches — share one masking pass per page so the engine stays linear-time
+even on adversarial inputs.
+
+**Functions** (split across two modules — see §3.2):
+- `_mask_code_fences(text)` — offset-preserving mask of fenced code.
+- `_mask_inline_constructs(text)` — masks inline backticks + HTML comments.
+- `find_section / find_all_sections / get_section_body / replace_section_body / insert_section_before` — all accept an optional pre-computed `masked` view.
+- `_existing_lines(body)` — list-item recovery preserving multi-line items.
+- `_extract_wikilinks_with_anchors(body, masked=None)` — `{target: {anchors}}` map.
+- `_first_sentence(text)` — abbreviation-aware sentence-split, 16 KiB cap.
+- `split_frontmatter(content, warnings=None)` — line-anchored YAML closer; surfaces malformed-line warnings.
+- `_strip_frontmatter_fast(content)` — cheap body extractor (no parse).
+- `_splice_frontmatter_fields(text, fields, fm)` — structural list-field rewrite.
+
+**Inputs**: raw markdown text.
+**Outputs**: structured (dict / set / tuple / re-serialised text).
+
+**Related Use Cases**: UC-2 (per-module critic loop); foundational for UC-1 (any new command needs section/frontmatter manipulation).
+
+**Dependencies**: F1 (for `die` only — fatal-error path on guard violations).
+
+#### F3. Vault & Command Layer
+
+**Purpose**: the public-facing CLI surface. Every subcommand reads + mutates
+the vault by composing F1 + F2; vault-layout constants and the symlink-
+filtering walk live in `_vault.py` so commands share one definition.
+
+**Functions**:
+- **Vault helpers** (`_vault.py`): `_walk_pages(vault)`, `load_vault_pages(vault)`, `ensure_schema(vault)`, `load_asset(name)`, `tail_log(vault, n)`.
+- **Constants** (`_vault.py`): `DEFAULT_SUBDIRS`, `SUBDIR_TO_KIND`, `SUBDIR_TO_DISPLAY`, `SCHEMA_FILE`, `INDEX_FILE`, `LOG_FILE`.
+- **Classify helpers** (`_classify.py`): `_count_md_structure`, `_filename_hint_score`, `_looks_like_wiki_summary`, `_classify_one_file`, `_detect_grouping`, `_group_files`, `_pick_primary`, plus the per-extension/skip/hint tables.
+- **Commands** (`commands/*.py`): one file per subcommand — `scan`, `init`, `upsert_page`, `update_index`, `append_log`, `register_summary`, `log_event`, `find`, `lint`, `reindex`, `classify_folder`. Each exposes exactly two public symbols: `register(subparser)` and `execute(args)`.
+
+**Inputs**: parsed `argparse.Namespace`.
+**Outputs**: vault-file mutations, JSON-on-stdout reports.
+
+**Related Use Cases**: UC-1 (new command path), UC-3 (E2E smoke).
+
+**Dependencies**: F1 + F2.
 
 ### 2.2. Functional Components Diagram
 
-```
-            ┌──────────────── verify & lock (Part A) ────────────────┐
- md2pdf.py ─┤                                                        │
-            │  weasyprint  ──► PDF (outline already present) ──┐      │
-html2pdf.py ┤  (UA bookmark-level)                             │      │
- (engine=   │                                                  ▼      │
-  weasyprint)                                          F5 regression  │
-            └──────────────────────────────────────────► tests ◄──────┘
-                                                            ▲
-            ┌──────────────── chrome parity (Part B) ────────┘
-html2pdf.py ┤  chrome_engine.render_chrome()
- (engine=   │     page.pdf(outline=True)  ──► PDF (outline now present)
-  chrome)   │  requirements-chrome.txt: playwright>=1.42
-            │  install.sh --with-chrome: pip install --upgrade
-            └─────────────────────────────────────────────────────────
+```mermaid
+graph TD
+    CLI[wiki_ops.py<br/>argparse shim ≤200 LoC] --> CMDS
 
- F6 _outline_probe.py: PDF ──pypdf.PdfReader.outline──► depth-indented dump
-                              consumed by F5 test blocks in test_e2e.sh
+    subgraph F3 [F3 · Vault & Command Layer]
+        CMDS[commands/*.py<br/>11 subcommand modules]
+        VAULT[_vault.py<br/>constants + walk + tail_log]
+        CLASSIFY[_classify.py<br/>classify-folder helpers]
+    end
+
+    subgraph F2 [F2 · Markdown / Frontmatter Engine]
+        MD[_markdown.py<br/>sections + wikilinks +<br/>masking + _first_sentence]
+        FM[_frontmatter.py<br/>split + parse + splice +<br/>serialize YAML lists]
+    end
+
+    subgraph F1 [F1 · Safety & I/O Primitives]
+        SAFE[_safety.py<br/>atomic I/O · NFKC ·<br/>safe_inline · safe_for_json]
+    end
+
+    CMDS --> VAULT
+    CMDS --> CLASSIFY
+    CMDS --> MD
+    CMDS --> FM
+    CMDS --> SAFE
+
+    CLASSIFY --> VAULT
+    CLASSIFY --> SAFE
+
+    VAULT --> FM
+    VAULT --> SAFE
+
+    MD --> SAFE
+    FM --> SAFE
 ```
+
+**Dependency rule (one-way only)**: F3 → F2 → F1. No back-edges. Commands
+may import any F1/F2/F3-helper module but **never** another command.
 
 ---
 
@@ -107,354 +145,440 @@ html2pdf.py ┤  chrome_engine.render_chrome()
 
 ### 3.1. Architectural Style
 
-Single-skill, script-level modification. No new module, no package, no new
-process boundary. The pdf skill keeps its existing shape: standalone CLI
-scripts (`md2pdf.py`, `html2pdf.py`) + the `html2pdf_lib/` package + a
-bash-driven E2E harness (`tests/test_e2e.sh`) with inline `python -c`
-assertions.
+**Layered monolith — single-process Python CLI** with explicit one-way
+dependency layers (Safety → Engine → Commands). Each subcommand is a
+*driver* over the shared engine; there is no shared mutable state and no
+process boundary. The unit of deploy is one `.skill` archive.
 
-**Stub-First adaptation.** This task has no large new surface to stub. The
-Stub-First discipline maps onto the **test-first** ordering:
+**Justification**:
+- The skill must remain installable and runnable in isolation
+  ([CLAUDE.md §"Независимость скиллов"](../CLAUDE.md)) — a single-process
+  layered design is the simplest shape that meets that constraint.
+- No concurrency requirements (advisory `flock` covers the single
+  cross-process race we care about: two agents writing the same wiki at
+  the same time).
+- The agent invokes one subcommand per turn — IPC / persistent daemons
+  are unjustified.
+- Pure stdlib (no `pip` runtime deps) is a hard constraint per CLAUDE.md;
+  rules out anything frameworky.
 
-1. F6 (`_outline_probe.py`) + F5 (test blocks) are written **first**. Against
-   the weasyprint paths they pass immediately — that *is* the Part-A
-   verification (Green confirms F1/F2 already work).
-2. The chrome test block is **RED** at this point (chrome omits `outline=True`).
-3. F3 (the `page.pdf(outline=True)` change) turns the chrome block **GREEN**.
-
-So the natural Red→Green gate is: chrome outline test RED → F3 → GREEN.
+**Alternatives considered + rejected**:
+- *Plugin discovery via entry_points*: overkill for ≤15 commands and adds a
+  packaging surface not currently present.
+- *Async I/O*: zero async-relevant operations in the workload (all reads
+  are kilobytes-to-megabytes, all writes are single files).
 
 ### 3.2. System Components
 
-| Component | Path | Kind | Notes |
-|-----------|------|------|-------|
-| md2pdf converter | `skills/pdf/scripts/md2pdf.py` | unchanged | weasyprint render; outline already emitted |
-| html2pdf render orchestration | `skills/pdf/scripts/html2pdf_lib/render.py` | unchanged | weasyprint branch already emits outline |
-| chrome engine | `skills/pdf/scripts/html2pdf_lib/chrome_engine.py` | **modified** | `render_chrome()` `page.pdf(...)` gains `outline=True` |
-| chrome dependency pin | `skills/pdf/scripts/requirements-chrome.txt` | **modified** | floor `playwright>=1.40` → `>=1.42` (+ rationale comment) |
-| installer | `skills/pdf/scripts/install.sh` | **modified** | `--with-chrome` block installs `requirements-chrome.txt` with `--upgrade` |
-| outline probe helper | `skills/pdf/scripts/tests/_outline_probe.py` | **new** | test-only; reads `PdfReader.outline`, emits depth-indented dump |
-| E2E harness | `skills/pdf/scripts/tests/test_e2e.sh` | **modified** | new outline test blocks (md2pdf / html2pdf-weasyprint / html2pdf-chrome) |
-| skill manifest | `skills/pdf/SKILL.md` | **modified** | §2 Capabilities; §10/§12 reviewed |
-| reference doc | `skills/pdf/references/html-conversion.md` | **modified** | outline note (engine-agnostic, automatic from headings) |
-| backlog | `docs/office-skills-backlog.md` | **modified** | `pdf-7` row → ✅ DONE; stale note corrected |
+The repository layout after the refactor:
+
+```
+skills/wiki-ingest/
+├── SKILL.md                            # unchanged (public-surface contract)
+├── assets/                             # unchanged (markdown templates)
+├── examples/                           # unchanged
+├── references/
+│   ├── ingest_workflow.md              # unchanged
+│   ├── folder_ingest_workflow.md       # unchanged
+│   ├── query_lint_workflow.md          # unchanged
+│   ├── wiki_schema.md                  # unchanged
+│   ├── karpathy-llm-wiki.md            # unchanged
+│   └── architecture.md                 # NEW (R12 — maintainer-facing module map)
+├── evals/                              # unchanged (fixtures + eval suite)
+└── scripts/
+    ├── wiki_ops.py                     # SHRUNK to ≤200 LoC argparse shim
+    ├── wiki_ingest/                    # NEW package
+    │   ├── __init__.py
+    │   ├── _safety.py                  # F1 — ≤300 LoC
+    │   ├── _markdown.py                # F2 — ≤350 LoC
+    │   ├── _frontmatter.py             # F2 — ≤300 LoC
+    │   ├── _vault.py                   # F3 helpers — ≤150 LoC
+    │   ├── _classify.py                # F3 helpers — ≤350 LoC
+    │   └── commands/
+    │       ├── __init__.py
+    │       ├── scan.py                 # ≤100 LoC
+    │       ├── init.py                 # ≤100 LoC
+    │       ├── upsert_page.py          # ≤250 LoC
+    │       ├── update_index.py         # ≤150 LoC
+    │       ├── append_log.py           # ≤150 LoC
+    │       ├── register_summary.py     # ≤350 LoC (largest — fm rewrite path)
+    │       ├── log_event.py            # ≤100 LoC
+    │       ├── find.py                 # ≤150 LoC
+    │       ├── lint.py                 # ≤300 LoC
+    │       ├── reindex.py              # ≤250 LoC
+    │       └── classify_folder.py      # ≤200 LoC (drives _classify.py)
+    └── tests/                          # NEW — unit + E2E smoke suite
+        ├── __init__.py
+        ├── fixtures/                   # NEW — minimal module-targeted fixtures
+        ├── test__safety.py
+        ├── test__markdown.py
+        ├── test__frontmatter.py
+        ├── test__vault.py
+        ├── test__classify.py
+        ├── commands/
+        │   └── test_*.py               # one per command — happy + ≥1 adversarial
+        └── test_e2e_smoke.py           # init → upsert → lint → reindex byte-identity
+```
+
+**Component dossier** — for each module:
+
+| Module                                  | Type      | Responsibility                                                                                                                                                       | LoC budget | Imports from              |
+|-----------------------------------------|-----------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------|------------|----------------------------|
+| `wiki_ops.py`                           | shim      | argparse wiring + dispatch to `wiki_ingest.commands.<cmd>.execute(args)`. **The only file under `scripts/` outside the `wiki_ingest/` package.**                       | ≤200       | wiki_ingest, stdlib        |
+| `wiki_ingest/__init__.py`               | package   | Empty (or version string only).                                                                                                                                      | ≤30        | —                          |
+| `wiki_ingest/_safety.py`                | F1        | die · slugify · _safe_name · _safe_inline · _is_relative_to · read_text · write_text · _atomic_write_text · _safe_for_json · _skip_symlink · _check_case_collision · constants (MAX_PAGE_BYTES, MAX_SUMMARY_BYTES, MAX_VALUE_BYTES, _UNSAFE_NAME_RE, _CTRL_CHARS_RE) | ≤300       | stdlib                     |
+| `wiki_ingest/_markdown.py`              | F2        | _mask_code_fences · _mask_inline_constructs · SECTION_BOUNDARY_RE · find_section / find_all_sections / get_section_body / replace_section_body · insert_section_before · _existing_lines · WIKILINK_RE / WIKILINK_ANCHOR_RE · _extract_wikilinks_with_anchors · _first_sentence · _HTML_COMMENT_RE · _TLDR_BOLD_RE · _ABBREV_RE | ≤350       | _safety                    |
+| `wiki_ingest/_frontmatter.py`           | F2        | split_frontmatter · _strip_frontmatter_fast · _parse_flow_list · _strip_quotes · _strip_trailing_comment · _serialize_yaml_list_field · _splice_frontmatter_fields · _FM_CLOSER_RE · _FM_KEY_RE | ≤300       | _safety                    |
+| `wiki_ingest/_vault.py`                 | F3 helper | DEFAULT_SUBDIRS · SUBDIR_TO_KIND · SUBDIR_TO_DISPLAY · SCHEMA_FILE · INDEX_FILE · LOG_FILE · ASSETS_DIR · _walk_pages · load_vault_pages · ensure_schema · load_asset · tail_log | ≤150       | _safety, _frontmatter      |
+| `wiki_ingest/_classify.py`              | F3 helper | _OFFICE_EXTS / _IMAGE_EXTS / _METADATA_EXTS / _TEXT_EXTS / _SKIP_EXTS / _SKIP_NAMES / _PRIMARY_HINTS / _NON_PRIMARY_HINTS · _PREFIX_REGEX · _UNGROUPED_SENTINEL · _UNGROUPED_LABEL · _is_text_readable · _count_md_structure · _filename_hint_score · _looks_like_wiki_summary · _classify_one_file · _detect_grouping · _group_files · _pick_primary | ≤350       | _safety                    |
+| `wiki_ingest/commands/<cmd>.py`         | F3 driver | One subcommand each. Public surface: `register(subparser) → None` and `execute(args) → int`. **No command imports another command.**                                  | ≤400 each  | _safety, _markdown, _frontmatter, _vault, _classify (subset per command) |
+| `scripts/tests/`                        | tests     | unittest discoverable; per-module + per-command + E2E.                                                                                                               | n/a        | wiki_ingest                |
+
+**Import-graph invariant** — enforced by a tiny `tests/test_architecture.py`
+that walks each module via the `ast` module and asserts: (a) no
+`wiki_ingest/_*.py` file imports `wiki_ingest.commands.*`, and (b) no
+`wiki_ingest/commands/<a>.py` imports `wiki_ingest/commands/<b>.py`. Cost:
+~30 LoC, zero new deps — converts the rule from "manual" to "CI-trusted"
+without pulling in `import-linter`. A future task can promote to a
+fully-fledged dependency-linter if needed.
 
 ### 3.3. Components Diagram
 
-```
-skills/pdf/scripts/
-├── md2pdf.py                      ← F1  (unchanged — verified)
-├── html2pdf.py                    ←     (unchanged)
-├── html2pdf_lib/
-│   ├── render.py                  ← F2  (unchanged — verified, weasyprint)
-│   └── chrome_engine.py           ← F3  (MODIFIED — page.pdf(outline=True))
-├── requirements-chrome.txt        ← F4  (MODIFIED — playwright>=1.42)
-├── install.sh                     ← F4  (MODIFIED — pip install --upgrade)
-└── tests/
-    ├── _outline_probe.py          ← F6  (NEW — outline dump helper)
-    └── test_e2e.sh                ← F5  (MODIFIED — 3 outline test blocks)
+```mermaid
+graph LR
+    subgraph "scripts/"
+        SHIM[wiki_ops.py<br/>argparse + dispatch<br/>≤200 LoC]
+    end
 
-skills/pdf/SKILL.md                ← F7  (MODIFIED — §2)
-skills/pdf/references/
-└── html-conversion.md             ← F7  (MODIFIED — outline note)
-docs/office-skills-backlog.md      ← F7  (MODIFIED — pdf-7 row)
+    subgraph "scripts/wiki_ingest/"
+        SAFETY[_safety.py]
+        MARKDOWN[_markdown.py]
+        FRONTMATTER[_frontmatter.py]
+        VAULT[_vault.py]
+        CLASSIFY[_classify.py]
+
+        subgraph "commands/"
+            SCAN[scan]
+            CINIT[init]
+            UPSERT[upsert_page]
+            UPDIDX[update_index]
+            APLOG[append_log]
+            REGSUM[register_summary]
+            LOGEV[log_event]
+            FIND[find]
+            LINT[lint]
+            REINDEX[reindex]
+            CFOLDER[classify_folder]
+        end
+    end
+
+    SHIM --> SCAN & CINIT & UPSERT & UPDIDX & APLOG & REGSUM & LOGEV & FIND & LINT & REINDEX & CFOLDER
+    SCAN --> VAULT
+    CINIT --> VAULT
+    UPSERT --> VAULT & MARKDOWN & FRONTMATTER & SAFETY
+    UPDIDX --> VAULT & MARKDOWN & SAFETY
+    APLOG --> VAULT & SAFETY
+    REGSUM --> VAULT & FRONTMATTER & SAFETY
+    LOGEV --> VAULT & SAFETY
+    FIND --> VAULT & FRONTMATTER & SAFETY
+    LINT --> VAULT & MARKDOWN & FRONTMATTER & SAFETY
+    REINDEX --> VAULT & MARKDOWN & FRONTMATTER & SAFETY
+    CFOLDER --> CLASSIFY & VAULT & SAFETY
+
+    VAULT --> FRONTMATTER & SAFETY
+    CLASSIFY --> SAFETY
+    MARKDOWN --> SAFETY
+    FRONTMATTER --> SAFETY
 ```
 
 ---
 
-## 4. Data Model (Conceptual)
+## 4. Data Model
 
-There is no persisted data model. The single domain entity is the **PDF
-outline** — produced *by the render engine*, not constructed by skill code.
-It is modelled here only to fix the **contract the F5 regression tests assert
-against**.
+The refactor introduces **no new persistent data structures** — vault layout
+(`_sources/`, `_concepts/`, `_entities/`, `index.md`, `log.md`, `WIKI_SCHEMA.md`)
+is unchanged. The internal data exchanged between layers stays as plain
+Python dicts / sets / strings, but the contract is now explicit:
 
-### 4.1. Entity: `PdfOutline`
+### 4.1. PageDict (returned by `load_vault_pages` and built inline by `cmd_lint`)
 
-The document outline embedded in a generated PDF.
-
-| Attribute | Type | Description |
-|-----------|------|-------------|
-| `items` | ordered list of `OutlineItem` | top-level bookmarks, in document order |
-| `is_empty` | bool (derived) | `len(items) == 0` — true for a headingless source (valid; not an error — TASK UC-1/A2) |
-
-### 4.2. Entity: `OutlineItem`
-
-One bookmark node.
-
-| Attribute | Type | Description |
-|-----------|------|-------------|
-| `title` | str | bookmark label = the heading's text content (`<h1>`–`<h6>` inner text) |
-| `depth` | int ≥ 0 | nesting depth in the outline tree (0 = top level) |
-| `children` | ordered list of `OutlineItem` | nested bookmarks (a deeper heading following a shallower one) |
-| `target` | page reference | the page the bookmark jumps to |
-
-**Read interface (tests only).** `pypdf.PdfReader.outline` returns this tree as
-nested Python lists of `Destination` objects (`.title` = label). `pypdf` is
-already a declared pdf-skill dependency (`requirements.txt`, used by
-`pdf_merge.py`) — **no new test dependency** (TASK A-4).
-
-### 4.3. Derived rule: outline well-formedness (test contract)
-
-For a source document whose headings are `h1 → h2 → h3 → h2 → h1` the produced
-`PdfOutline` MUST satisfy:
-
-```
-is_empty            == False
-len(items)          == 2          # two top-level h1
-items[0].title      == "<text of first h1>"
-items[0].children   non-empty     # the h2/h3 nest under the first h1
-depth strictly increases by 1 for each heading-level increase
+```python
+{
+    "path": str,                # vault-relative path, e.g. "_concepts/Foo.md"
+    "raw": str,                 # full file content (UTF-8)
+    "fm": dict,                 # parsed frontmatter (from split_frontmatter)
+    "kind": str,                # "concept" | "entity" | "source" | "unknown"
+    # OPTIONAL — present only on the cmd_lint enrichment path:
+    "masked": str,              # _mask_inline_constructs(_mask_code_fences(raw))
+    "wikilinks": set[str],      # bare target names
+    "wikilinks_anchors": dict[str, set[str]],  # {target: {anchor, ...}}
+}
 ```
 
-This is the **engine-agnostic** assertion granularity. Per TASK §1.4(d), the
-tests assert *"a non-empty, hierarchically nested outline whose titles match
-the headings"* — **not** byte-identical trees across weasyprint vs. Chromium
-(the two engines' grouping algorithms may differ in edge cases).
+### 4.2. SectionLocation (returned by `find_section`)
+
+```python
+tuple[int, int, int]  # (header_start, body_start, body_end) — offsets into
+                      # the ORIGINAL content; the mask preserves offsets.
+None                  # if the requested occurrence is not present.
+```
+
+### 4.3. WikilinkMap (returned by `_extract_wikilinks_with_anchors`)
+
+```python
+dict[str, set[str]]   # {target_name: {anchor_or_empty, ...}}
+                      # anchor "" means anchor-less reference; "#API" etc.
+                      # are surfaced verbatim in dangling-link reports (L-L4).
+```
+
+### 4.4. Frontmatter dict (returned by `split_frontmatter`)
+
+Plain `dict[str, str | list]`. Lists may contain strings OR inner dicts (for
+the `key:\n  - subkey: value` pattern). `warnings: list[str] | None` is an
+out-parameter for malformed-line surfacing (L-M5).
+
+### 4.5. Derived rules / invariants
+
+1. **Offset stability under masking**: every masking function preserves byte
+   offsets (newlines preserved, non-newline content replaced with spaces).
+   `find_section`'s returned `(header_start, body_start, body_end)` are
+   valid in both the masked AND the original content. Tested by
+   `tests/test__markdown.py::test_offsets_under_mask`.
+2. **Mask-once invariant**: `find_section / find_all_sections /
+   get_section_body / replace_section_body` accept a `masked` parameter so
+   callers in `cmd_lint` and `cmd_reindex` can pay the masking cost ONCE
+   per page (closes the pre-refactor O(K²·L) ReDoS class).
+3. **No symlink under `_walk_pages`**: every page emitted by `_walk_pages`
+   is a regular file (or follow-up `try/except OSError` returns "" if it
+   was raced into a symlink between the walk and the read).
+4. **Atomic-write rename**: `write_text` is observable as either "old file"
+   or "new file", never "half-new file".
 
 ---
 
 ## 5. Interfaces
 
-### 5.1. Render-engine outline interfaces (existing, external)
+### 5.1. Public CLI (unchanged)
 
-| Engine | Interface | Status |
-|--------|-----------|--------|
-| weasyprint | UA stylesheet sets `bookmark-level: N` + `bookmark-label: content(...)` on `h1`–`h6`; `HTML.write_pdf()` emits the outline. No skill code calls it — it is automatic. | already active |
-| Chromium (Playwright) | `page.pdf(outline=True)` → Chromium derives the outline from the document heading structure and embeds it. | **activated by this task** |
+```
+wiki_ops.py {scan|init|upsert-page|update-index|append-log|
+             register-summary|log-event|find|lint|reindex|
+             classify-folder} ...
+```
 
-### 5.2. `render_chrome()` change (F3)
+All flags and stdout/stderr contracts stay byte-identical (R11). The
+[`skills/wiki-ingest/SKILL.md`](../skills/wiki-ingest/SKILL.md) Agent contract
+is the source of truth for this surface and is not changed.
 
-`skills/pdf/scripts/html2pdf_lib/chrome_engine.py`, inside `render_chrome()`,
-the existing `page.pdf(...)` call gains one keyword argument:
+### 5.2. Command Module Contract (NEW internal interface)
+
+Every `wiki_ingest/commands/<cmd>.py` exposes exactly two symbols:
 
 ```python
-page.pdf(
-    path=str(output_path),
-    format=fmt,
-    print_background=print_background,
-    scale=pdf_scale,
-    margin={"top": "1cm", "right": "1cm",
-            "bottom": "1cm", "left": "1cm"},
-    outline=True,                       # ← ADDED (TASK R4.1)
-    tagged=True,                        # ← ADDED — REQUIRED for the outline:
-                                        #   Chromium builds the outline from
-                                        #   the tagged structure tree; outline=
-                                        #   True alone emits 0 bookmarks.
-)
+def register(sub: argparse._SubParsersAction) -> None:
+    """Attach this command's subparser. Called once at startup by wiki_ops.py."""
+
+def execute(args: argparse.Namespace) -> int:
+    """Run the command. Return process exit code (0 = success)."""
 ```
 
-- **Appended last, existing five arguments unchanged in order** — the diff adds
-  two lines (TASK R4.4).
-- **`tagged=True` is mandatory, not optional** — empirically, `outline=True`
-  alone produces an empty outline (TASK §1.1a, A-3). A chrome-rendered PDF
-  consequently becomes a tagged PDF — an accepted side-effect (TASK §1.2).
-- **No new `render_chrome()` parameter.** Both flags are hardcoded at the call
-  site. There is no `--no-outline` CLI flag (TASK Q-2 resolved: no opt-out), so
-  no caller needs to vary them — parameters would be unused surface (YAGNI).
-  Decision D2.
+`wiki_ops.py` dispatches by calling `execute` after `argparse.parse_args`.
+The shim **does not import** the command's helpers, only the two public
+symbols.
 
-### 5.3. Dependency + installer interface (F4)
+### 5.3. F1 / F2 / F3 internal APIs
 
-`requirements-chrome.txt`:
+Helper-module surface is informally public *within the package only*. The
+underscore prefix on the module names (`_safety.py`, `_markdown.py`, etc.)
+signals that external consumers should not import them. The Universal-Skills
+convention does not yet have a stable "public" tier for wiki-ingest; the
+SKILL.md CLI is the only stable surface.
 
-```
-playwright>=1.42,<2.0    # 1.42 added page.pdf(outline=True); see pdf-7 / TASK 014
-```
-
-`install.sh` `--with-chrome` block: the `pip install ... -r
-requirements-chrome.txt` invocation gains `--upgrade` so a re-run upgrades an
-already-present too-old Playwright (1.40/1.41 from a pdf-11-era install) —
-plain `pip install -r` does not upgrade an already-satisfied package
-(TASK R5.3 / M-1).
-
-### 5.4. Test helper interface (F6) — `tests/_outline_probe.py`
-
-A test-only helper (peer of the existing `tests/_acroform_fixture.py`).
+### 5.4. Test discovery
 
 ```
-python3 tests/_outline_probe.py <PDF>
-  → stdout: one line per bookmark, depth-indented:
-        "Chapter One"
-        "  Section 1.1"
-        "    Subsection 1.1.1"
-        "  Section 1.2"
-        "Chapter Two"
-  → exit 0 if the PDF has a non-empty outline; exit 3 if the outline is empty.
+cd skills/wiki-ingest/scripts
+python3 -m venv .venv && source .venv/bin/activate
+python -m unittest discover -s tests
 ```
 
-Exit 3 is a **private test-harness sentinel**, not an `_errors.py`-style code —
-`_outline_probe.py` is a test-only helper and deliberately stays outside the
-`--json-errors` envelope convention; its docstring states this so a future
-reader does not assume alignment.
-
-`test_e2e.sh` blocks render a fixture, call `_outline_probe.py`, and assert
-on its exit code (non-empty) + `grep` its output for expected titles and the
-indentation that proves nesting. Keeping the `pypdf` traversal in one helper
-avoids brittle multi-line `python -c` strings in the bash harness.
-
-### 5.5. E2E test blocks (F5) — added to `test_e2e.sh`
-
-| Block | Engine / flags | Asserts | Skip rule |
-|-------|----------------|---------|-----------|
-| `md2pdf outline` | `md2pdf.py` (weasyprint) | non-empty, nested, titled (R2) | none — always runs |
-| `html2pdf outline` | `html2pdf.py` default + a second run with `--no-default-css` | non-empty, nested; outline survives `--no-default-css` (R3) | none — always runs |
-| `html2pdf chrome outline` | `html2pdf.py --engine chrome` | `outline` kwarg present in `Page.pdf` signature (R6.4); non-empty + nested (R6.1/6.3) | **soft-skip** when Playwright/Chromium absent — mirrors the `mermaid_renders` pattern (R6.2) |
-
-Fixtures are written inline (heredoc) into the harness `$TMP` dir, exactly as
-the existing mermaid block writes `with_mermaid.md` — no committed fixture
-files, no committed `.pdf` (the skill `.gitignore` ignores `*.pdf` outside
-`examples/`). The chrome fixture is **plain content with no fixed-position
-chrome** so the assertion is not coupled to `_DOM_NORMALIZE_SCRIPT` hiding a
-heading inside `position:fixed` chrome (TASK R4.3 / §1.4(b)).
+Per CLAUDE.md §1 "Testing" — no globally-installed deps; venv is local to
+the skill.
 
 ---
 
 ## 6. Technology Stack
 
-| Concern | Choice | Justification |
-|---------|--------|---------------|
-| weasyprint outline | weasyprint UA stylesheet (`bookmark-*`) | already in use; produces the outline automatically — nothing to add |
-| chrome outline | Playwright `page.pdf(outline=True, tagged=True)` | the engine's native options; **both** required — Chromium derives the outline from the tagged structure tree (`outline` alone → 0 bookmarks); introduced in Playwright 1.42 |
-| outline read-back (tests) | `pypdf` `PdfReader.outline` | already a declared dependency (`requirements.txt`); no new test dependency |
-| test harness | bash `test_e2e.sh` + inline assertions + `_outline_probe.py` | matches the established pdf-skill E2E style |
-
-**No new runtime dependency.** `requirements-chrome.txt` receives a version
-**floor bump** on an already-declared package — not a new dependency —
-therefore **no `THIRD_PARTY_NOTICES.md` change** is required by this task
-(TASK R5.4 / C-4).
+- **Python 3.9+** (matches `_is_relative_to` backport heuristic; `match/case`
+  is NOT used so 3.10 is not required).
+- **stdlib only**: `argparse`, `errno`, `json`, `math`, `os`, `re`, `sys`,
+  `tempfile`, `unicodedata`, `datetime`, `pathlib`, `fcntl` (POSIX guard).
+- **No new runtime dependencies introduced by this refactor**.
+- **Dev / test**: `unittest` (stdlib). No `pytest`, no `tox`, no `hypothesis`
+  for v1 — keeps the test surface portable.
 
 ---
 
 ## 7. Security
 
-No new attack surface.
+The refactor preserves every defence installed in the 2026-05-25 VDD-multi
+pass. None of these may regress; tests in `tests/test__safety.py` and
+`tests/commands/test_*.py` lock them in.
 
-- `outline=True` is a static boolean literal at the `page.pdf()` call site — no
-  file content, user input, or path is interpolated into it.
-- The chrome engine's existing offline guarantees are unchanged: remote-route
-  blocking (`_block_remote_routes`), `<base>` stripping, `<script>` stripping.
-  Outline generation runs on the already-loaded local DOM.
-- weasyprint paths are untouched — their existing `_offline_url_fetcher` and
-  SIGALRM watchdog behaviour is preserved bit-for-bit.
-- AuthN/AuthZ: not applicable — these are local file-conversion CLIs with no
-  account model, consistent with every other pdf-skill script.
-- `_outline_probe.py` is a test-only helper; it opens a PDF the test itself
-  just produced in a private `$TMP` dir.
+| ID         | Defence                                                                                       | Location after refactor                                  |
+|------------|------------------------------------------------------------------------------------------------|-----------------------------------------------------------|
+| OVERLAP-1  | Atomic write + `flock` + `O_NOFOLLOW`                                                          | `_safety.py::_atomic_write_text`, `write_text`            |
+| OVERLAP-5  | Symlink-skipping directory walks                                                               | `_vault.py::_walk_pages`, `load_vault_pages`              |
+| S-H1       | Path containment via `is_relative_to`                                                          | `_safety.py::_is_relative_to`; called from `upsert_page`, `register_summary` |
+| S-H2       | `O_NOFOLLOW` on `read_text`, size cap                                                          | `_safety.py::read_text`                                    |
+| S-M1       | `WIKI_INGEST_INBOX_ROOT` containment + sensitive-path blocklist for `register-summary`         | `commands/register_summary.py`                            |
+| S-M2       | Mask-once, scan-once in `find_all_sections` (closes ReDoS)                                     | `_markdown.py::find_all_sections`                         |
+| S-M5       | NFKC normalisation in `slugify` + `_safe_name`                                                 | `_safety.py`                                              |
+| S-M6       | `_safe_for_json` on every JSON-bound scalar                                                   | `_safety.py`; called from `commands/find.py`, `commands/lint.py`, `commands/register_summary.py` |
+| L-C1..L-C3 | Frontmatter close-delimiter + section-boundary correctness                                     | `_frontmatter.py::split_frontmatter`, `_markdown.py::SECTION_BOUNDARY_RE` |
+| L-H1, L-L4 | `_mask_inline_constructs` for wikilink extraction; anchor-aware variant                        | `_markdown.py`                                            |
+| L-H4       | Log idempotency via bounded line-lookahead (no catastrophic regex)                             | `commands/append_log.py`                                   |
+| L-H5       | Structural frontmatter rewrite (`_splice_frontmatter_fields`)                                  | `_frontmatter.py`                                          |
+
+**New attack surface introduced by the refactor**: **none.** The package
+introduces no new `subprocess`, no new file I/O, no new network paths. It
+re-shapes existing call graphs only.
+
+**Threat-model unchanged**: the wiki-ingest skill is a local-fs CLI; the
+worst plausible exploit before the refactor was "operator's secrets get
+summarised into a markdown index page they then read" (S-H2, addressed)
+and post-refactor remains the same.
 
 ---
 
 ## 8. Scalability and Performance
 
-- weasyprint paths: **zero** performance change (no code change).
-- chrome path: `outline=True` + `tagged=True` add negligible cost — Chromium
-  builds the outline and the structure tree from the layout tree it already
-  computes. No extra DOM pass, no extra navigation. A tagged PDF is marginally
-  larger (structure metadata) but not materially so for the documents the
-  chrome engine targets.
-- Test cost: three small renders (a few KB of HTML/MD each) — sub-second on
-  weasyprint; the chrome block adds one ~1–3 s Chromium render *only* when the
-  opt-in engine is installed, and soft-skips otherwise.
+The refactor's perf properties are inherited from the pre-refactor code,
+which is already linear in vault size after the OVERLAP-3 fix (mask-once).
+Module-boundary cost: **sub-microsecond per call** — Python import is
+cached, and cross-module function calls are dwarfed by I/O and regex work
+in every workload below.
+
+| Workload          | Pages | Pre-refactor wall-time (already optimised) | Refactor delta |
+|-------------------|-------|---------------------------------------------|----------------|
+| `scan`            | 500   | <0.1 s                                       | ≤+5 ms (import) |
+| `lint`            | 500   | ~0.3 s                                       | ≤+5 ms          |
+| `lint`            | 5000  | ~3 s                                         | ≤+5 ms          |
+| `reindex`         | 500   | ~0.4 s                                       | ≤+5 ms          |
+| `find --terms X`  | 500   | <0.2 s                                       | ≤+5 ms          |
+
+All numbers assume an SSD and the per-skill `.venv` already warmed.
+
+**Per-module budgets** (LoC) are listed in §3.2; the corresponding tests are
+required by R7.1 / R8 in [TASK.md](TASK.md#2-requirements-traceability-matrix-rtm).
 
 ---
 
 ## 9. Cross-Skill Replication Boundary (CLAUDE.md §2)
 
-**This task replicates nowhere.** Every file it edits or creates is pdf-only:
+**Not triggered.** wiki-ingest does not share any file with
+docx/xlsx/pptx/pdf — neither the `office/` package, nor `_soffice.py`,
+nor `_errors.py`, nor `preview.py`, nor `office_passwd.py`. The pre-refactor
+cross-skill `diff -qr` matrix is silent; the post-refactor matrix MUST stay
+silent.
 
-| File | Replication class |
-|------|-------------------|
-| `html2pdf_lib/chrome_engine.py` | pdf-only package module (no docx/xlsx/pptx peer) |
-| `requirements-chrome.txt` | pdf-only (chrome engine; not in any replication set) |
-| `install.sh` | pdf-only (explicitly out-of-scope per CLAUDE.md §2) |
-| `tests/_outline_probe.py`, `tests/test_e2e.sh` | pdf-only test surface |
-| `SKILL.md`, `references/html-conversion.md` | pdf-only docs |
-| `docs/office-skills-backlog.md` | repo doc |
-
-The replicated files — `office/`, `_soffice.py`, `_errors.py`, `preview.py`,
-`office_passwd.py` — are **not touched**. The CLAUDE.md §2 protocol is **not
-triggered**. Post-task invariant (TASK R9.3):
-
+Manual verification command:
 ```bash
-diff -q skills/docx/scripts/_errors.py  skills/pdf/scripts/_errors.py   # silent
-diff -q skills/docx/scripts/preview.py  skills/pdf/scripts/preview.py   # silent
+find skills/wiki-ingest/scripts -name "*.py" -exec basename {} \; \
+  | sort -u > /tmp/wi.txt
+for s in docx xlsx pptx pdf; do
+  find skills/$s/scripts -name "*.py" -exec basename {} \; | sort -u \
+    | comm -12 - /tmp/wi.txt
+done
+# Expected output: empty.
 ```
-
-(pdf has no `office/` directory, so the `office/` `diff -qr` is N/A.)
 
 ---
 
-## 10. Honest Scope (v1)
+## 10. Honest Scope
 
-Each item is documented in the named file by the named component.
-
-- **(a)** Outline derives **only** from real `<h1>`–`<h6>` tags; styled
-  `<p>`/`<div>` "visual headings" do not appear → `SKILL.md` §2 + reference.
-- **(b)** `--reader-mode`, the preprocessing pipeline, and (chrome)
-  `_DOM_NORMALIZE_SCRIPT` may remove/hide chrome headings → outline reflects
-  what survives **visible**; this is correct → reference note.
-- **(c)** The chrome engine emits a **tagged PDF** (Chromium's mechanism for
-  the outline — `tagged=True` is required). This is an accepted side-effect,
-  **not** a PDF/UA conformance claim; tagging quality is not validated, and the
-  weasyprint paths stay untagged → `SKILL.md` §2 + reference.
-- **(d)** Cross-engine outline trees are not byte-identical; tests assert
-  *non-empty + nested + titled*, not tree equality → §4.3 + test comments.
-- **(e)** The chrome engine stays opt-in; its outline test soft-skips when
-  Playwright/Chromium is absent → `test_e2e.sh` block comment.
-- **(f)** A heading inside DOM-normalised hidden chrome (`display:none`d
-  `position:fixed` element) is intentionally absent from the chrome outline →
-  the chrome test fixture deliberately uses plain content (§5.5).
-- **(g)** Open verification point A-6: `emulate_media("screen")` is assumed not
-  to alter which headings reach the chrome outline; the chrome test records the
-  observation → test comment + TASK A-6.
+- **No behavioural change**: every CLI subcommand emits byte-identical
+  stdout for the three deterministic eval scenarios (`scan` on a fixture
+  vault, `lint` on a fixture vault, `classify-folder` on the trading-bot
+  fixture folder). `append-log` and `log-event` are excluded — they write
+  timestamps and are non-deterministic across runs. **R11 fixtures must
+  commit a static `log.md`** — no `append-log` / `log-event` is run as
+  part of fixture setup; otherwise `cmd_scan`'s `last_log_entries`
+  (sourced from `tail_log`) drifts daily and the `diff -q` gate
+  silently breaks. **Determinism pre-check** (step 015-00): on day 1 of
+  execution, verify that `scan` / `lint` / `classify-folder` produce sorted
+  keys / sorted file iteration. If drift is found, a pre-refactor commit
+  introduces `sort_keys=True` + sorted `_walk_pages` output BEFORE module
+  extraction begins.
+- **Tests are new**: pre-refactor there is no `tests/` directory. The
+  refactor adds one; the tests are NEW lines of code with NEW coverage,
+  not a translation of an existing suite.
+- **Architecture document is per-skill, not per-repo**: this file
+  describes wiki-ingest specifically. Other skills have their own
+  architecture inside `skills/<skill>/references/` (when present) or are
+  documented elsewhere.
 
 ---
 
 ## 11. Atomic-Chain Skeleton (Planner handoff)
 
-Suggested decomposition (the Planner finalises). All beads are within a 2–4 h
-budget; the chain is short because the task is small.
+Stub-First decomposition — each step is independently revertable, gated by
+`diff -q` silent + unit tests green:
 
-| Bead | Type | Scope | RTM | Dep |
-|------|------|-------|-----|-----|
-| **014-01** | VERIFY + TEST | `tests/_outline_probe.py` (F6) + `test_e2e.sh` md2pdf & html2pdf-weasyprint outline blocks (F5) — Part A. Weasyprint blocks pass on first run = the verification (Green). | R1, R2, R3 | none |
-| **014-02** | LOGIC | `page.pdf(outline=True)` in `chrome_engine.py` (F3); `requirements-chrome.txt` floor `>=1.42` (F4); `install.sh --upgrade` (F4); `test_e2e.sh` chrome outline block incl. R6.4 capability probe + soft-skip (F5). The R6.4 `inspect.signature` probe runs **before** the render so an under-floor Playwright fails loudly on the cheap check rather than mid-render. Chrome block RED→GREEN. | R4, R5, R6 | 014-01 |
-| **014-03** | DOC + INTEGRATION | `SKILL.md` §2 (+ §10/§12 review); `references/html-conversion.md` note; `docs/office-skills-backlog.md` `pdf-7` row; `validate_skill.py skills/pdf` exit 0; full `test_e2e.sh` green; cross-skill `diff -q` silent. | R7, R8, R9 | 014-02 |
+| Step  | Title                                      | Touches                                                        | Verifies                            |
+|-------|--------------------------------------------|----------------------------------------------------------------|--------------------------------------|
+| 015-00 | Pre-refactor determinism check / fix       | `scan`, `lint`, `classify_folder` in `wiki_ops.py`             | Pre/post `diff -q` silent on fixtures |
+| 015-01 | Create `wiki_ingest/` package skeleton + extract `_safety.py` | `scripts/wiki_ingest/__init__.py`, `scripts/wiki_ingest/_safety.py`, `wiki_ops.py` imports | Unit tests for `_safety.py`; smoke tests pass |
+| 015-02 | Extract `_markdown.py`                     | `scripts/wiki_ingest/_markdown.py`                              | `tests/test__markdown.py`            |
+| 015-03 | Extract `_frontmatter.py`                  | `scripts/wiki_ingest/_frontmatter.py`                           | `tests/test__frontmatter.py`         |
+| 015-04 | Extract `_vault.py`                        | `scripts/wiki_ingest/_vault.py`                                 | `tests/test__vault.py`               |
+| 015-05 | Extract `_classify.py`                     | `scripts/wiki_ingest/_classify.py`                              | `tests/test__classify.py`            |
+| 015-06 | Move `scan` + `init` to `commands/`        | `commands/scan.py`, `commands/init.py`, `wiki_ops.py` shim       | Per-command tests + E2E smoke        |
+| 015-07 | Move `upsert_page` + `update_index`        | `commands/upsert_page.py`, `commands/update_index.py`           | Per-command tests + E2E smoke        |
+| 015-08 | Move `append_log` + `log_event`            | `commands/append_log.py`, `commands/log_event.py`                | Per-command tests                    |
+| 015-09 | Move `register_summary`                    | `commands/register_summary.py`                                   | Per-command tests (adversarial)      |
+| 015-10 | Move `find` + `lint` + `reindex`           | `commands/find.py`, `commands/lint.py`, `commands/reindex.py`     | Per-command tests + E2E smoke        |
+| 015-11 | Move `classify_folder`                     | `commands/classify_folder.py`                                    | Per-command tests                    |
+| 015-12 | Trim `wiki_ops.py` to ≤200 LoC + add `references/architecture.md` | `wiki_ops.py`, `references/architecture.md`                     | `validate_skill.py` + `skill-validator/validate.py` |
 
-**Execution order:** `014-01 → 014-02 → 014-03` (strict linear; 014-03 needs
-both prior beads' artifacts to exist before docs link them and validation runs).
+Each step ships its own tests; the pipeline never has a long-lived
+half-refactored state in `main`.
 
 ---
 
 ## 12. Open Questions
 
-All resolved upstream in TASK 014 §6 (Q-1..Q-4); none block design.
+Inherited from TASK.md §5. The architect's recommendation:
 
-- **Q-1 (resolved):** chrome-engine fix in scope — user-confirmed (TASK A-2).
-- **Q-2 (resolved):** no `--no-outline` flag → `outline=True` hardcoded, no
-  `render_chrome()` parameter (D2).
-- **Q-3 (resolved — amended 2026-05-22):** `tagged=True` **is** set on the
-  chrome engine — it is *required* for the outline (Chromium couples them);
-  the chrome PDF becomes a tagged PDF, an accepted side-effect. No PDF/UA
-  *conformance* is claimed (Honest Scope (c)). User-confirmed amendment.
-- **Q-4 (resolved):** Playwright **floor bump** to 1.42, not a runtime probe;
-  the F5 chrome block additionally probes the `outline` kwarg's presence
-  (R6.4) as a defence-in-depth diagnostic.
-- **A-6 (open verification point, non-blocking):** `emulate_media("screen")`
-  vs. chrome outline — confirmed empirically by the 014-02 chrome test and
-  recorded; no design decision pends on it.
+1. **Package vs flat layout** — **package wins**. The `commands/` sub-package
+   is the deciding factor (a flat layout cannot represent commands without
+   either a long-prefix convention `cmd_scan.py` or a separate `commands/`
+   directory, in which case we're already a package). **Decided.**
+2. **Global `--inbox-root`** — defer (out of scope; would change SKILL.md).
+3. **Fixture re-use** — reuse `evals/fixtures/` for R11; add tiny
+   targeted fixtures under `tests/fixtures/` only where the eval suite
+   lacks a deterministic enough surface.
+4. **Underscore prefixes** — keep `_*.py` for internal modules. `commands/`
+   submodules are NOT underscore-prefixed because they're the only external-
+   facing thing within the package (each is a CLI subcommand).
+5. **Command discovery** — hard-code in `wiki_ops.py` for v1. Each command
+   adds two lines to `wiki_ops.py` (one import, one `register` call) — that
+   beats the implicit-namespace-walk trade-off until the command count is
+   ≥15.
 
 ---
 
 ## 13. Decision-Record Summary
 
-| ID | Decision | Rationale |
-|----|----------|-----------|
-| **D1** | weasyprint paths get **no code change** — verify-and-lock only | They already emit the outline (reconnaissance); the risk is silent *regression*, which F5 tests pin |
-| **D2** | `outline=True` **and `tagged=True`** hardcoded at the `page.pdf()` call site — no new `render_chrome()` parameter | `tagged=True` is required for the outline (§1, TASK §1.1a — Chromium couples them); no `--no-outline` CLI flag (Q-2), so a parameter no caller varies is unused surface (YAGNI) |
-| **D3** | Playwright floor `>=1.42` (not a runtime version probe) | 1.42 introduced `page.pdf(outline=True)`; per project memory feedback "prefer dependency upgrades on a version mismatch" |
-| **D4** | `install.sh --with-chrome` installs `requirements-chrome.txt` with `--upgrade` | A floor bump alone does not upgrade an already-satisfied package; closes the pdf-11-era-install gap (M-1) |
-| **D5** | New test-only helper `tests/_outline_probe.py` | Keeps the `pypdf` outline traversal out of brittle multi-line `python -c` strings; mirrors `_acroform_fixture.py` |
-| **D6** | Fixtures written inline (heredoc) into `$TMP`; no committed fixture/`.pdf` files | Matches the existing mermaid-block convention; the skill `.gitignore` ignores `*.pdf` outside `examples/` |
-| **D7** | Chrome outline test soft-skips when Playwright/Chromium absent | The chrome engine is opt-in; a missing optional dependency is a coverage gap, not a suite failure — mirrors the `mermaid_renders` pattern |
-| **D8** | Chrome test fixture is plain content (no `position:fixed` chrome) | Decouples the assertion from `_DOM_NORMALIZE_SCRIPT` hiding headings inside hidden chrome (Honest Scope (b)/(f)) |
+| Decision                                              | Why                                                        |
+|--------------------------------------------------------|-------------------------------------------------------------|
+| Layered monolith (F1 → F2 → F3, one-way)              | Matches existing call graph; no concurrency; pure stdlib    |
+| Package layout (`wiki_ingest/`)                        | Enables `commands/` namespacing; standard Python idiom      |
+| ≤200 LoC argparse shim                                 | Forces every command to live in its own module               |
+| Two-symbol `(register, execute)` per command           | Trivially unit-testable; one update site in the shim        |
+| No command imports another command                     | Keeps the dependency DAG strictly hierarchical              |
+| Tests as `unittest` (no pytest)                        | Zero runtime deps; portable; matches CLAUDE.md §1 testing   |
+| Stub-First atomic merges (12 steps)                    | Each step gated by `diff -q` silent + tests; revertable     |
+| `_*` prefix on internal modules                        | Signals "not a public API" to future maintainers            |
+| No new SKILL.md changes                                | Refactor is invisible to the agent's contract               |
+| References per-skill (`references/architecture.md`)    | Standard wiki-ingest doc location; not in repo root         |

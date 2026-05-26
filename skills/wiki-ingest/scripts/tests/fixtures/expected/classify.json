@@ -1,0 +1,94 @@
+{
+  "source_folder": "__VAULT_PATH__",
+  "grouping": {
+    "pattern": "prefix",
+    "info": {
+      "regex": "^(\\d+(?:\\.\\d+)*)[\\s\\-_.]+",
+      "matched": "6/6"
+    }
+  },
+  "warnings": [],
+  "subdirs": [],
+  "groups": [
+    {
+      "group_key": "01",
+      "files": {
+        "primary": [
+          "01-transcript.txt"
+        ],
+        "merge": [
+          "01-notes.md"
+        ]
+      },
+      "derived_outputs": [],
+      "skipped": [],
+      "rationale": {
+        "01-notes.md": "unchosen primary → merge (small/flat: 213B, 0 headings)",
+        "01-transcript.txt": "primary — hint-pool: kept 1 non-negative files (dropped 1 with non-primary hints); top: 01-transcript.txt (548B, hint=+6)"
+      },
+      "warnings": []
+    },
+    {
+      "group_key": "02",
+      "files": {
+        "primary": [
+          "02-slides.md"
+        ]
+      },
+      "derived_outputs": [],
+      "skipped": [],
+      "rationale": {
+        "02-slides.md": "primary — only text-readable file in group"
+      },
+      "warnings": []
+    },
+    {
+      "group_key": "03",
+      "files": {
+        "link": [
+          "03-presentation.docx"
+        ]
+      },
+      "derived_outputs": [],
+      "skipped": [],
+      "rationale": {
+        "03-presentation.docx": "binary office file (.docx) — cannot inline, link only"
+      },
+      "warnings": [
+        "no text-readable primary in this group — manual review needed (consider running an extraction skill on a binary file first)"
+      ]
+    },
+    {
+      "group_key": "04",
+      "files": {
+        "link": [
+          "04-image.png"
+        ]
+      },
+      "derived_outputs": [],
+      "skipped": [],
+      "rationale": {
+        "04-image.png": "image asset (.png)"
+      },
+      "warnings": [
+        "no text-readable primary in this group — manual review needed (consider running an extraction skill on a binary file first)"
+      ]
+    },
+    {
+      "group_key": "05",
+      "files": {
+        "metadata": [
+          "05-data.json"
+        ]
+      },
+      "derived_outputs": [],
+      "skipped": [],
+      "rationale": {
+        "05-data.json": "structured-data file (.json, 17B) → frontmatter"
+      },
+      "warnings": [
+        "no text-readable primary in this group — manual review needed (consider running an extraction skill on a binary file first)"
+      ]
+    }
+  ]
+}

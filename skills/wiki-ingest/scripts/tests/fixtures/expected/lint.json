@@ -1,0 +1,43 @@
+{
+  "vault": "__VAULT_PATH__",
+  "totals": {
+    "pages": 5,
+    "orphans": 1,
+    "dangling_link_targets": 1,
+    "pages_with_open_contradictions": 1,
+    "missing_concept_pages": 1
+  },
+  "orphans": [
+    {
+      "page": "_concepts/Orphan.md",
+      "kind": "concept"
+    }
+  ],
+  "dangling_links": [
+    {
+      "target": "Missing",
+      "referenced_by": [
+        "_sources/src-1.md"
+      ],
+      "anchors": [
+        "#API"
+      ]
+    }
+  ],
+  "open_contradictions": [
+    {
+      "page": "_concepts/HasContradiction.md",
+      "count": 1
+    }
+  ],
+  "missing_concept_pages": [
+    {
+      "name": "Foo Bar",
+      "mentioned_in": [
+        "src-1",
+        "src-2"
+      ],
+      "count": 2
+    }
+  ]
+}

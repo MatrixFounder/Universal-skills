@@ -1,226 +1,217 @@
-# Development Plan: TASK 014 — `pdf-7` PDF outline (TOC bookmarks)
+# Development Plan — TASK 015 (wiki-ingest modular refactor)
 
-> **Mode:** VDD (Verification-Driven Development) + Stub-First.
-> **Status:** DRAFT v1 — pending Plan-Reviewer approval.
-> **TASK:** [TASK.md](TASK.md) (TASK 014, slug `pdf-outline-bookmarks`, backlog row `pdf-7`).
-> **Architecture:** [ARCHITECTURE.md](ARCHITECTURE.md) (TASK 014 — verify-and-lock
-> weasyprint outline + chrome-engine `page.pdf(outline=True, tagged=True)` parity).
-> **Amended 2026-05-22 (v2):** during 014-02 development, Chromium was found to
-> require `page.pdf(tagged=True)` alongside `outline=True` for the outline to
-> appear (`outline` alone → 0 bookmarks). TASK/ARCH/this plan + task files were
-> amended (user-confirmed scope amendment); the chrome change is now two
-> keyword args. See TASK 014 §1.1a.
-> **Prior plan archived:** [plans/plan-013-pdf-to-markdown.md](plans/plan-013-pdf-to-markdown.md).
-> **Atomic-chain hint (architect handoff):** [ARCHITECTURE.md §11](ARCHITECTURE.md).
+> **Mode:** VDD. **Status:** DRAFT v1 (2026-05-25). **Predecessor:** see archived
+> [`docs/plans/plan-014-pdf-outline-bookmarks.md`](plans/plan-014-pdf-outline-bookmarks.md).
+> **Parent docs:** [`docs/TASK.md`](TASK.md) · [`docs/ARCHITECTURE.md`](ARCHITECTURE.md).
 
----
+This plan implements TASK 015 as **13 atomic beads** following the
+Chainlink Decomposition from [`docs/ARCHITECTURE.md` §11](ARCHITECTURE.md#11-atomic-chain-skeleton-planner-handoff).
+Each bead is independently revertable; the pipeline never has a long-lived
+half-refactored `wiki_ops.py` on `main`.
 
-## 0. Strategy Summary
+## Stub-First adaptation for a refactor
 
-### 0.1. Chainlink Decomposition Overview
+The classic Stub-First two-pass (interface → logic) doesn't map onto a
+pure refactor because no new logic is being added. The equivalent contract
+for each bead is **Test-First + Move**:
 
-Every RTM Issue from TASK §2 (R1..R9, 9 IDs across 3 Epics) is decomposed into
-**Beads** — atomic sub-issues, each implementable in a single sitting (2–4 h)
-and verifiable through a single test cluster. Beads are grouped into **3
-module-scoped tasks** (`task-014-NN-*.md`).
+1. **Phase 1 (Red→Green)** — before moving any code, write the unit
+   test(s) against the **current** symbol location (e.g. `wiki_ops.read_text`
+   for bead 015-01). Run and confirm green.
+2. **Phase 2 (Move)** — extract the symbol to its new module, replace the
+   original definition with a re-export `from wiki_ingest._safety import
+   read_text`, and **update the test imports to the new location**. Run
+   and confirm still-green. The shim re-export keeps `wiki_ops.read_text`
+   working for any internal call site that hasn't been migrated yet within
+   the same bead, so the bead is small.
+3. **Phase 3 (Verify)** — run the deterministic-fixture `diff -q` gate
+   (R11) and the validator pair (R10).
 
-This is a small modification of one existing skill: one verified-and-locked
-behaviour (weasyprint outline), one ~1-line code change (chrome engine), one
-dependency-floor bump, one installer fix, a new test-only helper, three E2E
-test blocks, and documentation. No new module, no new dependency, no
-cross-skill replication (ARCH §3.1, §9).
-
-### 0.2. Phasing (Stub-First — test-first adaptation)
-
-This task has **no large new production surface to stub**, so the Stub-First
-two-pass discipline maps onto a **test-first** ordering, exactly as
-[ARCHITECTURE.md §3.1](ARCHITECTURE.md) sets out and the Architecture-Reviewer
-approved:
-
-- **Phase 1 — Structure & Tests (`[STUB + TEST]`) — task 014-01.** Create the
-  test-only helper `tests/_outline_probe.py` and the two **weasyprint** outline
-  test blocks in `test_e2e.sh`. These pass on the **unmodified** code — that
-  Green run *is* the Part-A verification (R1): it proves `md2pdf.py` and
-  `html2pdf.py` already emit the outline. The "stub" being verified is the
-  current production behaviour itself; the test asserts the (already-correct)
-  observed values, satisfying `tdd-stub-first §1.4`.
-
-- **Phase 2 — Logic Implementation (`[LOGIC IMPLEMENTATION]`) — task 014-02.**
-  Add the **chrome** outline test block (RED — chrome omits the outline),
-  then make it GREEN by adding `outline=True` **and `tagged=True`** to
-  `render_chrome()`'s `page.pdf()` call; bump the Playwright floor; fix
-  `install.sh`. This is the
-  literal Stub-First Red→Green gate (`tdd-stub-first §2`): the failing test is
-  written first, the logic change turns it green — both inside 014-02 so the
-  task ends Green.
-
-- **Phase 3 — Integration & Documentation (`[INTEGRATION]`) — task 014-03.**
-  `SKILL.md` surface, `references/html-conversion.md` note, the `pdf-7` backlog
-  row, `validate_skill.py` exit 0, full regression, cross-skill `diff -q`
-  silent gate. Pure docs + validation; no stub phase.
-
-> **Atomicity check:** each task targets one coherent artifact cluster + its
-> tests, within the 2–4 h budget per `planning-decision-tree`.
-
-### 0.3. Cross-skill replication gate
-
-**This task replicates nowhere.** Every new/edited file lives under
-`skills/pdf/` (+ `docs/`). No replicated file (`office/`, `_soffice.py`,
-`_errors.py`, `preview.py`, `office_passwd.py`) is touched (ARCH §9). The
-2-line `diff -q` silent gate appears in **every** task file's Acceptance
-Criteria:
-
-```bash
-diff -q skills/docx/scripts/_errors.py  skills/pdf/scripts/_errors.py
-diff -q skills/docx/scripts/preview.py  skills/pdf/scripts/preview.py
-```
-
-Both MUST produce no output. (pdf has no `office/` directory → the `office/`
-`diff -qr` is N/A.)
-
-### 0.4. Decisions locked from TASK + ARCHITECTURE (no blocking questions)
-
-Recorded here in case the Plan-Reviewer would have asked — all resolved
-upstream:
-
-- **`outline=True` + `tagged=True` hardcoded** at the `page.pdf()` call site —
-  both required (Chromium couples them; TASK §1.1a — v2 amendment); no new
-  `render_chrome()` parameter, no `--no-outline` CLI flag (ARCH D2, TASK Q-2).
-- **Playwright floor `>=1.42`** — the release that added `page.pdf(outline=...)`
-  **and `tagged=...`** (ARCH D3, TASK Q-4); plus `install.sh --with-chrome` installs with
-  `--upgrade` so a pdf-11-era under-floor install is lifted (ARCH D4, TASK M-1).
-- **`_outline_probe.py`** is a new **test-only** helper mirroring
-  `tests/_acroform_fixture.py`; exit-3 is a private test sentinel, not an
-  `_errors.py` code (ARCH D5, §5.4).
-- **Fixtures inline** (heredoc into `$TMP`); no committed fixture / `.pdf`
-  files (ARCH D6).
-- **Chrome outline test soft-skips** when Playwright/Chromium is absent —
-  mirrors the `mermaid_renders` pattern (ARCH D7).
-- **Chrome test fixture is plain content** (no `position:fixed` chrome) so the
-  assertion is not coupled to `_DOM_NORMALIZE_SCRIPT` (ARCH D8).
-- **No `THIRD_PARTY_NOTICES.md` change** — a version-floor bump on an
-  already-declared dependency is not a new dependency (ARCH §6, TASK R5.4).
-
-### 0.5. Backlog update
-
-Task **014-03** updates the existing `docs/office-skills-backlog.md` `pdf-7`
-row (line ~214) to **✅ DONE**, corrects the stale *"Сейчас только in-page
-links"* note, and reconciles every other `pdf-7` occurrence (the package list
-~line 613, the P1 prioritisation bullet ~line 689, the day-3 schedule ~line
-720 — **grep**, do not trust offsets). See §5.
+For Beads 015-06..015-11 (command modules) this becomes:
+- **Phase 1** — write per-command tests that drive the command via
+  `subprocess.run([..., "wiki_ops.py", "<cmd>", ...])` against a fixture
+  vault, capture stdout + filesystem effects. Run; green.
+- **Phase 2** — extract command logic to `wiki_ingest/commands/<cmd>.py`
+  with `register` + `execute` symbols; wire `wiki_ops.py` to dispatch.
+- **Phase 3** — re-run the tests; same stdout + same fs effects.
 
 ---
 
-## 1. Task Execution Sequence
+## Task Execution Sequence
 
-### Stage 1 — Structure & Tests (verify-and-lock, Part A)
+### Stage 0 — Pre-flight (R11 prerequisite)
 
-- **Task 014-01** — `[STUB + TEST]` `_outline_probe.py` helper + weasyprint outline E2E blocks
-  - RTM: **completes** [R1][R2][R3].
-  - Use Cases: UC-1 (main + A1 `--no-default-css`); UC-3 (test scaffold).
-  - Description file: [`docs/tasks/task-014-01-outline-probe-and-weasyprint-tests.md`](tasks/task-014-01-outline-probe-and-weasyprint-tests.md)
+- **Task 015.00** — Determinism pre-check + fixture freeze
+  - **Goal**: confirm `scan` / `lint` / `classify-folder` already produce
+    deterministic stdout (sorted keys, sorted file iteration); commit
+    frozen fixture vaults under `scripts/tests/fixtures/`.
+  - RTM: precondition for **R11**.
+  - Description: [`docs/tasks/task-015-00-determinism-check.md`](tasks/task-015-00-determinism-check.md)
+  - Priority: Critical
+  - Dependencies: none
+
+### Stage 1 — Helper module extraction (F1 + F2 + F3-helpers)
+
+> Each bead in this stage extracts a cohesive helper module behind the
+> Test-First+Move contract above. After each bead `wiki_ops.py` shrinks
+> by N lines and gains one `from wiki_ingest.<module> import …` block;
+> the shim's CLI behaviour is unchanged.
+
+- **Task 015.01** — Create package skeleton + extract `_safety.py`
+  - RTM: **R1.1** (package layout) + **R2** (safety primitives) + **R8.1**
+    (≥3 unit tests).
+  - UCs: UC-3 (E2E smoke retains parity).
+  - Description: [`docs/tasks/task-015-01-package-and-safety.md`](tasks/task-015-01-package-and-safety.md)
+  - Priority: Critical
+  - Dependencies: 015.00
+
+- **Task 015.02** — Extract `_markdown.py`
+  - RTM: **R3** + **R8.1** (markdown tests).
+  - UCs: UC-2 (per-module critic loop).
+  - Description: [`docs/tasks/task-015-02-markdown-module.md`](tasks/task-015-02-markdown-module.md)
+  - Priority: Critical
+  - Dependencies: 015.01
+
+- **Task 015.03** — Extract `_frontmatter.py`
+  - RTM: **R4** + **R8.1** (frontmatter tests).
+  - UCs: UC-2.
+  - Description: [`docs/tasks/task-015-03-frontmatter-module.md`](tasks/task-015-03-frontmatter-module.md)
+  - Priority: Critical
+  - Dependencies: 015.02 (imports `_safety`; no dep on `_markdown`)
+
+- **Task 015.04** — Extract `_vault.py`
+  - RTM: **R5** + **R8.1** (vault tests).
+  - UCs: UC-2.
+  - Description: [`docs/tasks/task-015-04-vault-module.md`](tasks/task-015-04-vault-module.md)
+  - Priority: Critical
+  - Dependencies: 015.03 (imports `_safety` + `_frontmatter`)
+
+- **Task 015.05** — Extract `_classify.py`
+  - RTM: **R6** + **R8.1** (classify tests).
+  - UCs: UC-2.
+  - Description: [`docs/tasks/task-015-05-classify-module.md`](tasks/task-015-05-classify-module.md)
   - Priority: High
-  - Dependencies: none (bootstrap).
+  - Dependencies: 015.01 (imports only `_safety`; no dep on 015.02-04)
+  - **Parallelism**: may land in parallel with 015.02 / 015.03 / 015.04
+    — `_classify.py` has zero compile-time dependency on the markdown
+    or frontmatter engines. A second developer can take this bead
+    immediately after 015.01 merges.
 
-### Stage 2 — Logic Implementation (chrome parity, Part B)
+### Stage 2 — Command module extraction (F3 drivers)
 
-- **Task 014-02** — `[LOGIC IMPLEMENTATION]` Chrome-engine `page.pdf(outline=True, tagged=True)` + Playwright floor + installer
-  - RTM: **completes** [R4][R5][R6].
-  - Use Cases: UC-2 (main + A1 chrome-absent + A2 old-Playwright).
-  - Description file: [`docs/tasks/task-014-02-chrome-outline-parity.md`](tasks/task-014-02-chrome-outline-parity.md)
+> Each bead extracts ≤3 commands per merge, with per-command tests
+> driving via `subprocess.run`. After each bead `wiki_ops.py` shrinks by
+> ~150 LoC per command and gains one `register()` + `execute()` dispatch.
+
+- **Task 015.06** — Extract `commands/scan.py` + `commands/init.py`
+  - RTM: **R7** (partial) + **R7.4** (architecture lint scaffold).
+  - UCs: UC-1 (new-command-shape demo), UC-3 (smoke E2E).
+  - Description: [`docs/tasks/task-015-06-commands-scan-init.md`](tasks/task-015-06-commands-scan-init.md)
+  - Priority: Critical
+  - Dependencies: 015.01..015.05
+
+- **Task 015.07** — Extract `commands/upsert_page.py` + `commands/update_index.py`
+  - RTM: **R7** (partial).
+  - UCs: UC-3.
+  - Description: [`docs/tasks/task-015-07-commands-upsert-update.md`](tasks/task-015-07-commands-upsert-update.md)
+  - Priority: Critical
+  - Dependencies: 015.06
+
+- **Task 015.08** — Extract `commands/append_log.py` + `commands/log_event.py`
+  - RTM: **R7** (partial).
+  - UCs: UC-3.
+  - Description: [`docs/tasks/task-015-08-commands-append-logevent.md`](tasks/task-015-08-commands-append-logevent.md)
   - Priority: High
-  - Dependencies: 014-01 (the `_outline_probe.py` helper + the `test_e2e.sh`
-    outline section it extends must exist).
+  - Dependencies: 015.06 (independent of 015.07)
 
-### Stage 3 — Integration & Documentation
-
-- **Task 014-03** — `[INTEGRATION]` Skill surface, reference note, backlog, validation
-  - RTM: **completes** [R7][R8][R9].
-  - Use Cases: UC-3 (maintainer validation).
-  - Description file: [`docs/tasks/task-014-03-docs-backlog-validation.md`](tasks/task-014-03-docs-backlog-validation.md)
+- **Task 015.09** — Extract `commands/register_summary.py`
+  - RTM: **R7** (partial) — largest command; isolated bead.
+  - UCs: UC-3 (adversarial register-summary smoke).
+  - Description: [`docs/tasks/task-015-09-commands-register-summary.md`](tasks/task-015-09-commands-register-summary.md)
   - Priority: High
-  - Dependencies: 014-02 (the chrome behaviour + the full test surface must
-    exist before docs describe them and `validate_skill.py` runs).
+  - Dependencies: 015.07 (shares `_frontmatter` splice path with upsert/update)
 
-**Execution order:** `014-01 → 014-02 → 014-03` (strict linear).
+- **Task 015.10** — Extract `commands/find.py` + `commands/lint.py` + `commands/reindex.py`
+  - RTM: **R7** (partial).
+  - UCs: UC-3 (full E2E init → upsert → lint → reindex byte-identity).
+  - Description: [`docs/tasks/task-015-10-commands-find-lint-reindex.md`](tasks/task-015-10-commands-find-lint-reindex.md)
+  - Priority: Critical
+  - Dependencies: 015.09
 
----
+- **Task 015.11** — Extract `commands/classify_folder.py`
+  - RTM: **R7** (final command).
+  - UCs: UC-3 (classify-folder smoke).
+  - Description: [`docs/tasks/task-015-11-commands-classify-folder.md`](tasks/task-015-11-commands-classify-folder.md)
+  - Priority: High
+  - Dependencies: 015.10
 
-## 2. RTM Coverage Matrix
+### Stage 3 — Shim trim + docs + final validation
 
-One RTM Issue = one checklist item, prefixed with the RTM ID (planner prompt
-§Step-2). "Bead" = the task that **completes** the requirement.
-
-- [ ] **[R1]** Verify weasyprint emits the PDF outline out of the box (md2pdf, html2pdf, `--no-default-css`) → **014-01**
-- [ ] **[R2]** `md2pdf.py` outline regression test (non-empty, nested, titled) → **014-01**
-- [ ] **[R3]** `html2pdf.py` weasyprint-engine outline regression test (incl. `--no-default-css` variant) → **014-01**
-- [ ] **[R4]** Chrome engine emits the PDF outline (`page.pdf(outline=True, tagged=True)`) → **014-02**
-- [ ] **[R5]** Playwright version floor `>=1.42` + `install.sh --upgrade` + no `THIRD_PARTY_NOTICES.md` change → **014-02**
-- [ ] **[R6]** Chrome-engine outline regression test (soft-skip + R6.4 capability probe) → **014-02**
-- [ ] **[R7]** Documentation & honesty discipline (`SKILL.md` §2; `references/html-conversion.md` note; honest scope) → **014-03**
-- [ ] **[R8]** Backlog update (`pdf-7` row → ✅ DONE; stale note corrected; all occurrences reconciled) → **014-03**
-- [ ] **[R9]** Validation gate (`validate_skill.py` exit 0; full `test_e2e.sh` green; cross-skill `diff -q` silent; no regression) → **014-03**
-
-**No orphan requirement.** Every R1–R9 has exactly one completing bead.
-
----
-
-## 3. Use Case Coverage
-
-| Use Case | Tasks |
-|----------|-------|
-| UC-1 — reader navigates a generated PDF via bookmarks (weasyprint) | 014-01 (R1/R2/R3 tests + verification) |
-| UC-2 — agent renders HTML→PDF via chrome engine (parity fix) | 014-02 (R4/R5/R6 — `outline=True`+`tagged=True`, floor, chrome test) |
-| UC-3 — maintainer validates the skill | 014-01 (test scaffold), 014-03 (`validate_skill.py`, full suite, `diff -q`) |
+- **Task 015.12** — Trim `wiki_ops.py` ≤200 LoC + `references/architecture.md` + final validator pass
+  - RTM: **R1.2/R1.3** (shim ≤200 LoC, no new entry points) + **R9** (cross-skill matrix silent) + **R10** (validator pass) + **R11** (final byte-identity gate on three fixtures) + **R12** (architecture reference doc).
+  - UCs: UC-3 (final E2E + validator pass).
+  - Description: [`docs/tasks/task-015-12-shim-docs-validate.md`](tasks/task-015-12-shim-docs-validate.md)
+  - Priority: Critical
+  - Dependencies: 015.11
 
 ---
 
-## 4. Stub-First Gate Inventory
+## Use Case Coverage
 
-Per `tdd-stub-first §1–§2`, each task file specifies its gate. Summary:
+| Use Case | Tasks                                            |
+|----------|--------------------------------------------------|
+| UC-1     | 015.06 (command-shape demo)                      |
+| UC-2     | 015.01, 015.02, 015.03, 015.04, 015.05           |
+| UC-3     | 015.00, 015.06, 015.07, 015.08, 015.09, 015.10, 015.11, 015.12 |
 
-| Task | Stub-First role |
-|------|-----------------|
-| 014-01 | **Phase 1 (test-first).** Writes `_outline_probe.py` + the two weasyprint test blocks. They pass on the **unmodified** production code — the Green run asserts the already-correct observed outline (`tdd-stub-first §1.4`) and *is* the R1 verification. No production code is changed in this task. |
-| 014-02 | **Phase 2 (Red→Green).** Adds the chrome outline test block (RED — chrome lacks the outline), then implements `page.pdf(outline=True, tagged=True)` to turn it GREEN — the literal `tdd-stub-first §2` gate, both halves inside one task so it ends Green. |
-| 014-03 | Integration — no stub phase; verified by `validate_skill.py` exit 0 + full suite green. |
+## RTM ↔ Task Coverage
 
-### Honest-scope locks (TASK §1.4 / ARCH §10)
+| RTM ID | Description                                       | Task(s)                                                   |
+|--------|---------------------------------------------------|------------------------------------------------------------|
+| R1     | Package layout + shim ≤200 LoC + no new entry pts | 015.01 (package skeleton), 015.12 (final shim trim)        |
+| R2     | `_safety.py`                                      | 015.01                                                     |
+| R3     | `_markdown.py`                                    | 015.02                                                     |
+| R4     | `_frontmatter.py`                                 | 015.03                                                     |
+| R5     | `_vault.py`                                       | 015.04                                                     |
+| R6     | `_classify.py`                                    | 015.05                                                     |
+| R7     | Commands package + register/execute contract      | 015.06 (R7.4 lint scaffold), 015.07, 015.08, 015.09, 015.10, 015.11 |
+| R8     | `tests/` directory + per-module + E2E             | 015.01..015.11 each adds its slice; 015.12 enforces totals |
+| R9     | Cross-skill replication matrix silent             | 015.12                                                     |
+| R10    | Validator pass (skill-creator + skill-validator)  | 015.12                                                     |
+| R11    | Behavioural parity (`diff -q` silent)             | 015.00 (precondition + fixture freeze); 015.12 (final gate) |
+| R12    | `references/architecture.md`                      | 015.12                                                     |
 
-Each is documented in the named file by the named task:
-
-- §1.4(a) outline from real `h1`–`h6` only → `SKILL.md` §2 + reference (014-03).
-- §1.4(b) reader-mode / preprocessing / `_DOM_NORMALIZE_SCRIPT` may hide
-  headings → reference note (014-03); chrome test fixture is plain content
-  (014-02).
-- §1.4(c) PDF/UA tagging out of scope → `SKILL.md` §2 + reference (014-03).
-- §1.4(d) cross-engine trees not byte-identical → test comments (014-01/02).
-- §1.4(e) chrome opt-in → chrome test soft-skips (014-02).
-- §1.4(f) headings in hidden chrome absent from outline → chrome test
-  fixture + reference (014-02/03).
-- §1.4(g) / A-6 `emulate_media("screen")` verification point → recorded by the
-  014-02 chrome test.
-
----
-
-## 5. Backlog Update (`docs/office-skills-backlog.md`)
-
-Task **014-03** performs the update at merge:
-
-- The `pdf-7` row (~line 214) `Status` → **✅ DONE** with a one-line evidence
-  summary; the **`Notes` column** *"Сейчас только in-page links"* is corrected
-  (weasyprint emits the outline out of the box; chrome parity added by this
-  task).
-- Every other `pdf-7` mention is reconciled — **grep `pdf-7`**, do not trust
-  line offsets: the package list (~613), the P1 prioritisation bullet (~689),
-  the day-3 schedule (~720).
+Every RTM item is covered. Every task ID has at least one RTM linkage.
+No task is a "feature group" — each bead is one atomic change to one
+module group, gated by tests + the R11 byte-identity check.
 
 ---
 
-## 6. Definition of Done (plan-level)
+## Risk Register
 
-- All 3 task files created under `docs/tasks/task-014-NN-*.md`.
-- Every RTM item R1–R9 bound to a completing bead (§2) — no orphan.
-- Stub-First two-pass structure (§4) — 014-01 test-first verify, 014-02
-  Red→Green logic.
-- Plan-Reviewer approval recorded in `docs/reviews/plan-014-review.md`.
+| Risk                                                        | Mitigation                                                              | Owner-task |
+|-------------------------------------------------------------|--------------------------------------------------------------------------|------------|
+| `cmd_scan`'s `last_log_entries` drifts daily (TZ / append-log) | 015.00 freezes a static `log.md` in the fixture vault                    | 015.00     |
+| A bead breaks an undocumented internal call chain            | Each bead keeps backward-compat re-exports inside `wiki_ops.py` until the shim trim in 015.12; tests exercise both old and new import paths during transition | 015.01..015.11 |
+| `_classify.py` exceeds 350-LoC ceiling                       | The `_classify.py` extraction (015.05) is single-purpose; if size drifts above the budget the bead is split — adjust the plan rather than the architecture | 015.05     |
+| Determinism pre-check finds drift (sorted-keys NOT set)      | 015.00 IS the fix bead — it lands the determinism fix as its first commit, then captures fixtures | 015.00     |
+| `register_summary.py` exceeds 350-LoC ceiling                | After extracting `_splice_frontmatter_fields` to `_frontmatter.py` (015.03), the command is ≤220 LoC expected; the ≤350 ceiling has 130-LoC headroom | 015.09     |
+| Hidden coupling between command handlers surfaces            | The R7.4 ast-walking `test_architecture.py` (015.06) fails-loudly on any forbidden import | 015.06+    |
+
+---
+
+## Phase-boundary checkpoint
+
+At the end of each bead the developer MUST:
+
+1. Run `python -m unittest discover -s tests` → 0 failures.
+2. Run the R11 byte-identity check on the three deterministic fixtures
+   (`scan`, `lint`, `classify-folder`).
+3. Run `validate_skill.py skills/wiki-ingest` → exit 0.
+4. Persist session state via
+   `python3 .agent/skills/skill-session-state/scripts/update_state.py …`
+   with the bead ID + status.
+
+Only after these four checks pass is the bead considered "merged" (in
+isolation; the actual merge is at the developer's discretion). A failed
+check stops the chain — the developer reverts the bead and re-plans.

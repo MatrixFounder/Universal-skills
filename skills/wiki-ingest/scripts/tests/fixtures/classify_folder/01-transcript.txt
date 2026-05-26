@@ -1,0 +1,6 @@
+Speaker A: This is the transcript of a recorded discussion about classification.
+Speaker B: It is intentionally long enough that the classifier considers it the primary text candidate over the slides file.
+Speaker A: The fixture exercises the prefix grouping pattern (01-, 02-, …) and the primary/non-primary tie-break.
+Speaker B: We avoid timestamps or anything else that would drift between runs.
+Speaker A: This file is deliberately the largest text file in the group.
+Speaker B: That guarantees it wins the size+prose component of the score.

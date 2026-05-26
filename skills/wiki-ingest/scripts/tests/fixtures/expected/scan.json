@@ -1,0 +1,31 @@
+{
+  "vault": "__VAULT_PATH__",
+  "schema_present": true,
+  "index_present": true,
+  "log_present": true,
+  "subdirs_present": {
+    "_sources": true,
+    "_concepts": true,
+    "_entities": true
+  },
+  "concepts": [
+    "Alpha",
+    "Beta",
+    "Gamma"
+  ],
+  "entities": [
+    "entity-foo"
+  ],
+  "sources": [
+    "source-a",
+    "source-b"
+  ],
+  "counts": {
+    "concepts": 3,
+    "entities": 1,
+    "sources": 2
+  },
+  "last_log_entries": [
+    "## [2024-01-01] init | fixture seed"
+  ]
+}
