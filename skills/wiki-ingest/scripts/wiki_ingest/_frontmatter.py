@@ -246,13 +246,24 @@ def split_frontmatter(content: str,
 def _serialize_yaml_list_field(key: str, values: list) -> str:
     """Render a list-valued frontmatter field as block-style YAML.
 
-    Output form:
-        key:
-          - value1
-          - "value with: colon"
+    Supports two shapes (TASK 016 bead 016-02):
+
+    1. `list[str]` (TASK 015 baseline):
+           key:
+             - value1
+             - "value with: colon"
+
+    2. `list[dict]` (`promoted_from: [{course, date}, ...]`):
+           key:
+             - sub1: "value1"
+               sub2: 2026-05-26
+             - sub1: "value2"
+               sub2: 2026-05-26
+
     Strings containing YAML metacharacters are double-quoted with backslash
-    escaping. Used by `_splice_frontmatter_fields` to rebuild specific list
-    fields after structural rewrites — see L-H5 / P-M2.
+    escaping. Inside a list-of-dicts entry, keys are emitted in
+    insertion order (Python 3.7+ `dict` guarantee). Used by
+    `_splice_frontmatter_fields`.
     """
     def _needs_quoting(s: str) -> bool:
         if not s:
@@ -274,7 +285,18 @@ def _serialize_yaml_list_field(key: str, values: list) -> str:
 
     lines = [f"{key}:"]
     for v in values:
-        lines.append(f"  - {_scalar(v)}")
+        if isinstance(v, dict):
+            # `- subkey: value` for the first key; indented `subkey: value`
+            # for the rest (matches what `split_frontmatter` round-trips).
+            keys = list(v.keys())
+            if not keys:
+                lines.append("  - {}")
+                continue
+            for idx, sub in enumerate(keys):
+                prefix = "  - " if idx == 0 else "    "
+                lines.append(f"{prefix}{sub}: {_scalar(v[sub])}")
+        else:
+            lines.append(f"  - {_scalar(v)}")
     return "\n".join(lines)
 
 
@@ -313,6 +335,7 @@ def _splice_frontmatter_fields(text: str, fields: list[str], fm: dict) -> str:
         line = lines[i]
         m = re.match(r"^([A-Za-z_][\w-]*)\s*:", line)
         if m and m.group(1) in fields:
+            field_name = m.group(1)
             # consume this key line + all subsequent indented or '- '-prefix lines
             i += 1
             while i < len(lines):
@@ -324,9 +347,14 @@ def _splice_frontmatter_fields(text: str, fields: list[str], fm: dict) -> str:
                     i += 1
                     continue
                 break
-            # emit fresh block
-            out_lines.append(_serialize_yaml_list_field(m.group(1),
-                                                       fm.get(m.group(1), [])))
+            # Removal semantics (TASK 016 bead 016-02): if the new value is
+            # explicitly None, OMIT the key entirely. Used by `demote` to
+            # strip `promoted_from:`.
+            new_value = fm.get(field_name)
+            if new_value is None:
+                continue  # consume the block, emit nothing
+            # emit fresh block (list[str] or list[dict])
+            out_lines.append(_serialize_yaml_list_field(field_name, new_value))
             continue
         out_lines.append(line)
         i += 1

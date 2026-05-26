@@ -1,12 +1,24 @@
-# ARCHITECTURE: TASK 015 — wiki-ingest modular refactor
+# ARCHITECTURE: wiki-ingest modular refactor + two-tier vault
 
-> **Status (2026-05-26): MERGED.** All 13 atomic beads (015-00..015-12)
-> shipped; 15 deferred KNOWN_ISSUES items resolved in the follow-up pass.
-> See [`docs/tasks/task-015-wiki-ingest-modular-refactor.md`](tasks/task-015-wiki-ingest-modular-refactor.md)
-> for the archived TASK and [`docs/plans/plan-015-wiki-ingest-modular-refactor.md`](plans/plan-015-wiki-ingest-modular-refactor.md)
-> for the archived PLAN. This document remains the source of truth for
-> the wiki-ingest **internal layout** going forward; future maintainers
-> editing the skill should keep it in sync with the code.
+> **Status (2026-05-26): TASK 015 MERGED · TASK 016 IN DESIGN.**
+>
+> TASK 015: All 13 atomic beads (015-00..015-12) shipped; 15 deferred
+> KNOWN_ISSUES items resolved in the follow-up pass. See
+> [`docs/tasks/task-015-wiki-ingest-modular-refactor.md`](tasks/task-015-wiki-ingest-modular-refactor.md)
+> and [`docs/plans/plan-015-wiki-ingest-modular-refactor.md`](plans/plan-015-wiki-ingest-modular-refactor.md).
+>
+> TASK 016 delta: adds the **two-tier vault model** (vault-root shared layer
+> vs course-local layer), lazy operator-driven `promote`/`demote` commands,
+> two new F3 command modules (`commands/promote.py`, `commands/demote.py`),
+> one new F2 helper (`_page_merge.py` — additive-merge primitives extracted
+> from `commands/upsert_page.py` to satisfy the import-graph invariant), and
+> extensions to five existing commands (`init`, `lint`, `reindex`,
+> `upsert_page`, `register_summary`). Single-course vaults with no root
+> `WIKI_SCHEMA.md` continue to behave byte-identically to v1 (backwards
+> compatibility load-bearing).
+>
+> This document is the source of truth for the wiki-ingest internal layout.
+> Future maintainers editing the skill must keep it in sync with the code.
 
 ---
 
@@ -106,6 +118,114 @@ filtering walk live in `_vault.py` so commands share one definition.
 
 **Dependencies**: F1 + F2.
 
+### 2.1.bis. TASK 016 additions per layer
+
+#### F1 — no new functions
+
+All path-safety primitives required by TASK 016 (`_is_relative_to`,
+`_safe_name`, `_atomic_write_text`, `_skip_symlink`, `die`) already exist.
+No new F1 functions are added.
+
+#### F2 — new module `_page_merge.py`
+
+Additive-merge primitives extracted from `commands/upsert_page.py` so that
+both `commands/upsert_page.py` and the new `commands/promote.py` can reuse
+them without violating the import-graph invariant (M-2 resolution):
+
+- `upsert_source_row(content, source_slug, source_title, source_date) → str`
+- `append_fact(content, fact, source_slug) → str`
+- `append_contradiction(content, existing_claim, new_fact, source_slug) → str`
+- `upsert_footnote(content, source_slug, source_title) → str`
+
+These four functions are lifted verbatim from `commands/upsert_page.py`
+(which becomes a thin caller). `_page_merge.py` is an F2-tier module: it
+imports from `_markdown` (section ops) and `_safety` (die), but NOT from
+`_vault` or any command. The import graph remains strictly hierarchical.
+
+Additionally, `_frontmatter.py` gains internal support for **list-of-dicts**
+splice: the existing `_splice_frontmatter_fields` handles flat `list[str]`
+fields; `promoted_from:` is `list[{course, date}]`. Rather than adding a
+new public function, the helper is extended to detect the list-of-dicts shape
+and use a structural rewrite path (the `_serialize_yaml_list_field` fallback
+already present). This is an in-module change; the public signature of
+`_splice_frontmatter_fields` does not change.
+
+#### F3 helpers — `_vault.py` extensions (M-3 resolution)
+
+R1 is split into TWO helpers as required by M-3:
+
+- `find_vault_root(start: Path) → tuple[Path, Path | None]` — given ANY path
+  inside a course directory, walks up until the first `WIKI_SCHEMA.md` (course
+  root), then continues walking for a second `WIKI_SCHEMA.md` with
+  `schema_version: 2.0` (vault root). Returns `(course_root, vault_root_or_None)`.
+  Refuses to cross filesystem boundaries or follow symlinks during the walk
+  (M-1 security caveat). Used by ingest-time commands (UC-4 / R8).
+
+- `discover_courses(vault_root: Path) → list[Path]` — given a vault root
+  (a directory with a `schema_version: 2.0` schema), walks all descendant
+  directories and returns every one that contains a `WIKI_SCHEMA.md` with
+  `schema_version: 1.x`. Does NOT hardcode the `Lessons/` segment (Q-8
+  resolution): any subdirectory at any depth qualifies. Returns a sorted list
+  for deterministic output. **Symlink discipline**: skips symlinked
+  directories during the walk (inherits OVERLAP-5 from `_walk_pages`).
+  **Nested course schemas**: descends into matched course directories so a
+  course-of-courses (e.g. `Lessons/2026/Spring/Hermes/`) is supported — the
+  result list is flat and every qualifying descendant appears independently.
+  **Same-device boundary not enforced** (only `find_vault_root` enforces
+  that, because it walks UP) — courses may live on different mount points
+  via deliberate operator setup. Used by `promote`, `demote`, cross-course
+  `lint`, root-mode `reindex`.
+
+These two helpers have complementary callers: `find_vault_root` is called by
+commands that receive a course path from the user (existing CLI surface, no
+`vault_root` argument); `discover_courses` is called by commands that receive
+the vault root directly (`promote`, `demote`, cross-course `lint`).
+
+**Byte-identity caveat (M-1 resolution)**: `upsert-page` and `register-summary`
+continue to accept the course-root `vault` positional argument unchanged. They
+internally call `find_vault_root(vault)` to discover an optional vault root.
+On single-course vaults (no root `WIKI_SCHEMA.md`), `vault_root=None` and the
+code path is byte-identical to v1 (enforced by TASK 015 R11 fixtures, plus the
+new `two_course_vault` fixture variant with `root_schema=None`). **Byte-identity
+holds only when no root `WIKI_SCHEMA.md` is present** — with a root schema,
+R8 demonstrably changes `upsert-page` behaviour (lookups land on the root page).
+This is correct and expected; R11 fixtures test single-course (no root) only.
+
+**Vault-relative footnote form (A-M-2 resolution)**: when promote / demote /
+root-aware upsert rewrite a footnote definition to vault-relative form, the
+path prefix is computed as `course_root.relative_to(vault_root)` — NOT the
+literal substring `Lessons/<Course>/`. The form is
+`[^src-<slug>]: [[<course_rel>/_sources/<slug>]] — <Title>`, where
+`<course_rel>` is whatever directory the source's owning course actually
+sits at relative to the vault root. The R6.4 lint check (root-page
+footnote-format) likewise validates the prefix against
+`{c.relative_to(vault_root) for c in discover_courses(vault_root)}`,
+not against a literal `Lessons/` prefix. `Lessons/` appears only in example
+JSON in §4.5 because the spec's running example uses that convention; it
+is not part of the contract.
+
+#### F3 commands — two new modules
+
+- `commands/promote.py` (≤400 LoC) — `promote <Name>` with `--dry-run` default
+  (R4), `--apply`, `--kind`, `--vault`. Dry-run is default (Q-2 locked).
+- `commands/demote.py` (≤300 LoC) — `demote <Name> --to <Course>` with
+  `--dry-run` available but NOT default (Q-2b locked). `--vault`, optional
+  `--kind`.
+
+Both commands import from `_safety`, `_markdown`, `_frontmatter`, `_vault`,
+and `_page_merge`. Neither imports any other `commands/*.py` module (R12.5 +
+`test_architecture.py` invariant preserved).
+
+#### F3 commands — five extended modules
+
+| Command           | Extension summary                                                                          |
+|-------------------|--------------------------------------------------------------------------------------------|
+| `init.py`         | Gains `--root` flag (Q-1 locked: `init <vault> --root`, not a new subcommand). Writes vault-root scaffold: `WIKI_SCHEMA.md` (from `WIKI_SCHEMA.root.template.md`), `_concepts/`, `_entities/`, optional `index.md`. Idempotent; never overwrites. |
+| `lint.py`         | Gains cross-course duplicate scan + invariant check (`cross_course_duplicate`, `invariant_violation`). Dangling-link logic updated: course→root resolves (not dangling); course→other-course is dangling. Root-page footnote-format check (warning). |
+| `reindex.py`      | Gains `## Shared * referenced` section for course-mode reindex; root-mode reindex (schema_version 2.0 auto-detection per M-4); `--cascade` flag for root mode. |
+| `upsert_page.py`  | Calls `find_vault_root`; root-aware lookup (R8.1); vault-relative footnote form on root pages (R8.2); log marker for shared merge target (R8.3). Primitives (`upsert_source_row` etc.) delegated to `_page_merge.py`. |
+| `register_summary.py` | Root-aware via `upsert_page.execute` path (no direct change to `register_summary` logic beyond the `upsert_page` delegation). |
+
 ### 2.2. Functional Components Diagram
 
 ```mermaid
@@ -113,14 +233,15 @@ graph TD
     CLI[wiki_ops.py<br/>argparse shim ≤200 LoC] --> CMDS
 
     subgraph F3 [F3 · Vault & Command Layer]
-        CMDS[commands/*.py<br/>11 subcommand modules]
-        VAULT[_vault.py<br/>constants + walk + tail_log]
+        CMDS[commands/*.py<br/>13 subcommand modules<br/>incl. promote · demote NEW]
+        VAULT[_vault.py<br/>constants + walk + tail_log<br/>+ find_vault_root NEW<br/>+ discover_courses NEW]
         CLASSIFY[_classify.py<br/>classify-folder helpers]
     end
 
     subgraph F2 [F2 · Markdown / Frontmatter Engine]
         MD[_markdown.py<br/>sections + wikilinks +<br/>masking + _first_sentence]
         FM[_frontmatter.py<br/>split + parse + splice +<br/>serialize YAML lists]
+        PM[_page_merge.py NEW<br/>upsert_source_row · append_fact<br/>append_contradiction · upsert_footnote]
     end
 
     subgraph F1 [F1 · Safety & I/O Primitives]
@@ -131,6 +252,7 @@ graph TD
     CMDS --> CLASSIFY
     CMDS --> MD
     CMDS --> FM
+    CMDS --> PM
     CMDS --> SAFE
 
     CLASSIFY --> VAULT
@@ -139,12 +261,104 @@ graph TD
     VAULT --> FM
     VAULT --> SAFE
 
+    PM --> MD
+    PM --> SAFE
+
     MD --> SAFE
     FM --> SAFE
 ```
 
 **Dependency rule (one-way only)**: F3 → F2 → F1. No back-edges. Commands
 may import any F1/F2/F3-helper module but **never** another command.
+`_page_merge.py` is F2: it imports `_markdown` + `_safety` only.
+
+---
+
+## 2.3. Two-Tier Vault Model (TASK 016)
+
+### Vault layout
+
+```
+<vault>/                                   # Obsidian vault root
+├── WIKI_SCHEMA.md                         # schema_version: 2.0  kind: vault-root
+├── _concepts/                             # shared concepts (lazy — empty until first promote)
+├── _entities/                             # shared entities (lazy)
+├── index.md                               # optional root catalog (created on first promote)
+└── Lessons/                               # or any other directory name — NOT hardcoded
+    ├── Course A/                          # course-local layer
+    │   ├── WIKI_SCHEMA.md                 # schema_version: 1.x
+    │   ├── _sources/  _concepts/  _entities/  index.md  log.md
+    └── Course B/                          # same
+```
+
+Single-course vaults (no vault-root `WIKI_SCHEMA.md`) are unaffected — all
+commands detect `vault_root=None` and behave exactly as v1. The root layer is
+bootstrapped via `init <vault> --root` (R2).
+
+### One-page-one-place invariant
+
+A given canonical filename (`Sharpe Score.md`) MUST live in exactly ONE of:
+- some course's `_concepts/` or `_entities/`, OR
+- the vault root's `_concepts/` or `_entities/`.
+
+Never both. This invariant is load-bearing for Obsidian's filename-based
+`[[wiki-link]]` resolution. `lint` enforces it (`invariant_violation` finding,
+hard failure / non-zero exit). `promote` and `demote` maintain it transactionally.
+
+### Discovery algorithm
+
+```mermaid
+graph LR
+    A["path inside a course<br/>(any depth)"] -->|find_vault_root| B["(course_root, vault_root | None)"]
+    C["vault root path"] -->|discover_courses| D["[course_root, ...]"]
+```
+
+`find_vault_root(start)`:
+1. Walk up from `start` until a `WIKI_SCHEMA.md` is found → `course_root`.
+2. Continue walking from `course_root.parent` until another `WIKI_SCHEMA.md`
+   with `schema_version: 2.0` is found → `vault_root`. If none found → `None`.
+3. Refuse to cross filesystem device boundary (symlink-loop protection).
+
+`discover_courses(vault_root)`:
+1. Walk ALL descendants of `vault_root` (any depth).
+2. For each directory containing a `WIKI_SCHEMA.md` with `schema_version: 1.x`
+   that is NOT the vault root itself → add to result list.
+3. Return sorted list (deterministic for lint/reindex).
+
+### Link resolution order (v2)
+
+For a `[[Foo]]` reference from within a course:
+1. `<course>/_concepts/Foo.md` — course-local concept
+2. `<course>/_entities/Foo.md` — course-local entity
+3. `<vault>/_concepts/Foo.md` — shared root concept
+4. `<vault>/_entities/Foo.md` — shared root entity
+5. Dangling — lint flags it
+
+The skill does not configure Obsidian's resolver; the above order is
+documented for the LLM's reading pass and for `lint`'s dangling-link check.
+
+### Lazy promotion
+
+- Ingest NEVER promotes (operator-only promotion invariant, R13).
+- The root layer stays empty until the first `promote --apply`.
+- New vaults work exactly like v1 until the operator runs `init --root`.
+- Re-promotion (R3.7): if a root page already exists and one more course
+  has a course-local copy, `promote` merges that course-local copy into the
+  existing root page (additive). The pre-condition is relaxed from "≥2
+  courses with course-local copies" to "≥1 course-local copy when root
+  version already exists OR ≥2 course-local copies with no root version."
+
+### Schema-version detection (M-4 resolution)
+
+`reindex <path>` auto-detects mode by peeking `<path>/WIKI_SCHEMA.md`'s
+`schema_version` field:
+- `2.0` → root mode: rebuild root `index.md`; optionally cascade with
+  `--cascade`.
+- `1.x` → course mode: existing v1 behaviour + `## Shared * referenced`.
+- Absent or mismatched → die with existing v1 message.
+
+The same schema-peek is used by `promote`/`demote` to validate the vault root
+before any reads (R9.1 / R9.2).
 
 ---
 
@@ -241,13 +455,41 @@ skills/wiki-ingest/
 | `wiki_ingest/commands/<cmd>.py`         | F3 driver | One subcommand each. Public surface: `register(subparser) → None` and `execute(args) → int`. **No command imports another command.**                                  | ≤400 each  | _safety, _markdown, _frontmatter, _vault, _classify (subset per command) |
 | `scripts/tests/`                        | tests     | unittest discoverable; per-module + per-command + E2E.                                                                                                               | n/a        | wiki_ingest                |
 
-**Import-graph invariant** — enforced by a tiny `tests/test_architecture.py`
+**TASK 016 module additions and extensions:**
+
+| Module                                  | Type      | Responsibility                                                                                                                                                            | LoC budget | Imports from                          |
+|-----------------------------------------|-----------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------|------------|---------------------------------------|
+| `wiki_ingest/_page_merge.py`            | F2 NEW    | Additive-merge primitives extracted from `commands/upsert_page.py`: `upsert_source_row`, `append_fact`, `append_contradiction`, `upsert_footnote`. Also hosts `render_stub_page` if it references section ops. No vault I/O — pure content mutation. | ≤150       | `_markdown`, `_safety`               |
+| `wiki_ingest/commands/promote.py`       | F3 NEW    | `promote <Name> [--kind concept\|entity] [--vault V] [--apply]`. Dry-run default. Calls `discover_courses`, reads N course-local copies, merges frontmatter + body via `_page_merge`, rewrites footnotes to vault-relative form, writes root page, deletes course copies, updates all indexes and logs. Emits `PromotionPlan` JSON on dry-run, `{applied, merged_to, merged_from, contradictions_raised}` on apply. ≤400 LoC. | ≤400       | `_safety`, `_markdown`, `_frontmatter`, `_vault`, `_page_merge` |
+| `wiki_ingest/commands/demote.py`        | F3 NEW    | `demote <Name> --to <Course> [--vault V] [--dry-run]`. Dry-run NOT default (Q-2b). Checks cross-course citation refusal (R5.2), moves root page to target course, rewrites footnotes to short form, strips `promoted_from:`, updates indexes and log. Emits `DemotionPlan` JSON on dry-run. ≤300 LoC. | ≤300       | `_safety`, `_markdown`, `_frontmatter`, `_vault`, `_page_merge` |
+| `wiki_ingest/_vault.py` (extended)      | F3 helper | **New functions**: `find_vault_root(start) → tuple[Path, Path\|None]`; `discover_courses(vault_root) → list[Path]`. Existing functions and constants unchanged. LoC budget extended to ≤250. | ≤250       | `_safety`, `_frontmatter`             |
+| `wiki_ingest/_frontmatter.py` (extended)| F2        | Internal extension: `_splice_frontmatter_fields` gains list-of-dicts rewrite path for `promoted_from:` field. Public signature unchanged. LoC budget extended to ≤350. | ≤350       | `_safety`                             |
+| `wiki_ingest/commands/init.py` (extended)| F3       | Gains `--root` flag. New branch writes vault-root scaffold from `WIKI_SCHEMA.root.template.md` asset. Idempotent. R2.3: `init` without `--root` is unchanged. | ≤150       | `_safety`, `_vault`                   |
+| `wiki_ingest/commands/lint.py` (extended)| F3       | New passes: `cross_course_duplicate`, `invariant_violation`. Dangling-link updated for two-tier namespace. Root-page footnote-format warning (R6.4). Sort discipline: findings alphabetical by `name` (m-5 resolution). | ≤450       | `_safety`, `_markdown`, `_frontmatter`, `_vault` |
+| `wiki_ingest/commands/reindex.py` (extended)| F3   | New: `## Shared concepts referenced` + `## Shared entities referenced` sections. Root-mode via schema-version auto-detection (M-4). `--cascade` flag. | ≤350       | `_safety`, `_markdown`, `_frontmatter`, `_vault` |
+| `wiki_ingest/commands/upsert_page.py` (extended)| F3 | Root-aware lookup (R8.1). Vault-relative footnote on root page (R8.2). Log marker for shared target (R8.3). Delegates merge primitives to `_page_merge`. Thin wrapper pattern. | ≤250       | `_safety`, `_markdown`, `_frontmatter`, `_vault`, `_page_merge` |
+
+**New assets and fixtures:**
+
+| Path                                                           | Purpose                                                          |
+|----------------------------------------------------------------|------------------------------------------------------------------|
+| `assets/WIKI_SCHEMA.root.template.md`                          | Root-schema template with `schema_version: 2.0` + `kind: vault-root` |
+| `tests/fixtures/two_course_vault/`                             | Two-course fixture with overlapping `Sharpe Score` + unique concepts |
+| `tests/commands/test_promote.py`                               | promote happy-path, 3-course merge, kind-mismatch, re-promote, dry-run, contradictions |
+| `tests/commands/test_demote.py`                                | demote happy-path, cross-course citation refusal, footnote rewrite, fm restore |
+| `tests/commands/test_lint.py` (extended)                       | New categories + cross-layer dangling refinement                 |
+| `tests/commands/test_reindex.py` (extended)                    | Shared-referenced sections + root-mode + cascade + custom-section preservation |
+| `tests/commands/test_upsert_page.py` (extended)                | Root-layer-first lookup + vault-relative footnote                |
+| `tests/test__vault.py` (extended)                              | `find_vault_root` single/two-tier/nested/schema-mismatch cases   |
+| `tests/test_e2e_promotion.py`                                  | Round-trip: ingest → lint detects dup → promote → lint clean → demote → lint clean |
+
+**Import-graph invariant** — enforced by `tests/test_architecture.py`
 that walks each module via the `ast` module and asserts: (a) no
 `wiki_ingest/_*.py` file imports `wiki_ingest.commands.*`, and (b) no
-`wiki_ingest/commands/<a>.py` imports `wiki_ingest/commands/<b>.py`. Cost:
-~30 LoC, zero new deps — converts the rule from "manual" to "CI-trusted"
-without pulling in `import-linter`. A future task can promote to a
-fully-fledged dependency-linter if needed.
+`wiki_ingest/commands/<a>.py` imports `wiki_ingest/commands/<b>.py`.
+TASK 016 preserves this invariant: `_page_merge.py` is an F2 module (no
+commands import), and `promote.py`/`demote.py` import only F1/F2/F3-helper
+modules — never another command.
 
 ### 3.3. Components Diagram
 
@@ -261,28 +503,31 @@ graph LR
         SAFETY[_safety.py]
         MARKDOWN[_markdown.py]
         FRONTMATTER[_frontmatter.py]
-        VAULT[_vault.py]
+        PAGEMERGE["_page_merge.py NEW<br/>upsert_source_row<br/>append_fact etc."]
+        VAULT["_vault.py<br/>+find_vault_root NEW<br/>+discover_courses NEW"]
         CLASSIFY[_classify.py]
 
         subgraph "commands/"
             SCAN[scan]
-            CINIT[init]
-            UPSERT[upsert_page]
+            CINIT["init<br/>+--root NEW"]
+            UPSERT["upsert_page<br/>+root-aware"]
             UPDIDX[update_index]
             APLOG[append_log]
             REGSUM[register_summary]
             LOGEV[log_event]
             FIND[find]
-            LINT[lint]
-            REINDEX[reindex]
+            LINT["lint<br/>+cross-course NEW"]
+            REINDEX["reindex<br/>+root-mode NEW"]
             CFOLDER[classify_folder]
+            PROMOTE["promote NEW"]
+            DEMOTE["demote NEW"]
         end
     end
 
-    SHIM --> SCAN & CINIT & UPSERT & UPDIDX & APLOG & REGSUM & LOGEV & FIND & LINT & REINDEX & CFOLDER
+    SHIM --> SCAN & CINIT & UPSERT & UPDIDX & APLOG & REGSUM & LOGEV & FIND & LINT & REINDEX & CFOLDER & PROMOTE & DEMOTE
     SCAN --> VAULT
-    CINIT --> VAULT
-    UPSERT --> VAULT & MARKDOWN & FRONTMATTER & SAFETY
+    CINIT --> VAULT & SAFETY
+    UPSERT --> VAULT & MARKDOWN & FRONTMATTER & PAGEMERGE & SAFETY
     UPDIDX --> VAULT & MARKDOWN & SAFETY
     APLOG --> VAULT & SAFETY
     REGSUM --> VAULT & FRONTMATTER & SAFETY
@@ -291,9 +536,12 @@ graph LR
     LINT --> VAULT & MARKDOWN & FRONTMATTER & SAFETY
     REINDEX --> VAULT & MARKDOWN & FRONTMATTER & SAFETY
     CFOLDER --> CLASSIFY & VAULT & SAFETY
+    PROMOTE --> VAULT & MARKDOWN & FRONTMATTER & PAGEMERGE & SAFETY
+    DEMOTE --> VAULT & MARKDOWN & FRONTMATTER & PAGEMERGE & SAFETY
 
     VAULT --> FRONTMATTER & SAFETY
     CLASSIFY --> SAFETY
+    PAGEMERGE --> MARKDOWN & SAFETY
     MARKDOWN --> SAFETY
     FRONTMATTER --> SAFETY
 ```
@@ -344,7 +592,108 @@ Plain `dict[str, str | list]`. Lists may contain strings OR inner dicts (for
 the `key:\n  - subkey: value` pattern). `warnings: list[str] | None` is an
 out-parameter for malformed-line surfacing (L-M5).
 
-### 4.5. Derived rules / invariants
+### 4.5. TASK 016 new data structures
+
+#### 4.5.1. PromotedPageFrontmatter
+
+Frontmatter added to a page when it is promoted to the vault root:
+
+```yaml
+schema_version: 2.0         # present only on vault-root WIKI_SCHEMA.md (not on content pages)
+kind: vault-root             # present only on vault-root WIKI_SCHEMA.md
+promoted_from:
+  - course: "Course A"
+    date: "2026-05-26"
+  - course: "Course B"
+    date: "2026-05-26"
+```
+
+`promoted_from` is a `list[dict]` with keys `course: str` and `date: str`.
+Demote removes this field entirely. Re-promote appends to the list (does not
+replace). The `_splice_frontmatter_fields` helper is extended to handle this
+list-of-dicts shape (existing flat-list path is unchanged).
+
+#### 4.5.2. PromotionPlan (dry-run JSON envelope)
+
+```python
+{
+    "merge_from": ["Lessons/Course A/_concepts/Sharpe Score.md",
+                   "Lessons/Course B/_concepts/Sharpe Score.md"],
+    "merge_to": "_concepts/Sharpe Score.md",
+    "delete": ["Lessons/Course A/_concepts/Sharpe Score.md",
+               "Lessons/Course B/_concepts/Sharpe Score.md"],
+    "index_updates": [
+        {"course": "Course A", "op": "move_to_shared"},
+        {"course": "Course B", "op": "move_to_shared"},
+        {"course": None, "op": "add_to_root_index"},
+    ],
+    "log_appends": [
+        {"course": "Course A", "body": "## [2026-05-26] promote | Sharpe Score\n..."},
+        {"course": "Course B", "body": "..."},
+    ],
+    "contradictions_raised": 0,
+    "noop": false
+}
+```
+
+When `--apply` succeeds, the output is:
+```python
+{"applied": true, "merged_to": "...", "merged_from": [...], "contradictions_raised": 0}
+```
+Re-running `--apply` when the page is already at root (no course-local copies)
+is a no-op:
+```python
+{"applied": true, "noop": true}
+```
+
+#### 4.5.3. DemotionPlan (dry-run JSON envelope)
+
+```python
+{
+    "move_from": "_concepts/Sharpe Score.md",
+    "move_to": "Lessons/Course A/_concepts/Sharpe Score.md",
+    "index_updates": [
+        {"course": None, "op": "remove_from_root_index"},
+        {"course": "Course A", "op": "move_from_shared_to_local"},
+    ],
+    "log_appends": [{"course": "Course A", "body": "..."}],
+    "refused_citations": []
+}
+```
+
+`refused_citations` lists `(course, source_slug)` pairs when demote is refused
+(non-empty → demote aborts with non-zero exit).
+
+#### 4.5.4. Lint finding categories (new)
+
+```python
+# cross_course_duplicate — per-item shape
+{
+    "category": "cross_course_duplicate",
+    "name": "Sharpe Score",
+    "kind": "concept",
+    "courses": [
+        "Lessons/Course A/_concepts/Sharpe Score.md",
+        "Lessons/Course B/_concepts/Sharpe Score.md"
+    ],
+    "suggest": 'wiki-ingest promote "Sharpe Score"'
+}
+
+# invariant_violation — per-item shape
+{
+    "category": "invariant_violation",
+    "name": "Sharpe Score",
+    "root_path": "_concepts/Sharpe Score.md",
+    "course_paths": ["Lessons/Course A/_concepts/Sharpe Score.md"],
+    "suggest": 'wiki-ingest promote "Sharpe Score" or demote it'
+}
+```
+
+Both lists are sorted alphabetically by `name` within their category
+(m-5 / determinism gate). The presence of any `invariant_violation` item
+causes lint to exit non-zero (hard failure).
+
+### 4.6. Derived rules / invariants
 
 1. **Offset stability under masking**: every masking function preserves byte
    offsets (newlines preserved, non-newline content replaced with spaces).
@@ -365,19 +714,54 @@ out-parameter for malformed-line surfacing (L-M5).
 
 ## 5. Interfaces
 
-### 5.1. Public CLI (unchanged)
+### 5.1. Public CLI
+
+TASK 015 subcommands are unchanged. TASK 016 adds two new subcommands and
+one new flag on `init`:
 
 ```
 wiki_ops.py {scan|init|upsert-page|update-index|append-log|
              register-summary|log-event|find|lint|reindex|
-             classify-folder} ...
+             classify-folder|promote|demote} ...
 ```
 
-All flags and stdout/stderr contracts stay byte-identical (R11). The
-[`skills/wiki-ingest/SKILL.md`](../skills/wiki-ingest/SKILL.md) Agent contract
-is the source of truth for this surface and is not changed.
+**`init` extension (Q-1 locked: `--root` flag on `init`, not a new subcommand)**:
+```
+wiki_ops.py init <vault> [--root]
+```
+`--root` writes the vault-root scaffold. Without `--root`, behaviour is
+unchanged (course-local wiki scaffold). (R2.3)
 
-### 5.2. Command Module Contract (NEW internal interface)
+**`promote` grammar**:
+```
+wiki_ops.py promote <Name> --vault <vault>
+                   [--kind concept|entity]
+                   [--apply]
+```
+- Default: dry-run (prints `PromotionPlan` JSON to stdout, writes nothing).
+- `--apply`: performs all writes.
+- `--kind`: optional; auto-inferred when all duplicates agree; error if mixed.
+- `--vault`: path to the vault root (the directory with the `schema_version: 2.0` schema).
+
+**`demote` grammar**:
+```
+wiki_ops.py demote <Name> --to <Course> --vault <vault>
+                   [--kind concept|entity]
+                   [--dry-run]
+```
+- Default: applies immediately (dry-run NOT default, Q-2b locked).
+- `--dry-run`: prints `DemotionPlan` JSON, writes nothing.
+- `--to <Course>`: required; target course name (not a path — resolved against the `discover_courses(vault_root)` result list by matching the last path segment of each course root; `Lessons/` convention is honoured but not hardcoded; the value is passed through `_safe_name`).
+- `--vault`: path to the vault root.
+
+**Existing subcommand changes (R11 byte-identity caveat)**:
+- `upsert-page <vault> ...` — vault positional unchanged; gains internal
+  `find_vault_root(vault)` call. Byte-identical when no root schema present.
+- `lint <vault>` — vault positional unchanged; cross-course passes are additive.
+- `reindex <path>` — path positional unchanged; mode auto-detected by schema
+  version (M-4 resolution, see §2.3). `--cascade` flag added (root mode only).
+
+### 5.2. Command Module Contract (NEW internal interface — unchanged from TASK 015)
 
 Every `wiki_ingest/commands/<cmd>.py` exposes exactly two symbols:
 
@@ -393,7 +777,26 @@ def execute(args: argparse.Namespace) -> int:
 The shim **does not import** the command's helpers, only the two public
 symbols.
 
-### 5.3. F1 / F2 / F3 internal APIs
+### 5.3. Internal helper boundary — `_page_merge.py` (M-2 resolution)
+
+`_page_merge.py` is an F2-tier module. Its four public functions are the
+**only** permitted path for additive-merge operations. Both
+`commands/upsert_page.py` and `commands/promote.py` import from it.
+
+**What is allowed**:
+- Any F3 command may import `_page_merge.upsert_source_row` etc.
+- `_page_merge` may import from `_markdown` and `_safety`.
+
+**What is forbidden**:
+- `_page_merge` must NOT import from `_vault` or any `commands/*.py`.
+- No command may import the merge primitives from `commands/upsert_page`
+  (the `test_architecture.py` invariant test will fail if attempted).
+
+Future maintainers: if a new merge primitive is needed that requires vault
+I/O, it belongs in `commands/promote.py` or a new F3-helper — NOT in
+`_page_merge.py`. Keep `_page_merge.py` pure-content (string-in, string-out).
+
+### 5.4. F1 / F2 / F3 internal APIs (unchanged from TASK 015)
 
 Helper-module surface is informally public *within the package only*. The
 underscore prefix on the module names (`_safety.py`, `_markdown.py`, etc.)
@@ -401,7 +804,7 @@ signals that external consumers should not import them. The Universal-Skills
 convention does not yet have a stable "public" tier for wiki-ingest; the
 SKILL.md CLI is the only stable surface.
 
-### 5.4. Test discovery
+### 5.5. Test discovery
 
 ```
 cd skills/wiki-ingest/scripts
@@ -420,7 +823,8 @@ the skill.
   is NOT used so 3.10 is not required).
 - **stdlib only**: `argparse`, `errno`, `json`, `math`, `os`, `re`, `sys`,
   `tempfile`, `unicodedata`, `datetime`, `pathlib`, `fcntl` (POSIX guard).
-- **No new runtime dependencies introduced by this refactor**.
+- **No new runtime dependencies introduced by TASK 015 or TASK 016** (pure
+  stdlib constraint is locked for the wiki-ingest skill).
 - **Dev / test**: `unittest` (stdlib). No `pytest`, no `tox`, no `hypothesis`
   for v1 — keeps the test surface portable.
 
@@ -451,10 +855,20 @@ pass. None of these may regress; tests in `tests/test__safety.py` and
 introduces no new `subprocess`, no new file I/O, no new network paths. It
 re-shapes existing call graphs only.
 
-**Threat-model unchanged**: the wiki-ingest skill is a local-fs CLI; the
-worst plausible exploit before the refactor was "operator's secrets get
-summarised into a markdown index page they then read" (S-H2, addressed)
-and post-refactor remains the same.
+**TASK 016 security additions:**
+
+| ID         | Defence                                                                                               | Location                                            |
+|------------|-------------------------------------------------------------------------------------------------------|-----------------------------------------------------|
+| T16-S1     | Vault-root containment for `--to <Course>` in `demote`: `_safe_name` + `_is_relative_to(<vault>/..., vault)` | `commands/demote.py` |
+| T16-S2     | `find_vault_root` symlink-loop / cross-device refusal: walk-up aborts if `stat().st_dev` changes between steps or if any intermediate directory is a symlink | `_vault.py::find_vault_root` |
+| T16-S3     | Footnote-format rewrite regex anchoring: `FOOTNOTE_DEF_RE` anchored to `^` and line-end with `re.M`; a single `[^src-slug]` key can only match once per line — prevents "second-definition smuggling" via a deliberately malformed footnote that repeats the same key on consecutive lines | `commands/promote.py`, `commands/demote.py` |
+| T16-S4     | `--name <Name>` argument for `promote`/`demote` passed through `_safe_name(name, kind="name")` — inherits NFKC normalisation, path-separator rejection, control-char rejection, template-placeholder rejection | `commands/promote.py`, `commands/demote.py` |
+| T16-S5     | Atomic-write discipline extended: root `index.md`, root concept/entity page, course `index.md`, course `log.md` all use `_atomic_write_text` + `flock` | `commands/promote.py`, `commands/demote.py` |
+
+**Threat-model unchanged**: the wiki-ingest skill is a local-fs CLI. TASK 016
+introduces no new subprocess, no new network paths, no new external deps. The
+new attack surface (cross-course file moves) is bounded by the same `_is_relative_to` +
+`_safe_name` + `_atomic_write_text` stack already defending v1 commands.
 
 ---
 
@@ -478,6 +892,22 @@ All numbers assume an SSD and the per-skill `.venv` already warmed.
 
 **Per-module budgets** (LoC) are listed in §3.2; the corresponding tests are
 required by R7.1 / R8 in [TASK.md](TASK.md#2-requirements-traceability-matrix-rtm).
+
+**TASK 016 performance constraints** (from TASK §4.1):
+
+| Operation                               | Constraint              | Implementation note                                    |
+|-----------------------------------------|-------------------------|--------------------------------------------------------|
+| `find_vault_root(start)`                | O(depth) — single walk-up | Stat at most `depth` directories; no full tree scan   |
+| `discover_courses(vault_root)`          | O(total directories)    | Single `os.walk` pass; no re-entry                     |
+| `lint` (incl. cross-course)             | ≤ 0.5 s on 5×100 vault  | Cross-course scan is O(N) — one dict keyed by filename |
+| `promote` dry-run                       | ≤ 0.2 s                 | Reads N course pages + merges in memory; no extra I/O  |
+| `promote --apply`                       | ≤ 0.4 s                 | Adds atomic writes for root page + delete + log        |
+| `reindex --cascade` (5×100 vault)       | ≤ 1 s                   | Sequential per course; reuse mask-once per page        |
+
+Demote's cross-course citation scan (R5.2) is O(courses × sources × footnotes);
+the existing `_extract_wikilinks_with_anchors` mask-once path is reused to keep
+it linear. On a 5×100×20 fixture that is ≈10k regex ops — well under the 0.5 s
+budget given the per-op cost is sub-microsecond on modern hardware.
 
 ---
 
@@ -551,34 +981,72 @@ Stub-First decomposition — each step is independently revertable, gated by
 Each step ships its own tests; the pipeline never has a long-lived
 half-refactored state in `main`.
 
+**TASK 016 atomic-bead chain:**
+
+Each bead is independently revertable. Gated by: per-bead tests green +
+`validate_skill.py` exit 0 + `test_architecture.py` green. The chain is
+ordered (per A-M-1 resolution) to land the **invariant-enforcement net
+(016-04, lint extensions)** BEFORE any state-mutating bead (`promote --apply`
+in 016-06), per TASK §8 risk 6. The `_splice_frontmatter_fields` list-of-dicts
+extension (A-M-3) is its own bead (016-02), so 016-06 can assume the helper
+is shipped. The existing `test_architecture.py` already covers new `_*.py`
+helper modules via `rglob` (m-A-1) — no test code edits are required for
+016-01; the bead's verifies-gate is "test still green against the new module."
+
+| Step   | Title                                                    | Touches                                                                                                              | Verifies                                                                 |
+|--------|----------------------------------------------------------|----------------------------------------------------------------------------------------------------------------------|--------------------------------------------------------------------------|
+| 016-00 | Pre-flight: `find_vault_root` + `discover_courses`       | `_vault.py` (new functions, symlink-skipping `discover_courses`), `tests/test__vault.py` (extended: single-course, two-tier, nested, schema-mismatch, symlink, cross-fs) | `test__vault.py` green; `test_architecture.py` green; no behavioural change |
+| 016-01 | Extract `_page_merge.py` from `commands/upsert_page.py` | New `wiki_ingest/_page_merge.py` hosting `upsert_source_row` / `append_fact` / `append_contradiction` / `upsert_footnote`; `commands/upsert_page.py` becomes thin caller | `test__page_merge.py` (new); `test_upsert_page.py` still green; `test_architecture.py` still green against the new F2 module; byte-identity on v1 fixtures |
+| 016-02 | Extend `_splice_frontmatter_fields` for list-of-dicts (A-M-3) | `_frontmatter.py` gains list-of-dicts code path inside `_splice_frontmatter_fields`; public signature unchanged; `tests/test__frontmatter.py` extended | New `test__frontmatter.py` cases: write `promoted_from:` as `list[dict]`, remove same field, round-trip; existing tests still green |
+| 016-03 | Root-schema scaffold: `WIKI_SCHEMA.root.template.md` + `init --root` | New asset `assets/WIKI_SCHEMA.root.template.md`; `commands/init.py` extended with `--root` branch (`os.makedirs(..., exist_ok=True)` for `_concepts/` + `_entities/`; no sentinel files; idempotent) | `tests/commands/test_init.py` extended (`--root` happy path, idempotent, never overwrites, no sentinel files) |
+| 016-04 | `commands/lint.py` extensions (invariant net lands FIRST, A-M-1) | `commands/lint.py` (cross-course dup + `invariant_violation` + dangling-link cross-layer refinement + root-footnote-format warning, all sorted alphabetically by `name`); `tests/commands/test_lint.py` extended | New lint categories; `invariant_violation` non-zero exit; dangling-link cross-layer; sort discipline preserves byte-identity on fixtures |
+| 016-05 | `commands/promote.py` skeleton + dry-run path            | New `commands/promote.py` (skeleton); `wiki_ops.py` gains `promote` registration; new `tests/commands/test_promote.py` | `test_promote.py` dry-run cases: no-duplicate refusal, kind-mismatch, dry-run JSON output; `lint` invariant-net (016-04) catches any incidental write regression |
+| 016-06 | `promote --apply` write path + log append (first state-mutating bead, covered by 016-04 net) | `commands/promote.py` (write path; footnote rewrite uses `course_root.relative_to(vault_root)` per A-M-2); `tests/commands/test_promote.py` extended (happy 2-course, 3-course, re-promote, contradictions) | All `test_promote.py` cases; round-trip on `two_course_vault` fixture; post-apply `lint` reports no invariant violation |
+| 016-07 | `commands/demote.py` (full)                              | New `commands/demote.py`; `wiki_ops.py` gains `demote`; new `tests/commands/test_demote.py`; footnote rewrite back to short form | `test_demote.py`: happy path, cross-course citation refusal, footnote rewrite, fm restore, dry-run; post-demote `lint` clean |
+| 016-08 | `commands/reindex.py` extensions                         | `commands/reindex.py` (Shared-referenced sections + root-mode via schema-peek per M-4 + `--cascade`); `tests/commands/test_reindex.py` extended | `## Shared * referenced` output; root-mode rebuild; cascade; custom-section preservation |
+| 016-09 | `commands/upsert_page.py` root-aware lookup              | `commands/upsert_page.py` (calls `find_vault_root`, root-first lookup, vault-relative footnote per A-M-2); `tests/commands/test_upsert_page.py` extended | Root-layer lookup; vault-relative footnote on root page; v1 byte-identity on single-course fixture |
+| 016-10 | E2E round-trip + documentation + validators              | `tests/test_e2e_promotion.py` (new); `tests/fixtures/two_course_vault/` (new); `SKILL.md` updates; `references/cross_course_promotion.md` (new); `references/wiki_schema.md` extended; `.AGENTS.md` updated | `test_e2e_promotion.py` full round-trip; `validate_skill.py` exit 0; `skill-validator` SAFE; cross-skill `diff -q` silent |
+
 ---
 
 ## 12. Open Questions
 
-Inherited from TASK.md §5. The architect's recommendation:
+### TASK 015 open questions (resolved)
 
-1. **Package vs flat layout** — **package wins**. The `commands/` sub-package
-   is the deciding factor (a flat layout cannot represent commands without
-   either a long-prefix convention `cmd_scan.py` or a separate `commands/`
-   directory, in which case we're already a package). **Decided.**
+1. **Package vs flat layout** — **package wins**. **Decided.**
 2. **Global `--inbox-root`** — defer (out of scope; would change SKILL.md).
-3. **Fixture re-use** — reuse `evals/fixtures/` for R11; add tiny
-   targeted fixtures under `tests/fixtures/` only where the eval suite
-   lacks a deterministic enough surface.
-4. **Underscore prefixes** — keep `_*.py` for internal modules. `commands/`
-   submodules are NOT underscore-prefixed because they're the only external-
-   facing thing within the package (each is a CLI subcommand).
-5. **Command discovery** — hard-code in `wiki_ops.py` for v1. Each command
-   adds two lines to `wiki_ops.py` (one import, one `register` call) — that
-   beats the implicit-namespace-walk trade-off until the command count is
-   ≥15.
+3. **Fixture re-use** — reuse `evals/fixtures/` for R11; add tiny targeted
+   fixtures under `tests/fixtures/` only where needed.
+4. **Underscore prefixes** — keep `_*.py` for internal modules.
+5. **Command discovery** — hard-code in `wiki_ops.py` for v1.
+
+### TASK 016 open questions (locked defaults)
+
+The following questions from TASK.md §5 are closed by this architecture
+document. Defaults are locked; the Planner need not revisit them.
+
+| ID  | Question                                                 | Locked decision                                                                      |
+|-----|----------------------------------------------------------|--------------------------------------------------------------------------------------|
+| Q-1 | `init --root` vs `init-root` subcommand                  | `init <vault> --root` flag. One flag, smaller surface. (m-1 resolved)               |
+| Q-2 | `--dry-run` default for `promote`                        | Dry-run IS the default; `--apply` required to commit. (R4)                           |
+| Q-2b| `--dry-run` default for `demote`                         | Dry-run is NOT the default; `--dry-run` is an explicit opt-in flag.                  |
+| Q-3 | Promotion threshold configurable?                        | Hard-coded at 2; no schema field. Defer.                                              |
+| Q-4 | Root-level `log.md`                                      | NO. Out of scope (R13.2). Affected courses' logs carry the operation.                |
+| Q-5 | Auto-promotion opt-in flag                               | NO. Operator-only. (R13)                                                              |
+| Q-6 | `description:` merge policy                              | Pick the LONGER of the two values. Operator may edit afterwards.                     |
+| Q-7 | Bidirectional `[[Course A/Foo]]` normalisation           | LEAVE ALONE. Operator intent preserved.                                               |
+| Q-8 | Course discovery: convention vs hardcoded `Lessons/`     | `discover_courses` walks ALL descendants with `schema_version: 1.x` — not hardcoded. (M-3 + §2.3) |
+| Q-9 | Root-page footnote format check level                    | `warning` (non-fatal; consistent with other format checks).                          |
+| Q-10| Promote-time contradiction detection algorithm           | Literal-line-diff (cheap; matches v1 contradiction surfacing). No predicate-extraction. (m-3 resolution) |
 
 ---
 
 ## 13. Decision-Record Summary
 
+### TASK 015 decisions
+
 | Decision                                              | Why                                                        |
-|--------------------------------------------------------|-------------------------------------------------------------|
+|-------------------------------------------------------|-------------------------------------------------------------|
 | Layered monolith (F1 → F2 → F3, one-way)              | Matches existing call graph; no concurrency; pure stdlib    |
 | Package layout (`wiki_ingest/`)                        | Enables `commands/` namespacing; standard Python idiom      |
 | ≤200 LoC argparse shim                                 | Forces every command to live in its own module               |
@@ -589,3 +1057,21 @@ Inherited from TASK.md §5. The architect's recommendation:
 | `_*` prefix on internal modules                        | Signals "not a public API" to future maintainers            |
 | No new SKILL.md changes                                | Refactor is invisible to the agent's contract               |
 | References per-skill (`references/architecture.md`)    | Standard wiki-ingest doc location; not in repo root         |
+
+### TASK 016 decisions
+
+| Decision                                              | Why                                                                                  |
+|-------------------------------------------------------|--------------------------------------------------------------------------------------|
+| New `_page_merge.py` F2 module (M-2)                  | Only way to share additive-merge primitives between `upsert_page` and `promote` without violating the import-graph invariant (`test_architecture.py`) |
+| Split R1 into `find_vault_root` + `discover_courses` (M-3) | Two complementary callers with different inputs: course-path-in (ingest-time) vs vault-root-in (promote/demote/lint). Removes the Q-8 "Lessons/" hardcoding ambiguity. |
+| `init --root` flag, not `init-root` subcommand (Q-1)  | Smaller CLI surface; `init` already discovers existing files; one flag cheaper than a parallel subcommand |
+| `reindex` mode-detection via `schema_version` peek (M-4) | No new flag needed; the schema file already encodes the intent; consistent with R9's schema-version guards elsewhere |
+| `upsert-page` keeps positional `vault` arg; calls `find_vault_root` internally (M-1) | Preserves CLI byte-identity on single-course vaults; root-aware behaviour kicks in only when root schema is present |
+| Byte-identity caveat scoped to "no root schema present" (M-1) | R11 TASK 015 fixtures test single-course only; the two-tier fixture tests a different code path — no contradiction |
+| Dry-run default for `promote`, NOT for `demote` (Q-2 / Q-2b) | `promote` deletes files (destructive, hard to reverse in place); `demote` moves one file (easily re-promoted) |
+| `description:` merge picks longer value (Q-6)         | Preserves more context; operator always has final authority |
+| Contradiction detection = literal-line-diff (Q-10)    | Matches v1 contradiction logic; predicate-extraction is out of scope (R13.1 semantic-identity prohibition) |
+| No root-level `log.md` (Q-4 / R13.2)                  | Per-course logs are sufficient for v2; root audit log deferred |
+| `discover_courses` walks ALL descendants, not just `Lessons/` (Q-8) | Handles arbitrary vault layouts; operator's `trade-agents/Lessons/` convention is the default but not the only one |
+| Lint `invariant_violation` is a hard failure (non-zero exit) | The one-page-one-place invariant is load-bearing for Obsidian link resolution; silent violation is worse than aborting |
+| R3.7 re-promote folded into `promote` (not a new command) | Spec §3.3 explicitly recommends this; avoids a `merge-into-root` command with nearly identical logic |

@@ -131,3 +131,83 @@ Grep-friendly prefix `## [YYYY-MM-DD] ingest|query|lint` is non-negotiable.
 ```
 
 The agent can extend each row with extra metadata over time, but the first column (`[[slug]]`) is the dedupe key.
+
+---
+
+## Root schema (v2.0) — Two-tier vaults (TASK 016)
+
+When a vault holds **multiple parallel courses**, an OUTER
+`WIKI_SCHEMA.md` lives at the vault root and governs cross-course
+concerns. The OUTER schema has `schema_version: 2.0` and `kind:
+vault-root`. Each course keeps its own `WIKI_SCHEMA.md` with
+`schema_version: 1.x`.
+
+### Root frontmatter
+
+```yaml
+---
+name: WIKI_SCHEMA
+description: Vault-root schema for two-tier wiki-ingest.
+schema_version: "2.0"
+kind: vault-root
+---
+```
+
+`wiki-ingest` checks `schema_version` and `kind`; the rest is freeform.
+The bundled template
+[`assets/WIKI_SCHEMA.root.template.md`](../assets/WIKI_SCHEMA.root.template.md)
+is copied verbatim by `init <vault> --root`.
+
+### Root layout
+
+```
+<vault>/
+├── WIKI_SCHEMA.md            # v2.0 (this section)
+├── _concepts/                # shared concepts (lazy; populated by promote)
+├── _entities/                # shared entities (lazy)
+├── index.md                  # optional; created on first promote
+└── Lessons/                  # convention, NOT hardcoded
+    ├── <Course A>/           # v1.x schema, full v1 layout
+    └── <Course B>/           # same
+```
+
+NO `_sources/` and NO `log.md` at the root — sources live only in
+courses (R13.2), and per-course logs serve as the audit trail.
+
+### One-page-one-place invariant
+
+A canonical filename lives in **exactly one** of (a) some course's
+`_concepts/`/`_entities/`, or (b) the root's. `lint` detects violations
+and exits non-zero.
+
+### Footnote-convention difference
+
+Course-local pages use the v1 short form: `[^src-foo]: [[foo]] — Title`.
+
+Root pages use the **vault-relative** form so citations resolve from
+the shared layer regardless of which course owns the source:
+
+```markdown
+[^src-foo]: [[Lessons/Hermes/_sources/foo]] — Title
+```
+
+The vault-relative prefix is computed as
+`course_root.relative_to(vault_root)`; `Lessons/` is conventional, not
+hardcoded.
+
+### Course-`index.md` additions
+
+When a course's `_sources/` cite a root-promoted concept, `reindex`
+emits a `## Shared concepts referenced` / `## Shared entities
+referenced` section to that course's `index.md`:
+
+```markdown
+## Shared concepts referenced
+
+- [[Sharpe Score]] — (shared)
+```
+
+### Operator workflow (promote / demote / lint)
+
+See [`cross_course_promotion.md`](cross_course_promotion.md) for the
+full playbook.

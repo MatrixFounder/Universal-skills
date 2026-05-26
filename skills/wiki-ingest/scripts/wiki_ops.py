@@ -30,10 +30,12 @@ import sys
 from wiki_ingest.commands import (
     append_log,
     classify_folder,
+    demote,
     find,
     init,
     lint,
     log_event,
+    promote,
     register_summary,
     reindex,
     scan,
@@ -47,6 +49,7 @@ _COMMAND_MODULES = (
     append_log, register_summary, log_event,
     find, lint, reindex,
     classify_folder,
+    promote, demote,
 )
 
 

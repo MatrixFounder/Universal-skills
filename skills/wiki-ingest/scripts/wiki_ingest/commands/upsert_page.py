@@ -1,11 +1,12 @@
 """`upsert-page` subcommand — create or additively update a concept/entity page.
 
 Mid-complexity command: builds (or extends) one markdown page per call.
-Local helpers (`render_stub_page`, `upsert_source_row`, `append_fact`,
-`append_contradiction`, `upsert_footnote`, `page_path`) are intentionally
-kept inside this module — they have no other caller and don't belong in
-F2/F3-helper. The contract is additive: an existing page's definition,
-footnotes, and source rows are preserved across re-ingest.
+The four additive-merge primitives (`upsert_source_row`, `append_fact`,
+`append_contradiction`, `upsert_footnote`) live in F2 helper
+`wiki_ingest._page_merge` since TASK 016 bead 016-01 (so `promote.py`
+can reuse them without crossing the command-import boundary). The
+local helper `render_stub_page` stays here — it consumes the F3-helper
+`load_asset` and has no other caller.
 """
 from __future__ import annotations
 
@@ -15,11 +16,11 @@ import re
 from datetime import datetime
 from pathlib import Path
 
-from wiki_ingest._markdown import (
-    _existing_lines,
-    get_section_body,
-    insert_section_before,
-    replace_section_body,
+from wiki_ingest._page_merge import (
+    append_contradiction,
+    append_fact,
+    upsert_footnote,
+    upsert_source_row,
 )
 from wiki_ingest._safety import (
     _check_case_collision,
@@ -30,7 +31,7 @@ from wiki_ingest._safety import (
     read_text,
     write_text,
 )
-from wiki_ingest._vault import ensure_schema, load_asset
+from wiki_ingest._vault import ensure_schema, find_vault_root, load_asset
 
 CONCEPT_KIND, ENTITY_KIND = "concept", "entity"
 KIND_TO_SUBDIR = {CONCEPT_KIND: "_concepts", ENTITY_KIND: "_entities"}
@@ -61,81 +62,6 @@ def render_stub_page(kind: str, name: str, definition: str | None,
     }
     return re.sub(r"\{\{([A-Z_]+)\}\}",
                   lambda m: subs.get(m.group(1), m.group(0)), tpl)
-
-
-def upsert_source_row(content: str, source_slug: str, source_title: str,
-                      source_date: str) -> str:
-    row = f"- [[{source_slug}]] — {source_date} — {source_title}"
-    body = get_section_body(content, "Sources mentioning this")
-    if body is None:
-        # create the section before Footnotes (or end)
-        new_section = f"## Sources mentioning this\n\n{row}\n"
-        return insert_section_before(content, "Footnotes", new_section)
-    rows = _existing_lines(body)
-    # dedupe by slug
-    if any(f"[[{source_slug}]]" in r for r in rows):
-        return content
-    rows.append(row)
-    new_body = "\n".join(rows)
-    return replace_section_body(content, "Sources mentioning this", new_body)
-
-
-def append_fact(content: str, fact: str, source_slug: str) -> str:
-    line = f"- {fact.strip()} [^src-{source_slug}]"
-    body = get_section_body(content, "Facts")
-    if body is None:
-        new_section = f"## Facts\n\n{line}\n"
-        # insert before Contradictions (preferred) or Sources mentioning this or Footnotes
-        for anchor in ("Contradictions", "Sources mentioning this", "Footnotes"):
-            if get_section_body(content, anchor) is not None:
-                return insert_section_before(content, anchor, new_section)
-        return content.rstrip() + "\n\n" + new_section
-    rows = _existing_lines(body)
-    # idempotent: don't duplicate the exact same fact+source pairing
-    if line in rows:
-        return content
-    rows.append(line)
-    return replace_section_body(content, "Facts", "\n".join(rows))
-
-
-def append_contradiction(content: str, existing_claim: str, new_fact: str,
-                         source_slug: str) -> str:
-    block = (
-        "> ⚠️ **Contradiction flagged** — operator review needed.\n"
-        f"> - Existing claim: {existing_claim.strip()}\n"
-        f"> - New claim from [[{source_slug}]]: {new_fact.strip()} [^src-{source_slug}]\n"
-    )
-    body = get_section_body(content, "Contradictions")
-    if body is None:
-        new_section = f"## Contradictions\n\n{block}"
-        for anchor in ("Sources mentioning this", "Footnotes"):
-            if get_section_body(content, anchor) is not None:
-                return insert_section_before(content, anchor, new_section)
-        return content.rstrip() + "\n\n" + new_section
-    # idempotent: skip if the same (existing_claim, new_fact, source_slug) tuple
-    # is already present. Check by looking for the unique "New claim from" line.
-    new_claim_line = (f"> - New claim from [[{source_slug}]]: "
-                      f"{new_fact.strip()} [^src-{source_slug}]")
-    if new_claim_line in body:
-        return content
-    existing = body.strip("\n")
-    return replace_section_body(content, "Contradictions", existing + "\n\n" + block)
-
-
-def upsert_footnote(content: str, source_slug: str, source_title: str) -> str:
-    fn_line = f"[^src-{source_slug}]: [[{source_slug}]] — {source_title}"
-    # dedupe by full line OR by key
-    if fn_line in content:
-        return content
-    if re.search(rf"^\[\^src-{re.escape(source_slug)}\]: ", content, re.M):
-        return content
-    body = get_section_body(content, "Footnotes")
-    if body is None:
-        # append a Footnotes section at the very end
-        return content.rstrip() + "\n\n## Footnotes\n\n" + fn_line + "\n"
-    rows = _existing_lines(body)
-    rows.append(fn_line)
-    return replace_section_body(content, "Footnotes", "\n".join(rows))
 
 
 def register(sub: argparse._SubParsersAction) -> None:
@@ -176,21 +102,59 @@ def execute(args: argparse.Namespace) -> int:
     safe_fact = _safe_inline(args.fact, "fact") if args.fact else None
     safe_contradicts = _safe_inline(args.contradicts, "contradicts") if args.contradicts else None
 
+    # TASK 016 R8.1 — root-aware lookup: if `vault` is inside a two-tier
+    # vault, check the ROOT layer first. If a page with the canonical
+    # name exists at root, target it (vault-relative footnote). Else
+    # fall back to course-local (v1 behaviour). On single-course vaults
+    # (no root schema), `find_vault_root` returns vault_root=None and
+    # behaviour is byte-identical to v1.
+    course_root, vault_root = find_vault_root(vault)
+    target_is_shared = False
     target_dir = vault / KIND_TO_SUBDIR[args.kind]
-    collision = _check_case_collision(target_dir, safe_name)
-    if collision:
-        die(f"case-collision: '{safe_name}.md' would collide with existing "
-            f"'{collision}' on a case-insensitive filesystem; rename one or "
-            f"pass --force to override", code=4)
+    target: Path
 
-    target = target_dir / f"{safe_name}.md"
-    # final containment check after resolving symlinks etc. — use
-    # is_relative_to so a sibling like `_concepts_evil/` cannot match
-    # via string-prefix confusion (S-H1).
-    if not _is_relative_to(target, target_dir):
-        die(f"refusing to write outside {target_dir}: {target}")
+    if vault_root is not None:
+        # Look at root layer first
+        for sub in ("_concepts", "_entities"):
+            candidate = vault_root / sub / f"{safe_name}.md"
+            try:
+                if candidate.is_file() and not candidate.is_symlink():
+                    target = candidate
+                    target_dir = vault_root / sub
+                    target_is_shared = True
+                    break
+            except OSError:
+                continue
+
+    if not target_is_shared:
+        collision = _check_case_collision(target_dir, safe_name)
+        if collision:
+            die(f"case-collision: '{safe_name}.md' would collide with existing "
+                f"'{collision}' on a case-insensitive filesystem; rename one or "
+                f"pass --force to override", code=4)
+        target = target_dir / f"{safe_name}.md"
+        # final containment check after resolving symlinks etc. — use
+        # is_relative_to so a sibling like `_concepts_evil/` cannot match
+        # via string-prefix confusion (S-H1).
+        if not _is_relative_to(target, target_dir):
+            die(f"refusing to write outside {target_dir}: {target}")
 
     created = not target.exists()
+
+    # H1 fix: guard against the race window where target_is_shared=True
+    # was decided based on a directory listing, but the root page was
+    # deleted/renamed between the lookup and now (concurrent operator
+    # action, mid-promote crash recovery, etc.). The "create stub at
+    # root" path is forbidden: shared pages must only be created via
+    # `promote` (R8.5 honest-scope).
+    if target_is_shared and created:
+        die(
+            f"shared target expected at {target.relative_to(vault_root)} "
+            f"but is missing — re-run `promote --apply` to recreate it, "
+            f"or remove the operator-added reference. wiki-ingest never "
+            f"auto-creates shared pages (R8.5).",
+            code=2,
+        )
 
     # verify --contradicts text actually appears on the page (unless creating)
     contradiction_warning = None
@@ -204,6 +168,10 @@ def execute(args: argparse.Namespace) -> int:
             contradiction_warning = "contradicted text not found on page; recorded anyway via --force"
 
     if created:
+        # When creating a shared (root) page on first ingest of an
+        # already-existing slug, we don't take that path here — R8.5
+        # honest-scope: shared pages are only created via `promote`.
+        # So this branch is reachable only when target_is_shared is False.
         content = render_stub_page(
             kind=args.kind, name=safe_name, definition=safe_definition,
             source_slug=safe_slug, source_title=safe_title,
@@ -215,6 +183,15 @@ def execute(args: argparse.Namespace) -> int:
             content, safe_slug, safe_title, safe_date
         )
         content = upsert_footnote(content, safe_slug, safe_title)
+        # R8.2: when target is a SHARED root page, footnotes on it should
+        # use the vault-relative form `[[<course_rel>/_sources/<slug>]]`.
+        # Rewrite the just-added footnote definition to that form.
+        if target_is_shared and vault_root is not None:
+            course_rel = course_root.relative_to(vault_root)
+            new_target = f"{course_rel}/_sources/{safe_slug}"
+            content = _rewrite_one_footnote(
+                content, safe_slug, new_target, safe_title,
+            )
 
     if safe_fact:
         content = append_fact(content, safe_fact, safe_slug)
@@ -225,13 +202,39 @@ def execute(args: argparse.Namespace) -> int:
         content = append_contradiction(content, safe_contradicts, safe_fact, safe_slug)
 
     write_text(target, content, args.dry_run)
+    rel_target = str(target.relative_to(
+        vault_root if target_is_shared and vault_root is not None else vault))
     result = {
-        "page": str(target.relative_to(vault)),
+        "page": rel_target,
         "created": created,
         "added_fact": bool(args.fact),
         "contradiction_flagged": bool(args.contradicts),
+        "target_is_shared": target_is_shared,
     }
     if contradiction_warning:
         result["warning"] = contradiction_warning
     print(json.dumps(result, indent=2))
     return 0
+
+
+def _rewrite_one_footnote(content: str, slug: str, new_target: str,
+                          title: str) -> str:
+    """Replace `[^src-<slug>]: [[<anything>]] <sep> <title>` with the
+    vault-relative form. Regex anchored to line start with `re.M`
+    (T16-S3 — no second-definition smuggling).
+
+    Sec L-2 fix: pass a **function** to `pattern.sub` instead of a
+    template string so user-supplied `title` cannot inject `\\g<N>`
+    back-references and leak earlier capture groups.
+    H4 fix: separator class accepts em-dash, en-dash, ASCII hyphen,
+    unicode minus.
+    """
+    pattern = re.compile(
+        rf"^(\[\^src-{re.escape(slug)}\]:\s*\[\[)([^\]]+)(\]\]\s*[—–\-−]\s*)(.+)$",
+        re.M,
+    )
+
+    def _sub(m: re.Match) -> str:
+        return f"{m.group(1)}{new_target}{m.group(3)}{title}"
+
+    return pattern.sub(_sub, content)

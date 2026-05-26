@@ -56,6 +56,21 @@ The skill supports four modes. Most uses invoke `ingest` (the default); `query`,
   - Report open `## Contradictions` blocks pending operator resolution
   - Report concepts mentioned in N+ sources without a dedicated page
 - **`reindex`** — rebuild `index.md` from disk, recovering from drift; preserves the `## Notes` section
+- **`promote` / `demote`** (cross-course; vault-root mode) — lazy operator-triggered merging of same-named concept/entity pages across courses into the vault's shared `_concepts/`/`_entities/`. See **Phase P** below and [`references/cross_course_promotion.md`](references/cross_course_promotion.md) for the full operator playbook.
+
+## Two-Tier Vault Model (cross-course)
+
+When the operator's vault holds **multiple parallel courses** each
+with their own `WIKI_SCHEMA.md` (schema_version `1.x`), an OUTER
+`WIKI_SCHEMA.md` at the vault root (`schema_version: 2.0`, `kind: vault-root`)
+turns on the shared layer. `_concepts/` and `_entities/` at the vault
+root hold concepts/entities the operator has explicitly promoted out
+of individual courses. **Sources never live at root** (spec §2.5); the
+shared layer is **lazy** — populated only via `promote` (R8.5 / R13).
+
+**Invariant (load-bearing)**: a given canonical filename lives in
+**exactly one place** — either some course's `_concepts/`/`_entities/`
+OR the root's. `lint` detects violations and exits non-zero.
 
 ## 3. Execution Mode
 
@@ -76,6 +91,9 @@ The skill supports four modes. Most uses invoke `ingest` (the default); `query`,
   - `python3 scripts/wiki_ops.py lint <vault> [--threshold N]` → JSON health report (orphans, dangling links, open contradictions, missing concept pages)
   - `python3 scripts/wiki_ops.py reindex <vault>` → rebuild `index.md` from on-disk pages (preserves `## Notes`)
   - `python3 scripts/wiki_ops.py classify-folder <folder> [--group-by <regex>]` → Phase 0 of folder-ingest: detect grouping pattern + classify each file into primary/metadata/merge/link/derived-output; emit a plan JSON. Pure read-only; no vault required.
+  - `python3 scripts/wiki_ops.py init <vault> --root` → scaffold a vault-ROOT layer (`WIKI_SCHEMA.md` with `schema_version: 2.0`, `_concepts/`, `_entities/`). NO `_sources/` or `log.md` at the root. Idempotent; never overwrites. See [`references/cross_course_promotion.md`](references/cross_course_promotion.md).
+  - `python3 scripts/wiki_ops.py promote <Name> --vault <vault> [--kind concept|entity] [--apply]` → merge ≥2 course-local copies of the same concept/entity into a single root-level page. **Dry-run by default**; `--apply` commits. Unions frontmatter (earliest `created`, longer `description`, `promoted_from:` list), additive body merge, rewrites footnotes to vault-relative form, deletes course copies, updates course `index.md`s + root `index.md`, appends `log.md` entries. Detects literal-line-diff contradictions and surfaces them via `## Contradictions` blocks (operator resolves).
+  - `python3 scripts/wiki_ops.py demote <Name> --to <Course> --vault <vault> [--dry-run]` → move a root-level page back to a named course. Refuses if any course OTHER than `--to` cites the page via its `_sources/`. Rewrites footnotes to short form, strips `promoted_from:`, updates indexes + log. `--dry-run` NOT default (demote is reversible; cheap to undo).
 - **Inputs**: vault root path; for upserts, the source's slug/title/date and the concept name and either a definition (stub-creation) or a fact (additive update).
 - **Outputs**: stdout JSON for `scan`; mutated markdown files for the rest; non-zero exit on missing required args or invalid vault.
 - **Failure semantics**: exits 1 with stderr message on invalid args / missing vault; exits 2 if `WIKI_SCHEMA.md` is absent and `init` was not run first (prevents improvised conventions).
@@ -238,6 +256,37 @@ Use this when the operator says "lint the wiki", "what's missing", or after ~10 
    - Open contradictions → operator decides which claim wins; you can offer to apply the resolution via `Edit`
    - Missing concept pages → propose an ingest of the most-mentioned ones first
 4. **Log the event**: `python3 scripts/wiki_ops.py log-event <vault> --event lint --title "Lint pass" --detail "orphans=<n>" --detail "dangling=<n>" --detail "open_contradictions=<n>" --detail "missing_pages=<n>"`.
+
+### Phase P — Promote / Demote (cross-course; two-tier vault)
+
+Use this when the operator's vault has a `schema_version: 2.0` root
+schema (`init <vault> --root` to scaffold). The skill works with a
+two-tier vault: each course under `Lessons/<Course>/` keeps its own
+`_sources/_concepts/_entities/log.md/index.md`; the vault root holds
+`_concepts/` and `_entities/` for **shared** concepts/entities that
+≥2 courses cite.
+
+1. **When**: lint reports `cross_course_duplicate` AND the duplicate
+   pages describe the same concept (operator judgement — the skill
+   never auto-decides semantic identity).
+2. **Promote (dry-run first)**:
+   `python3 scripts/wiki_ops.py promote "<Name>" --vault <vault>`. Inspect
+   the `PromotionPlan` JSON. Re-run with `--apply` to commit.
+3. **What promote does**: reads all course-local copies, unions
+   frontmatter (earliest `created`, longer `description`, list-of-dicts
+   `promoted_from`), additive body merge with literal-line-diff
+   contradiction detection, vault-relative footnote rewrite, atomic
+   write of the root page, deletion of course-local copies, update of
+   each course's `index.md` + `log.md`, and the root `index.md`.
+4. **Demote (no dry-run by default; reversible via re-promote)**:
+   `python3 scripts/wiki_ops.py demote "<Name>" --to "<Course>"
+   --vault <vault>`. Refuses if a NON-target course's `_sources/`
+   cites the page.
+5. **Always bracket with lint**: `lint <vault>` before AND after every
+   promote/demote. Zero `invariant_violation` is required after.
+
+Detailed playbook + honest-scope items + edge cases:
+[`references/cross_course_promotion.md`](references/cross_course_promotion.md).
 
 ### Phase R — Reindex mode
 

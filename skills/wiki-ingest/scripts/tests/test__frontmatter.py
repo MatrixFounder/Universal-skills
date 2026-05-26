@@ -247,5 +247,117 @@ class TestParseFlowListQuoting(unittest.TestCase):
                          ["a", "b", "c"])
 
 
+# =============================================================================
+# TASK 016 bead 016-02 — _splice_frontmatter_fields list[dict] support
+# =============================================================================
+
+
+class TestSpliceListOfDicts(unittest.TestCase):
+    """TC-UNIT-016-02-01..07"""
+
+    def test_write_new_list_of_dicts(self):
+        """TC-UNIT-016-02-01"""
+        text = (
+            "---\n"
+            "name: Foo\n"
+            "promoted_from:\n"
+            "---\n"
+            "# body\n"
+        )
+        fm = {"promoted_from": [{"course": "A", "date": "2026-05-26"}]}
+        out = _splice_frontmatter_fields(text, ["promoted_from"], fm)
+        self.assertIn("promoted_from:", out)
+        self.assertIn("- course:", out)
+        # Round-trip parse — the on-disk YAML form may or may not quote
+        # plain-string scalars (quoting kicks in only for values with
+        # metacharacters); what matters is round-trip equivalence.
+        new_fm, _ = split_frontmatter(out)
+        self.assertEqual(new_fm["promoted_from"],
+                         [{"course": "A", "date": "2026-05-26"}])
+
+    def test_update_existing_list_of_dicts(self):
+        """TC-UNIT-016-02-02"""
+        text = (
+            "---\n"
+            "promoted_from:\n"
+            "  - course: A\n"
+            "    date: 2026-05-26\n"
+            "---\n"
+            "body\n"
+        )
+        fm = {"promoted_from": [
+            {"course": "A", "date": "2026-05-26"},
+            {"course": "B", "date": "2026-05-26"},
+        ]}
+        out = _splice_frontmatter_fields(text, ["promoted_from"], fm)
+        new_fm, _ = split_frontmatter(out)
+        self.assertEqual(len(new_fm["promoted_from"]), 2)
+        names = sorted(item["course"] for item in new_fm["promoted_from"])
+        self.assertEqual(names, ["A", "B"])
+
+    def test_remove_field_when_value_is_none(self):
+        """TC-UNIT-016-02-03"""
+        text = (
+            "---\n"
+            "name: Foo\n"
+            "promoted_from:\n"
+            "  - course: A\n"
+            "    date: 2026-05-26\n"
+            "kind: concept\n"
+            "---\n"
+            "body\n"
+        )
+        out = _splice_frontmatter_fields(text, ["promoted_from"],
+                                         {"promoted_from": None})
+        new_fm, _ = split_frontmatter(out)
+        self.assertNotIn("promoted_from", new_fm,
+                         "value=None must REMOVE the field entirely")
+        # Other fields preserved
+        self.assertEqual(new_fm.get("name"), "Foo")
+        self.assertEqual(new_fm.get("kind"), "concept")
+
+    def test_round_trip_parse_splice_parse(self):
+        """TC-UNIT-016-02-04"""
+        text = (
+            "---\n"
+            "promoted_from:\n"
+            "---\n"
+            "body\n"
+        )
+        fm = {"promoted_from": [
+            {"course": "Hermes", "date": "2026-01-01"},
+            {"course": "OpenClaw", "date": "2026-05-26"},
+        ]}
+        once = _splice_frontmatter_fields(text, ["promoted_from"], fm)
+        parsed_fm, _ = split_frontmatter(once)
+        # Splice the same data back in: should be byte-identical (idempotent)
+        twice = _splice_frontmatter_fields(once, ["promoted_from"], parsed_fm)
+        self.assertEqual(once, twice)
+
+    def test_course_name_with_spaces_round_trips(self):
+        """TC-UNIT-016-02-05 — course names containing spaces round-trip.
+
+        The parser handles unquoted multi-word values; explicit quoting is
+        not required. The contract is round-trip equivalence, not literal
+        quote form.
+        """
+        text = "---\npromoted_from:\n---\nbody\n"
+        fm = {"promoted_from": [{"course": "Course A", "date": "2026-05-26"}]}
+        out = _splice_frontmatter_fields(text, ["promoted_from"], fm)
+        new_fm, _ = split_frontmatter(out)
+        self.assertEqual(new_fm["promoted_from"][0]["course"], "Course A")
+        self.assertEqual(new_fm["promoted_from"][0]["date"], "2026-05-26")
+
+    def test_list_of_strings_path_unchanged(self):
+        """TC-UNIT-016-02-06 — regression: list[str] behaviour preserved."""
+        text = "---\nconcepts:\n  - old\n---\nbody\n"
+        fm = {"concepts": ["a", "b", "c"]}
+        out = _splice_frontmatter_fields(text, ["concepts"], fm)
+        new_fm, _ = split_frontmatter(out)
+        self.assertEqual(new_fm["concepts"], ["a", "b", "c"])
+        # No accidental dict-style emission for scalar list
+        self.assertNotIn("- a:", out)
+
+
 if __name__ == "__main__":
     unittest.main()

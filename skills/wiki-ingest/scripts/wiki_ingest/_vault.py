@@ -1,15 +1,12 @@
-"""F3-helper · Vault layout constants + walk + tail_log for wiki-ingest.
+"""F3-helper · Vault layout + two-tier discovery (TASK 015 + TASK 016).
 
-Single source of truth for the on-disk vault shape (Obsidian-style
-`_sources/`, `_concepts/`, `_entities/` system folders + `WIKI_SCHEMA.md`
-/ `index.md` / `log.md` at the root). Symlinks are refused at the walk
-boundary (OVERLAP-5). `tail_log` is code-fence aware (L-M6).
-
-Imports F1 (`_safety`) and F2 (`_frontmatter`, `_markdown`) per the
-layered DAG. Tested by `../tests/test__vault.py`.
+`_peek_schema_version` + `find_vault_root` + `discover_courses` are the
+TASK 016 additions; they skip symlinks (OVERLAP-5) and `find_vault_root`
+refuses cross-filesystem traversal. Tested by `../tests/test__vault.py`.
 """
 from __future__ import annotations
 
+import os
 import re
 from pathlib import Path
 
@@ -122,6 +119,125 @@ def load_asset(name: str) -> str:
     if not path.exists():
         die(f"missing bundled asset: {path}")
     return path.read_text(encoding="utf-8")
+
+
+_SCHEMA_PEEK_BYTES = 1024  # frontmatter rarely exceeds 200 bytes
+
+
+def _peek_schema_version(schema_path: Path) -> str | None:
+    """`schema_version` from a `WIKI_SCHEMA.md` frontmatter, or None on any failure."""
+    try:
+        with open(schema_path, "rb") as f:
+            head = f.read(_SCHEMA_PEEK_BYTES)
+    except OSError:
+        return None
+    try:
+        fm, _ = split_frontmatter(head.decode("utf-8", errors="replace"))
+    except (ValueError, UnicodeError, KeyError):
+        return None
+    sv = fm.get("schema_version") if isinstance(fm, dict) else None
+    return None if sv is None else str(sv).strip()
+
+
+def _walk_up_for_schema(ancestors: list[Path], start_idx: int,
+                        start_dev: int) -> int:
+    """Next ancestor with `WIKI_SCHEMA.md` from `start_idx`, or -1.
+
+    Stops at filesystem boundary or symlinked ancestor (both = unreachable).
+    """
+    for i in range(start_idx, len(ancestors)):
+        anc = ancestors[i]
+        try:
+            if os.stat(anc).st_dev != start_dev:
+                return -1
+        except OSError:
+            return -1
+        if _skip_symlink(anc):
+            return -1
+        if (anc / SCHEMA_FILE).is_file():
+            return i
+    return -1
+
+
+def find_vault_root(start: Path) -> tuple[Path, Path | None]:
+    """Walk UP from `start` to find `(course_root, vault_root_or_None)`.
+
+    First schema-bearing ancestor = course root. Outer schema declaring
+    `schema_version: 2.0` = vault root; anything else → `None` (single-
+    course mode, R1.2 / R9.3). Refuses symlinked / cross-fs ancestors.
+    `die(..., code=2)` if no schema found.
+
+    Symlink discipline: walks the **un-resolved** absolute path; if an
+    ancestor encountered BEFORE reaching the course root is a symlink,
+    aborts. System-level symlinks above the course root (e.g. macOS
+    `/var → /private/var`) are never inspected because the walk stops
+    at the first schema match.
+
+    Caller contract: `start` MUST be free of literal `..` segments.
+    `start.absolute()` does NOT normalise `..`, and the parent-walk
+    would produce nonsense paths. All in-tree callers pass either
+    `Path(args.vault).resolve()` or a path produced by `discover_courses`
+    (already resolved by `os.walk`), so this is the documented contract.
+    """
+    try:
+        start_abs = start.absolute()
+        start_dev = os.stat(start_abs).st_dev
+    except OSError:
+        die(f"vault not found from {start}", code=2)
+        return Path(), None  # unreachable; satisfies type checker
+    ancestors: list[Path] = []
+    cur = start_abs if start_abs.is_dir() else start_abs.parent
+    while True:
+        ancestors.append(cur)
+        if cur.parent == cur:
+            break
+        cur = cur.parent
+    course_idx = _walk_up_for_schema(ancestors, 0, start_dev)
+    if course_idx < 0:
+        die(f"vault not found from {start}", code=2)
+        return Path(), None  # unreachable
+    course_root = ancestors[course_idx]
+    outer_idx = _walk_up_for_schema(ancestors, course_idx + 1, start_dev)
+    vault_root: Path | None = None
+    if outer_idx >= 0:
+        outer = ancestors[outer_idx]
+        if _peek_schema_version(outer / SCHEMA_FILE) == "2.0":
+            vault_root = outer
+    return course_root, vault_root
+
+
+def discover_courses(vault_root: Path) -> list[Path]:
+    """Walk DOWN from `vault_root`, return descendant course roots (sorted).
+
+    Course root = any dir with `WIKI_SCHEMA.md` declaring `schema_version: 1.x`.
+    Vault root itself (`2.0`) excluded. Descends INTO matched dirs so nested
+    courses (e.g. `Lessons/2026/Spring/Hermes/`) are also captured (A-M-4).
+    `followlinks=False` + per-dir symlink filter enforce OVERLAP-5.
+    `die(..., code=2)` if `vault_root` is not a v2.0 root.
+    """
+    root_schema = vault_root / SCHEMA_FILE
+    if not root_schema.is_file():
+        die(f"not a vault root: {vault_root} (no {SCHEMA_FILE})", code=2)
+    if _peek_schema_version(root_schema) != "2.0":
+        die(f"not a vault root: {vault_root} (schema_version != 2.0)", code=2)
+    vault_root_resolved = vault_root.resolve()
+    result: list[Path] = []
+    for dirpath, dirnames, filenames in os.walk(vault_root, followlinks=False):
+        dirnames[:] = [d for d in dirnames
+                       if not _skip_symlink(Path(dirpath) / d)]
+        if SCHEMA_FILE not in filenames:
+            continue
+        cur = Path(dirpath)
+        try:
+            if cur.resolve() == vault_root_resolved:
+                continue
+        except OSError:
+            continue
+        sv = _peek_schema_version(cur / SCHEMA_FILE)
+        if sv is not None and sv.startswith("1."):
+            result.append(cur)
+    result.sort(key=lambda p: str(p))
+    return result
 
 
 _TAIL_LOG_RE = re.compile(r"^## \[\d{4}-\d{2}-\d{2}\][^\n]*$", re.M | re.A)
