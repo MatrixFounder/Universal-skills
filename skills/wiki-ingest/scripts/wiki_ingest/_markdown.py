@@ -11,6 +11,7 @@ Tested by `../tests/test__markdown.py`.
 """
 from __future__ import annotations
 
+import functools
 import re
 
 
@@ -89,6 +90,16 @@ def _ensure_masked(content: str, masked: str | None) -> str:
     return _mask_code_fences(content) if masked is None else masked
 
 
+@functools.lru_cache(maxsize=128)
+def _compile_section_header_re(header_text: str) -> "re.Pattern[str]":
+    """Compile + cache the per-header `^## <header>[ \\t]*$` regex (P-M3).
+
+    Previously rebuilt on every `find_section` / `find_all_sections` call;
+    now memoised so batch rewrites of K sections pay the compile cost once.
+    """
+    return re.compile(rf"^## {re.escape(header_text)}[ \t]*$", re.M)
+
+
 def find_section(content: str, header_text: str,
                  occurrence: int = 0,
                  masked: str | None = None) -> tuple[int, int, int] | None:
@@ -105,8 +116,7 @@ def find_section(content: str, header_text: str,
     call (OVERLAP-3 perf fix: O(K²·L) → O(K·L) on pages with many sections).
     """
     masked = _ensure_masked(content, masked)
-    matches = list(re.finditer(rf"^## {re.escape(header_text)}[ \t]*$",
-                               masked, re.M))
+    matches = list(_compile_section_header_re(header_text).finditer(masked))
     if occurrence < 0 or occurrence >= len(matches):
         return None
     h = matches[occurrence]
@@ -127,8 +137,7 @@ def find_all_sections(content: str, header_text: str,
     header matches, then computes body extent for each in one sweep.
     """
     masked = _ensure_masked(content, masked)
-    matches = list(re.finditer(rf"^## {re.escape(header_text)}[ \t]*$",
-                               masked, re.M))
+    matches = list(_compile_section_header_re(header_text).finditer(masked))
     out: list[tuple[int, int, int]] = []
     for h in matches:
         body_start = h.end()
@@ -158,13 +167,22 @@ def get_section_body(content: str, header_text: str,
     return content[body_start:body_end]
 
 
-def replace_section_body(content: str, header_text: str, new_body: str) -> str:
+def replace_section_body(content: str, header_text: str, new_body: str,
+                          masked: str | None = None) -> str:
     """Replace the body of an existing section. Preserves surrounding whitespace.
 
     Empty body case is special-cased to avoid emitting `\\n\\n\\n` (triple
     blank line) between an empty section and the next `## ` header.
+
+    Trailing newlines BEFORE the next `## ` header are preserved exactly —
+    only newlines AT the body's own end are normalised (L-H2 fix: prior
+    impl's blanket `.lstrip("\\n")` on content[body_end:] could collapse
+    mandated blank lines between sections).
+
+    `masked` is propagated to `find_section` (P-M3-015-02): batch rewrites
+    of K sections in one page now pay the mask cost ONCE instead of K times.
     """
-    loc = find_section(content, header_text)
+    loc = find_section(content, header_text, masked=masked)
     if loc is None:
         return content
     _, body_start, body_end = loc
@@ -175,7 +193,14 @@ def replace_section_body(content: str, header_text: str, new_body: str) -> str:
     else:
         # empty body: just one blank line between the header and what follows
         normalised = "\n"
-    return content[:body_start] + normalised + content[body_end:].lstrip("\n")
+    # L-H2: preserve any extra blank lines that the caller had BEFORE the
+    # next `## ` boundary by stripping at most one leading `\n` (which was
+    # consumed by the normalised trailing `\n\n`). The prior `.lstrip("\n")`
+    # devoured ALL leading newlines, collapsing intentional spacing.
+    tail = content[body_end:]
+    if tail.startswith("\n"):
+        tail = tail[1:]
+    return content[:body_start] + normalised + tail
 
 
 def insert_section_before(content: str, anchor_header_text: str,
@@ -220,33 +245,58 @@ def _is_placeholder_line(line: str) -> bool:
 def _existing_lines(body: str) -> list[str]:
     """Return existing non-placeholder, non-blank list items in a section body.
 
-    Multi-line list items (lines indented under a `- ` parent) are STITCHED
-    back into one entry preserving original indentation, so a markdown renderer
-    still folds the continuation. Pure indented continuations without a `-`
-    parent are kept verbatim (e.g. blockquote bodies).
+    Multi-line list items (lines indented under a `- ` or `* ` parent) are
+    STITCHED back into one entry preserving original indentation, so a
+    markdown renderer still folds the continuation. Pure indented
+    continuations without a `-` parent are kept verbatim.
+
+    **Blockquote handling** (L-L3 fix): a `> ` line is treated as a
+    continuation of the most recent list item if one is open, OR as a
+    standalone-block start if not. Previously `> ` was treated as a
+    top-level "list marker", which split contradiction blocks into
+    re-ordered fragments on upsert.
     """
     out: list[str] = []
     current: list[str] | None = None
+    in_blockquote = False
     for line in body.splitlines():
         stripped = line.strip()
         if not stripped:
-            # blank line: terminate any open multi-line item
+            # blank line: terminate any open multi-line item / blockquote
             if current is not None:
                 out.append("\n".join(current))
                 current = None
+            in_blockquote = False
             continue
         if _is_placeholder_line(line):
             if current is not None:
                 out.append("\n".join(current))
                 current = None
+            in_blockquote = False
             continue
         indent = len(line) - len(line.lstrip(" \t"))
-        is_list_marker = line.lstrip().startswith(("- ", "* ", "> "))
+        lstripped = line.lstrip()
+        is_blockquote = lstripped.startswith("> ") or lstripped == ">"
+        is_list_marker = lstripped.startswith(("- ", "* "))
+
+        # L-L3: contiguous `> ` lines stitch into one blockquote entry so
+        # Contradiction blocks (which use `> ` lines) survive upsert intact.
+        if is_blockquote:
+            if in_blockquote and current is not None:
+                current.append(line.rstrip())
+            else:
+                if current is not None:
+                    out.append("\n".join(current))
+                current = [line.rstrip()]
+                in_blockquote = True
+            continue
+
         if is_list_marker and indent == 0:
             # new top-level list item
             if current is not None:
                 out.append("\n".join(current))
             current = [line.rstrip()]
+            in_blockquote = False
         elif current is not None and indent > 0:
             # continuation line under the open item
             current.append(line.rstrip())
@@ -255,6 +305,7 @@ def _existing_lines(body: str) -> list[str]:
             if current is not None:
                 out.append("\n".join(current))
                 current = None
+            in_blockquote = False
             out.append(stripped)
     if current is not None:
         out.append("\n".join(current))

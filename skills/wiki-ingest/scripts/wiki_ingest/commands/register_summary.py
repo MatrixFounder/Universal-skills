@@ -70,7 +70,16 @@ def execute(args: argparse.Namespace) -> int:
     """Copy a pre-made summary file into _sources/ and return its metadata."""
     vault = Path(args.vault).resolve()
     ensure_schema(vault)
-    summary_path = Path(args.summary_path).resolve()
+    # S-M1b — check `is_symlink()` BEFORE `.resolve()` (resolve follows the
+    # link, after which `is_symlink()` is always False on the real target).
+    # We also evaluate the sensitive-path blocklist on BOTH the unresolved
+    # and resolved forms — an attacker-supplied symlink like
+    # `inbox/innocuous.md -> /etc/passwd` must fail-close on the target.
+    unresolved = Path(args.summary_path)
+    if unresolved.is_symlink():
+        die(f"summary path is a symlink ({unresolved} → "
+            f"{os.readlink(unresolved)}); refusing to follow", code=8)
+    summary_path = unresolved.resolve()
     if not summary_path.is_file():
         die(f"summary file not found: {summary_path}")
 
@@ -82,25 +91,24 @@ def execute(args: argparse.Namespace) -> int:
         "WIKI_INGEST_INBOX_ROOT")
     if inbox_root:
         inbox_path = Path(inbox_root).expanduser().resolve()
-        if not _is_relative_to(summary_path, inbox_path):
-            die(f"summary file {summary_path} is outside inbox root "
+        # Check the UNRESOLVED form too — a symlink-into-inbox pointing
+        # outside would otherwise slip past the containment.
+        if not _is_relative_to(summary_path, inbox_path) \
+                or not _is_relative_to(unresolved, inbox_path):
+            die(f"summary file {unresolved} is outside inbox root "
                 f"{inbox_path}; move it into the inbox or unset "
                 f"WIKI_INGEST_INBOX_ROOT", code=8)
 
     # Refuse common sensitive paths even when no inbox root is configured —
-    # belt-and-braces against an attacker-influenced argv.
-    sp_str = str(summary_path)
-    for forbidden in ("/.ssh/", "/.aws/", "/.gnupg/", "/etc/shadow",
-                      "/etc/passwd", "/.config/"):
-        if forbidden in sp_str:
-            die(f"refusing to read summary from sensitive path {summary_path}",
-                code=8)
-
-    # Refuse to follow a symlink (could point at /etc/, ~/.ssh/, etc.) and
-    # cap input size (defends against /dev/zero and 4 GB log files).
-    if summary_path.is_symlink():
-        die(f"summary path is a symlink ({summary_path} → "
-            f"{os.readlink(summary_path)}); refusing to follow", code=8)
+    # belt-and-braces against an attacker-influenced argv. Check both the
+    # unresolved form (what the operator typed) AND the resolved form
+    # (where the file actually lives).
+    for sp_str in (str(unresolved), str(summary_path)):
+        for forbidden in ("/.ssh/", "/.aws/", "/.gnupg/", "/etc/shadow",
+                          "/etc/passwd", "/.config/"):
+            if forbidden in sp_str:
+                die(f"refusing to read summary from sensitive path {sp_str}",
+                    code=8)
     try:
         st = summary_path.stat()
     except OSError as e:
@@ -230,12 +238,25 @@ def execute(args: argparse.Namespace) -> int:
             f"({target} → {os.readlink(target)})", code=7)
 
     action = "skipped"
+    backup_path: Path | None = None
     if already_in_place:
         action = "in-place (already at target)"
     elif target_exists and not args.force:
         die(f"_sources/{slug}.md already exists; pass --force to overwrite "
             f"(or use a different --slug)", code=3)
     else:
+        # L-L9: on --force overwrite, snapshot the prior content to a
+        # `<slug>.md.backup-<timestamp>` sibling BEFORE the write. The
+        # operator can then diff the two and restore if needed. Skip the
+        # backup on `--dry-run` (no write happens anyway).
+        if target_exists and not args.dry_run:
+            import time as _time
+            ts = _time.strftime("%Y%m%dT%H%M%S")
+            backup_path = target.parent / f"{target.stem}.md.backup-{ts}"
+            try:
+                backup_path.write_bytes(target.read_bytes())
+            except OSError:
+                backup_path = None  # best-effort; don't block the write
         # Use the atomic write helper so a crash mid-copy leaves the previous
         # target intact (or no target at all), not a truncated half-write.
         write_text(target, text, args.dry_run)
@@ -261,6 +282,8 @@ def execute(args: argparse.Namespace) -> int:
         "related": related,
         "warnings": warnings,
     }
+    if backup_path is not None and backup_path.exists():
+        result["backup_path"] = str(backup_path.relative_to(vault))
     # Strip control chars + cap scalar lengths before echoing into the agent
     # context (S-M6 — prompt-injection-via-frontmatter defense).
     print(json.dumps(_safe_for_json(result), indent=2, ensure_ascii=False))

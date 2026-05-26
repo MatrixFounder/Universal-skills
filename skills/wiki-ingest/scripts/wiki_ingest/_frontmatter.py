@@ -25,6 +25,13 @@ _FM_KEY_RE = re.compile(r"^([A-Za-z_][\w-]*)\s*:\s*(.*)$")
 
 
 def _strip_quotes(s: str) -> str:
+    """Strip matched surrounding quotes; pass through unbalanced or unquoted.
+
+    Mismatched quotes (e.g. `'foo"` — single-open, double-close) are NOT
+    stripped — returned as-is, preserving operator-visible asymmetry
+    instead of silently corrupting the value (S-L3 fix-closed semantics).
+    Only EXACTLY-matched pairs of `'` or `"` at both endpoints reduce.
+    """
     s = s.strip()
     if len(s) >= 2 and s[0] == s[-1] and s[0] in ('"', "'"):
         return s[1:-1]

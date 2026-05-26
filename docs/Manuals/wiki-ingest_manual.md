@@ -209,16 +209,19 @@ The script enforces multiple invariants you can rely on:
 ## `wiki_ops.py` Subcommand Reference
 
 ```
-scan          dump vault state as JSON (concepts, entities, sources, schema/index/log presence)
-init          scaffold WIKI_SCHEMA.md, index.md, log.md, _sources/_concepts/_entities/ (idempotent)
-register-summary  copy a pre-made summary into _sources/, auto-normalise unsafe names, return upsert targets
-upsert-page   create OR additively update a concept/entity page (deduplicated, footnoted)
-update-index  add rows under ## Sources / ## Concepts / ## Entities (deduplicated by slug)
-append-log    append an ingest entry (idempotent by date+event+slug; --force-log to override)
-log-event     append a generic event (query, lint, reindex); rejects multiline / log-header injection
-find          keyword search; returns ranked JSON hits with optional --kinds filter
-lint          health report (orphans, dangling, contradictions, missing concept pages)
-reindex       rebuild Sources/Concepts/Entities sections; preserve custom sections; merge duplicates with warning
+scan              dump vault state as JSON (concepts, entities, sources, schema/index/log presence)
+init              scaffold WIKI_SCHEMA.md, index.md, log.md, _sources/_concepts/_entities/ (idempotent)
+register-summary  copy a pre-made summary into _sources/, auto-normalise unsafe names, return upsert targets;
+                  --inbox-root + sensitive-path blocklist + symlink refusal; --force snapshots prior content
+upsert-page       create OR additively update a concept/entity page (deduplicated, footnoted)
+update-index      add rows under ## Sources / ## Concepts / ## Entities (deduplicated by slug)
+append-log        append an ingest entry (idempotent by date+event+slug; --force-log to override)
+log-event         append a generic event (query, lint, reindex); rejects multiline / log-header injection
+find              keyword search with merged-regex single-pass scoring; returns ranked JSON hits + --kinds filter
+lint              health report (orphans, dangling links w/ anchors, contradictions, missing concept pages)
+reindex           rebuild Sources/Concepts/Entities sections; preserve custom sections; merge duplicates with warning
+classify-folder   Phase 0 of folder-ingest — detect grouping pattern + role-classify files into
+                  primary/metadata/merge/link/derived-output; emit a plan JSON
 ```
 
 All mutating subcommands support `--dry-run`. Most return JSON to stdout.
@@ -271,7 +274,11 @@ You can use any of the three independently, but the composition is where the val
 wiki-ingest/
 ├── SKILL.md                            # 12-section spec (red flags, contract, instructions for 4 modes)
 ├── scripts/
-│   └── wiki_ops.py                     # 9 subcommands (pure stdlib, ~1350 lines)
+│   ├── wiki_ops.py                     # 69-LoC argparse shim — argparse + dispatch only
+│   ├── wiki_ingest/                    # internal package (5 helper modules + commands/)
+│   │   ├── _safety.py · _markdown.py · _frontmatter.py · _vault.py · _classify.py
+│   │   └── commands/                   # 11 subcommand modules (register + execute contract)
+│   └── tests/                          # 138 tests across 16 files
 ├── assets/                             # bundled templates (copied by `init` + `upsert-page`)
 │   ├── WIKI_SCHEMA.template.md         # default vault conventions
 │   ├── index.template.md               # empty index skeleton (3 reserved sections)

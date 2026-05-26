@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 from pathlib import Path
 
 from wiki_ingest._frontmatter import _strip_frontmatter_fast, split_frontmatter
@@ -41,6 +42,15 @@ def execute(args: argparse.Namespace) -> int:
     if kind_filter:
         kind_filter = {k.strip().lower() for k in kind_filter if k.strip()}
 
+    # P-M5: build ONE merged regex with named groups so we score all
+    # terms in a single O(L) sweep instead of N separate `.count()` passes.
+    # For ≤4 terms `str.count` is competitive; for 5+ the merged scan wins.
+    # (We always use the merged scan — overhead is minimal at N=1.)
+    # Group names are `t0`, `t1`, … so we don't have to sanitise term text.
+    merged_re = re.compile(
+        "|".join(f"(?P<t{i}>{re.escape(t)})" for i, t in enumerate(terms))
+    )
+
     hits = []
     need_fm = bool(kind_filter)
     for md in _walk_pages(vault):
@@ -65,12 +75,15 @@ def execute(args: argparse.Namespace) -> int:
             fm = None
             body = _strip_frontmatter_fast(text)
         body_hay = body.lower()
+        # Single-pass merged-regex scan: each match contributes +1 to the
+        # term identified by its winning named group.
+        per_term: dict[str, int] = {t: 0 for t in terms}
         score = 0
-        per_term = {}
-        for t in terms:
-            c = body_hay.count(t)
-            per_term[t] = c
-            score += c
+        for m in merged_re.finditer(body_hay):
+            # `lastgroup` is the name of the winning alternation branch
+            idx = int(m.lastgroup[1:])  # strip the "t" prefix
+            per_term[terms[idx]] += 1
+            score += 1
         if score == 0:
             continue
         if fm is None:

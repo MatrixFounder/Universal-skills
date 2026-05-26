@@ -112,6 +112,12 @@ class TestAtomicWriteUnderFailure(unittest.TestCase):
                 target.read_text(encoding="utf-8"), "old content",
                 "old content must be preserved after fsync failure",
             )
+            # M2-015-01 — the tmp file MUST be cleaned up, not orphaned.
+            orphans = list(Path(tmp).glob(".page.md.*.tmp"))
+            self.assertEqual(
+                orphans, [],
+                f"M2-015-01: orphan tmp files leaked on fsync failure: {orphans}",
+            )
 
 
 class TestReadTextRefusesSymlink(unittest.TestCase):

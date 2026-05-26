@@ -216,36 +216,34 @@ follow-up task is at user discretion.
 
 ---
 
-## wiki-ingest — deferred cosmetic findings (post VDD-multi 2026-05-25)
+## wiki-ingest — RESOLVED post-TASK-015 (2026-05-26)
 
-Twelve cosmetic / low-impact findings from the 2026-05-25 VDD-multi audit
-of [`skills/wiki-ingest/scripts/wiki_ops.py`](../skills/wiki-ingest/scripts/wiki_ops.py)
-were deferred after the Critical / High / important-Medium items were closed.
-These are tracked here so a follow-up task can pick them up without
-re-discovering them. Severity: **LOW** unless otherwise noted.
+> **All 15 wiki-ingest deferred findings have been resolved.** The 12
+> cosmetic items from the May-2026 VDD-multi audit + the 3 bugs surfaced
+> by Sarcasmotron during TASK 015 (M2-015-01, P-M3-015-02, S-M1b-015-09)
+> are fixed. Regression tests live in
+> [`skills/wiki-ingest/scripts/tests/test_known_issues_resolved.py`](../skills/wiki-ingest/scripts/tests/test_known_issues_resolved.py).
 
-- **L-H2** — Minor whitespace drift around `replace_section_body` (mitigated by L-C3 fix; the underlying `.lstrip("\n")` may still collapse trailing blank lines before code fences). Cosmetic.
-- **L-L2** — `cmd_log_event` emits double leading newline when log content is empty. Cosmetic.
-- **L-L3** — `_existing_lines` treats `> ` (blockquote) as a list-item, slightly re-ordering Contradictions blocks on upsert. Cosmetic.
-- **L-L8** — `_safe_name` rejects `^` (caret) but SKILL.md only documents `/`, `\`, `..`, leading `.`. Doc drift.
-- **L-L9** — `register-summary --force` overwrites with no backup / diff. Operator UX.
-- **S-L2** — `tail_log`'s `^## \[[^\n]+` matches Unicode-digit `[date]` strings; tighten with `re.A` or anchored ASCII.
-- **S-L3** — `_strip_quotes("'foo\"")` silently returns `foo"` (mismatched quotes); should fail closed.
-- **P-L1** — `_check_case_collision` uses `iterdir()`; `os.scandir()` is cheaper at 10k-file directories.
-- **P-L2** — `tail_log` reads the entire log (5 MB+ after a year of daily use) to surface 5 recent entries; seek-from-end would be O(64 KB).
-- **P-L5** — `_count_md_structure` reads each text candidate twice in `classify-folder`. Cache per invocation.
-- **P-M3** — Dynamic `^## {re.escape(header_text)}` regex is not memoised per-header. Compile cache keyed on header_text.
-- **P-M5** — `cmd_find` scans each term in a separate pass; Aho-Corasick / merged regex would fold all terms into one O(L) pass.
-- **M2-015-01** — `_atomic_write_text` leaks the temp file on `os.fsync` failure (original at `path` is preserved correctly; only the `.{name}.XXXX.tmp` orphan is left). Caught by Sarcasmotron during 015-01. Fix path: wrap fsync in try/except + `os.unlink(tmp_path)` on failure. Defer to a follow-up cosmetic task to avoid violating 015-01's surgical-move contract.
-- **P-M3-015-02** — `replace_section_body` calls `find_section(content, header_text)` without the `masked=` parameter (`_markdown.py:159-176`). On a batch rewrite of K sections in one page, the mask cost is paid K times redundantly — the same OVERLAP-3 pattern fixed for `cmd_lint` / `cmd_reindex` but still present on the mutation path. Pre-existing; surfaced by Sarcasmotron during 015-02 and deferred (signature-additive change incompatible with surgical-move). Fix path: add `masked: str | None = None` parameter, pass through to `find_section`.
-- **S-M1b-015-09** — `register-summary`'s symlink refusal is a no-op because `Path(args.summary_path).resolve()` (in `register_summary.py` line ~77) silently follows the symlink BEFORE the `is_symlink()` check at line ~100. Same applies to the `inbox_root` containment via `.resolve()`. The defence message is honest about intent but the actual implementation always sees a resolved real path. **Fix path**: keep an `unresolved = Path(args.summary_path)` reference and call `unresolved.is_symlink()` BEFORE the resolve, OR use `os.lstat()` for the symlink detection. Pre-existing bug carried into the May-2026 VDD-multi report's S-M1 fix; deferred during the 015-09 surgical-move bead. **Operator workaround**: rely on the `--inbox-root` containment + the hard-coded `/.ssh//.aws/` blocklist (both functional); avoid placing symlinks in the inbox.
+| ID            | Fix                                                                                                              |
+|---------------|------------------------------------------------------------------------------------------------------------------|
+| **L-H2**      | `replace_section_body` strips at most one leading `\n` (was: blanket `.lstrip("\n")`).                            |
+| **L-L2**      | Determined to be a non-bug — `content or load_asset(...)` fallback ensures content is never truly empty. Test locks "exactly-one-blank-line-between-entries" invariant. |
+| **L-L3**      | `_existing_lines` now stitches contiguous `> ` lines into one blockquote entry (Contradiction blocks no longer fragment). |
+| **L-L8**      | SKILL.md filesystem-safety paragraph now documents `[`, `]`, `|`, `^` rejection + NFKC normalisation + slug-equivalent collision detection. |
+| **L-L9**      | `register-summary --force` now snapshots prior content to `<slug>.md.backup-<UTC-timestamp>` before overwrite; backup path is surfaced in the JSON output. |
+| **S-L2**      | `tail_log` regex is ASCII-anchored (`\d{4}-\d{2}-\d{2}` with `re.A`); Unicode-digit decoy dates rejected.            |
+| **S-L3**      | `_strip_quotes` mismatched-pair behaviour locked in docstring (pass-through-unchanged, NOT silent corruption).      |
+| **P-L1**      | `_check_case_collision` uses `os.scandir()` (~3-5× cheaper at 10k+ files).                                          |
+| **P-L2**      | `tail_log` fast path: seek to last 64 KiB on logs >64 KiB; full-file read only on fallback.                         |
+| **P-L5**      | `_count_md_structure` decorated with `functools.lru_cache(512)` — `_pick_primary` + `classify-folder` no longer double-read the same candidates. |
+| **P-M3**      | `_compile_section_header_re(header_text)` LRU-cached at module level (was: rebuilt per `find_section` call).        |
+| **P-M5**      | `cmd_find` uses ONE merged-regex pass (`(?P<t0>...)|(?P<t1>...)`) instead of N `.count()` passes.                    |
+| **M2-015-01** | `_atomic_write_text` unlinks the tmp file on `os.write` / `os.fsync` failure (no orphan `.tmp` litter on crash).     |
+| **P-M3-015-02** | `replace_section_body` accepts `masked=` and propagates to `find_section` (batch K-section rewrites pay mask cost once). |
+| **S-M1b-015-09** | `register-summary` checks `is_symlink()` on the UNRESOLVED path BEFORE `.resolve()` (defence no longer no-op). Sensitive-path blocklist + inbox containment now check both unresolved AND resolved forms. |
 
-**Workaround:** none required — these are quality-of-life items, not bugs.
-A maintainer touching the relevant code path is encouraged to fix the local
-item; otherwise expect them to be batched into a future cosmetic-cleanup
-task once [TASK 015 — wiki-ingest modular refactor](TASK.md) lands (the
-refactor will re-locate them to their respective new modules, where they
-may be cheaper to fix in isolation).
+The regression-test file enforces all 15 fixes; restoring a regression
+requires deleting both the fix AND the test.
 
 ---
 

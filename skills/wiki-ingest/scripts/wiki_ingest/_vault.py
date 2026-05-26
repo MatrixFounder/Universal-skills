@@ -124,20 +124,63 @@ def load_asset(name: str) -> str:
     return path.read_text(encoding="utf-8")
 
 
+_TAIL_LOG_RE = re.compile(r"^## \[\d{4}-\d{2}-\d{2}\][^\n]*$", re.M | re.A)
+
+# Read this much from the END of log.md to find recent entries. 64 KiB is
+# generous: even an obnoxiously long event entry with hundreds of detail
+# lines won't exceed ~4 KiB. 5 entries × 4 KiB = 20 KiB; pad to 64 for
+# safety. The full-file fallback below kicks in if the regex finds <n
+# entries in the tail window (P-L2).
+_TAIL_LOG_WINDOW_BYTES = 64 * 1024
+
+
 def tail_log(vault: Path, n: int) -> list[str]:
     """Return the last `n` `## [YYYY-MM-DD] …` heading lines from `log.md`.
 
     Code-fence aware: a `## [date]` heading inside a fenced example
     block is NOT surfaced as a real log entry (L-M6). The `[^\\n]`
-    upper-bound on the line tail keeps the regex linear.
+    upper-bound on the line tail keeps the regex linear. ASCII-anchored
+    `\\d{4}-\\d{2}-\\d{2}` rejects Unicode-digit `[date]` strings that
+    would otherwise pass the bare `\\[` literal (S-L2).
+
+    **P-L2 fast path**: for files larger than `_TAIL_LOG_WINDOW_BYTES`,
+    seek to the last 64 KiB and search there first. If we find ≥ n entries
+    in the tail window, return them without ever reading the full file
+    (5 MB log → 64 KiB read instead of full 5 MB). Falls back to full-file
+    read for short logs or when the window doesn't contain enough entries.
     """
     log = vault / LOG_FILE
     if not log.exists():
         return []
+
+    # Fast path: seek to last 64 KiB on large logs.
+    try:
+        size = log.stat().st_size
+    except OSError:
+        size = 0
+    if size > _TAIL_LOG_WINDOW_BYTES:
+        try:
+            with log.open("rb") as f:
+                f.seek(-_TAIL_LOG_WINDOW_BYTES, 2)
+                tail_bytes = f.read()
+            # Truncate up to the first `\n` so we don't start mid-line and
+            # accidentally splice a half-heading.
+            nl_idx = tail_bytes.find(b"\n")
+            if nl_idx >= 0:
+                tail_bytes = tail_bytes[nl_idx + 1:]
+            tail_text = tail_bytes.decode("utf-8", errors="replace")
+            masked = _mask_code_fences(tail_text)
+            matches = list(_TAIL_LOG_RE.finditer(masked))
+            if len(matches) >= n:
+                return [tail_text[m.start():m.end()] for m in matches][-n:]
+            # else: window didn't have enough entries → fall through to full read
+        except OSError:
+            pass
+
     raw = read_text(log)
     masked = _mask_code_fences(raw)
     entries: list[str] = []
-    for m in re.finditer(r"^## \[[^\n]+$", masked, flags=re.M):
+    for m in _TAIL_LOG_RE.finditer(masked):
         # use the ORIGINAL content's slice (offsets are preserved by masking)
         entries.append(raw[m.start():m.end()])
     return entries[-n:]

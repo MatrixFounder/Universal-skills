@@ -1,24 +1,31 @@
 # ARCHITECTURE: TASK 015 — wiki-ingest modular refactor
 
-> **Living document.** Replaces the prior task-014 / pdf-7 architecture
-> snapshot (archived under git history). This document is the source of
-> truth for the wiki-ingest **internal layout** going forward.
+> **Status (2026-05-26): MERGED.** All 13 atomic beads (015-00..015-12)
+> shipped; 15 deferred KNOWN_ISSUES items resolved in the follow-up pass.
+> See [`docs/tasks/task-015-wiki-ingest-modular-refactor.md`](tasks/task-015-wiki-ingest-modular-refactor.md)
+> for the archived TASK and [`docs/plans/plan-015-wiki-ingest-modular-refactor.md`](plans/plan-015-wiki-ingest-modular-refactor.md)
+> for the archived PLAN. This document remains the source of truth for
+> the wiki-ingest **internal layout** going forward; future maintainers
+> editing the skill should keep it in sync with the code.
 
 ---
 
 ## 1. Task Description
 
-See [`docs/TASK.md`](TASK.md) for the full TASK 015 specification.
+See archived [`docs/tasks/task-015-wiki-ingest-modular-refactor.md`](tasks/task-015-wiki-ingest-modular-refactor.md)
+for the full TASK 015 specification.
 
-**One-liner**: split [`skills/wiki-ingest/scripts/wiki_ops.py`](../skills/wiki-ingest/scripts/wiki_ops.py)
-(currently 2661 LoC) into a `wiki_ingest/` Python package alongside it, with
-strict module boundaries and a ≤200-LoC argparse shim. **No behavioural change
-to the CLI.** Each subcommand becomes its own module; cross-cutting helpers
-form five domain modules with a documented one-way dependency graph.
+**One-liner (delivered)**: split `skills/wiki-ingest/scripts/wiki_ops.py`
+(was 2661 LoC, **now 69 LoC**) into a `wiki_ingest/` Python package
+alongside it, with strict module boundaries and a ≤200-LoC argparse shim.
+**Zero behavioural change to the CLI** (locked by R11 byte-identity gate).
+Each subcommand became its own module; cross-cutting helpers form five
+domain modules with a documented one-way dependency graph.
 
-**Why now**: three VDD passes have grown the file faster than its structure
-absorbed; future critic loops, unit tests, and feature additions are all
-gated on per-module ergonomics.
+**Why we did it**: three VDD passes had grown the file faster than its
+structure absorbed; per-module unit tests, future critic loops, and
+feature additions are now well-isolated. **Outcome**: 138 tests across
+16 files, both validators green, R9 cross-skill matrix silent.
 
 ---
 

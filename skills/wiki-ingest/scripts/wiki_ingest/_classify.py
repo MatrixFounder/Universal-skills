@@ -11,6 +11,7 @@ Pure stdlib — no F1/F2 imports needed. Tested by
 """
 from __future__ import annotations
 
+import functools
 import math
 import re
 from pathlib import Path
@@ -57,6 +58,7 @@ def _is_text_readable(ext: str) -> bool:
     return ext.lower() in _TEXT_EXTS
 
 
+@functools.lru_cache(maxsize=512)
 def _count_md_structure(path: Path) -> tuple[int, int, int, bool]:
     """Return (size_bytes, h2_count, fence_count, is_prose).
 
@@ -64,6 +66,12 @@ def _count_md_structure(path: Path) -> tuple[int, int, int, bool]:
     Rejects binary masquerade (L-M8): a file with significant UTF-8 decode
     errors or NUL bytes in the first 8 KiB is treated as non-prose so it
     can't win `_pick_primary` over a real markdown file.
+
+    **P-L5 cache**: `lru_cache(512)` memoises results per-Path within a
+    single CLI invocation. `_pick_primary` and `cmd_classify_folder` both
+    call this on the same paths; previously the file was read twice. Cache
+    lives for the process lifetime (CLI exits after one command, so no
+    staleness risk).
     """
     try:
         size = path.stat().st_size

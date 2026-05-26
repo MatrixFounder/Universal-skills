@@ -82,13 +82,7 @@ class TestSecurityDefences(unittest.TestCase):
                 rs_cmd.execute(args)
             self.assertEqual(cm.exception.code, 8)
 
-    @unittest.skip(
-        "S-M1b-015-09 — `Path(...).resolve()` follows the symlink before the "
-        "`is_symlink()` check, so the symlink-refusal defence is a no-op. "
-        "Pre-existing bug logged to docs/KNOWN_ISSUES.md; fix deferred to a "
-        "follow-up bead (surgical-move discipline)."
-    )
-    def test_symlink_refusal_KNOWN_FAILING(self):
+    def test_symlink_refusal(self):
         with tempfile.TemporaryDirectory() as tmp:
             vault = Path(tmp) / "v"
             vault.mkdir()
