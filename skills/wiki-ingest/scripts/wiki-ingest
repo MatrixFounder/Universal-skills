@@ -1,0 +1,20 @@
+#!/bin/sh
+# wiki-ingest — thin wrapper that exec's wiki_ops.py with the same args.
+#
+# Cross-shell, symlink-safe (TASK 017 R1.1, R1.4 / T17-S8). GNU + BusyBox
+# `readlink -f` is the fast path; stock macOS BSD `readlink` lacks -f, so
+# we fall back to python3 os.path.realpath. `"$@"` stays quoted —
+# no IFS / glob attack surface.
+#
+# Install: ln -s "$PWD/wiki-ingest" ~/.local/bin/wiki-ingest
+
+set -eu
+
+if SELF=$(readlink -f -- "$0" 2>/dev/null); then
+    :
+else
+    SELF=$(python3 -c 'import os, sys; print(os.path.realpath(sys.argv[1]))' -- "$0")
+fi
+
+DIR=$(dirname -- "$SELF")
+exec python3 "$DIR/wiki_ops.py" "$@"

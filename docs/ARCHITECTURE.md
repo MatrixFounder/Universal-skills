@@ -1,6 +1,6 @@
-# ARCHITECTURE: wiki-ingest modular refactor + two-tier vault
+# ARCHITECTURE: wiki-ingest modular refactor + two-tier vault + v1.1 contract
 
-> **Status (2026-05-26): TASK 015 MERGED · TASK 016 IN DESIGN.**
+> **Status (2026-05-27): TASK 015 MERGED · TASK 016 MERGED · TASK 017 IN DESIGN.**
 >
 > TASK 015: All 13 atomic beads (015-00..015-12) shipped; 15 deferred
 > KNOWN_ISSUES items resolved in the follow-up pass. See
@@ -16,6 +16,19 @@
 > `upsert_page`, `register_summary`). Single-course vaults with no root
 > `WIKI_SCHEMA.md` continue to behave byte-identically to v1 (backwards
 > compatibility load-bearing).
+>
+> **TASK 017 delta**: aligns the skill with the external
+> [`obsidian-llm-wiki/docs/WIKI-INGEST-V1.1-CONTRACT.md`](../../obsidian-llm-wiki/docs/WIKI-INGEST-V1.1-CONTRACT.md)
+> consumed by the index-layer `/wiki-enrich` bridge. Surface adds: a `wiki-ingest`
+> shell wrapper on `PATH`, top-level `--version` flag (`__version__ = "1.1.0"`),
+> a new `commands/ingest.py` orchestrator that composes the existing atomic
+> ops (`register-summary` → `upsert-page` → `update-index` → `append-log` →
+> `log-event`) and emits a stable JSON manifest on stdout, opt-in `vault_id`
+> validation in `_vault.py`, an extended exit-code matrix (0..9), and a new
+> internal F2/F3-boundary helper `_dispatch.py` (Open Q-2 resolved in this
+> architecture, see §3.2). NO change to existing atomic-op CLIs; v1.0 callers
+> see byte-identical behaviour when they do not pass `--vault-id` and do not
+> invoke the `ingest` subcommand.
 >
 > This document is the source of truth for the wiki-ingest internal layout.
 > Future maintainers editing the skill must keep it in sync with the code.
@@ -362,6 +375,115 @@ before any reads (R9.1 / R9.2).
 
 ---
 
+## 2.4. v1.1 Contract Integration (TASK 017)
+
+The skill is consumed by an external **index layer** — the `obsidian-llm-wiki`
+project, which indexes the markdown output into a per-vault SQLite + FTS5
+cache via the `/wiki-enrich` bridge. This integration is realised through a
+subprocess boundary; the file layer (this skill) owns synthesis, the index
+layer owns reflection. The contract that pins the boundary is
+[`obsidian-llm-wiki/docs/WIKI-INGEST-V1.1-CONTRACT.md`](../../obsidian-llm-wiki/docs/WIKI-INGEST-V1.1-CONTRACT.md);
+the v1.1 surface is mirrored verbatim in
+`skills/wiki-ingest/references/manifest_schema.md` (R12.3) so the skill stays
+self-describing if the external contract moves.
+
+### Subprocess data-flow
+
+```mermaid
+graph LR
+    OP[operator] -->|/wiki-enrich| BR[wiki-enrich bridge<br/>obsidian-llm-wiki]
+    BR -->|"subprocess: wiki-ingest --version"| W[wiki-ingest 1.1.0]
+    BR -->|"subprocess: wiki-ingest ingest<br/>--source / --vault / --output-format json<br/>+stdin: known-concepts JSON"| ING[commands/ingest.py orchestrator]
+    ING -->|register-summary| REG[commands/register_summary.py]
+    ING -->|upsert-page× N| UP[commands/upsert_page.py]
+    ING -->|update-index× layers| IDX[commands/update_index.py]
+    ING -->|append-log| AL[commands/append_log.py]
+    ING -->|log-event| LE[commands/log_event.py]
+    ING -->|"stdout: JSON manifest"| BR
+    BR -->|SQLite indexing| DB[(wiki-index.db)]
+```
+
+The orchestrator is **composition over the atomic ops**, NOT reimplementation
+(R5). Each step calls the atomic op's `execute(args)` via the new
+`_dispatch.py` helper (see §3.2) — preserving the §3.2 import-graph invariant
+(no command imports another command).
+
+### Atomicity strategy — per-step rollback (Q-1 RESOLVED option (a))
+
+Mid-pipeline failures DO NOT roll back what already succeeded. The manifest
+carries `written_so_far[]` + `phase:"<phase>"` + exit 20, and the caller
+(`/wiki-enrich`) gates its DB-side reflection on `exit 20 + non-empty
+written_so_far[]` → refuse to half-index, surface to operator. This was
+selected over stage-to-tempdir → rename-on-success because vault writes touch
+multiple directories (`_sources/`, `_concepts/`, `_entities/`, `index.md`,
+`log.md`) that may live on separate filesystems (network mounts, encrypted
+overlays), and `os.rename` cannot cross device boundaries.
+
+### `vault_id` semantics — emit, don't enforce
+
+`_vault.py` READS `vault_id` from the root `WIKI_SCHEMA.md` frontmatter when
+present and EMITS it in the manifest. Absence is NOT an error in this skill —
+enforcement lives in the index layer (its `wiki-init` requires the field).
+Standalone wiki-ingest users see no breaking change. Validation triggers
+only when:
+
+| Condition                                                          | Exit code | Envelope `code`           |
+|--------------------------------------------------------------------|-----------|---------------------------|
+| Caller passes `--vault-id` AND frontmatter has none                | 23        | `MISSING_VAULT_ID`        |
+| Caller passes `--vault-id` AND frontmatter has a DIFFERENT slug    | 25        | `VAULT_ID_FLAG_MISMATCH`  |
+| Frontmatter `vault_id` violates pattern (any caller, w/o the flag) | 24        | `INVALID_VAULT_ID`        |
+
+Pattern (locked): `^[a-z][a-z0-9-]{1,30}[a-z0-9]$` (3..32 chars, lowercase
+kebab-case, no `--`).
+
+### Exit-code matrix (extended)
+
+Authoritative audit + per-code call-site list lives at
+[`skills/wiki-ingest/references/exit_codes.md`](../skills/wiki-ingest/references/exit_codes.md).
+TASK 017's initial draft proposed 3..9 for v1.1-NEW codes, but a 2026-05-27
+audit found codes 3..8 already shipped with different meanings in TASK
+015/016 (`commands/register_summary.py`, `commands/upsert_page.py`,
+`_safety.py`). The v1.1 codes were renumbered to the dedicated **20..26**
+band; shipped 3..8 are left untouched.
+
+| Code | Meaning                          | Carries manifest? | New in v1.1 |
+|------|----------------------------------|-------------------|-------------|
+| 0    | Success                          | Yes (full)        | —           |
+| 1    | Generic error (TASK 015/016)     | No                | —           |
+| 2    | Argparse / usage error           | No                | —           |
+| 3..8 | Shipped TASK 015/016 codes — see `references/exit_codes.md` §2 | No | — |
+| 20   | Partial success                  | Yes (`written_so_far[]` + `phase`) | TASK 017 |
+| 21   | Downstream subprocess failure (`summarizing-meetings`, etc.) | Optional (`phase`) | TASK 017 |
+| 22   | LLM API unavailable / auth failed| Optional (`phase`) | TASK 017 |
+| 23   | `MISSING_VAULT_ID`               | No (error envelope only)         | TASK 017 |
+| 24   | `INVALID_VAULT_ID`               | No                | TASK 017 |
+| 25   | `VAULT_ID_FLAG_MISMATCH`         | No                | TASK 017 |
+| 26   | `TIMEOUT` (split from 21)        | Optional (`phase:"timeout"`)     | TASK 017 |
+
+The split between 21 and 26 lets the bridge route on recoverable timeouts
+without conflating them with genuine downstream failures. Codes 10..19 are
+reserved for future per-command extensions; 27..29 reserved for additive
+v1.1.x extensions (renames/removals would require bumping CONTRACT §7).
+
+### Subprocess-friendly behaviour
+
+- `os.isatty(1)` — when stdout is piped, suppress decorative output; emit
+  JSON to stdout and unstructured logs to stderr (CONTRACT §8).
+- `--quiet` flag forces quiet regardless of TTY.
+- `--timeout-seconds <N>` (default 600) bounds total ingest; overrun → kill
+  internal subprocess cleanly, exit 26 + partial manifest with
+  `phase:"timeout"`.
+- `--source-hash <hex>` — external idempotency override; when the recorded
+  footer hash in `_sources/<slug>.md` matches the supplied value, skip the
+  LLM call entirely (UC-4 short-circuit). Trust model: the caller supplies a
+  hex digest of bytes it already has; the skill performs NO additional
+  validation — supplying a wrong hash silently re-uses a stale record but
+  cannot escape the vault sandbox (containment defenses §7 still apply).
+- `--config <path>` — YAML override for the `wiki:` block subset; precedence
+  `CLI > config > defaults`. Unknown keys → warning (forward-compat).
+
+---
+
 ## 3. System Architecture
 
 ### 3.1. Architectural Style
@@ -491,40 +613,90 @@ TASK 016 preserves this invariant: `_page_merge.py` is an F2 module (no
 commands import), and `promote.py`/`demote.py` import only F1/F2/F3-helper
 modules — never another command.
 
+**TASK 017 module additions and extensions:**
+
+| Module                                  | Type      | Responsibility                                                                                                                                                            | LoC budget | Imports from                          |
+|-----------------------------------------|-----------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------|------------|---------------------------------------|
+| `scripts/wiki-ingest` (no `.sh`)        | wrapper   | POSIX shell wrapper: `exec python3 "$(dirname "$(readlink -f "$0")")/wiki_ops.py" "$@"`. Cross-shell, symlink-safe (R1.1, R1.4). Installed via `~/.local/bin/wiki-ingest` symlink (R1.2). | ≤30 LoC    | shell only                            |
+| `wiki_ingest/__init__.py` (extended)    | package   | Gains `__version__ = "1.1.0"` (R2.1). Single source of truth for the version constant; `wiki_ops.py --version` reads it; tests assert minimum `>=1.1`. | ≤30        | —                                     |
+| `wiki_ingest/_safety.py` (extended)     | F1        | New `EXIT_*` constants — see `references/exit_codes.md` for the audit + per-code call-site list. Shipped: `EXIT_OK=0`, `EXIT_GENERIC=1`, `EXIT_USAGE=2`. v1.1 contract band (TASK 017 NEW, renumbered from 3..9 after the 2026-05-27 collision audit): `EXIT_PARTIAL=20`, `EXIT_SUBPROCESS=21`, `EXIT_LLM=22`, `EXIT_MISSING_VAULT_ID=23`, `EXIT_INVALID_VAULT_ID=24`, `EXIT_VAULT_ID_MISMATCH=25`, `EXIT_TIMEOUT=26`. `die(msg, code=…)` accepts them. No behavioural change to existing 3..8 magic-number call sites. | ≤350       | stdlib                                |
+| `wiki_ingest/_vault.py` (extended ×2)   | F3 helper | New: `read_vault_id(vault_root) → str \| None` (frontmatter peek; emits raw value without enforcement); `validate_vault_id_pattern(slug) → None \| raises die(code=7)`; `_VAULT_ID_RE = re.compile(r"^[a-z][a-z0-9-]{1,30}[a-z0-9]$")` (NO `--` substring). `find_vault_root` signature unchanged — the existing tuple `(course_root, vault_root)` return stays; callers query `read_vault_id` separately. LoC budget extended to ≤300. | ≤300       | `_safety`, `_frontmatter`             |
+| `wiki_ingest/_dispatch.py` (NEW)        | F3 helper | **Resolves Open Q-2** (architect's call, locked here). Single function: `dispatch(cmd_name: str, args: argparse.Namespace) → int` that imports the target `wiki_ingest.commands.<cmd>` module at call-time and invokes its `execute(args)`. Lets `commands/ingest.py` call other atomic commands without violating the "no command imports another command" invariant. The import is local (inside the function body) — `_dispatch.py` itself has no top-level command imports, so `test_architecture.py` is unaffected. Imports only `importlib` + stdlib + `_safety` for error envelopes. | ≤80        | `importlib`, `_safety`                |
+| `wiki_ingest/commands/ingest.py` (NEW)  | F3 driver | Orchestrator subcommand (R5). Composes the atomic ops via `_dispatch.py`. Owns the manifest collection (see §4.5.5), source-hash short-circuit (R9), known-concepts merge (R7), timeout enforcement (R10.3), `--config` YAML loading (R11), exit-code routing (R4). Internal pipeline order: `find_vault_root` → `read_vault_id` (+ optional `--vault-id` validation) → source-hash check → summary synthesis (delegate or no-op) → `register-summary` via dispatch → N× `upsert-page` → `update-index` per layer → `append-log` (course) → `log-event` (structured) → emit manifest. NO direct vault I/O — every write goes through an existing atomic op. | ≤400       | `_safety`, `_frontmatter`, `_vault`, `_dispatch` |
+| `wiki_ingest/commands/init.py` (extended)| F3       | Gains `--vault-id <slug>` flag. When `--root` is also given, the scaffold writes `vault_id: <slug>` in the root `WIKI_SCHEMA.md`. When given without `--root`, error (usage). LoC budget extended to ≤180 (was ≤150). | ≤180       | `_safety`, `_vault`                   |
+| `wiki_ops.py` (extended)                | shim      | Gains top-level `--version` action (R2.2) reading `wiki_ingest.__version__`. Gains `ingest` subparser. NO change to existing subparser definitions. LoC budget stays ≤200 (the additions net <30 LoC; if we hit the cap, the subparser registration is hoisted to a small `_register_subcommands(parser)` helper inside `wiki_ops.py`). | ≤200       | wiki_ingest, stdlib                   |
+
+**Why `_dispatch.py` instead of refactoring atomic ops into `lib/*.py`**:
+the alternative (Option (a) from TASK 017 Q-2: refactor each composing
+command to expose a `lib/*.py` callable) doubles the public surface for
+zero benefit — every command would carry both a `commands/<name>.py` driver
+AND a `lib/<name>.py` library form. Subprocess recursion (Option (b)) costs
+~100ms per atomic op (Python startup) and breaks idempotency contracts
+that read process-local state. The `_dispatch.py` helper is the smallest
+change that preserves the import-graph invariant; the test gate stays
+`test_architecture.py` walks every `commands/*.py` and asserts none import
+each other — `_dispatch.py` doing local imports inside a function body is
+NOT an `import wiki_ingest.commands.X` at module-top-level, so the AST
+walker (which checks module-level `Import` / `ImportFrom` nodes) is unaffected.
+
+**Test-architecture invariant carve-out (explicit)**: `test_architecture.py`
+is extended to also assert that `_dispatch.py` does NOT have any
+module-level `Import` / `ImportFrom` referencing `wiki_ingest.commands.*`
+(the local imports inside `dispatch()` are intentional). This locks the
+"dispatch via local import only" contract for the next maintainer.
+
+**TASK 017 new assets and fixtures:**
+
+| Path                                                           | Purpose                                                          |
+|----------------------------------------------------------------|------------------------------------------------------------------|
+| `scripts/wiki-ingest`                                          | POSIX shell wrapper (R1.1), `chmod +x`, no `.sh` suffix          |
+| `references/manifest_schema.md`                                | Verbatim copies of CONTRACT §1/§2/§3/§5/§6/§7/§8 (R12.3) with provenance lines |
+| `tests/commands/test_ingest.py`                                | Orchestrator happy path (single-course + two-tier), source-hash short-circuit, exit-code matrix (0/3/4/5/6/7/8/9), `--known-concepts-stdin` injection, `--quiet`, `--timeout-seconds` |
+| `tests/commands/test_init_vault_id.py`                         | `init --root --vault-id <slug>` happy path; `--vault-id` without `--root` → exit 2 |
+| `tests/test__vault_id.py`                                      | `read_vault_id`, `validate_vault_id_pattern`, pattern boundary cases |
+| `tests/test__dispatch.py`                                      | `dispatch()` invokes the target command, propagates exit code, error envelope on unknown name |
+| `tests/test_cli_wrapper.py`                                    | `scripts/wiki-ingest --version` → exit 0; subcommand dispatch via wrapper ≡ `python3 wiki_ops.py …` |
+| `tests/test_e2e_v1_1_contract.py`                              | Subprocess-call `wiki-ingest ingest …` against `tests/fixtures/two_course_vault/`, parse manifest, assert CONTRACT §1 field shape |
+| `tests/test_architecture.py` (extended)                        | New assertion: `_dispatch.py` has zero module-level `wiki_ingest.commands.*` imports |
+
 ### 3.3. Components Diagram
 
 ```mermaid
 graph LR
     subgraph "scripts/"
-        SHIM[wiki_ops.py<br/>argparse + dispatch<br/>≤200 LoC]
+        WRAP["wiki-ingest NEW<br/>shell wrapper<br/>(readlink -f + exec python3)"]
+        SHIM[wiki_ops.py<br/>argparse + dispatch<br/>+--version NEW<br/>≤200 LoC]
     end
 
     subgraph "scripts/wiki_ingest/"
-        SAFETY[_safety.py]
+        SAFETY["_safety.py<br/>+EXIT_* constants NEW"]
         MARKDOWN[_markdown.py]
         FRONTMATTER[_frontmatter.py]
-        PAGEMERGE["_page_merge.py NEW<br/>upsert_source_row<br/>append_fact etc."]
-        VAULT["_vault.py<br/>+find_vault_root NEW<br/>+discover_courses NEW"]
+        PAGEMERGE["_page_merge.py<br/>(TASK 016)"]
+        VAULT["_vault.py<br/>+read_vault_id NEW<br/>+validate_vault_id_pattern NEW"]
         CLASSIFY[_classify.py]
+        DISPATCH["_dispatch.py NEW<br/>local-import dispatch<br/>(Q-2 resolved)"]
 
         subgraph "commands/"
             SCAN[scan]
-            CINIT["init<br/>+--root NEW"]
-            UPSERT["upsert_page<br/>+root-aware"]
+            CINIT["init<br/>+--vault-id NEW"]
+            UPSERT[upsert_page]
             UPDIDX[update_index]
             APLOG[append_log]
             REGSUM[register_summary]
             LOGEV[log_event]
             FIND[find]
-            LINT["lint<br/>+cross-course NEW"]
-            REINDEX["reindex<br/>+root-mode NEW"]
+            LINT[lint]
+            REINDEX[reindex]
             CFOLDER[classify_folder]
-            PROMOTE["promote NEW"]
-            DEMOTE["demote NEW"]
+            PROMOTE[promote]
+            DEMOTE[demote]
+            INGEST["ingest NEW<br/>orchestrator<br/>(composes atomic ops)"]
         end
     end
 
-    SHIM --> SCAN & CINIT & UPSERT & UPDIDX & APLOG & REGSUM & LOGEV & FIND & LINT & REINDEX & CFOLDER & PROMOTE & DEMOTE
+    WRAP -->|exec| SHIM
+    SHIM --> SCAN & CINIT & UPSERT & UPDIDX & APLOG & REGSUM & LOGEV & FIND & LINT & REINDEX & CFOLDER & PROMOTE & DEMOTE & INGEST
     SCAN --> VAULT
     CINIT --> VAULT & SAFETY
     UPSERT --> VAULT & MARKDOWN & FRONTMATTER & PAGEMERGE & SAFETY
@@ -538,13 +710,20 @@ graph LR
     CFOLDER --> CLASSIFY & VAULT & SAFETY
     PROMOTE --> VAULT & MARKDOWN & FRONTMATTER & PAGEMERGE & SAFETY
     DEMOTE --> VAULT & MARKDOWN & FRONTMATTER & PAGEMERGE & SAFETY
+    INGEST --> VAULT & FRONTMATTER & DISPATCH & SAFETY
+    INGEST -.->|"local import<br/>via dispatch()"| REGSUM & UPSERT & UPDIDX & APLOG & LOGEV
 
     VAULT --> FRONTMATTER & SAFETY
     CLASSIFY --> SAFETY
     PAGEMERGE --> MARKDOWN & SAFETY
+    DISPATCH --> SAFETY
     MARKDOWN --> SAFETY
     FRONTMATTER --> SAFETY
 ```
+
+Dashed lines indicate **call-time local imports** (Python `importlib`) — they
+do NOT appear in the AST at module level and so do not violate the
+import-graph invariant enforced by `tests/test_architecture.py` (see §3.2).
 
 ---
 
@@ -693,6 +872,113 @@ Both lists are sorted alphabetically by `name` within their category
 (m-5 / determinism gate). The presence of any `invariant_violation` item
 causes lint to exit non-zero (hard failure).
 
+### 4.5.5. IngestManifest (TASK 017 — emitted by `commands/ingest.py`)
+
+Stable JSON envelope written to stdout when `--output-format json`. Mirrors
+the consumer contract verbatim — the in-repo authority is
+`skills/wiki-ingest/references/manifest_schema.md` (R12.3).
+
+```python
+{
+    "manifest_version": "1.1",                         # structural forward-compat
+                                                        # consumers MUST hard-fail on a major bump (e.g. "1.2");
+                                                        # mirrors `schema_version: 2.0` precedent (§4.5.1);
+                                                        # additive 1.1.x changes do NOT bump this.
+    "status": "ok",                                    # "ok" | "error"
+    "vault_id": "trade-agents" | None,                  # null when absent (see §2.4)
+    "vault_root": "/abs/path/to/vault",
+    "course": "Course A" | None,                        # null on single-course vaults
+    "source": {
+        "path": "/abs/path/to/raw/transcript.md",     # input
+        "slug": "transcript-2026-05-27",              # _safe_name'd
+        "hash": "sha256-hex"
+    },
+    "written": [                                      # see WrittenEntry below
+        {"path": "Lessons/Course A/_sources/transcript-2026-05-27.md",
+         "action": "created", "kind": "source", "scope": "course"},
+        ...
+    ],
+    "created": ["Lessons/Course A/_concepts/Sharpe Score.md", ...],   # subset of written
+    "touched": ["Lessons/Course A/_concepts/Volatility.md", ...],     # subset of written
+    "contradictions": 0,                              # int — fed from upsert-page
+    "summary_path": "Lessons/Course A/_sources/transcript-2026-05-27.md",
+    "log_event": <LogEventEnvelope>,                  # see §4.5.7
+    "llm_tokens_used": {"input": 4218, "output": 1102, "model": "claude-opus-4-7"}
+}
+```
+
+**WrittenEntry** (each row in `written[]`):
+
+```python
+{
+    "path": str,                          # vault-relative
+    "action": "created" | "updated" | "appended",
+    "kind": "source" | "concept" | "entity" | "index" | "log",
+    "scope": "course" | "vault"           # per two-tier model (TASK 016)
+}
+```
+
+**Partial-success envelope** (exit 20 — supersedes full manifest):
+
+```python
+{
+    "manifest_version": "1.1",                         # same forward-compat sentinel
+    "status": "error",
+    "phase": "upsert-page" | "register-summary" | "update-index" | "append-log" | "log-event" | "timeout",
+    "code": "PARTIAL_INDEX_FAILURE",
+    "child_exit_code": int,                            # dispatched atomic op's
+                                                        # original exit code (vdd-multi
+                                                        # 2026-05-27): preserves the
+                                                        # security signal — e.g. 8 =
+                                                        # S-M1 inbox-containment, 7 =
+                                                        # symlink-overwrite, 6 =
+                                                        # MAX_*_BYTES exceeded — so
+                                                        # consumers can distinguish
+                                                        # security-class refusals from
+                                                        # generic mid-pipeline failures.
+    "written_so_far": [<WrittenEntry>, ...],          # what successfully landed
+    "cleanup_advice": "Run `wiki-ingest lint --fix` then retry.",
+    "vault_id": str | None,                            # echoed when known
+    "vault_root": str
+}
+```
+
+**Forward-compatibility rule**: additive field changes are allowed within
+v1.1.x (consumers MUST ignore unknown fields). Renames/removals require
+bumping to v1.2.0 (CONTRACT §7 frozen-CLI rule, locked in
+`references/manifest_schema.md`).
+
+### 4.5.6. KnownConcept (TASK 017 — `--known-concepts-stdin/file` payload)
+
+```python
+# JSON array; one entry per known entity, from the index-layer DB
+[
+    {"slug": "sharpe-score", "name": "Sharpe Score", "aliases": ["Sharpe Ratio"]},
+    ...
+]
+```
+
+Merge rule: when both `scan`-derived and supplied lists exist, the
+DB-supplied entry wins on slug collision (DB is authoritative).
+`commands/ingest.py` forwards the merged set to the summary synthesiser
+to avoid dangling-link generation.
+
+### 4.5.7. LogEventEnvelope (TASK 017 — mirrors index-layer `log_events` schema)
+
+```python
+{
+    "event_ts": "2026-05-27T14:32:08+00:00",            # ISO-8601 with TZ
+    "event_type": "ingest",                              # enum: ingest|reindex|lint|promote|demote
+    "subject": "Karpathy LLM lesson 2026-05-27",         # human-readable
+    "log_md_byte_offset": 4218                            # position of the line in log.md
+}
+```
+
+`log_md_byte_offset` is captured AFTER the `append-log` write completes
+(the value returned by `commands/log_event.py`'s underlying append).
+Consumers (`/wiki-enrich`) round-trip the file's log.md back to `log_events`
+rows on reindex using this offset (R-28 from the index side).
+
 ### 4.6. Derived rules / invariants
 
 1. **Offset stability under masking**: every masking function preserves byte
@@ -716,14 +1002,40 @@ causes lint to exit non-zero (hard failure).
 
 ### 5.1. Public CLI
 
-TASK 015 subcommands are unchanged. TASK 016 adds two new subcommands and
-one new flag on `init`:
+TASK 015 subcommands are unchanged. TASK 016 adds `promote`/`demote` and
+`init --root`. TASK 017 adds the `wiki-ingest` shell wrapper (so the CLI is
+invokable as `wiki-ingest <sub>` instead of `python3 wiki_ops.py <sub>`),
+the top-level `--version` action, and the `ingest` orchestrator subcommand:
 
 ```
-wiki_ops.py {scan|init|upsert-page|update-index|append-log|
+# Wrapper:
+wiki-ingest --version                       # → "wiki-ingest 1.1.0\n", exit 0 (TASK 017)
+wiki-ingest <sub> [args...]                 # exec → python3 wiki_ops.py <sub> [args...]
+
+# Underlying argparse:
+wiki_ops.py [--version] {scan|init|upsert-page|update-index|append-log|
              register-summary|log-event|find|lint|reindex|
-             classify-folder|promote|demote} ...
+             classify-folder|promote|demote|ingest} ...
 ```
+
+**`ingest` grammar (TASK 017, R5.1)**:
+```
+wiki-ingest ingest --source <abs-path>
+                   --vault  <abs-path>
+                   [--output-format {human,json}]   (default: human)
+                   [--vault-id <slug>]              (strict-mode validator)
+                   [--known-concepts-file <path> |
+                    --known-concepts-stdin]         (mutually exclusive)
+                   [--source-hash <hex>]            (idempotency override)
+                   [--config <path>]                (YAML override)
+                   [--timeout-seconds <N>]          (default: 600; env: WIKI_INGEST_TIMEOUT)
+                   [--quiet]                        (force-quiet regardless of TTY)
+```
+- Default `--output-format human` → unstructured stdout summary; no manifest.
+- `--output-format json` → emit IngestManifest JSON (§4.5.5) on stdout for
+  success / partial; error envelope only for hard failures (exit ≥21 without
+  `phase`).
+- `--vault-id <slug>` is a VALIDATOR — see §2.4 for the 6/7/8 routing.
 
 **`init` extension (Q-1 locked: `--root` flag on `init`, not a new subcommand)**:
 ```
@@ -821,10 +1133,19 @@ the skill.
 
 - **Python 3.9+** (matches `_is_relative_to` backport heuristic; `match/case`
   is NOT used so 3.10 is not required).
-- **stdlib only**: `argparse`, `errno`, `json`, `math`, `os`, `re`, `sys`,
-  `tempfile`, `unicodedata`, `datetime`, `pathlib`, `fcntl` (POSIX guard).
-- **No new runtime dependencies introduced by TASK 015 or TASK 016** (pure
-  stdlib constraint is locked for the wiki-ingest skill).
+- **stdlib only**: `argparse`, `errno`, `importlib` (NEW use site:
+  `_dispatch.py`), `json`, `math`, `os`, `re`, `subprocess` (NEW use site:
+  `commands/ingest.py` invoking `summarizing-meetings` — same pattern as
+  existing TASK 015 callers), `sys`, `tempfile`, `unicodedata`, `datetime`,
+  `pathlib`, `fcntl` (POSIX guard).
+- **No new runtime dependencies introduced by TASK 015 / TASK 016 / TASK 017**
+  (pure stdlib constraint is locked for the wiki-ingest skill). YAML parsing
+  for `--config` uses a minimal hand-rolled subset parser (see `commands/ingest.py`
+  `_parse_config_subset`) — same pattern as the `_parse_flow_list` /
+  `_strip_quotes` helpers in `_frontmatter.py`. NO `PyYAML` dependency.
+- **Version constant**: `wiki_ingest/__init__.py::__version__ = "1.1.0"`.
+  Single source of truth; `wiki_ops.py --version` consumes it; tests in
+  `test_cli_wrapper.py` assert minimum `>= 1.1`.
 - **Dev / test**: `unittest` (stdlib). No `pytest`, no `tox`, no `hypothesis`
   for v1 — keeps the test surface portable.
 
@@ -870,6 +1191,31 @@ introduces no new subprocess, no new network paths, no new external deps. The
 new attack surface (cross-course file moves) is bounded by the same `_is_relative_to` +
 `_safe_name` + `_atomic_write_text` stack already defending v1 commands.
 
+**TASK 017 security additions:**
+
+| ID         | Defence                                                                                               | Location                                            |
+|------------|-------------------------------------------------------------------------------------------------------|-----------------------------------------------------|
+| T17-S1     | `vault_id` pattern validation: `^[a-z][a-z0-9-]{1,30}[a-z0-9]$` rejects path separators, control chars, `--` substring, leading/trailing dashes, and any non-ASCII. Applied to BOTH frontmatter-read values (exit 24) AND `--vault-id <slug>` CLI arguments (re-validated before comparison; exit 25 on mismatch). | `_vault.py::validate_vault_id_pattern`, `commands/init.py`, `commands/ingest.py` |
+| T17-S2     | `--known-concepts-stdin` is read-bounded to 1 MiB (configurable via `WIKI_INGEST_KNOWN_CONCEPTS_MAX_BYTES`, default `1048576`). Larger payloads → die("INPUT_TOO_LARGE", code=1) BEFORE JSON parsing. Defends against memory-pressure DoS from a malicious bridge. | `commands/ingest.py::_read_known_concepts_stdin`     |
+| T17-S3     | `--known-concepts-file <path>` is read via existing `_safety.read_text(path, max_bytes=1<<20)`. NO `_is_relative_to(vault)` check — operator supplies the path (CONTRACT §2 caller-owned). | `commands/ingest.py::_read_known_concepts_file`     |
+| T17-S4     | `--source-hash <hex>` is validated as `^[0-9a-fA-F]{64}$` (sha256 only) before any use. Wrong hash → no escape from sandbox (downstream writes still go through `_atomic_write_text` + `_safe_name`); only effect is incorrectly identifying the source as "already-ingested" / "changed". | `commands/ingest.py::_validate_source_hash`         |
+| T17-S5     | `--config <path>` YAML is parsed by a hand-rolled subset parser (no `yaml.load`). Subset: scalar keys + scalar values + flat lists; nested dicts ONLY one level deep. Unknown keys → warning (not error). NO arbitrary type construction (defends against the `yaml.load` exec-tag CVE class). | `commands/ingest.py::_parse_config_subset`          |
+| T17-S6     | `--timeout-seconds` enforced via `subprocess.run(timeout=N)` for downstream synthesiser; on timeout, the subprocess is killed via `Popen.kill()` (NOT just `terminate()`) — guarantees no zombie LLM process. Internal Python-side bound is enforced by `signal.SIGALRM` on POSIX where supported; falls back to per-step timeout otherwise. | `commands/ingest.py::_run_with_timeout`              |
+| T17-S7     | Manifest JSON emission passes EVERY scalar through `_safe_for_json` (S-M6 carry-over). Vault names, slugs, paths, log subjects — all sanitised; control chars and overlong strings rejected. | `commands/ingest.py::_emit_manifest`                |
+| T17-S8     | Shell wrapper `scripts/wiki-ingest` uses `readlink -f` (GNU + BusyBox + macOS coreutils — caveat: stock macOS `readlink` lacks `-f`; the wrapper falls back to a `python3 -c "import os,sys;print(os.path.realpath(sys.argv[1]))" "$0"` form when `readlink -f` errors). NO shell-expansion of arguments — `"$@"` is quoted, eliminating IFS / glob attack surface. | `scripts/wiki-ingest`                                |
+| T17-S9     | The new local-import `_dispatch.dispatch()` validates `cmd_name` against a whitelist `_ALLOWED_COMMANDS = frozenset({...})` BEFORE the `importlib.import_module` call. Defends against arbitrary-module-import via attacker-controlled CLI argument. Exit 2 (`UNKNOWN_COMMAND`) on any non-whitelist name. | `_dispatch.py::dispatch`                             |
+| T17-S10    | `wiki_ops.py --version` is a pure-Python `argparse.Action` reading `wiki_ingest.__version__`; no subprocess, no `subprocess.check_output("git describe ...")`, no I/O. | `wiki_ops.py`                                        |
+
+**Threat-model delta**: TASK 017 introduces ONE new subprocess call —
+`commands/ingest.py` invoking `summarizing-meetings` (same pattern as
+existing TASK 015 callers; bounded via T17-S6). The shell wrapper does NOT
+shell out further than the single `exec`. NO new network paths. NO new
+external runtime deps. The `--source-hash` override (T17-S4) and
+`--known-concepts-*` channels (T17-S2, T17-S3) expand the input surface to
+the subprocess boundary — both are caller-trusted (the bridge runs locally
+under the same UID as the operator) and bounded by the existing containment
+stack.
+
 ---
 
 ## 8. Scalability and Performance
@@ -908,6 +1254,21 @@ Demote's cross-course citation scan (R5.2) is O(courses × sources × footnotes)
 the existing `_extract_wikilinks_with_anchors` mask-once path is reused to keep
 it linear. On a 5×100×20 fixture that is ≈10k regex ops — well under the 0.5 s
 budget given the per-op cost is sub-microsecond on modern hardware.
+
+**TASK 017 performance constraints**:
+
+| Operation                               | Constraint              | Implementation note                                    |
+|-----------------------------------------|-------------------------|--------------------------------------------------------|
+| `ingest` orchestrator (no LLM, source-hash hit) | ≤ 0.15 s (warm FS cache — typical operator workflow; cold-FS first-run may add stat-walk latency ≤+0.5 s) | Pure idempotency check: `_vault.find_vault_root` + `read_text` of `_sources/<slug>.md` footer + sha256 compare; no subprocess, no writes |
+| `ingest` orchestrator (full pipeline)   | LLM-bound (~30-180 s) — wall time dominated by `summarizing-meetings`; skill-internal overhead ≤ 0.4 s | Sequential atomic-op dispatch + manifest collection. NO orchestrator-internal regex / mask passes beyond what the atomic ops already pay (they reuse mask-once). |
+| `wiki-ingest --version`                 | ≤ 50 ms (Python startup) | No-op argparse Action; tested for "doesn't import the wiki_ingest package eagerly" — only `__init__.__version__` is read |
+| `_dispatch.dispatch()` (per atomic op)  | ≤ 5 ms (cold) + ≤ 0.1 ms (warm) | `importlib.import_module` is cached by `sys.modules` after the first call; ingest's pipeline pays the cold cost once per atomic op kind |
+| Manifest emission                       | ≤ 10 ms on 100-write payload | `json.dump(fp)` directly to stdout buffer; `_safe_for_json` per scalar; no shape construction beyond a dict-of-lists |
+| `--known-concepts-stdin` parse + merge  | ≤ 50 ms on 10k entries  | `json.loads` once + dict-keyed merge with `scan` output (O(N+M)) |
+
+Source-hash short-circuit (UC-4) is the perf-critical path for the index
+layer's reindex flows — `/wiki-enrich` calls `ingest` opportunistically on
+every observed file change; ~99% of calls hit the no-op branch (sub-200ms).
 
 ---
 
@@ -1007,6 +1368,35 @@ helper modules via `rglob` (m-A-1) — no test code edits are required for
 | 016-09 | `commands/upsert_page.py` root-aware lookup              | `commands/upsert_page.py` (calls `find_vault_root`, root-first lookup, vault-relative footnote per A-M-2); `tests/commands/test_upsert_page.py` extended | Root-layer lookup; vault-relative footnote on root page; v1 byte-identity on single-course fixture |
 | 016-10 | E2E round-trip + documentation + validators              | `tests/test_e2e_promotion.py` (new); `tests/fixtures/two_course_vault/` (new); `SKILL.md` updates; `references/cross_course_promotion.md` (new); `references/wiki_schema.md` extended; `.AGENTS.md` updated | `test_e2e_promotion.py` full round-trip; `validate_skill.py` exit 0; `skill-validator` SAFE; cross-skill `diff -q` silent |
 
+**TASK 017 atomic-bead chain:**
+
+Each bead is independently revertable. Gated by per-bead tests green +
+`validate_skill.py` exit 0 + `test_architecture.py` green + (when applicable)
+`skill-validator/validate.py` SAFE. The chain is ordered so that **the
+manifest contract (017-04) and the dispatch substrate (017-03) land BEFORE
+the orchestrator (017-05)** — fail-fast on contract drift before any
+state-mutating code. The shell wrapper (017-01) lands first because the
+`--version` action it surfaces is referenced by every downstream bead's test.
+
+| Step   | Title                                                    | Touches                                                                                                              | Verifies                                                                 |
+|--------|----------------------------------------------------------|----------------------------------------------------------------------------------------------------------------------|--------------------------------------------------------------------------|
+| 017-00 | Pre-flight: `__version__` constant + `wiki_ops.py --version` | `wiki_ingest/__init__.py` (`__version__="1.1.0"`); `wiki_ops.py` (top-level `--version` action); `tests/test_cli_wrapper.py` (version-format + minimum-1.1 assertions) | `wiki_ops.py --version` exits 0 with exact format; no eager package import |
+| 017-01 | Shell wrapper `scripts/wiki-ingest` (POSIX, no `.sh`)    | `scripts/wiki-ingest` (chmod +x, `readlink -f` + macOS fallback); SKILL.md install-pattern note; `tests/test_cli_wrapper.py` extended (`wiki-ingest --version` exits 0; subcommand-dispatch equivalence) | wrapper round-trips arguments; symlink-installed wrapper resolves correctly |
+| 017-02 | `_safety.EXIT_*` constants + `vault_id` helpers in `_vault.py` | `_safety.py` gains `EXIT_*` enum-equivalent constants; `_vault.py` gains `read_vault_id`, `validate_vault_id_pattern`, `_VAULT_ID_RE`; `tests/test__vault_id.py` (new) | All exit codes 0..9 resolve via constants; vault_id pattern boundary cases (3-char min, 32-char max, `--` rejected, leading digit rejected, control chars rejected) |
+| 017-03 | `_dispatch.py` helper (Q-2 RESOLVED option (c))          | `_dispatch.py` (new); `tests/test__dispatch.py` (new); `tests/test_architecture.py` extended (no-module-level-cmd-import assertion for `_dispatch.py`) | `dispatch("upsert-page", args)` invokes `commands.upsert_page.execute(args)`; whitelist enforcement; unknown name → exit 2; module-level import scan clean |
+| 017-04 | `references/manifest_schema.md` (verbatim contract copy) | `skills/wiki-ingest/references/manifest_schema.md` (new — embeds CONTRACT §1/§2/§3/§5/§6/§7/§8 verbatim with provenance lines); `tests/test_manifest_schema.py` (parses the §1 JSON example block and asserts it round-trips) | Reference file lands BEFORE the orchestrator; tests can use its example block as a fixture |
+| 017-05 | `commands/ingest.py` skeleton (no real writes; emits empty-success manifest) | `wiki_ingest/commands/ingest.py` (skeleton: argparse contract, `find_vault_root`, `read_vault_id`, source-hash idempotency check, emits well-formed manifest with empty `written[]`); `wiki_ops.py` gains `ingest` subparser; new `tests/commands/test_ingest.py` (manifest shape + source-hash short-circuit + exit-code 23/24/25 routing — NO writes tested yet) | Argparse contract complete; manifest passes `references/manifest_schema.md`'s example-validation harness; vault_id routing exits 23/24/25 correctly; UC-3 strict-mode cases pass |
+| 017-06 | `commands/ingest.py` write path (full orchestrator)      | `commands/ingest.py` extended with the full pipeline (`register-summary` → `upsert-page`× → `update-index` → `append-log` → `log-event`, all via `_dispatch.dispatch`); manifest's `written[]` populated post-hoc from each dispatch return; `tests/commands/test_ingest.py` extended (happy path 1- and 2-course, exit-3 partial recovery, exit-9 timeout) | Round-trip on `tests/fixtures/two_course_vault/`; manifest's `written[]` matches the actual `git diff` of the fixture; partial-success envelope on injected `register-summary` failure |
+| 017-07 | `--known-concepts-stdin/file` + `--source-hash` + `--config` + `--quiet` + `--timeout-seconds` | `commands/ingest.py` extended with the flag set; `tests/commands/test_ingest.py` extended (stdin payload merge, file payload merge, mutual-exclusion, hash-override, config-overrides-default + CLI-overrides-config, quiet honours TTY check, timeout exits 9 + phase) | All R7/R9/R10/R11 flag families pass; payload size bound (1 MiB) enforced; `_safe_for_json` applied to manifest scalars |
+| 017-08 | `commands/init.py` extension (`--vault-id` flag)         | `commands/init.py` (`--vault-id <slug>` flag; only valid with `--root`; writes `vault_id:` to root schema); `tests/commands/test_init_vault_id.py` (new) | `init --root --vault-id` writes schema; `init --vault-id` without `--root` exits 2; round-trip with `read_vault_id` |
+| 017-09 | E2E v1.1 contract smoke + documentation + validators     | `tests/test_e2e_v1_1_contract.py` (subprocess-call against `tests/fixtures/two_course_vault/`); SKILL.md §4 + §"Top-level orchestrator" section + migration paragraph; `references/wiki_schema.md` extended with `vault_id` §"v1.1"; `.AGENTS.md` updated | `test_e2e_v1_1_contract.py` green; `validate_skill.py` exit 0; `skill-validator/validate.py` SAFE; cross-skill `diff -q` matrix silent |
+
+Each bead is independently revertable. 017-04 (the reference page) lands
+between the substrate beads (017-00..017-03) and the orchestrator
+(017-05..017-07) so the contract is documented in-repo before any code
+references it — protects against drift if the external contract moves
+during development.
+
 ---
 
 ## 12. Open Questions
@@ -1038,6 +1428,16 @@ document. Defaults are locked; the Planner need not revisit them.
 | Q-8 | Course discovery: convention vs hardcoded `Lessons/`     | `discover_courses` walks ALL descendants with `schema_version: 1.x` — not hardcoded. (M-3 + §2.3) |
 | Q-9 | Root-page footnote format check level                    | `warning` (non-fatal; consistent with other format checks).                          |
 | Q-10| Promote-time contradiction detection algorithm           | Literal-line-diff (cheap; matches v1 contradiction surfacing). No predicate-extraction. (m-3 resolution) |
+
+### TASK 017 open questions (locked defaults — architect's call)
+
+| ID  | Question                                                 | Locked decision                                                                      |
+|-----|----------------------------------------------------------|--------------------------------------------------------------------------------------|
+| Q-1 | Atomicity strategy: per-step rollback vs tempdir/rename  | **Per-step rollback + `exit 20` + `written_so_far[]`**. Tempdir/rename cannot cross filesystem boundaries; the vault touches multiple directories that may live on separate FS (network mounts, encrypted overlays). Callers gate DB-side reflection on exit 20 + non-empty manifest. (TASK §5 Q-1 RESOLVED 2026-05-27.) |
+| Q-2 | `commands/ingest.py` invocation of other commands        | **New `_dispatch.py` F3 helper with whitelist + local imports**. Smallest change preserving the import-graph invariant; `lib/*.py` factoring is ~2× the public surface; subprocess recursion costs ~100ms per atomic op + breaks process-local idempotency. (TASK §5 Q-2 RESOLVED, see §3.2 dossier.) |
+| Q-3 | `--source-hash` semantic for a `.md` summary input       | **File-bytes-hash** (sha256 of the raw input bytes, regardless of `type:` frontmatter). Matches CONTRACT §6; the skill never recomputes — it trusts the caller. The downstream `_sources/<slug>.md` footer stores whatever the caller supplied. |
+| Q-4 | `summary-light` type emission                            | **No-op for `ingest`**. The orchestrator emits manifest `kind` values from the existing TASK 016 enum (`source` / `concept` / `entity` / `index` / `log`); `summary-light` is an index-layer-internal TYPE_MAPPING concern, not a manifest concept. Drop from contract. |
+| Q-5 | `course` field on single-course vaults                   | **`course: null` AND `written[].scope: "course"`** — single-course vaults have one course root (`scope: course`), but no shared layer to map onto a vault-relative `course:` label. The index layer's `_validate_manifest` round-trips `null` correctly per its R-28 schema. |
 
 ---
 
@@ -1075,3 +1475,20 @@ document. Defaults are locked; the Planner need not revisit them.
 | `discover_courses` walks ALL descendants, not just `Lessons/` (Q-8) | Handles arbitrary vault layouts; operator's `trade-agents/Lessons/` convention is the default but not the only one |
 | Lint `invariant_violation` is a hard failure (non-zero exit) | The one-page-one-place invariant is load-bearing for Obsidian link resolution; silent violation is worse than aborting |
 | R3.7 re-promote folded into `promote` (not a new command) | Spec §3.3 explicitly recommends this; avoids a `merge-into-root` command with nearly identical logic |
+
+### TASK 017 decisions
+
+| Decision                                              | Why                                                                                  |
+|-------------------------------------------------------|--------------------------------------------------------------------------------------|
+| `ingest` orchestrator as composition (not reimplementation) — R5 | Atomic ops already exist and are tested; composition keeps the public surface narrow and lets the orchestrator land without re-validating every atomic-op invariant |
+| New F3-helper `_dispatch.py` (Q-2)                    | Lets `commands/ingest.py` invoke other commands without violating the "no command imports another command" invariant. Local imports + whitelist + `_safety` error envelopes. |
+| `vault_id` emit-don't-enforce (R3, ADR-002 §D1.1 note 2026-05-27) | Backwards-compat for standalone wiki-ingest users. Enforcement is the index layer's concern; this skill only validates the pattern when `--vault-id` is passed |
+| Per-step rollback + exit 20 (Q-1)                       | Vault touches multiple directories that may live on separate FS; `os.rename` cannot cross device boundaries; callers (`/wiki-enrich`) already encode this contract |
+| Exit code 26 split from 21 (R4.1)                      | Timeout is a recoverable signal; downstream subprocess failure is not. Splitting lets the bridge route on retry semantics without inventing a `phase` discriminator-only API |
+| v1.1 exit codes in the 20..26 band (audit 2026-05-27)  | Initial draft proposed 3..9 but `references/exit_codes.md` audit found 3..8 already shipped in TASK 015/016 (`_safety` size-caps, symlink refusals, `register_summary` slug-exists, `upsert_page` case-collision / contradicts-miss). Renumbering v1.1 is cheaper than renumbering shipped behaviour (which is undocumented public surface) |
+| Manifest verbatim-mirror in `references/manifest_schema.md` (R12.3) | Defends against external contract drift; the skill stays self-describing even if `obsidian-llm-wiki/docs/WIKI-INGEST-V1.1-CONTRACT.md` is renamed/moved |
+| Hand-rolled YAML subset for `--config` (no `PyYAML`)   | Pure stdlib constraint locked; reuses the existing `_frontmatter.py` parser style; avoids the `yaml.load` exec-tag CVE class |
+| `__version__` in `wiki_ingest/__init__.py` (single source of truth) | One place to bump; `--version` action reads it; tests assert minimum `>=1.1` |
+| Shell wrapper `scripts/wiki-ingest` (no `.sh`)         | Matches CONTRACT §7 expectation that the binary is on PATH; `readlink -f` cross-shell; macOS fallback shelled out — same pattern as TASK 015's existing shell tooling |
+| `_dispatch.py` whitelist (not arbitrary `importlib`)   | Defense-in-depth: even though `cmd_name` comes from argparse choices, the explicit whitelist documents the call-graph and survives a future argparse refactor |
+| Manifest emission via `json.dump(fp)` (streaming, not buffered string) | Same memory-discipline pattern as `emit_json.py` in xlsx-8a-07 (PERF-HIGH-2 reduction); the manifest is small (<10 KB typical) but the pattern is locked for future scale |

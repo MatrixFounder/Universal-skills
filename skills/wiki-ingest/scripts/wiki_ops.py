@@ -22,47 +22,63 @@ from __future__ import annotations
 import argparse
 import sys
 
-# All command logic lives in `wiki_ingest/commands/<cmd>.py`. Each module
-# exposes `register(subparser)` and `execute(args) -> int`. This shim does
-# only argparse wiring + dispatch. See `wiki_ingest/__init__.py` for the
-# layered DAG (F1 _safety → F2 _markdown/_frontmatter → F3 _vault/_classify
-# + commands/). Tests in ../tests/ enforce the import-graph invariant.
-from wiki_ingest.commands import (
-    append_log,
-    classify_folder,
-    demote,
-    find,
-    init,
-    lint,
-    log_event,
-    promote,
-    register_summary,
-    reindex,
-    scan,
-    update_index,
-    upsert_page,
-)
-
-_COMMAND_MODULES = (
-    scan, init,
-    upsert_page, update_index,
-    append_log, register_summary, log_event,
-    find, lint, reindex,
-    classify_folder,
-    promote, demote,
-)
+from wiki_ingest import __version__ as _WIKI_INGEST_VERSION
 
 
 def build_parser() -> argparse.ArgumentParser:
+    # Command modules are imported lazily INSIDE build_parser() so that the
+    # top-level `--version` fast path in main() does not pay the ~13×
+    # module-import cost (TASK 017 R2 / architecture §8 ≤50 ms budget).
+    # The argparse `--version` action below is reachable ONLY through
+    # `--help` discoverability (humans listing top-level flags); when the
+    # user actually runs `wiki_ops.py --version`, main()'s fast path
+    # short-circuits before this parser is built.
+    from wiki_ingest.commands import (
+        append_log,
+        classify_folder,
+        demote,
+        find,
+        ingest,
+        init,
+        lint,
+        log_event,
+        promote,
+        register_summary,
+        reindex,
+        scan,
+        update_index,
+        upsert_page,
+    )
+
+    command_modules = (
+        scan, init,
+        upsert_page, update_index,
+        append_log, register_summary, log_event,
+        find, lint, reindex,
+        classify_folder,
+        promote, demote,
+        ingest,
+    )
+
     p = argparse.ArgumentParser(prog="wiki_ops", description=__doc__,
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    p.add_argument("--version", action="version",
+                   version=f"wiki-ingest {_WIKI_INGEST_VERSION}")
     sub = p.add_subparsers(dest="cmd", required=True)
-    for mod in _COMMAND_MODULES:
+    for mod in command_modules:
         mod.register(sub)
     return p
 
 
 def main(argv: list[str] | None = None) -> int:
+    if argv is None:
+        argv = sys.argv[1:]
+    # Fast path for `wiki-ingest --version` (TASK 017 R2 / CONTRACT §7):
+    # avoid importing the ~13 command modules for a single-string read.
+    # Output format is locked: consumers prefix-match `wiki-ingest <ver>`.
+    if argv and argv[0] == "--version":
+        sys.stdout.write(f"wiki-ingest {_WIKI_INGEST_VERSION}\n")
+        return 0
     parser = build_parser()
     args = parser.parse_args(argv)
     return args.func(args)

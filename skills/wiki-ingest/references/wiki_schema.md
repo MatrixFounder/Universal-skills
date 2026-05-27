@@ -2,6 +2,37 @@
 
 This is the *reference* version of the schema the skill scaffolds into a fresh vault. The bundled `assets/WIKI_SCHEMA.template.md` is what gets copied. This file exists so an agent can read the conventions without needing access to the target vault.
 
+## vault_id field (v1.1)
+
+Two-tier vault roots (those with `schema_version: "2.0"` + `kind: vault-root`) MAY carry an additional **`vault_id: <slug>`** field in their root `WIKI_SCHEMA.md` frontmatter. The slug uniquely identifies the vault for downstream consumers — primarily the `obsidian-llm-wiki` index layer's `/wiki-enrich` bridge, which uses it as the SQLite partition key.
+
+```yaml
+---
+name: WIKI_SCHEMA
+schema_version: "2.0"
+kind: vault-root
+vault_id: my-vault              # ← TASK 017 v1.1 field
+---
+```
+
+**Pattern**: `^[a-z][a-z0-9-]{1,30}[a-z0-9]$`
+- Length 3..32 characters.
+- Lowercase ASCII only (no Cyrillic / CJK confusables).
+- Kebab-case with internal hyphens; `--` is rejected.
+- Leading character must be a letter; trailing must be letter or digit.
+
+**Emit, don't enforce**: wiki-ingest READS the field if present and EMITS it in the v1.1 manifest, but absence is NOT an error in the skill itself. Standalone users without an index-layer consumer see no behavioural change. Strict-mode validation triggers only when a caller passes `--vault-id <slug>` to `wiki-ingest ingest` (or other v1.1 surfaces) — see [`./exit_codes.md`](./exit_codes.md) codes 23/24/25.
+
+**Scaffolding**:
+```sh
+# fresh vault root with vault_id set:
+wiki-ingest init <vault> --root --vault-id my-vault
+
+# existing vault: hand-edit WIKI_SCHEMA.md to add the line (one-line migration).
+```
+
+`commands/init.py` validates the slug pattern BEFORE any I/O (`validate_vault_id_pattern` → exit 24 on malformed). Re-running `init --root --vault-id <same>` is idempotent; re-running with a DIFFERENT slug on an already-vault_id'd schema exits 1 (deliberate; hand-edit if intentional).
+
 ## When to read this
 
 - The vault's own `WIKI_SCHEMA.md` is missing AND you cannot scaffold it (e.g., dry-run mode).

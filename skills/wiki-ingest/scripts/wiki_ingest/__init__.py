@@ -26,3 +26,9 @@ Rules:
 
 Tests live in ../tests/.
 """
+
+# Single source of truth for the skill's version (TASK 017 R2.1). The
+# `wiki_ops.py --version` action reads this constant; the matching
+# minimum-version contract is documented in CONTRACT §7 (mirrored in
+# references/manifest_schema.md). Bump format: semver MAJOR.MINOR.PATCH.
+__version__ = "1.1.0"

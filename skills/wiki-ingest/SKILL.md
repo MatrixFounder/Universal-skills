@@ -10,7 +10,7 @@ description: >-
   cite). Triggers: ingest into wiki, register summary, lint, reindex, search
   notes, compound notes, llm-wiki.
 tier: 2
-version: 1.0
+version: 1.1
 ---
 
 # Wiki-Ingest — LLM-Wiki Maintenance Layer
@@ -72,6 +72,102 @@ shared layer is **lazy** — populated only via `promote` (R8.5 / R13).
 **exactly one place** — either some course's `_concepts/`/`_entities/`
 OR the root's. `lint` detects violations and exits non-zero.
 
+## Install on PATH (TASK 017 R1)
+
+The skill ships a thin POSIX shell wrapper at
+[`scripts/wiki-ingest`](scripts/wiki-ingest) (no `.sh` suffix) so the
+binary is invokable as `wiki-ingest <subcommand>` instead of
+`python3 scripts/wiki_ops.py <subcommand>`. The wrapper resolves its
+own path via `readlink -f` (GNU + BusyBox) with a `python3
+os.path.realpath` fallback for stock macOS BSD `readlink`.
+
+```sh
+# Install (any one of these patterns works):
+ln -s "$PWD/skills/wiki-ingest/scripts/wiki-ingest" ~/.local/bin/wiki-ingest
+
+# Or invoke directly:
+skills/wiki-ingest/scripts/wiki-ingest --version    # → "wiki-ingest 1.1.0"
+```
+
+Both forms — `wiki-ingest <sub>` (wrapper) and `python3 wiki_ops.py
+<sub>` (direct) — produce identical stdout / stderr / exit codes
+(locked by `tests/test_cli_wrapper.py` equivalence assertions). The
+direct form is the supported pattern for tooling that cannot rely on
+PATH; the wrapper is the supported pattern for human operators and
+external bridges (e.g., the `obsidian-llm-wiki` `/wiki-enrich` skill
+shells out as `wiki-ingest …`).
+
+<!-- finalised by 017-09 (do not edit out of band) -->
+
+## Top-level orchestrator: `wiki-ingest ingest` (TASK 017)
+
+The v1.1 contract adds `ingest` — a single subcommand that composes
+the atomic ops (`register-summary` → N× `upsert-page` → `update-index`
+→ `append-log` → `log-event`) into one call and emits a stable JSON
+manifest on stdout. Designed for external bridges (e.g.,
+`obsidian-llm-wiki` `/wiki-enrich`) that need an end-to-end ingest in
+one subprocess invocation.
+
+```sh
+wiki-ingest ingest --source <abs-path-to-summary.md> \
+                   --vault  <abs-path-to-course-root> \
+                   --output-format json \
+                   [--vault-id <slug>] \
+                   [--source-hash <sha256-hex>]
+```
+
+**Scope (v1.1)**: `--source` MUST be a pre-made summary (frontmatter
+`type:` ∈ {`summary`, `lesson-summary`, `meeting-summary`}). Raw
+transcripts fail-fast with `phase:"needs-pre-summarization"` + exit
+26 — the operator / bridge pre-summarises via the
+[`summarizing-meetings`](../summarizing-meetings/) skill first. (The
+synthesizer-subagent integration is a documented future enhancement;
+see [`references/manifest_schema.md`](references/manifest_schema.md) §8.)
+
+**Manifest shape**: see
+[`references/manifest_schema.md`](references/manifest_schema.md) (in-repo
+mirror of the external CONTRACT). Top-level fields include
+`manifest_version: "1.1"`, `vault_id` (string or null), `vault_root`,
+`course` (string or null per Q-5), `source: {path, slug, hash}`,
+`written[]` (each entry `{path, action, kind, scope}`), `created[]`,
+`touched[]`, `contradictions`, `summary_path`, `log_event`,
+`llm_tokens_used`.
+
+**Exit codes**: see
+[`references/exit_codes.md`](references/exit_codes.md). The v1.1
+contract band is 20..26 — `EXIT_PARTIAL=20`, `EXIT_SUBPROCESS=21`,
+`EXIT_LLM=22`, `EXIT_MISSING_VAULT_ID=23`, `EXIT_INVALID_VAULT_ID=24`,
+`EXIT_VAULT_ID_MISMATCH=25`, `EXIT_TIMEOUT=26`.
+
+**Idempotency (UC-4)**: the orchestrator records `source_hash:` in
+the registered `_sources/<slug>.md` frontmatter on first ingest.
+Re-running with `--source-hash <same-hex>` short-circuits — emits
+`action: "unchanged"` + empty `written[]`, exits 0.
+
+## vault_id migration (TASK 017 R3)
+
+Existing two-tier vaults that want to integrate with the index layer
+(e.g., `obsidian-llm-wiki`) MUST add a `vault_id: <slug>` field to
+the root `WIKI_SCHEMA.md` frontmatter:
+
+```yaml
+schema_version: "2.0"
+kind: vault-root
+vault_id: my-vault              # ← one-line add
+```
+
+The slug pattern is `^[a-z][a-z0-9-]{1,30}[a-z0-9]$` (3..32 chars,
+lowercase ASCII kebab-case, no `--`). Standalone wiki-ingest users
+DO NOT need this field — it stays absent and the orchestrator emits
+`vault_id: null` in the manifest. Strict-mode `--vault-id <slug>`
+validation only fires when callers (e.g., the bridge) demand it.
+
+To scaffold a new vault root WITH a `vault_id`:
+
+```sh
+wiki-ingest init <vault> --root --vault-id my-vault
+```
+
 ## 3. Execution Mode
 
 - **Mode**: `hybrid`
@@ -94,6 +190,8 @@ OR the root's. `lint` detects violations and exits non-zero.
   - `python3 scripts/wiki_ops.py init <vault> --root` → scaffold a vault-ROOT layer (`WIKI_SCHEMA.md` with `schema_version: 2.0`, `_concepts/`, `_entities/`). NO `_sources/` or `log.md` at the root. Idempotent; never overwrites. See [`references/cross_course_promotion.md`](references/cross_course_promotion.md).
   - `python3 scripts/wiki_ops.py promote <Name> --vault <vault> [--kind concept|entity] [--apply]` → merge ≥2 course-local copies of the same concept/entity into a single root-level page. **Dry-run by default**; `--apply` commits. Unions frontmatter (earliest `created`, longer `description`, `promoted_from:` list), additive body merge, rewrites footnotes to vault-relative form, deletes course copies, updates course `index.md`s + root `index.md`, appends `log.md` entries. Detects literal-line-diff contradictions and surfaces them via `## Contradictions` blocks (operator resolves).
   - `python3 scripts/wiki_ops.py demote <Name> --to <Course> --vault <vault> [--dry-run]` → move a root-level page back to a named course. Refuses if any course OTHER than `--to` cites the page via its `_sources/`. Rewrites footnotes to short form, strips `promoted_from:`, updates indexes + log. `--dry-run` NOT default (demote is reversible; cheap to undo).
+  - `wiki-ingest ingest --source <abs-summary.md> --vault <abs-course-root> [--output-format json] [--vault-id <slug>] [--source-hash <hex>]` → **v1.1 top-level orchestrator (TASK 017)**. Composes register-summary → upsert-page × N → update-index → append-log → log-event in one call. Emits a stable JSON manifest. Scope: summary-passthrough only (raw transcripts pre-summarised by the operator / bridge). Full contract in [`references/manifest_schema.md`](references/manifest_schema.md). Exit codes in [`references/exit_codes.md`](references/exit_codes.md) (v1.1 band: 20..26).
+  - `wiki-ingest --version` → emits `wiki-ingest 1.1.0\n` and exits 0 (CONTRACT §7 minimum-version check).
 - **Inputs**: vault root path; for upserts, the source's slug/title/date and the concept name and either a definition (stub-creation) or a fact (additive update).
 - **Outputs**: stdout JSON for `scan`; mutated markdown files for the rest; non-zero exit on missing required args or invalid vault.
 - **Failure semantics**: exits 1 with stderr message on invalid args / missing vault; exits 2 if `WIKI_SCHEMA.md` is absent and `init` was not run first (prevents improvised conventions).

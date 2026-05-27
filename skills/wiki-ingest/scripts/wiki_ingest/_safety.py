@@ -32,6 +32,25 @@ MAX_PAGE_BYTES = 50 * 1024 * 1024       # 50 MiB per markdown file
 MAX_SUMMARY_BYTES = 50 * 1024 * 1024    # 50 MiB for register-summary input
 MAX_VALUE_BYTES = 2000                  # cap any scalar echoed into JSON output
 
+# Exit-code matrix — see `references/exit_codes.md` for the authoritative
+# audit + per-code call-site list. Codes 0/1/2 are inherited from TASK 015.
+# Shipped 3..8 are TASK 015/016 numeric call sites (kept as magic numbers;
+# the symbolic names live in references/exit_codes.md but the call sites
+# are not refactored here — out-of-scope drive-by changes are prohibited).
+# 10..19 reserved for future per-command extensions.
+# 20..26 are the v1.1 contract band (NEW in TASK 017). Partial-success
+# envelopes for codes 20/21/22/26 MUST carry a `phase` discriminator.
+EXIT_OK = 0
+EXIT_GENERIC = 1
+EXIT_USAGE = 2
+EXIT_PARTIAL = 20
+EXIT_SUBPROCESS = 21
+EXIT_LLM = 22
+EXIT_MISSING_VAULT_ID = 23
+EXIT_INVALID_VAULT_ID = 24
+EXIT_VAULT_ID_MISMATCH = 25
+EXIT_TIMEOUT = 26
+
 
 def die(msg: str, code: int = 1) -> None:
     """Print a `wiki_ops: error: <msg>` line to stderr and exit with `code`."""
@@ -293,10 +312,20 @@ _CTRL_CHARS_RE = re.compile(r"[\x00-\x08\x0b-\x1f\x7f]")
 def _safe_for_json(value, *, max_bytes: int = MAX_VALUE_BYTES):
     """Sanitize a value before echoing into JSON output (S-M6).
 
-    Strips control characters and truncates overly long strings. Recurses into
-    lists/dicts. Prevents prompt-injection-via-frontmatter chains where an
-    attacker-controlled `title:` or `concept:` value would otherwise land
-    verbatim in the agent's planning context.
+    Strips C0 control characters (except tab 0x09 and LF 0x0a, which JSON
+    escapes natively via `\\t` / `\\n`) and 0x7f DEL; truncates overly
+    long strings. Recurses into lists/dicts. Prevents prompt-injection-
+    via-frontmatter chains where an attacker-controlled `title:` or
+    `concept:` value would otherwise land verbatim in the agent's
+    planning context.
+
+    Defense-in-depth caveat (vdd-multi 2026-05-27): this filter is the
+    JSON-output safety net only. Structural rejection of newlines /
+    pipes / log-heading-spoofs in user-supplied prose fields is the
+    job of `_safe_inline` (called by atomic ops at their CLI boundary).
+    `_safe_for_json` is intentionally lax on tab/LF because JSON's own
+    escape mechanism handles them safely; upstream `_safe_inline`
+    rejects them where they would corrupt log / index formats.
     """
     if isinstance(value, str):
         cleaned = _CTRL_CHARS_RE.sub("", value)

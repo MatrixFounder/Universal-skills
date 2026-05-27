@@ -12,7 +12,12 @@ from pathlib import Path
 
 from wiki_ingest._frontmatter import split_frontmatter
 from wiki_ingest._markdown import _mask_code_fences
-from wiki_ingest._safety import _skip_symlink, die, read_text
+from wiki_ingest._safety import (
+    EXIT_INVALID_VAULT_ID,
+    _skip_symlink,
+    die,
+    read_text,
+)
 
 
 # Folder names use the Obsidian system-folder convention: a leading underscore
@@ -121,7 +126,12 @@ def load_asset(name: str) -> str:
     return path.read_text(encoding="utf-8")
 
 
-_SCHEMA_PEEK_BYTES = 1024  # frontmatter rarely exceeds 200 bytes
+_SCHEMA_PEEK_BYTES = 8192  # frontmatter rarely exceeds 200 bytes, but template
+                            # comments / extended descriptions can push past 1 KiB.
+                            # Logic-critic 2026-05-27 (TASK 017 vdd-multi):
+                            # a 1024-byte cap could misclassify a 2.0 vault root
+                            # as 1.x when frontmatter is long. 8 KiB is safely
+                            # above any realistic frontmatter while staying tiny.
 
 
 def _peek_schema_version(schema_path: Path) -> str | None:
@@ -137,6 +147,61 @@ def _peek_schema_version(schema_path: Path) -> str | None:
         return None
     sv = fm.get("schema_version") if isinstance(fm, dict) else None
     return None if sv is None else str(sv).strip()
+
+
+_VAULT_ID_RE = re.compile(r"^[a-z][a-z0-9-]{1,30}[a-z0-9]$")
+
+
+def read_vault_id(vault_root: Path) -> str | None:
+    """`vault_id` slug from `vault_root/WIKI_SCHEMA.md` frontmatter (TASK 017 R3).
+
+    "Emit, don't enforce" per architecture §2.4: returns the raw value
+    when present, `None` when absent (schema-file missing, frontmatter
+    has no `vault_id:` line, or read fails). Does NOT validate the
+    pattern — caller chooses when to call `validate_vault_id_pattern`.
+
+    Standalone wiki-ingest users see no behavioural change: they neither
+    set the field nor demand strict mode, and the consumer-side index
+    layer (`obsidian-llm-wiki`) is the only audience that requires it.
+    """
+    schema_path = vault_root / SCHEMA_FILE
+    if not schema_path.is_file():
+        return None
+    try:
+        content = read_text(schema_path)
+    except (OSError, SystemExit):
+        # SystemExit guards against `read_text` deciding to die() on a
+        # symlinked schema. Absent / unreadable schema = "no vault_id".
+        return None
+    try:
+        fm, _ = split_frontmatter(content)
+    except (ValueError, UnicodeError, KeyError):
+        return None
+    value = fm.get("vault_id") if isinstance(fm, dict) else None
+    if not isinstance(value, str):
+        return None
+    return value.strip()
+
+
+def validate_vault_id_pattern(slug: str) -> None:
+    """`die(code=EXIT_INVALID_VAULT_ID)` on a malformed `vault_id` (TASK 017 R3.3).
+
+    Pattern (architecture §2.4): `^[a-z][a-z0-9-]{1,30}[a-z0-9]$`
+    (length 3..32, lowercase ASCII, kebab-case, no leading/trailing
+    dash). The `--` substring is rejected separately so the error
+    message can be specific.
+
+    A malformed slug would poison downstream consumers (filesystem,
+    SQLite PRIMARY KEY, URL fragments), so this check fires whether
+    the value came from frontmatter or from `--vault-id <slug>`.
+    Returns `None` on valid input.
+    """
+    if not _VAULT_ID_RE.fullmatch(slug):
+        die(f"INVALID_VAULT_ID: {slug!r} does not match {_VAULT_ID_RE.pattern}",
+            code=EXIT_INVALID_VAULT_ID)
+    if "--" in slug:
+        die(f"INVALID_VAULT_ID: {slug!r} contains '--'",
+            code=EXIT_INVALID_VAULT_ID)
 
 
 def _walk_up_for_schema(ancestors: list[Path], start_idx: int,

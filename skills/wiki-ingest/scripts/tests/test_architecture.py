@@ -86,6 +86,46 @@ class ImportGraphInvariant(unittest.TestCase):
         self.assertTrue((PKG / "commands" / "__init__.py").exists(),
                         "wiki_ingest/commands/__init__.py is required")
 
+    def test_dispatch_no_module_level_command_imports(self):
+        """TASK 017 R14.5 / Arch Q-2 — `_dispatch.py` is the F3-helper that
+        lets `commands/ingest.py` invoke other atomic commands via
+        `importlib.import_module` AT CALL TIME. The deliberate
+        carve-out: function-body imports are allowed; module-level
+        `from wiki_ingest.commands import …` or
+        `import wiki_ingest.commands.X` are forbidden.
+
+        The existing `test_no_helper_imports_commands` (above) also
+        catches this via `ast.walk` (which recurses into function
+        bodies for `ast.Import` / `ast.ImportFrom` nodes), but the
+        design uses `importlib.import_module(...)` — a `Call`, not an
+        `Import` — which is invisible to the walker. This test
+        documents the carve-out explicitly so future maintainers
+        don't accidentally lift the local import to module level.
+        """
+        dispatch_path = PKG / "_dispatch.py"
+        # If the helper is not yet present (older revision), skip.
+        if not dispatch_path.is_file():
+            self.skipTest("wiki_ingest/_dispatch.py not present yet")
+        tree = ast.parse(dispatch_path.read_text(encoding="utf-8"))
+        for node in tree.body:
+            if isinstance(node, ast.ImportFrom):
+                module = node.module or ""
+                self.assertFalse(
+                    module.startswith("wiki_ingest.commands"),
+                    f"_dispatch.py has a module-level `from {module} "
+                    f"import ...` — this violates the dispatch carve-out. "
+                    f"Move the import inside `dispatch()` and use "
+                    f"`importlib.import_module(...)`.",
+                )
+            elif isinstance(node, ast.Import):
+                for alias in node.names:
+                    self.assertFalse(
+                        alias.name.startswith("wiki_ingest.commands"),
+                        f"_dispatch.py has a module-level "
+                        f"`import {alias.name}` — this violates the "
+                        f"dispatch carve-out.",
+                    )
+
 
 if __name__ == "__main__":
     unittest.main()
