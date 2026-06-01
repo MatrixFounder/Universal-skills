@@ -30,17 +30,17 @@ from pathlib import Path
 try:
     from scripts.common import (  # type: ignore
         ALLOWED_DIFF_FORMATS, ARTIFACT_DATASET, ARTIFACT_FULL_SKILL, ARTIFACT_PROMPT,
-        ARTIFACT_SKILL, ARTIFACT_WORKFLOW,
+        ARTIFACT_SKILL, ARTIFACT_TEXT, ARTIFACT_WORKFLOW,
         DATASET_IMMUTABLE_FIELDS, DATASET_REF_FIELDS,
-        DIFF_DATASET_OP, DIFF_FRONTMATTER_FIELD, DIFF_SECTION_REPLACE,
+        DIFF_DATASET_OP, DIFF_FRONTMATTER_FIELD, DIFF_SECTION_REPLACE, DIFF_TEXT_REPLACE,
         MUTABLE_FRONTMATTER_FIELDS, parse_frontmatter, resolve_dataset_items,
     )
 except ImportError:
     from common import (
         ALLOWED_DIFF_FORMATS, ARTIFACT_DATASET, ARTIFACT_FULL_SKILL, ARTIFACT_PROMPT,
-        ARTIFACT_SKILL, ARTIFACT_WORKFLOW,
+        ARTIFACT_SKILL, ARTIFACT_TEXT, ARTIFACT_WORKFLOW,
         DATASET_IMMUTABLE_FIELDS, DATASET_REF_FIELDS,
-        DIFF_DATASET_OP, DIFF_FRONTMATTER_FIELD, DIFF_SECTION_REPLACE,
+        DIFF_DATASET_OP, DIFF_FRONTMATTER_FIELD, DIFF_SECTION_REPLACE, DIFF_TEXT_REPLACE,
         MUTABLE_FRONTMATTER_FIELDS, parse_frontmatter, resolve_dataset_items,
     )
 
@@ -97,11 +97,19 @@ def immutable_signatures(path: Path, artifact_type: str) -> set[str]:
             ident = item.get("id")
             if ident in (None, ""):
                 continue  # new/unidentified items are additions, not tracked
-            sig.add("case:" + "|".join(f"{f}={item.get(f, '')}" for f in DATASET_IMMUTABLE_FIELDS))
+            # Key by id first so each tracked case is a distinct set element
+            # (two cases sharing the same immutable triple can't collapse).
+            sig.add(f"case:{ident}:" + "|".join(f"{f}={item.get(f, '')}" for f in DATASET_IMMUTABLE_FIELDS))
             for ref_key in DATASET_REF_FIELDS:
                 if ref_key in item:
                     sig.add(f"{ident}:{ref_key}={json.dumps(item[ref_key], sort_keys=True)}")
         return sig
+
+    if artifact_type == ARTIFACT_TEXT:
+        # Free-form prose graded against a SEPARATE rubric (--criteria). The
+        # rubric is the harness and is never the artifact, so nothing within the
+        # text itself is immutable.
+        return set()
 
     if artifact_type == ARTIFACT_PROMPT:
         return set(_PLACEHOLDER_RE.findall(_artifact_text(path)))
@@ -130,6 +138,18 @@ def validate_proposal(artifact_path: Path, artifact_type: str, proposal: dict) -
     fmt = proposal.get("diff_format")
     if fmt not in ALLOWED_DIFF_FORMATS:
         return False, f"diff_format not allowed: {fmt!r} (allowed: {ALLOWED_DIFF_FORMATS})"
+
+    if fmt == DIFF_TEXT_REPLACE:
+        find = proposal.get("find") or ""
+        if not find.strip():
+            return False, "text-replace requires a non-empty 'find'"
+        if "replace" not in proposal:
+            return False, "text-replace requires a 'replace' field"
+        # Bound `find`: it is compiled into a fuzzy-ws regex; an unbounded value
+        # (from an LLM) would build a huge pattern and waste compile time.
+        if len(find) > 4096:
+            return False, f"text-replace 'find' too long ({len(find)} chars; cap 4096)"
+        return True, "ok"
 
     if fmt == DIFF_FRONTMATTER_FIELD:
         field = (proposal.get("field") or "").strip()
@@ -166,11 +186,40 @@ def validate_proposal(artifact_path: Path, artifact_type: str, proposal: dict) -
                 bad = set((op.get("fields") or {}).keys()) & protected
                 if bad:
                     return False, f"dataset op modifies immutable fields: {sorted(bad)}"
-            if op["op"] == "remove":
+            elif op["op"] == "add":
+                # A NEW case must not smuggle a grader (harness config) and any
+                # file refs must stay within the dataset's own directory.
+                item = op.get("item")
+                if not isinstance(item, dict):
+                    return False, "dataset add op requires an 'item' object"
+                if "grader" in item or "skill_name" in item:
+                    return False, "added eval case may not set 'grader'/'skill_name'"
+                ok_refs, why = _safe_dataset_refs(artifact_path, item)
+                if not ok_refs:
+                    return False, why
+            elif op["op"] == "remove":
                 return False, "removing existing eval cases is not allowed"
+            else:
+                return False, f"unsupported dataset op: {op['op']!r}"
         return True, "ok"
 
     return False, "unhandled format"
+
+
+def _safe_dataset_refs(dataset_path: Path, item: dict) -> tuple[bool, str]:
+    """Reject file refs that escape the dataset's own directory (traversal)."""
+    base = Path(dataset_path).resolve().parent
+    for key in DATASET_REF_FIELDS:
+        if key not in item:
+            continue
+        refs = item[key]
+        for ref in (refs if isinstance(refs, list) else [refs]):
+            try:
+                resolved = (base / str(ref)).resolve()
+                resolved.relative_to(base)
+            except (ValueError, OSError):
+                return False, f"added eval case file ref escapes dataset dir: {ref!r}"
+    return True, "ok"
 
 
 def main() -> int:

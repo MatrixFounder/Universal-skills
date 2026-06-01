@@ -21,16 +21,16 @@ from pathlib import Path
 try:
     from scripts.common import (  # type: ignore
         ARTIFACT_DATASET, ARTIFACT_FULL_SKILL, ARTIFACT_SKILL,
-        DIFF_DATASET_OP, DIFF_FRONTMATTER_FIELD, DIFF_SECTION_REPLACE,
-        ProposalError, replace_section, resolve_dataset_items,
-        set_frontmatter_field, split_frontmatter,
+        DIFF_DATASET_OP, DIFF_FRONTMATTER_FIELD, DIFF_SECTION_REPLACE, DIFF_TEXT_REPLACE,
+        ProposalError, apply_text_replace, replace_section, resolve_dataset_items,
+        sanitize_injectable_value, set_frontmatter_field, split_frontmatter,
     )
 except ImportError:
     from common import (
         ARTIFACT_DATASET, ARTIFACT_FULL_SKILL, ARTIFACT_SKILL,
-        DIFF_DATASET_OP, DIFF_FRONTMATTER_FIELD, DIFF_SECTION_REPLACE,
-        ProposalError, replace_section, resolve_dataset_items,
-        set_frontmatter_field, split_frontmatter,
+        DIFF_DATASET_OP, DIFF_FRONTMATTER_FIELD, DIFF_SECTION_REPLACE, DIFF_TEXT_REPLACE,
+        ProposalError, apply_text_replace, replace_section, resolve_dataset_items,
+        sanitize_injectable_value, set_frontmatter_field, split_frontmatter,
     )
 
 
@@ -54,10 +54,20 @@ def _apply_section_replace(target: Path, proposal: dict) -> None:
 
 def _apply_frontmatter_field(target: Path, proposal: dict) -> None:
     text = target.read_text(encoding="utf-8")
-    target.write_text(
-        set_frontmatter_field(text, proposal["field"], proposal["value"]),
-        encoding="utf-8",
-    )
+    value = proposal["value"]
+    # description is embedded into an agent-readable command context downstream;
+    # defang injection markers before writing (see common.sanitize_injectable_value).
+    if proposal["field"] == "description":
+        value = sanitize_injectable_value(value)
+    target.write_text(set_frontmatter_field(text, proposal["field"], value), encoding="utf-8")
+
+
+def _apply_text_replace(target: Path, proposal: dict) -> None:
+    content = target.read_text(encoding="utf-8")
+    new_content, how = apply_text_replace(content, proposal["find"], proposal.get("replace", ""))
+    if new_content is None:
+        raise ProposalError(f"text-replace failed: {how}")
+    target.write_text(new_content, encoding="utf-8")
 
 
 def _apply_dataset_ops(target: Path, proposal: dict) -> None:
@@ -102,6 +112,8 @@ def apply_proposal(artifact_path: Path, artifact_type: str, proposal: dict) -> P
         _apply_frontmatter_field(target, proposal)
     elif fmt == DIFF_DATASET_OP:
         _apply_dataset_ops(target, proposal)
+    elif fmt == DIFF_TEXT_REPLACE:
+        _apply_text_replace(target, proposal)
     else:
         raise ProposalError(f"unknown/unsupported diff_format: {fmt!r}")
     return target

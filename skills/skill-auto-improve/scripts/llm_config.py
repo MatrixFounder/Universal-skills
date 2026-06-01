@@ -20,6 +20,7 @@ when only one provider's SDK is present.
 
 from __future__ import annotations
 
+import json
 import os
 import sys
 from pathlib import Path
@@ -49,6 +50,15 @@ except ImportError:
     openai = None
 
 
+# Defaults applied when neither the environment nor config/llm_profiles.yaml
+# supplies a value. Kept as named constants (no magic literals in the logic).
+FALLBACK_PROVIDER = "anthropic"
+DEFAULT_TEMPERATURE = 0.0
+DEFAULT_MAX_OUTPUT_TOKENS = 8192
+DEFAULT_TIMEOUT_SECONDS = 180
+DEFAULT_OPENAI_CLIENT_RETRIES = 1
+
+
 def find_skill_root() -> Path:
     """Skill root = parent of the scripts/ directory holding this file."""
     return Path(__file__).resolve().parent.parent
@@ -66,12 +76,19 @@ class LLMConfigManager:
     """
 
     def __init__(self, profile_name: str, config_path: str | None = None):
+        # Trust boundary: secrets come from the process env and from .env at the
+        # skill root or CWD. A CWD .env is therefore TRUSTED input — do not run
+        # this from an attacker-controlled working directory (we deliberately do
+        # NOT walk parent directories, which could pick up an unintended .env).
         self.profile_name = profile_name
         self.root_path = find_skill_root()
 
-        # Load .env from skill root and (if present) from CWD / its parents.
+        # Load .env from the skill root, then the exact CWD (NOT an upward walk:
+        # walking parents could pick up an unintended/attacker .env that
+        # redirects OPENAI_BASE_URL and exfiltrates prompts). Neither overrides
+        # already-set process env.
         load_dotenv(dotenv_path=self.root_path / ".env")
-        load_dotenv()  # default search from CWD upward; does not override existing
+        load_dotenv(dotenv_path=Path.cwd() / ".env")
 
         if not config_path:
             config_path = self.root_path / "config" / "llm_profiles.yaml"
@@ -94,7 +111,7 @@ class LLMConfigManager:
 
         self.provider = os.environ.get(
             "DEFAULT_PROVIDER",
-            self.global_settings.get("default_provider", "anthropic"),
+            self.global_settings.get("default_provider", FALLBACK_PROVIDER),
         )
 
         key_env = {
@@ -111,21 +128,46 @@ class LLMConfigManager:
                 file=sys.stderr,
             )
 
-        self.temperature = self.profile.get("temperature", 0.0)
-        self.max_output_tokens = self.profile.get("max_output_tokens", 8192)
+        self.temperature = self.profile.get("temperature", DEFAULT_TEMPERATURE)
+        # Per-call output cap: profile value, optionally overridden run-wide by
+        # LLM_MAX_OUTPUT_TOKENS (set by the CLI --max-output-tokens flag) so a
+        # user can raise/lower it without editing llm_profiles.yaml.
+        self.max_output_tokens = self._read_positive_int(
+            os.environ.get("LLM_MAX_OUTPUT_TOKENS"),
+            self.profile.get("max_output_tokens", DEFAULT_MAX_OUTPUT_TOKENS),
+            DEFAULT_MAX_OUTPUT_TOKENS,
+        )
         self.json_mode = self.profile.get("json_mode", False)
         self.top_p = self.profile.get("top_p")
         self.request_timeout_seconds = self._read_positive_int(
             os.environ.get("LLM_REQUEST_TIMEOUT_SECONDS"),
-            self.global_settings.get("timeout_seconds", 180),
-            180,
+            self.global_settings.get("timeout_seconds", DEFAULT_TIMEOUT_SECONDS),
+            DEFAULT_TIMEOUT_SECONDS,
         )
         self.openai_client_retries = self._read_non_negative_int(
             os.environ.get("LLM_OPENAI_CLIENT_RETRIES"),
-            self.global_settings.get("retry_attempts", 1),
-            1,
+            self.global_settings.get("retry_attempts", DEFAULT_OPENAI_CLIENT_RETRIES),
+            DEFAULT_OPENAI_CLIENT_RETRIES,
         )
+        # Gateway base URLs (OpenRouter, Ollama, vLLM, Together, Groq, LiteLLM,
+        # an Anthropic-compatible proxy, ...). OpenRouter is OpenAI-compatible →
+        # use provider=openai + OPENAI_BASE_URL + OPENAI_MODEL_OVERRIDE (the
+        # OpenRouter model id, e.g. "anthropic/claude-3.5-sonnet").
         self.openai_base_url = os.environ.get("OPENAI_BASE_URL") or None
+        self.anthropic_base_url = os.environ.get("ANTHROPIC_BASE_URL") or None
+        # Optional custom headers for the OpenAI client (JSON), e.g. OpenRouter
+        # attribution: {"HTTP-Referer":"https://app","X-Title":"skill-auto-improve"}.
+        self.openai_default_headers = self._parse_json_env("OPENAI_DEFAULT_HEADERS")
+        active_base_url = (
+            self.openai_base_url if self.provider == "openai"
+            else self.anthropic_base_url if self.provider == "anthropic"
+            else None
+        )
+        if active_base_url:
+            # Loud, because a redirected base URL sends every prompt (incl. full
+            # artifact contents) to that endpoint.
+            print(f"WARNING: routing {self.provider} traffic to non-default "
+                  f"base_url: {active_base_url}", file=sys.stderr)
 
         models_dict = self.profile.get("model", {}) or {}
         self.model_name = self._resolve_primary_model(models_dict)
@@ -133,7 +175,20 @@ class LLMConfigManager:
         self.model_candidates = [self.model_name, *self.fallback_models]
         self.last_call_meta: dict[str, Any] | None = None
 
-    # -- small int helpers ---------------------------------------------------
+    # -- small helpers -------------------------------------------------------
+    @staticmethod
+    def _parse_json_env(name: str) -> dict | None:
+        """Parse a JSON-object env var (e.g. OPENAI_DEFAULT_HEADERS); None if unset/bad."""
+        raw = os.environ.get(name)
+        if not raw:
+            return None
+        try:
+            value = json.loads(raw)
+            return value if isinstance(value, dict) else None
+        except (json.JSONDecodeError, TypeError):
+            print(f"WARNING: {name} is not valid JSON; ignoring.", file=sys.stderr)
+            return None
+
     @staticmethod
     def _read_positive_int(value: object, fallback: object, default: int) -> int:
         for candidate in (value, fallback):
@@ -295,7 +350,12 @@ class LLMConfigManager:
         if self.provider == "anthropic":
             if not anthropic:
                 raise ImportError("anthropic is not installed.")
-            return anthropic.Anthropic(api_key=self.api_key) if self.api_key else None
+            if not self.api_key:
+                return None
+            a_kwargs: dict[str, Any] = {"api_key": self.api_key}
+            if self.anthropic_base_url:  # Anthropic-compatible gateway/proxy
+                a_kwargs["base_url"] = self.anthropic_base_url
+            return anthropic.Anthropic(**a_kwargs)
         if self.provider == "openai":
             if not openai:
                 raise ImportError("openai is not installed.")
@@ -306,8 +366,10 @@ class LLMConfigManager:
                 "timeout": float(self.request_timeout_seconds),
                 "max_retries": self.openai_client_retries,
             }
-            if self.openai_base_url:
+            if self.openai_base_url:  # e.g. OpenRouter / Ollama / vLLM / Together
                 kwargs["base_url"] = self.openai_base_url
+            if self.openai_default_headers:  # e.g. OpenRouter attribution headers
+                kwargs["default_headers"] = self.openai_default_headers
             return openai.OpenAI(**kwargs)
         return None
 

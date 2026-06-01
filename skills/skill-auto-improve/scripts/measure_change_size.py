@@ -22,12 +22,12 @@ import sys
 
 try:
     from scripts.common import (  # type: ignore
-        DIFF_DATASET_OP, DIFF_FRONTMATTER_FIELD, DIFF_SECTION_REPLACE,
+        DIFF_DATASET_OP, DIFF_FRONTMATTER_FIELD, DIFF_SECTION_REPLACE, DIFF_TEXT_REPLACE,
         TIER_LARGE, TIER_MEDIUM, TIER_SMALL, TIER_TRIVIAL,
     )
 except ImportError:
     from common import (
-        DIFF_DATASET_OP, DIFF_FRONTMATTER_FIELD, DIFF_SECTION_REPLACE,
+        DIFF_DATASET_OP, DIFF_FRONTMATTER_FIELD, DIFF_SECTION_REPLACE, DIFF_TEXT_REPLACE,
         TIER_LARGE, TIER_MEDIUM, TIER_SMALL, TIER_TRIVIAL,
     )
 
@@ -48,6 +48,11 @@ def _diff_stats(proposal: dict, old_section_lines: int = 0) -> tuple[int, int]:
 
     if fmt == DIFF_FRONTMATTER_FIELD:
         return 1, 1  # a single scalar field — always trivial
+
+    if fmt == DIFF_TEXT_REPLACE:
+        find_lines = len((proposal.get("find", "") or "").splitlines())
+        repl_lines = len((proposal.get("replace", "") or "").splitlines())
+        return 1, max(find_lines, repl_lines)
 
     if fmt == DIFF_DATASET_OP:
         ops = proposal.get("dataset_ops", []) or []

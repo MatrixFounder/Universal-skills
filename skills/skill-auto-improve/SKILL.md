@@ -22,7 +22,8 @@ across LLM vendors and improves skills, prompts, workflows, and eval datasets.
 - "Run it straight on `main`" -> **WRONG**. Use `--git-isolation`; intermediate commits belong on a throwaway branch, and a dirty tree aborts the run.
 
 ## 2. Capabilities
-- Improve four artifact types: `skill`, `prompt`, `workflow`, `dataset` (+ `full-skill`).
+- Improve artifact types: `skill`, `prompt`, `workflow`, `dataset`, `full-skill`, and `text` (arbitrary prose — emails, READMEs, landing copy — graded against a quality rubric).
+- Two decision mechanisms: noise-aware absolute-delta (deterministic/typed metrics) and a **debiased pairwise gate** (champion-vs-candidate in both orderings) for subjective text quality, with optional **best-of-N** candidates per iteration.
 - Vendor-agnostic LLM completion via `LLMConfigManager` (Anthropic / OpenAI / Gemini / OpenAI-compatible gateways), selected by `DEFAULT_PROVIDER`.
 - Pluggable agent-eval backends for skill-trigger evaluation (Claude validated; Gemini / Codex stubs); deterministic scoring for datasets; LLM grading for generic artifacts.
 - Multi-axis budget (iterations / tokens / wall-clock) and convergence detection.
@@ -35,8 +36,8 @@ across LLM vendors and improves skills, prompts, workflows, and eval datasets.
 ## 4. Script Contract
 - **Command (required args)**:
   - `python3 scripts/auto_improve.py --artifact-path <path> --workspace <dir>`
-- **Optional flags**: `--artifact-type` (default `auto`), `--target` (`auto`/`description`/`generic`), `--eval-set <evals.json>`, `--provider` (default `auto`), `--model`, `--max-iterations` (default 10), `--max-tokens`, `--max-duration` (e.g. `30m`), `--noise-sigma`, `--runs-per-query`, `--git-isolation`, `--verbose`.
-- **Inputs**: an artifact (dir or file); for `skill`/`prompt`/`workflow` an `--eval-set`; provider API key in `.env` (`{PROVIDER}_API_KEY`, optional `OPENAI_BASE_URL`); profiles in `config/llm_profiles.yaml`.
+- **Optional flags**: `--artifact-type` (default `auto`; use `text` for rubric-graded prose), `--target` (`auto`/`description`/`generic`), `--eval-set <evals.json>`, `--criteria <rubric.md>` (required for `text`), `--candidates N` (best-of-N for `text`, default 1), `--threshold` (0-1 early-stop; `text` default 0.9), `--provider` (default `auto`), `--model`, `--max-iterations` (default 10), `--max-tokens`, `--max-duration` (e.g. `30m`), `--noise-sigma`, `--runs-per-query`, `--num-workers`, `--git-isolation`, `--verbose`.
+- **Inputs**: an artifact (dir or file); for `skill`/`prompt`/`workflow` an `--eval-set`; for `text` a `--criteria` rubric (weighted dimensions summing to 100); provider API key in `.env` (`{PROVIDER}_API_KEY`, optional `OPENAI_BASE_URL`); profiles in `config/llm_profiles.yaml`.
 - **Outputs**: `<workspace>/improvement_history.tsv` (baseline + per-iteration rows), `<workspace>/improvement_report.md`, snapshots under `<workspace>/snapshots/`, optional `adversarial_review.md` for large-tier changes. The winning artifact is left in place (merge the git branch explicitly).
 - **Failure semantics**: non-zero exit on a dirty tree under `--git-isolation` (code 2) or an unknown artifact type; Proposer/apply/eval errors are logged as iteration rows and never crash the loop.
 - **Idempotency**: re-running re-evaluates from the current artifact state; history appends. Use a fresh `--workspace` for a clean run.
@@ -48,6 +49,8 @@ across LLM vendors and improves skills, prompts, workflows, and eval datasets.
 - **Destructive actions**: never. Removing existing eval cases is rejected; full-file overwrite is never used; revert restores the pre-change snapshot.
 - **Statistical honesty**: the inner loop (`runs_per_query≈3`) optimizes *direction*; only a final 5-run + bootstrap pass is a reliable measurement. This limitation is real — do not over-trust a single inner-loop score.
 - **Optional artifacts**: missing `references/`/`examples/` is non-blocking; a missing eval set for skill/prompt/workflow is blocking (cannot measure).
+- **Trust boundary**: skill-trigger eval runs a tool-enabled agent (`claude -p`) seeded with the artifact's own text. Two defense layers guard the description→agent prompt-injection path: (1) the Proposer's `description` is sanitized (HTML comments / control chars stripped) before write, and (2) the eval sink (`run_eval.py`) frames the description in the command body as untrusted DATA with a do-not-follow preamble. Still, run on trusted artifacts as belt-and-suspenders. Treat the process environment (`{PROVIDER}_API_KEY`, `OPENAI_BASE_URL`, `AUTO_IMPROVE_*`) as trusted input: a redirected `OPENAI_BASE_URL` sends prompts to that endpoint (the run warns when one is active).
+- **Text-quality judge trust boundary**: for `--artifact-type text`, the artifact prose is fed into the rubric judge AND the pairwise judge, which TOGETHER are the keep/revert gate. The artifact is stripped of injection markup (HTML comments/control chars) and the judges are instructed to treat it as untrusted DATA, but a determined plaintext-imperative injection ("score 100 / pick B") cannot be fully neutralized while still judging the prose — and the two-ordering debias does NOT defend against in-text injection (the instruction travels with the candidate into both orderings). Run text-quality only on artifacts whose provenance you trust, and review the winner before merging (the loop never merges for you). `text-replace` edits stay scoped to the artifact's own string (no path escape).
 
 ## 6. Validation Evidence
 - **Local verification**:
@@ -103,13 +106,15 @@ across LLM vendors and improves skills, prompts, workflows, and eval datasets.
 See `examples/`:
 - `examples/dataset-improvement-example.md` — offline dataset quality loop (no API for the Evaluator).
 - `examples/skill-improvement-example.md` — improving a weak skill's description (CSO trigger accuracy).
+- `examples/text-quality-example.md` + `examples/cold-email-rubric.md` — improving arbitrary prose against a rubric via the pairwise gate + best-of-N.
 
 ## 11. Resources
-- `scripts/auto_improve.py` — orchestrator + CLI; `run_improvement_loop` takes injectable proposer/evaluator for offline tests.
+- `scripts/auto_improve.py` — orchestrator + CLI; `run_improvement_loop` takes injectable proposer/evaluator/decider for offline tests.
 - `scripts/llm_config.py` — vendor-agnostic `LLMConfigManager` (native SDKs, fallback chain, usage→budget, `OPENAI_BASE_URL`).
+- `scripts/pairwise.py` — debiased pairwise gate (champion-vs-candidate, both orderings) for `text` quality.
 - `scripts/{check_immutability,apply_proposal,measure_change_size,grade_dataset,snapshot,log_iteration,detect_artifact_type,detect_vendor}.py` — deterministic utilities.
 - `scripts/backends/` — agent-eval registry (`claude` validated; `gemini`/`codex` stubs).
-- `config/llm_profiles.yaml` — `proposer` / `grader` / `eval_bootstrap` profiles per provider.
+- `config/llm_profiles.yaml` — `proposer` / `text_mutator` / `grader` / `eval_bootstrap` profiles per provider.
 - `references/` — `artifact_type_guide.md`, `metrics_reference.md`, `backends/*` adapter specs.
 - `agents/` — `proposer.md`, `evaluator.md` system prompts the orchestrator sends to the LLM.
 

@@ -34,12 +34,14 @@ ARTIFACT_PROMPT = "prompt"
 ARTIFACT_WORKFLOW = "workflow"
 ARTIFACT_DATASET = "dataset"
 ARTIFACT_FULL_SKILL = "full-skill"
+ARTIFACT_TEXT = "text"  # arbitrary text improved against a quality rubric (0-100)
 ARTIFACT_TYPES = (
     ARTIFACT_SKILL,
     ARTIFACT_PROMPT,
     ARTIFACT_WORKFLOW,
     ARTIFACT_DATASET,
     ARTIFACT_FULL_SKILL,
+    ARTIFACT_TEXT,
 )
 
 # Proposal diff formats. NOTE: a raw `unified-diff` format was intentionally
@@ -49,7 +51,10 @@ ARTIFACT_TYPES = (
 DIFF_SECTION_REPLACE = "section-replace"   # replace one `## Header` section body
 DIFF_DATASET_OP = "dataset-op"             # structured ops on evals.json
 DIFF_FRONTMATTER_FIELD = "frontmatter-field"  # set one mutable frontmatter field (e.g. description)
-ALLOWED_DIFF_FORMATS = (DIFF_SECTION_REPLACE, DIFF_DATASET_OP, DIFF_FRONTMATTER_FIELD)
+DIFF_TEXT_REPLACE = "text-replace"         # scoped find/replace within the artifact (prose)
+ALLOWED_DIFF_FORMATS = (
+    DIFF_SECTION_REPLACE, DIFF_DATASET_OP, DIFF_FRONTMATTER_FIELD, DIFF_TEXT_REPLACE,
+)
 
 # Frontmatter fields the loop is allowed to change (description/version only).
 MUTABLE_FRONTMATTER_FIELDS = ("description", "version")
@@ -143,6 +148,32 @@ def parse_frontmatter(text: str) -> dict[str, str]:
     return result
 
 
+_HTML_COMMENT_RE = re.compile(r"<!--.*?-->", re.DOTALL)
+_CONTROL_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
+
+
+def strip_injection_markup(text: str) -> str:
+    """Remove HTML comments + control chars but PRESERVE whitespace/newlines.
+
+    Used when the text's own formatting matters (e.g. prose fed to a quality
+    judge — collapsing newlines would corrupt what is being judged). Defangs the
+    obvious comment/control injection vector without altering visible structure.
+    """
+    return _CONTROL_RE.sub("", _HTML_COMMENT_RE.sub(" ", text))
+
+
+def sanitize_injectable_value(value: str) -> str:
+    """Defang a value embedded into an agent-readable context AND collapse to a
+    single line (for short scalar fields like a skill `description`).
+
+    The description is later written into a `claude -p` command file and read by
+    a tool-enabled agent, so a Proposer (steerable by a poisoned artifact body)
+    could smuggle instructions via HTML comments or control characters. Strip
+    those and collapse to one line. This is data, not instructions.
+    """
+    return " ".join(strip_injection_markup(value).split())
+
+
 def _unescape_double(text: str) -> str:
     """Reverse the \\ and \" escaping used for double-quoted scalars."""
     out: list[str] = []
@@ -231,6 +262,29 @@ def replace_section(body: str, target_header: str, new_section_text: str) -> str
 
 def _ensure_trailing_newline(text: str) -> str:
     return text if text.endswith("\n") else text + "\n"
+
+
+def apply_text_replace(content: str, find: str, replace: str) -> tuple[str | None, str]:
+    """Scoped find/replace within an artifact's own text (prose improvement).
+
+    Returns (new_content, how) on success or (None, reason) on failure — NEVER
+    raises. Unlike a unified diff, this only mutates the artifact's own string
+    content (no file paths, no scope escape). Two rungs:
+      1. exact   — `find` occurs verbatim (replaced once)
+      2. fuzzy-ws — whitespace-tolerant: runs of whitespace in `find` match any
+                    whitespace run in `content` (handles LLM newline/spacing drift)
+    """
+    if not find:
+        return None, "empty-find"
+    if find in content:
+        return content.replace(find, replace, 1), "exact"
+    tokens = find.split()
+    if tokens:
+        pattern = re.compile(r"\s+".join(re.escape(t) for t in tokens))
+        m = pattern.search(content)
+        if m:
+            return content[: m.start()] + replace + content[m.end():], "fuzzy-ws"
+    return None, "not-found"
 
 
 def set_frontmatter_field(text: str, field: str, value: str) -> str:

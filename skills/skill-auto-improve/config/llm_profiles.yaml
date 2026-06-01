@@ -35,8 +35,21 @@ profiles:
     max_output_tokens: 4096
     json_mode: true
 
-  # Bootstraps an eval set from a skill's examples/ when none exists.
-  # Cheaper model is fine — it drafts candidate eval cases for review.
+  # Text-quality mutator: proposes surgical find/replace edits for prose.
+  # Higher temperature for diverse best-of-N draws (paired with the temp-0
+  # `grader` profile used for rubric scoring + the pairwise judge).
+  text_mutator:
+    model:
+      gemini: "gemini-2.5-pro"
+      anthropic: "claude-sonnet-4-6"
+      openai: "gpt-5.2"
+    temperature: 0.9
+    max_output_tokens: 8192
+    json_mode: true
+
+  # RESERVED — not yet wired into auto_improve.py. Intended for a future step
+  # that bootstraps an eval set from a skill's examples/ when none exists.
+  # Cheaper model is fine — it would draft candidate eval cases for review.
   eval_bootstrap:
     model:
       gemini: "gemini-2.5-flash"

@@ -12,6 +12,7 @@ violation that triggers a revert.
 | `prompt` | `.md`/`.txt`/`.prompt` file | prose, `## sections` | `{{placeholders}}` (must all survive) | `section-replace` |
 | `workflow` | under `workflows/`/`commands/` | step prose, ordering | YAML frontmatter keys, tool-invocation names | `section-replace` |
 | `dataset` | `evals.json` / list / `{evals|results|cases:[...]}` | add cases; refine non-immutable fields | existing cases' `id`, `skill_name`, `grader`, file refs; no removals | `dataset-op` (`add`, `modify`) |
+| `text` | explicit `--artifact-type text` + `--criteria rubric.md` | the whole prose body | nothing within the text (the rubric is a SEPARATE file = the harness) | `text-replace` (scoped find/replace) |
 
 ## Edit formats
 
@@ -27,6 +28,12 @@ escape the artifact scope and tamper with the immutable eval harness.)
 - **`dataset-op`** — `[{"op":"add","item":{...}}]` or
   `[{"op":"modify","id":"X","fields":{...}}]`. `modify` may not touch
   `id`/`skill_name`/`grader`/file-refs; `remove` is disallowed.
+- **`text-replace`** — `{find, replace}` applied to the artifact's own text
+  (exact, else whitespace-tolerant; `find` capped at 4096 chars). Scoped to the
+  artifact string only — no file paths, no scope escape. Used for `text` prose
+  improvement. Note: the whitespace-tolerant rung treats any whitespace run as
+  flexible, so a fuzzy match can span a blank-line/heading boundary — the
+  pairwise gate is the backstop against a bad splice.
 
 ## Why immutability is a subset check
 A plain hash-equality check would flag legitimate dataset additions (a new

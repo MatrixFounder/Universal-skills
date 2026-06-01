@@ -24,13 +24,23 @@ from pathlib import Path
 
 
 def _locate_run_eval() -> Path | None:
+    # NOTE on trust: AUTO_IMPROVE_RUN_EVAL points at a script executed via the
+    # Python interpreter. The process environment is part of the trust boundary
+    # (like {PROVIDER}_API_KEY). We additionally require a .py file to reduce the
+    # chance of pointing at an arbitrary executable by accident.
     env = os.environ.get("AUTO_IMPROVE_RUN_EVAL")
-    if env and Path(env).exists():
-        return Path(env)
+    if env:
+        p = Path(env)
+        if p.suffix == ".py" and p.is_file():
+            return p
     # scripts/backends/claude.py -> skill root -> skills/ -> skill-creator
     skill_root = Path(__file__).resolve().parent.parent.parent
     candidate = skill_root.parent / "skill-creator" / "scripts" / "run_eval.py"
     return candidate if candidate.exists() else None
+
+
+def _default_workers() -> int:
+    return min(10, (os.cpu_count() or 4))
 
 
 class ClaudeBackend:
@@ -51,10 +61,12 @@ class ClaudeBackend:
         runs_per_query: int = 3,
         timeout: int = 30,
         model: str | None = None,
+        num_workers: int | None = None,
     ) -> dict:
         if not self.available:
             raise RuntimeError("run_eval.py not found; claude backend unavailable")
 
+        workers = num_workers if num_workers and num_workers > 0 else _default_workers()
         with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as tmp:
             json.dump(eval_set, tmp)
             eval_path = tmp.name
@@ -65,6 +77,7 @@ class ClaudeBackend:
             "--skill-path", str(skill_path),
             "--runs-per-query", str(runs_per_query),
             "--timeout", str(timeout),
+            "--num-workers", str(workers),
         ]
         if model:
             cmd.extend(["--model", model])

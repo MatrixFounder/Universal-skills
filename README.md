@@ -98,7 +98,7 @@ Available plugins (by category):
 | Category | Plugins |
 | :--- | :--- |
 | `office` | `docx`, `xlsx`, `pptx`, `pdf`, `marp-slide` |
-| `meta` | `skill-creator`, `skill-validator`, `skill-enhancer` |
+| `meta` | `skill-creator`, `skill-validator`, `skill-enhancer`, `skill-auto-improve` |
 | `verification` | `vdd-adversarial`, `vdd-sarcastic` |
 | `content` | `post-writing`, `text-humanizer`, `summarizing-meetings`, `transcript-fetcher` |
 | `workflow` | `brainstorming` |
@@ -160,6 +160,7 @@ specific repo.
 | **[Brainstorming](skills/brainstorming/SKILL.md)** | Explores user intent, clarifies requirements, and designs solutions with domain-specific research and self-correction. Use before writing code. | 2 |
 | **[Skill Enhancer](skills/skill-enhancer/SKILL.md)** | A meta-skill to audit, fix, and improve other skills. Enforces "Gold Standard" compliance (TDD, CSO, Script-First). Implements rules from [Skill Execution Policy](docs/SKILL_EXECUTION_POLICY.md). | 2 |
 | **[Skill Creator](/skills/skill-creator/SKILL.md)** | Authoritative guidelines for creating NEW skills. Ensures compliant directory structure and philosophy. Implements rules from [Skill Execution Policy](docs/SKILL_EXECUTION_POLICY.md). | 2 |
+| **[Skill Auto-Improve](skills/skill-auto-improve/SKILL.md)** | Vendor-agnostic meta-skill that automatically improves any artifact (skill, prompt, command/workflow, eval dataset) against a measurable metric. An orchestrator runs Proposer + Evaluator subagents in a propose→evaluate→keep/revert loop (immutable eval harness, git-isolated, revertible). Works across Anthropic / OpenAI / Gemini / OpenAI-compatible gateways. | 2 |
 | **[Summarizing Meetings](skills/summarizing-meetings/SKILL.md)** | Meta-skill for generating meeting summaries from transcriptions. Auto-detects meeting type (standup, retro, discovery), selects template, and produces a two-level pyramid Markdown document optimized for people, AI agents, RAG, and Obsidian. | 2 |
 | **[Wiki Ingest](skills/wiki-ingest/SKILL.md)** | Hybrid maintenance layer for an Obsidian-style llm-wiki (Karpathy pattern). Four modes: **ingest** (delegates to Summarizing Meetings, then upserts concept/entity pages additively, attaches `[^src-...]` footnotes, flags contradictions, updates `index.md` + `log.md`), **lint** (orphans / dangling links / missing pages / open contradictions), **reindex** (rebuild `index.md` from disk, preserve custom sections, merge duplicates), **query** (keyword-find + synthesise with citations). Filesystem-safe (path-traversal guard, Unicode-aware slugs, case-collision detection). Composes with **Transcript Fetcher** + **Summarizing Meetings**: fetch → summarize → ingest. | 2 |
 
@@ -373,6 +374,7 @@ Detailed manuals for specific components can be found in `docs/Manuals`:
 - **[Text Humanizer Manual](docs/Manuals/text_humanizer_manual.md)**: Deep dive into the Humanizer's taxonomy and patterns.
 - **[Post Writing Manual](docs/Manuals/post-writing_manual.md)**: Prompt formulas, IDE/Agent examples, and automated content pipeline architecture.
 - **[Skill Writing Manual](docs/Manuals/skill-writing_manual.md)**: Detailed guide on the philosophy of "Rich Skills".
+- **[Skill Auto-Improve Manual](docs/Manuals/skill-auto-improve_manual.md)**: Guide to the vendor-agnostic auto-improvement meta-skill — the `propose → evaluate → keep/revert` loop, the six artifact types and their edit formats, the absolute-delta vs **debiased pairwise** decision rules, **text-quality** mode (rubric + best-of-N), provider/gateway setup (incl. **OpenRouter**), the two token-budget axes, the immutability harness, and offline testing.
 - **[Hooks Creator Manual](docs/Manuals/hooks-creator_manual.md)**: Guide to generating lifecycle hooks and security blockers.
 - **[Skill Validator Manual](docs/Manuals/skill-validator_manual.md)**: Security auditing guide — CLI reference, architecture, pattern catalog, and CI/CD integration.
 - **[Skill Evals Guide](docs/Manuals/skill-evals_guide.md)** ([🇷🇺 RU](docs/Manuals/skill-evals_guide.ru.md)): Tutorial on how skill **evaluations** work in `skill-creator` — the two eval types (trigger vs behavior), LLM-judge vs deterministic **script-grader** (with a top-level schema of its internals), how to author quality eval sets, when evals go stale, what they affect, and token/effort budgets. Distills advanced practices (reproducibility pinning, set diversification / the "mirage" lesson, A/B isolation, multi-rep) from the `wiki-verify` reference stand.
