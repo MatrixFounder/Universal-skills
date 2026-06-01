@@ -18,9 +18,6 @@ on:
         required: false
         default: "false"
 
-env:
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
-
 jobs:
   skill:
     name: ${{ matrix.skill }}
@@ -39,13 +36,13 @@ jobs:
       # already available on actions/runner-images.)
       PUPPETEER_EXECUTABLE_PATH: /usr/bin/google-chrome-stable
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.11"
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v6
         with:
           node-version: "24"
 
@@ -61,7 +58,7 @@ jobs:
             imagemagick
 
       - name: Cache per-skill venv + node_modules
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: |
             skills/${{ matrix.skill }}/scripts/.venv
@@ -104,7 +101,7 @@ jobs:
         # isn't enough because GitHub Actions skips subsequent steps on
         # earlier failures by default.
         if: ${{ always() && github.event_name == 'workflow_dispatch' && inputs.update_goldens == 'true' }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: goldens-${{ matrix.skill }}
           path: tests/visual/goldens/${{ matrix.skill }}/
@@ -112,7 +109,7 @@ jobs:
 
       - name: Upload regenerated battery_signatures (pdf only)
         if: ${{ always() && github.event_name == 'workflow_dispatch' && inputs.update_goldens == 'true' && matrix.skill == 'pdf' }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: battery_signatures-pdf
           path: skills/pdf/scripts/tests/battery_signatures.json
@@ -133,13 +130,13 @@ jobs:
       HYPOTHESIS_PROFILE: ci
       PUPPETEER_EXECUTABLE_PATH: /usr/bin/google-chrome-stable
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.11"
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v6
         with:
           node-version: "24"
 
