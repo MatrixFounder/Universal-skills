@@ -1,0 +1,73 @@
+{
+  "skill_name": "skill-auto-improve",
+  "notes": "Behavioral evals for the auto-improvement loop. Scenarios 1-2,5 exercise skill artifacts (need a vendor agent-eval backend + provider key). Scenarios 3,4,6 exercise the deterministic dataset path and decision logic and run offline (fake/real proposer). Fixtures live in evals/fixtures/. The orchestrator's decision logic also has standalone unit tests in scripts/tests/.",
+  "evals": [
+    {
+      "id": 1,
+      "name": "improve-skill-description",
+      "prompt": "The skill at evals/fixtures/test-skill-broken has a vague description ('formats json') that under-triggers. Run auto-improve on it (description target, --max-iterations 3) using its trigger eval set and raise its CSO trigger accuracy.",
+      "files": ["evals/fixtures/test-skill-broken/SKILL.md", "evals/fixtures/test-skill-broken/evals/evals.json"],
+      "expectations": [
+        "improvement_history.tsv is written with a baseline row plus >=1 iteration row",
+        "At least one iteration has status=keep, OR exit_reason is recorded if no improvement was found",
+        "The final description is never worse than the baseline (no kept regression)",
+        "No IMMUTABILITY_VIOLATION: frontmatter name and tier are unchanged"
+      ]
+    },
+    {
+      "id": 2,
+      "name": "improve-skill-instructions",
+      "prompt": "Run auto-improve on evals/fixtures/test-skill-broken targeting the Instructions section. The skill's vague instructions should be tightened without changing the frontmatter or evals.",
+      "files": ["evals/fixtures/test-skill-broken/SKILL.md"],
+      "expectations": [
+        "Score does not decrease below baseline (kept changes only improve or hold)",
+        "No IMMUTABILITY_VIOLATION logged",
+        "Each kept change is a single section-replace whose header matches the target (no rename)"
+      ]
+    },
+    {
+      "id": 3,
+      "name": "improve-dataset",
+      "prompt": "Run auto-improve with --artifact-type dataset on evals/fixtures/thin-dataset.json. The thin dataset has only positive cases and 3 entries; the loop should propose adding negative cases / more entries to raise grade_dataset's quality score.",
+      "files": ["evals/fixtures/thin-dataset.json"],
+      "expectations": [
+        "Final grade_dataset score is >= baseline score",
+        "Any added eval cases preserve immutable fields (id/skill_name/grader of existing cases unchanged)",
+        "improvement_history.tsv records the dataset quality trajectory"
+      ]
+    },
+    {
+      "id": 4,
+      "name": "revert-on-regression",
+      "prompt": "When a proposed change lowers the score, the loop must revert it and restore the artifact to its previous best state.",
+      "files": [],
+      "expectations": [
+        "An iteration whose evaluated score < best_score is logged with status=revert",
+        "After a revert, the artifact content equals the pre-change snapshot",
+        "best_score never decreases across the run"
+      ]
+    },
+    {
+      "id": 5,
+      "name": "convergence-stop",
+      "prompt": "Run auto-improve on an artifact whose evaluation already scores 1.0. The loop must exit immediately after the baseline without proposing changes.",
+      "files": [],
+      "expectations": [
+        "exit_reason == 'already_optimal'",
+        "Only the baseline row is written to improvement_history.tsv",
+        "No proposer call is made after the baseline"
+      ]
+    },
+    {
+      "id": 6,
+      "name": "no-signal-revert",
+      "prompt": "When a change moves the score by less than the noise sigma, the loop must treat it as no-signal and REVERT (not keep), so noise does not accumulate as drift.",
+      "files": [],
+      "expectations": [
+        "An iteration with |delta| <= sigma is logged with status=no-signal",
+        "no-signal iterations are reverted (best_score unchanged)",
+        "Repeated no-signal iterations trigger the stagnation convergence exit"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,8 @@
+[
+  {"query": "Pretty-print and reindent this minified JSON config file", "should_trigger": true},
+  {"query": "My package.json is all on one line, can you format it nicely?", "should_trigger": true},
+  {"query": "Sort the keys in this JSON object alphabetically and indent with 2 spaces", "should_trigger": true},
+  {"query": "Write me a Python web scraper for news headlines", "should_trigger": false},
+  {"query": "Explain how TCP congestion control works", "should_trigger": false},
+  {"query": "Translate this paragraph into French", "should_trigger": false}
+]

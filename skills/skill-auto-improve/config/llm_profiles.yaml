@@ -1,0 +1,47 @@
+# LLM profiles for skill-auto-improve (vendor-agnostic).
+#
+# Provider is chosen by the DEFAULT_PROVIDER env var (gemini|anthropic|openai).
+# For each profile, `model` maps the active provider to a concrete model id.
+# Override per-run with {PROVIDER}_MODEL_OVERRIDE / {PROVIDER}_FALLBACK_MODELS.
+# Secrets ({PROVIDER}_API_KEY, optional OPENAI_BASE_URL) live in .env / env.
+
+global:
+  default_provider: anthropic
+  retry_attempts: 3
+  retry_backoff_seconds: 5
+  timeout_seconds: 180
+
+profiles:
+
+  # Generates ONE focused improvement proposal per iteration.
+  # Needs reasoning quality + reliable JSON → a capable model, json_mode on.
+  proposer:
+    model:
+      gemini: "gemini-2.5-pro"
+      anthropic: "claude-sonnet-4-6"
+      openai: "gpt-5.2"
+    temperature: 0.4
+    max_output_tokens: 16384
+    json_mode: true
+
+  # Grades a generic artifact's output against a rubric (subjective eval).
+  # Lower temperature for consistency; json_mode for a parseable verdict.
+  grader:
+    model:
+      gemini: "gemini-2.5-pro"
+      anthropic: "claude-sonnet-4-6"
+      openai: "gpt-5.2"
+    temperature: 0.0
+    max_output_tokens: 4096
+    json_mode: true
+
+  # Bootstraps an eval set from a skill's examples/ when none exists.
+  # Cheaper model is fine — it drafts candidate eval cases for review.
+  eval_bootstrap:
+    model:
+      gemini: "gemini-2.5-flash"
+      anthropic: "claude-haiku-4-5-20251001"
+      openai: "gpt-4o-mini"
+    temperature: 0.3
+    max_output_tokens: 8192
+    json_mode: true

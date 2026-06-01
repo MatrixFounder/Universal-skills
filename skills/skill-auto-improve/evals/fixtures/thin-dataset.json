@@ -1,0 +1,5 @@
+[
+  {"id": "a", "query": "Pretty-print this minified JSON", "should_trigger": true},
+  {"id": "b", "query": "Format my package.json nicely", "should_trigger": true},
+  {"id": "c", "query": "Reindent this JSON with two spaces", "should_trigger": true}
+]
