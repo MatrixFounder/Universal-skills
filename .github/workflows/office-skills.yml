@@ -128,6 +128,7 @@ jobs:
     runs-on: ubuntu-22.04
     env:
       HYPOTHESIS_PROFILE: ci
+      PUPPETEER_EXECUTABLE_PATH: /usr/bin/google-chrome-stable
     steps:
       - uses: actions/checkout@v4
 
