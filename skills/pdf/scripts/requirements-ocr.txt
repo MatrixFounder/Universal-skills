@@ -9,4 +9,9 @@
 #   - tesseract  (+ the 'eng' and 'rus' traineddata language packs)
 #   - ghostscript (gs)
 # pikepdf / Pillow are pulled in transitively by ocrmypdf.
+#
+# LICENSE: ghostscript is AGPL-3.0-or-later. It MUST stay a non-bundled,
+# non-modified, separate-process dependency (ocrmypdf invokes it via subprocess).
+# NEVER vendor or patch a gs binary into this (proprietary) skill — doing so
+# would pull the skill under AGPL copyleft. See THIRD_PARTY_NOTICES.md.
 ocrmypdf>=16

@@ -74,7 +74,7 @@ class TestStubUnits(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
         cls._tmp = tempfile.mkdtemp(prefix="pdf_ocr_test_")
-        cls._fx = fixtures.build_all(Path(cls._tmp))
+        cls._fx = _SHARED_FX
 
     @classmethod
     def tearDownClass(cls) -> None:
@@ -243,6 +243,29 @@ class _FakeOcr:
         return self.behavior(self.captured)
 
 
+# Module-level shared READ-ONLY fixtures: scan.pdf + digital.pdf are built ONCE
+# (Pillow raster + reportlab is the dominant cost of the engine-absent suite).
+# Classes reference these for INPUT reads and write OUTPUTS into their own
+# per-class tmp dirs — the fixtures are never mutated, so no per-class rebuild.
+_SHARED_DIR: "str | None" = None
+_SHARED_FX: dict = {}
+
+
+def setUpModule() -> None:
+    global _SHARED_DIR
+    _SHARED_DIR = tempfile.mkdtemp(prefix="pdf_ocr_shared_")
+    _SHARED_FX.update(fixtures.build_all(Path(_SHARED_DIR)))
+
+
+def tearDownModule() -> None:
+    if _SHARED_DIR:
+        for p in Path(_SHARED_DIR).glob("*"):
+            with contextlib.suppress(OSError):
+                p.unlink()
+        with contextlib.suppress(OSError):
+            os.rmdir(_SHARED_DIR)
+
+
 class TestEngineProbeAndLangValidate(unittest.TestCase):
     """018-02 [LOGIC] — FC-3 engine probe + FC-4 language validator.
 
@@ -253,7 +276,7 @@ class TestEngineProbeAndLangValidate(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
         cls._tmp = tempfile.mkdtemp(prefix="pdf_ocr_t2_")
-        cls._fx = fixtures.build_all(Path(cls._tmp))
+        cls._fx = _SHARED_FX
 
     @classmethod
     def tearDownClass(cls) -> None:
@@ -306,6 +329,35 @@ class TestEngineProbeAndLangValidate(unittest.TestCase):
             pdf_ocr._validate_languages("+", {"eng", "rus"})
         self.assertEqual(ctx.exception.error_type, "LanguagePackMissing")
 
+    def test_installed_languages_parsing(self) -> None:
+        # TC-UNIT-L4 — direct coverage of the `tesseract --list-langs` parser:
+        # banner-on-stdout (older), banner-on-stderr (newer), blank lines.
+        import subprocess as _sp
+
+        def fake_run(argv, **kw):  # noqa: ANN001, ANN202
+            return _sp.CompletedProcess(argv, 0, stdout=self._STDOUT, stderr=self._STDERR)
+
+        # (a) older form: banner + langs all on stdout.
+        self._STDOUT = "List of available languages (3):\neng\nosd\nrus\n"
+        self._STDERR = ""
+        with mock.patch.object(pdf_ocr.shutil, "which", return_value="/usr/bin/tesseract"), \
+             mock.patch.object(pdf_ocr.subprocess, "run", side_effect=fake_run):
+            self.assertEqual(pdf_ocr._installed_languages(), {"eng", "osd", "rus"})
+
+        # (b) newer form: banner on stderr, langs on stdout, trailing blank.
+        self._STDOUT = "eng\nrus\n\n"
+        self._STDERR = 'List of available languages in "/opt/share" (2):'
+        with mock.patch.object(pdf_ocr.shutil, "which", return_value="/usr/bin/tesseract"), \
+             mock.patch.object(pdf_ocr.subprocess, "run", side_effect=fake_run):
+            self.assertEqual(pdf_ocr._installed_languages(), {"eng", "rus"})
+
+    def test_installed_languages_tesseract_missing(self) -> None:
+        # TC-UNIT-L4b — tesseract not on PATH → OcrEngineUnavailable.
+        with mock.patch.object(pdf_ocr.shutil, "which", return_value=None):
+            with self.assertRaises(pdf_ocr._OcrError) as ctx:
+                pdf_ocr._installed_languages()
+        self.assertEqual(ctx.exception.error_type, "OcrEngineUnavailable")
+
     def test_main_engine_path(self) -> None:
         # TC-E2E-02 / updated TC-UNIT-07 — engine-aware end-to-end.
         scan = self._fx["scan"]
@@ -331,7 +383,7 @@ class TestOcrRunner(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
         cls._tmp = tempfile.mkdtemp(prefix="pdf_ocr_t3_")
-        cls._fx = fixtures.build_all(Path(cls._tmp))
+        cls._fx = _SHARED_FX
 
     @classmethod
     def tearDownClass(cls) -> None:
@@ -362,13 +414,16 @@ class TestOcrRunner(unittest.TestCase):
         code, fake = self._run(out, behavior, mode="redo_ocr", jobs=2)
         self.assertEqual(code, 0)
         self.assertTrue(out.exists())
-        self.assertFalse((out.with_name(out.name + ".partial")).exists())
+        # The .partial is an mkstemp scratch (unpredictable name, O_EXCL, 0600);
+        # it must be moved away on success, leaving none behind.
+        self.assertEqual(list(Path(self._tmp).glob("*.partial.pdf")), [])
         self.assertTrue(fake.captured["redo_ocr"])
         self.assertNotIn("skip_text", fake.captured)
         self.assertNotIn("force_ocr", fake.captured)
         self.assertEqual(fake.captured["language"], ["eng", "rus"])
         self.assertEqual(fake.captured["jobs"], 2)
-        self.assertEqual(fake.captured["output_file"], str(out) + ".partial")
+        self.assertTrue(fake.captured["output_file"].endswith(".partial.pdf"))
+        self.assertEqual(Path(fake.captured["output_file"]).parent, Path(self._tmp))
 
     def test_atomic_no_partial_on_failure(self) -> None:
         # TC-UNIT-14 — engine writes the partial then raises → nothing left (I-3).
@@ -382,19 +437,53 @@ class TestOcrRunner(unittest.TestCase):
             self._run(out, behavior)
         self.assertEqual(ctx.exception.error_type, "InternalError")
         self.assertFalse(out.exists(), "no OUTPUT on failure")
-        self.assertFalse(
-            (out.with_name(out.name + ".partial")).exists(), "no partial left"
+        self.assertEqual(
+            list(Path(self._tmp).glob("*.partial.pdf")), [], "no partial left"
         )
 
+    def test_nonzero_exitcode_is_failure(self) -> None:
+        # TC-UNIT-L1 — ocrmypdf RETURNS a non-zero ExitCode (does not raise) for
+        # some failures; run_ocr must NOT promote that to success (HIGH-L1).
+        out = Path(self._tmp) / "rc.pdf"
+
+        def behavior(kwargs):  # noqa: ANN001, ANN202
+            Path(kwargs["output_file"]).write_bytes(b"%PDF bad\n")
+            return 4  # ExitCode.invalid_output_pdf
+
+        with self.assertRaises(pdf_ocr._OcrError) as ctx:
+            self._run(out, behavior)
+        self.assertEqual(ctx.exception.error_type, "OutputWriteFailed")
+        self.assertEqual(ctx.exception.details["ocrmypdf_exit"], 4)
+        self.assertFalse(out.exists(), "bad output not promoted to success")
+        self.assertEqual(list(Path(self._tmp).glob("*.partial.pdf")), [])
+
+    def test_unwritable_output_dir_maps_cleanly(self) -> None:
+        # iter-2 HIGH — mkstemp on a nonexistent OUTPUT dir must map to a clean
+        # OutputWriteFailed envelope, never escape as a raw OSError/traceback.
+        out = Path(self._tmp) / "nope" / "out.pdf"  # parent does not exist
+        with self.assertRaises(pdf_ocr._OcrError) as ctx:
+            self._run(out, lambda kwargs: None)
+        self.assertEqual(ctx.exception.error_type, "OutputWriteFailed")
+
     def test_exception_mapping(self) -> None:
-        # TC-UNIT-15 — mapped ocrmypdf exceptions → the right envelope `type`.
+        # TC-UNIT-15 — every _ENGINE_EXC_MAP entry → the right envelope `type`,
+        # plus the OSError and unmapped-exception fallbacks.
         out = Path(self._tmp) / "map.pdf"
+        # All 8 mapped class names (assert the map itself stays in sync).
         cases = [
             ("EncryptedPdfError", "EncryptedInput"),
             ("PriorOcrFoundError", "PriorOcrFound"),
             ("InputFileError", "InputUnreadable"),
+            ("BadArgsError", "InputUnreadable"),
+            ("UnsupportedImageFormatError", "InputUnreadable"),
+            ("DpiError", "InputUnreadable"),
             ("MissingDependencyError", "OcrEngineUnavailable"),
+            ("OutputFileAccessError", "OutputWriteFailed"),
         ]
+        self.assertEqual(
+            {n for n, _ in cases}, set(pdf_ocr._ENGINE_EXC_MAP),
+            "test cases out of sync with _ENGINE_EXC_MAP",
+        )
         for exc_name, expected in cases:
             with self.subTest(exc=exc_name):
                 fake_exc = type(exc_name, (Exception,), {})
@@ -405,6 +494,24 @@ class TestOcrRunner(unittest.TestCase):
                 with self.assertRaises(pdf_ocr._OcrError) as ctx:
                     self._run(out, behavior)
                 self.assertEqual(ctx.exception.error_type, expected)
+
+        # OSError fallback → OutputWriteFailed.
+        with self.subTest(exc="OSError"):
+            def os_behavior(kwargs):  # noqa: ANN001, ANN202
+                raise OSError("disk full")
+
+            with self.assertRaises(pdf_ocr._OcrError) as ctx:
+                self._run(out, os_behavior)
+            self.assertEqual(ctx.exception.error_type, "OutputWriteFailed")
+
+        # Unmapped exception → InternalError.
+        with self.subTest(exc="ValueError"):
+            def val_behavior(kwargs):  # noqa: ANN001, ANN202
+                raise ValueError("???")
+
+            with self.assertRaises(pdf_ocr._OcrError) as ctx:
+                self._run(out, val_behavior)
+            self.assertEqual(ctx.exception.error_type, "InternalError")
 
 
 @unittest.skipUnless(
@@ -420,7 +527,7 @@ class TestComposition(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
         cls._tmp = tempfile.mkdtemp(prefix="pdf_ocr_comp_")
-        cls._fx = fixtures.build_all(Path(cls._tmp))
+        cls._fx = _SHARED_FX
 
     @classmethod
     def tearDownClass(cls) -> None:
@@ -594,7 +701,7 @@ class TestImagePrepKnobs(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
         cls._tmp = tempfile.mkdtemp(prefix="pdf_ocr_knobs_")
-        cls._fx = fixtures.build_all(Path(cls._tmp))
+        cls._fx = _SHARED_FX
 
     @classmethod
     def tearDownClass(cls) -> None:

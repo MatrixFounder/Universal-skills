@@ -148,8 +148,11 @@ if [ "$WITH_OCR" -eq 1 ]; then
     if command -v tesseract >/dev/null 2>&1; then
         say "tesseract: $(tesseract --version 2>&1 | head -1)"
         # `--list-langs` writes to stderr on some tesseract builds and stdout on
-        # others — merge both so the eng/rus probe is not falsely negative.
-        langs=$(tesseract --list-langs 2>&1 | tail -n +2)
+        # others — merge both so the eng/rus probe is not falsely negative. Skip
+        # the banner by content ("List of available languages …"), not by a
+        # positional `tail` (after the 2>&1 merge the banner order is not fixed) —
+        # mirrors the pdf_ocr.py _installed_languages parser.
+        langs=$(tesseract --list-langs 2>&1 | grep -ivE '^list of')
         for need in eng rus; do
             if printf '%s\n' "$langs" | grep -qx "$need"; then
                 say "tesseract lang '$need': OK"

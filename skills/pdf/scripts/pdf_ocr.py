@@ -352,8 +352,13 @@ def _map_engine_exception(exc: Exception) -> _OcrError:
 def _decrypt_to_temp(inp: Path, password: str, out_dir: Path) -> Path:
     """Decrypt `inp` with `password` to a 0600 scratch PDF in `out_dir` and
     return its path. ocrmypdf has no native input-password path, so we decrypt
-    with `pikepdf` first (D-A3). The scratch lives in the OUTPUT directory (not
-    a world-readable /tmp) and is removed by `run_ocr`'s `finally` (S-3).
+    with `pikepdf` first (D-A3). The scratch is 0600 and lives in the OUTPUT dir
+    (not a world-readable /tmp), and is removed by `run_ocr`'s `finally` (S-3).
+
+    Scope note: only the scratch is mode-0600. The final searchable PDF is, for
+    an encrypted input, the **decrypted** content with whatever mode ocrmypdf
+    writes (operator's responsibility per the single-tenant trust model; see
+    references/ocr.md). Re-encryption of the output is out of scope.
 
     Raises `EncryptedInput` on a wrong/absent password, `OcrEngineUnavailable`
     if `pikepdf` is missing (it ships with ocrmypdf)."""
@@ -402,21 +407,29 @@ def run_ocr(
     deskew: bool,
     rotate_pages: bool,
     clean: bool,
+    installed: set[str] | None = None,
 ) -> int:
     """Drive `ocrmypdf` to produce the searchable PDF (atomic write), mapping
     engine exceptions to `_OcrError`. Returns `_EXIT_OK` on success.
 
-    The output is written to a `.partial` sibling and `os.replace`d into place,
-    and every temp (the `.partial`, plus a decrypted scratch file when
-    `--password` is used) is removed on every exit path — so a failure leaves no
-    partial or stale OUTPUT (invariant I-3). The image-prep knobs have host
+    `installed` is the set of installed tesseract languages (for the
+    `--rotate-pages` osd check); when None it is queried lazily — pass the set
+    `main` already computed to avoid a second `tesseract --list-langs` spawn.
+
+    The output is written to an O_EXCL `.partial` scratch (mkstemp) in the
+    OUTPUT dir and `os.replace`d into place; every temp (the `.partial`, plus a
+    decrypted scratch when `--password` is used) is removed on every exit path —
+    so a failure leaves no partial or stale OUTPUT (invariant I-3). The image-prep
+    knobs have host
     prerequisites checked up front (loud, never silent): `--rotate-pages` needs
     the tesseract `osd` data and `--clean` needs the `unpaper` binary;
     `--deskew` needs no extra tool."""
     ocr = _require_engine()
 
     # R9 prerequisites — fail loud before doing any work.
-    if rotate_pages and "osd" not in _installed_languages():
+    if rotate_pages and "osd" not in (
+        installed if installed is not None else _installed_languages()
+    ):
         raise _OcrError(
             "--rotate-pages needs the tesseract 'osd' data, which is not "
             "installed. Install — macOS: `brew install tesseract-lang`; Debian: "
@@ -432,21 +445,14 @@ def run_ocr(
             error_type="OcrEngineUnavailable",
         )
 
-    # R5: ocrmypdf does not accept an input password — decrypt to a 0600 scratch
-    # file in the OUTPUT directory first, then OCR that (D-A3). The output is
-    # unencrypted (re-encryption is out of scope).
-    decrypted: Path | None = None
-    if password is not None:
-        decrypted = _decrypt_to_temp(inp, password, outp.parent)
-    source = decrypted if decrypted is not None else inp
-
-    kwargs: dict = {
-        "language": lang,
-        "progress_bar": False,
-    }
-    # Exactly one OCR mode (argparse already enforces the mutex; default skip).
-    kwargs[{"skip_text": "skip_text", "redo_ocr": "redo_ocr",
-            "force_ocr": "force_ocr"}[mode]] = True
+    # Exactly one OCR mode (argparse enforces the mutex). `mode` IS the ocrmypdf
+    # kwarg name; validate membership so an out-of-band caller gets a clean
+    # envelope, not a raw KeyError.
+    if mode not in ("skip_text", "redo_ocr", "force_ocr"):
+        raise _OcrError(
+            f"Unknown OCR mode: {mode!r}.", error_type="InternalError",
+        )
+    kwargs: dict = {"language": lang, "progress_bar": False, mode: True}
     if sidecar is not None:
         kwargs["sidecar"] = str(sidecar)
     if jobs is not None:
@@ -458,24 +464,52 @@ def run_ocr(
     if clean:
         kwargs["clean"] = True
 
-    # Atomic write: render to a sibling `.partial`, then os.replace into place.
-    # `ocrmypdf.ocr(input_file_or_options, output_file, *, ...)` takes the two
-    # paths POSITIONALLY (verified against ocrmypdf 17); the rest are kwargs.
-    tmp_out = outp.with_name(outp.name + ".partial")
+    # Atomic write via an O_EXCL, 0600 scratch in the OUTPUT dir (mkstemp →
+    # unpredictable name, no symlink-follow/TOCTOU on a pre-planted `.partial`),
+    # then os.replace into place. The decrypt-to-temp (R5) AND the ocr call live
+    # inside the try so any failure — including a raw OSError from mkstemp/decrypt
+    # or a NON-ZERO ExitCode RETURNED (not raised) by ocrmypdf — is mapped to a
+    # clean envelope and never leaves a partial or decrypted scratch behind (I-3).
+    tmp_out: Path | None = None
+    decrypted: Path | None = None
     try:
-        ocr.ocr(str(source), str(tmp_out), **kwargs)
+        # mkstemp is INSIDE the try so an OSError on an unwritable/nonexistent
+        # OUTPUT dir maps to a clean OutputWriteFailed envelope instead of
+        # escaping `main` (which only catches `_OcrError`) as a raw traceback.
+        fd, tmp_name = tempfile.mkstemp(dir=str(outp.parent), suffix=".partial.pdf")
+        os.close(fd)
+        tmp_out = Path(tmp_name)
+
+        # R5: ocrmypdf has no input-password path — decrypt to a 0600 scratch in
+        # the OUTPUT dir first, then OCR that (D-A3). The output is unencrypted.
+        if password is not None:
+            decrypted = _decrypt_to_temp(inp, password, outp.parent)
+        source = decrypted if decrypted is not None else inp
+
+        # `ocrmypdf.ocr(input_file_or_options, output_file, *, ...)` takes the two
+        # paths POSITIONALLY (verified against ocrmypdf 17). It RETURNS a non-zero
+        # ExitCode for some failures (e.g. invalid_output_pdf) instead of raising
+        # — never promote a bad output to success.
+        rc = ocr.ocr(str(source), str(tmp_out), **kwargs)
+        if rc is not None and int(rc) != 0:
+            raise _OcrError(
+                f"ocrmypdf reported a non-zero exit code ({int(rc)}); the output "
+                "was not produced cleanly.",
+                error_type="OutputWriteFailed",
+                details={"ocrmypdf_exit": int(rc)},
+            )
         os.replace(tmp_out, outp)
-    except Exception as exc:  # noqa: BLE001 — re-raised as a mapped _OcrError
+    except _OcrError:
+        raise
+    except Exception as exc:  # noqa: BLE001 — mapped to a clean _OcrError
         raise _map_engine_exception(exc) from exc
     finally:
         # I-3 / S-3: never leave the partial or the decrypted scratch behind
-        # (success already moved the partial away). The suppress keeps cleanup
-        # from masking the real error being propagated.
+        # (success already moved the partial away).
         for scratch in (tmp_out, decrypted):
             if scratch is not None:
                 with contextlib.suppress(OSError):
-                    if scratch.exists():
-                        scratch.unlink()
+                    scratch.unlink(missing_ok=True)
     return _EXIT_OK
 
 
@@ -498,12 +532,15 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         inp, outp, sidecar = _resolve_paths(args)
-        _require_engine()                       # → OcrEngineUnavailable if absent
-        langs = _validate_languages(args.lang)  # → LanguagePackMissing if absent
+        _require_engine()                  # → OcrEngineUnavailable if absent
+        # Query the installed tesseract languages ONCE and thread the set into
+        # both validation and run_ocr's osd check (avoids a 2nd --list-langs spawn).
+        installed = _installed_languages()
+        langs = _validate_languages(args.lang, installed)
         code = run_ocr(
             inp, outp, lang=langs, mode=args.mode, sidecar=sidecar,
             jobs=args.jobs, password=args.password, deskew=args.deskew,
-            rotate_pages=args.rotate_pages, clean=args.clean,
+            rotate_pages=args.rotate_pages, clean=args.clean, installed=installed,
         )
     except _OcrError as exc:
         return _report(exc, json_mode=je)
