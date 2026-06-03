@@ -35,7 +35,9 @@ OOXML schemas are distributed unchanged from their public sources.
 
 ## Python Libraries (runtime dependencies)
 
-Installed via `pip install -r scripts/requirements.txt` in each skill.
+Installed via `pip install -r scripts/requirements.txt` in each skill
+(except where a row notes a **soft-optional** manifest such as
+`requirements-ocr.txt`, installed only on demand via an `install.sh` flag).
 None are bundled in this repository.
 
 | Package | License | Used by |
@@ -54,6 +56,7 @@ None are bundled in this repository.
 | `pdfplumber` | MIT | pdf (layout-aware text/table extraction) |
 | `weasyprint` | BSD-3-Clause | pdf (Markdown/HTML → PDF) |
 | `markdown2` | MIT | pdf (Markdown → HTML preprocessing) |
+| `ocrmypdf` | MPL-2.0 | pdf (OCR scanned PDFs → searchable PDF; **soft-optional**, installed via `scripts/requirements-ocr.txt` only with `install.sh --with-ocr`) |
 
 ## JavaScript Libraries (runtime dependencies)
 
@@ -78,9 +81,12 @@ are bundled in this repository.
 | LibreOffice (`soffice`) | MPL-2.0 | docx (accept changes), xlsx (recalc), pptx (convert to PDF, thumbnails) |
 | Poppler (`pdftoppm`) | GPL-2.0-or-later | pptx (thumbnails) |
 | Pandoc | GPL-2.0-or-later | optional alternative paths in docx/pdf |
+| Tesseract OCR (`tesseract`) | Apache-2.0 | pdf (OCR engine behind `pdf_ocr.py`; soft-optional; needs the `eng`+`rus` language data) |
+| Ghostscript (`gs`) | AGPL-3.0-or-later | pdf (PDF rasterize/repair invoked by `ocrmypdf` for `pdf_ocr.py`; soft-optional) |
 
-GPL-licensed tools are invoked as unmodified standalone binaries via
-`subprocess`; this repository does not link against or redistribute them.
+GPL- and AGPL-licensed tools are invoked as unmodified standalone binaries
+via `subprocess` (Ghostscript indirectly, through `ocrmypdf`); this
+repository does not link against, modify, or redistribute them.
 
 ## Attribution
 

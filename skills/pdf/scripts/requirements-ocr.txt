@@ -1,0 +1,12 @@
+# Soft-optional OCR engine for pdf_ocr.py (pdf-4 / TASK 018).
+#
+# Installed ONLY via `bash install.sh --with-ocr` — NOT part of the base
+# requirements.txt (keeps the base pdf skill light). pdf_ocr.py imports
+# ocrmypdf lazily and fails loud (OcrEngineUnavailable) if it is absent.
+#
+# ocrmypdf also needs these SYSTEM tools on PATH (checked, not installed, by
+# install.sh --with-ocr):
+#   - tesseract  (+ the 'eng' and 'rus' traineddata language packs)
+#   - ghostscript (gs)
+# pikepdf / Pillow are pulled in transitively by ocrmypdf.
+ocrmypdf>=16

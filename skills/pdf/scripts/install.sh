@@ -8,10 +8,14 @@
 #   - python3 3.10+
 #   - pango + cairo + gdk-pixbuf (weasyprint runtime; required by md2pdf.py)
 #
-# Optional flag:
+# Optional flags:
 #   --with-chrome   also install Playwright + bundled Chromium (~150 MB) for
 #                   the optional chrome render engine (html2pdf --engine chrome).
 #                   See requirements-chrome.txt for the dependency.
+#   --with-ocr      also install ocrmypdf (pdf_ocr.py / pdf-4) into the venv and
+#                   PROBE the required system tools (tesseract + eng/rus
+#                   traineddata, ghostscript) — checked, not installed.
+#                   See requirements-ocr.txt for the dependency.
 #
 # Idempotent; safe to re-run.
 set -euo pipefail
@@ -20,16 +24,20 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$SCRIPT_DIR"
 
 WITH_CHROME=0
+WITH_OCR=0
 for arg in "$@"; do
     case "$arg" in
         --with-chrome) WITH_CHROME=1 ;;
+        --with-ocr) WITH_OCR=1 ;;
         --help|-h)
             cat <<EOF
-Usage: bash install.sh [--with-chrome]
+Usage: bash install.sh [--with-chrome] [--with-ocr]
 
 Options:
   --with-chrome   Install Playwright + Chromium for the optional chrome
                   render engine (html2pdf --engine chrome). Adds ~150 MB.
+  --with-ocr      Install ocrmypdf (pdf_ocr.py) into the venv and probe the
+                  required system tools (tesseract + eng/rus, ghostscript).
 EOF
             exit 0
             ;;
@@ -118,11 +126,65 @@ if [ "$WITH_CHROME" -eq 1 ]; then
     fi
 fi
 
+# --- Optional: ocrmypdf + system OCR tools for pdf_ocr.py (pdf-4) ---
+# Gated behind --with-ocr because most users do not need OCR and the system
+# tools (tesseract + language packs + ghostscript) are a heavier ask. We INSTALL
+# the Python wheel into the venv but only PROBE the system tools (install is the
+# user's choice — parity with the weasyprint native-libs probe).
+if [ "$WITH_OCR" -eq 1 ]; then
+    say "Installing ocrmypdf (OCR engine) into scripts/.venv/ ..."
+    # --upgrade so a re-run lifts an already-present too-old ocrmypdf to the
+    # requirements-ocr.txt floor. Plain `pip install -r` does not upgrade a
+    # satisfied package.
+    ./.venv/bin/pip install --quiet --upgrade -r requirements-ocr.txt
+    if ./.venv/bin/python -c 'import ocrmypdf' 2>/dev/null; then
+        say "ocrmypdf: OK ($(./.venv/bin/python -c 'import ocrmypdf; print(ocrmypdf.__version__)' 2>/dev/null))"
+    else
+        warn "ocrmypdf installed but cannot import — check the pip output above."
+        missing_host=1
+    fi
+
+    # Probe system tesseract + the eng/rus language packs.
+    if command -v tesseract >/dev/null 2>&1; then
+        say "tesseract: $(tesseract --version 2>&1 | head -1)"
+        # `--list-langs` writes to stderr on some tesseract builds and stdout on
+        # others — merge both so the eng/rus probe is not falsely negative.
+        langs=$(tesseract --list-langs 2>&1 | tail -n +2)
+        for need in eng rus; do
+            if printf '%s\n' "$langs" | grep -qx "$need"; then
+                say "tesseract lang '$need': OK"
+            else
+                warn "tesseract language pack '$need' MISSING (needed by default --lang eng+rus)."
+                missing_host=1
+            fi
+        done
+    else
+        warn "tesseract not found — pdf_ocr.py cannot run."
+        missing_host=1
+    fi
+
+    # Probe ghostscript (ocrmypdf hard dependency).
+    if command -v gs >/dev/null 2>&1; then
+        say "ghostscript: $(gs --version 2>/dev/null)"
+    else
+        warn "ghostscript (gs) not found — ocrmypdf cannot run."
+        missing_host=1
+    fi
+
+    if [ "$missing_host" -ne 0 ]; then
+        warn "Install the missing OCR system tools:"
+        warn "  macOS:   brew install tesseract tesseract-lang ghostscript"
+        warn "  Debian:  sudo apt install tesseract-ocr tesseract-ocr-eng tesseract-ocr-rus ghostscript"
+        warn "  Fedora:  sudo dnf install tesseract tesseract-langpack-eng tesseract-langpack-rus ghostscript"
+        warn "After installing, re-run 'bash install.sh --with-ocr' to verify."
+    fi
+fi
+
 echo ""
 if [ "$missing_host" -eq 0 ]; then
     say "All dependencies installed and verified."
 else
-    warn "Local deps OK, but weasyprint cannot run until pango/cairo/gdk-pixbuf are installed."
+    warn "Local deps OK, but some optional/native tools are missing (see warnings above)."
 fi
 echo ""
 say "Usage:"
@@ -131,4 +193,7 @@ say "  ./.venv/bin/python scripts/pdf_merge.py OUT.pdf A.pdf B.pdf"
 say "  ./.venv/bin/python scripts/pdf_split.py INPUT.pdf --each-page OUTDIR/"
 if [ "$WITH_CHROME" -eq 1 ]; then
     say "  ./.venv/bin/python scripts/html2pdf.py IN.webarchive OUT.pdf --engine chrome"
+fi
+if [ "$WITH_OCR" -eq 1 ]; then
+    say "  ./.venv/bin/python scripts/pdf_ocr.py SCAN.pdf SCAN.ocr.pdf   # OCR eng+rus"
 fi

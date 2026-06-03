@@ -32,6 +32,7 @@ scripts that embed those choices removes the variance.
 - **Detect, inspect, and fill AcroForm fields** via `pdf_fill_form.py` — three modes: `--check` (form-type triage with exit codes 0/11/12 = AcroForm/XFA/none), `--extract-fields` (dump field schema as JSON for editing), and fill mode (`INPUT.pdf DATA.json -o OUT.pdf [--flatten]`). XFA forms are detected and refused with a clear message.
 - Extract text, tables, and layout via `pdfplumber` (documented; inline usage from the agent is fine).
 - **Dump a PDF's per-page text + tables to structured JSON** via `pdf_extract.py` — a structured *dump*, NOT a Markdown converter (it never emits Markdown). Its defining feature is **scan detection**: an image-only document exits `10` with a `DocumentScanned` signal instead of silently yielding empty text. Pairs with [references/pdf-to-markdown.md](references/pdf-to-markdown.md) for the PDF→Markdown decision tree and recipe; final Markdown composition stays agent judgement.
+- **OCR a scanned (image-only) PDF into a searchable PDF** via `pdf_ocr.py` — wraps `ocrmypdf` to overlay an invisible OCR text layer (default languages **`eng+rus`**), the remediation hop for `pdf_extract.py` exit `10`. The OCR engine is **soft-optional**: install with `bash scripts/install.sh --with-ocr` (+ system tesseract/eng/rus/ghostscript); a missing engine or language pack fails loud, never silent. See [references/ocr.md](references/ocr.md).
 - Render any `.pdf` (or peer-skill `.docx`/`.xlsx`/`.pptx`) into a single PNG-grid preview via `preview.py` (uses Poppler directly for `.pdf`; LibreOffice + Poppler for OOXML).
 - Emit failures as machine-readable JSON to stderr with `--json-errors` (uniform across all four office skills).
 
@@ -55,6 +56,7 @@ scripts that embed those choices removes the variance.
   - `python3 scripts/pdf_fill_form.py INPUT.pdf DATA.json -o OUTPUT.pdf [--flatten]`
   - `python3 scripts/preview.py INPUT OUTPUT.jpg [--cols 3] [--dpi 110] [--gap 12] [--padding 24] [--label-font-size 14] [--soffice-timeout 240] [--pdftoppm-timeout 60]`
   - `python3 scripts/pdf_extract.py INPUT.pdf [-o OUT.json] [--layout] [--password PW] [--json-errors]` — dumps per-page text + tables as structured JSON (NOT Markdown). Exit codes: `0` success; `1` failure (missing / not-a-PDF / corrupt / encrypted-without-password); `2` usage error; `6` `SelfOverwriteRefused` (`-o` resolves to the input PDF); **`10` `DocumentScanned`** — the whole document is image-only, run OCR or read the pages as images. On exit 10 the dump is still emitted; exit 10 + stderr is the loud signal. Default output is stdout; `-o` writes a file (idempotent). See [references/pdf-to-markdown.md](references/pdf-to-markdown.md).
+  - `python3 scripts/pdf_ocr.py INPUT.pdf OUTPUT.pdf [--lang eng+rus] [--skip-text|--redo-ocr|--force-ocr] [--sidecar OUT.txt] [--jobs N] [--password PW] [--deskew] [--rotate-pages] [--clean] [--json-errors]` — OCR a scanned PDF into a searchable PDF via `ocrmypdf` (default languages `eng+rus`). `--password` decrypts an encrypted input; `--rotate-pages` needs tesseract `osd` data; `--clean` needs `unpaper`. Exit codes: `0` success; `1` failure (`type` in the envelope: `OcrEngineUnavailable` / `LanguagePackMissing` / `EncryptedInput` / `InputUnreadable` / `PriorOcrFound` / `OutputWriteFailed` / `InputNotFound`); `2` usage; `6` `SelfOverwriteRefused`. **Soft-optional engine** — `bash scripts/install.sh --with-ocr` first. See [references/ocr.md](references/ocr.md).
   - All scripts above accept `--json-errors` to emit failures as a single line of JSON on stderr (`{v, error, code, type?, details?}`). The schema version `v` is currently `1`; argparse usage errors are routed through the same envelope (`type:"UsageError"`).
 - **Inputs**: positional paths; optional flags per command.
 - **Outputs**: single PDF files (`md2pdf`, `pdf_merge`) or multiple PDFs under a directory (`pdf_split`). All stdout goes to the output path list.
@@ -118,6 +120,7 @@ Page numbers are 1-indexed and inclusive. Invalid ranges exit 1.
 1. **MUST** run `bash scripts/install.sh` once. It creates `scripts/.venv/` locally, installs `requirements.txt`, probes whether weasyprint can find its native libraries, and prints install hints if not. Idempotent.
 2. **External system libraries** (checked by `install.sh`, installed manually per project plan §3.3 "внешние инструменты — не бандлятся"):
    - **pango, cairo, gdk-pixbuf** — weasyprint native runtime; required by `md2pdf.py`. macOS: `brew install pango gdk-pixbuf libffi`. Debian: `sudo apt install libpango-1.0-0 libpangoft2-1.0-0 libharfbuzz0b libcairo2 libgdk-pixbuf2.0-0`. See [references/weasyprint-setup.md](references/weasyprint-setup.md) for fuller notes.
+   - **tesseract (+ eng/rus data) and ghostscript** — only for `pdf_ocr.py`; installed by `bash scripts/install.sh --with-ocr` (which installs `ocrmypdf` into the venv and probes these). macOS: `brew install tesseract tesseract-lang ghostscript`. Debian: `sudo apt install tesseract-ocr tesseract-ocr-eng tesseract-ocr-rus ghostscript`. See [references/ocr.md](references/ocr.md).
    Commands that need them fail with a clear error until installed.
 
 ## 8. Workflows (Optional)
@@ -195,6 +198,7 @@ Extract text (inline, no bundled script):
 | Fill AcroForm from JSON | `python3 scripts/pdf_fill_form.py form.pdf data.json -o filled.pdf [--flatten]` |
 | Preview as PNG-grid | `python3 scripts/preview.py file.pdf preview.jpg [--cols 3] [--dpi 110]` |
 | Dump PDF text + tables to JSON | `python3 scripts/pdf_extract.py in.pdf -o dump.json` |
+| OCR a scanned PDF (eng+rus) | `python3 scripts/pdf_ocr.py scan.pdf scan.ocr.pdf` (needs `install.sh --with-ocr`) |
 | PDF → Markdown (approach + recipe) | follow [references/pdf-to-markdown.md](references/pdf-to-markdown.md) |
 | Machine-readable failures | append `--json-errors` to any of the above |
 
@@ -257,5 +261,6 @@ python3 scripts/pdf_watermark.py contract.pdf contract-draft.pdf --text "DRAFT"
 - [scripts/pdf_fill_form.py](scripts/pdf_fill_form.py) — AcroForm inspect/extract/fill/flatten via pypdf; XFA forms detected and refused.
 - [scripts/preview.py](scripts/preview.py) — universal `INPUT → PNG-grid` renderer for `.pdf` (via Poppler) and `.docx`/`.xlsx`/`.pptx` (via LibreOffice + Poppler). Byte-identical across all four office skills.
 - [scripts/pdf_extract.py](scripts/pdf_extract.py) — dumps a PDF's per-page text + tables to structured JSON via `pdfplumber`, with scan detection (image-only document → exit `10`). A dump, not a Markdown converter.
+- [scripts/pdf_ocr.py](scripts/pdf_ocr.py) — OCR a scanned PDF into a searchable PDF via `ocrmypdf` (default `eng+rus`); soft-optional engine (`install.sh --with-ocr`); imports `_errors.py` read-only (no cross-skill replication). See [references/ocr.md](references/ocr.md).
 - [scripts/mermaid-config.json](scripts/mermaid-config.json) — bundled office-friendly mermaid config (Cyrillic-capable font stack, auto-applied unless overridden via `--mermaid-config`).
 - [scripts/_errors.py](scripts/_errors.py) — `--json-errors` envelope helper (schema `v=1`).

@@ -28,9 +28,10 @@ Is the PDF born-digital (has a real text layer)?
 │
 └─ NO — scanned / image-only (no text layer)
       → pdfplumber returns empty text. DO NOT ship that empty result.
-        Either: OCR the PDF first (`ocrmypdf in.pdf out.pdf`, then extract
-        out.pdf), or render the pages as images and read them with the Read
-        tool. `pdf_extract.py` detects this and exits 10 — see §5.
+        Either: OCR the PDF first with `pdf_ocr.py in.pdf out.pdf` (eng+rus
+        searchable PDF; see references/ocr.md), then extract out.pdf — or
+        render the pages as images and read them with the Read tool.
+        `pdf_extract.py` detects this and exits 10 — see §5.
 ```
 
 How do you know which branch you are on? Run `pdf_extract.py` — its
