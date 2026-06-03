@@ -320,6 +320,12 @@ _ENGINE_EXC_MAP: dict[str, tuple[str, str]] = {
         "InputUnreadable", "Unsupported image format in the input PDF",
     ),
     "DpiError": ("InputUnreadable", "Input image DPI could not be determined"),
+    "DecompressionBombError": (
+        "InputUnreadable",
+        "An embedded image is too large to process safely (Pillow "
+        "decompression-bomb guard) — try the default --skip-text, OCR fewer "
+        "pages, or pre-shrink the image",
+    ),
     "MissingDependencyError": (
         "OcrEngineUnavailable",
         "A required OCR system tool is missing (tesseract / ghostscript / unpaper)",

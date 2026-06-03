@@ -477,6 +477,7 @@ class TestOcrRunner(unittest.TestCase):
             ("BadArgsError", "InputUnreadable"),
             ("UnsupportedImageFormatError", "InputUnreadable"),
             ("DpiError", "InputUnreadable"),
+            ("DecompressionBombError", "InputUnreadable"),
             ("MissingDependencyError", "OcrEngineUnavailable"),
             ("OutputFileAccessError", "OutputWriteFailed"),
         ]

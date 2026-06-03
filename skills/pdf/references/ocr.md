@@ -61,6 +61,16 @@ TMPDIR="$PWD/.ocrtmp" python3 scripts/pdf_ocr.py scan.pdf out.pdf
 
 On an unrestricted shell the default `TMPDIR` works and no override is needed.
 
+### Troubleshooting: `--force-ocr` + a very large embedded image
+
+`--force-ocr` rasterizes **every** page; a PDF with a very large embedded image
+(e.g. a full-page figure) can exceed Pillow's decompression-bomb safety limit,
+surfaced as an `InputUnreadable` envelope ("an embedded image is too large to
+process safely"). For a **mostly-digital** PDF with only a few image/figure
+pages, prefer the default `--skip-text` (it OCRs only the image-only pages and
+keeps the crisp vector text on the rest), or OCR just the figure pages — rather
+than `--force-ocr` over the whole document.
+
 ## Usage
 
 ```text
