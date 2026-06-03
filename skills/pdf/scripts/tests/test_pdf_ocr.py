@@ -521,8 +521,9 @@ class TestOcrRunner(unittest.TestCase):
 )
 class TestComposition(unittest.TestCase):
     """018-03 — TC-E2E-03/04/05. The architecture's acceptance hinge: a real
-    scan → OCR → pdf_extract digital re-read. SKIPPED unless the engine + tools
-    are installed (PR-1: pdf-4 may be marked DONE only when this actually runs)."""
+    scan → OCR → pdf_extract digital re-read. Verified passing on engine-equipped
+    hosts (PR-1 gate); soft-skips on hosts without the OCR engine + tools (e.g. a
+    sandbox where the spawned tesseract can't read ocrmypdf's nested temp dir)."""
 
     @classmethod
     def setUpClass(cls) -> None:

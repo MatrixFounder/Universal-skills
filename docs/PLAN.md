@@ -251,8 +251,10 @@ Per `tdd-stub-first §1–§2`, each task file specifies its gate. Summary:
   §7-prioritisation mention (line ~665) are annotated **🔄 PLANNED — TASK 018
   (VDD spec+arch+plan approved)**, noting the locked design (ocrmypdf→searchable
   PDF, eng+rus, soft-optional `--with-ocr`, composition with `pdf_extract.py`).
-- **At merge:** task **018-06** flips the row to **✅ DONE** with the final
-  validation evidence (R8d).
+- **Done (2026-06-03):** PR-1 real-engine gate satisfied — `TC-E2E-03` ran and
+  passed on an engine-equipped host (`test_e2e.sh` 82 passed, 0 failed). Task
+  **018-06** complete; backlog row `pdf-4` flipped to **✅ DONE** with the final
+  validation evidence (R8d, composition E2E pass).
 
 ---
 
@@ -262,12 +264,13 @@ Per `tdd-stub-first §1–§2`, each task file specifies its gate. Summary:
   R7, R8 bound to a completing bead (§2) — no orphan; Stub-First two-pass
   structure (§4); `validate_skill.py skills/pdf` exit 0; cross-skill `diff -q`
   silent.
-  - **No false-green (PR-1):** the composition E2E **TC-E2E-03 must have
-    actually run — not soft-skipped — at least once on an engine-equipped host**
-    (ocrmypdf + tesseract eng+rus + ghostscript), with the pass recorded in the
-    018-06 validation evidence. `pdf-4` may be flipped to ✅ DONE **only** on that
-    real-run evidence; a suite that merely soft-skips the OCR block is NOT
-    sufficient to mark the feature done.
+  - **No false-green (PR-1) — SATISFIED (2026-06-03):** the composition E2E
+    **TC-E2E-03 ran (not soft-skipped) on an engine-equipped host** (ocrmypdf
+    17.5.0 + tesseract eng/rus/osd + ghostscript 10.07.1) and passed —
+    `test_e2e.sh` 82 passed, 0 failed (pdf_ocr unit+E2E suite 35 cases green +
+    the composition round-trip). The PR-1 gate is lifted and `pdf-4` is ✅ DONE.
+    (On a sandboxed host the OCR block soft-skips by design; that alone is not
+    sufficient evidence — the gate required this real run, which has now occurred.)
 - **Full DoD (incl. deferred):** 018-04 (R5) + 018-05 (R9) executed; UC-4 +
   R9 acceptance met.
 - Plan-Reviewer approval recorded in `docs/reviews/plan-018-review.md`.

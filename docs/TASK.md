@@ -96,7 +96,7 @@ land in a later Stub-First bead.
 | ID | Requirement | MVP? | Sub-features |
 |----|-------------|------|-------------|
 | R6 | Exit-code & error contract aligned with sibling pdf CLIs | ✅ | (a) `--json-errors` envelope (cross-5, `v=1`); (b) exit map `0` ok / `1` fail / `2` usage / `6` SelfOverwriteRefused — **all hard failures exit `1`, discriminated by the envelope `error_type`** (`OcrEngineUnavailable` / `LanguagePackMissing` / `EncryptedInput` / `InputUnreadable` / `PriorOcrFound` / `OutputWriteFailed` / `InternalError`); **no new exit codes** — `10` is reserved to `pdf_extract.py` `DocumentScanned` and not reused (see ARCHITECTURE §5.2 / §12 D-A1, resolves M-1); (c) same-path guard via `Path.resolve()` (in==out → exit 6); (d) `--sidecar` self-overwrite guard (sidecar path ∉ {input, output}) |
-| R7 | Soft-optional dependency packaging (D-2) | ✅ | (a) `requirements-ocr.txt` (ocrmypdf) + `install.sh --with-ocr`; (b) lazy `import ocrmypdf` inside the run path → missing → `OcrEngineUnavailable` (exit 11) with remediation; (c) `install.sh --with-ocr` **checks (not installs)** tesseract binary, `eng`+`rus` traineddata, and ghostscript, printing per-OS install hints (macOS/Debian/Fedora); (d) `requirements.txt` / base `install.sh` UNCHANGED (no eager OCR dep) |
+| R7 | Soft-optional dependency packaging (D-2) | ✅ | (a) `requirements-ocr.txt` (ocrmypdf) + `install.sh --with-ocr`; (b) lazy `import ocrmypdf` inside the run path → missing → `OcrEngineUnavailable` (exit 1, envelope `type`) with remediation; (c) `install.sh --with-ocr` **checks (not installs)** tesseract binary, `eng`+`rus` traineddata, and ghostscript, printing per-OS install hints (macOS/Debian/Fedora); (d) `requirements.txt` / base `install.sh` UNCHANGED (no eager OCR dep) |
 | R8 | Tests, fixtures, docs, validator-green | ✅ | (a) E2E in `skills/pdf/scripts/tests/test_e2e.sh` (scanned fixture → OCR → `pdf_extract` recovers a **tolerant** Cyrillic+ASCII needle, case-insensitive substring — OCR is not bit-exact); (b) unit tests (lang validation, mode-flag mutex, same-path guard, envelope shapes, lazy-import failure path); (c) reference doc `references/ocr.md` (incl. the OCR **trust model** — see M-2 below) + `SKILL.md` surface + cross-link from `references/pdf-to-markdown.md`; (d) `validate_skill.py skills/pdf` exit 0; skill-validator green; cross-skill `diff -q` unaffected (no `office/` / shared-helper edits) |
 
 ### Epic D — Optional image-prep knobs (honest-scope, deferrable)
@@ -131,11 +131,11 @@ land in a later Stub-First bead.
      `doc_scanned=false`, per-page `text` now populated.
 - **3.5 Alternative scenarios:**
   - **A1 — engine missing:** lazy `import ocrmypdf` fails →
-    `OcrEngineUnavailable` (exit 11) + remediation
+    `OcrEngineUnavailable` (exit 1, envelope `type`) + remediation
     (`bash install.sh --with-ocr` + system tesseract/gs hints). No stack trace.
   - **A2 — language pack missing:** user passes `--lang eng+deu` but `deu`
-    not installed → `LanguagePackMissing` (exit 12) naming the missing pack
-    + per-OS install hint. No partial OCR.
+    not installed → `LanguagePackMissing` (exit 1, envelope `type`) naming the
+    missing pack + per-OS install hint. No partial OCR.
   - **A3 — same path (in==out):** `pdf_ocr.py a.pdf a.pdf` →
     `SelfOverwriteRefused` (exit 6) before any work; symlink-aware via
     `Path.resolve()`.
