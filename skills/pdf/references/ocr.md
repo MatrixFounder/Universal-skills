@@ -43,6 +43,24 @@ If the engine or a language pack is missing, `pdf_ocr.py` fails **loud** (never
 silent): `OcrEngineUnavailable` or `LanguagePackMissing` in the `--json-errors`
 envelope, with the remediation in the message.
 
+### Troubleshooting: `tesseract` "image file not found" / `SubprocessOutputError`
+
+If `ocrmypdf` aborts with leptonica errors like
+`Error in fopenReadStream: ... image file not found: <TMPDIR>/ocrmypdf.io.*/…png`
+(surfaced by `pdf_ocr.py` as an `InternalError` / `OutputWriteFailed` envelope),
+the engine is fine but the **spawned `tesseract` process cannot read ocrmypdf's
+intermediate files** under your `TMPDIR`. This happens in **sandboxed / SIP- or
+seatbelt-restricted environments** where a third-party `tesseract` binary is
+denied access to the system temp dir. Point `TMPDIR` at a directory the
+`tesseract` binary is permitted to read (e.g. a project-local one):
+
+```bash
+TMPDIR="$PWD/.ocrtmp" mkdir -p "$PWD/.ocrtmp" && \
+TMPDIR="$PWD/.ocrtmp" python3 scripts/pdf_ocr.py scan.pdf out.pdf
+```
+
+On an unrestricted shell the default `TMPDIR` works and no override is needed.
+
 ## Usage
 
 ```text
