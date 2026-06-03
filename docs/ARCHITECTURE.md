@@ -11,8 +11,9 @@
 
 ## 1. Task Description
 
-- **Source:** [`docs/TASK.md`](TASK.md) (TASK 018, slug `pdf-ocr`, backlog
-  row `pdf-4`).
+- **Source:** [`docs/tasks/task-018-pdf-ocr.md`](tasks/task-018-pdf-ocr.md)
+  (TASK 018, slug `pdf-ocr`, backlog row `pdf-4`; archived on completion, with
+  the plan at [`docs/plans/plan-018-pdf-ocr.md`](plans/plan-018-pdf-ocr.md)).
 - **Review:** [`docs/reviews/task-018-review.md`](reviews/task-018-review.md)
   — APPROVED WITH COMMENTS; MAJOR items **M-1** (exit codes) and **M-3**
   (R5 MVP scope) are resolved here (§12 D-A1, D-A2).
@@ -76,8 +77,9 @@ network, no concurrency beyond ocrmypdf's own per-page worker pool.
   (`html2pdf_lib/chrome_engine.py:425`).
 - **Scope note (AM-3):** FC-3 probes only the `ocrmypdf` import. The R9
   pass-throughs need *additional* host checks — `--clean` requires the
-  `unpaper` binary, `--rotate-pages` needs `osd` traineddata — which are added
-  in **bead 05** (soft-check + degrade-with-warn), not folded into FC-3.
+  `unpaper` binary, `--rotate-pages` needs `osd` traineddata — which are
+  implemented in **`run_ocr`** (FC-5) as loud fail-fast prereq checks (never a
+  silent degrade), not folded into FC-3.
 
 **FC-4 — Language validator**
 - **Purpose:** turn tesseract's late, cryptic "missing traineddata" failure
@@ -95,24 +97,37 @@ network, no concurrency beyond ocrmypdf's own per-page worker pool.
 **FC-5 — OCR runner (ocrmypdf delegate)**
 - **Purpose:** the actual conversion.
 - **Functions:**
-  - invoke `ocrmypdf.ocr(in, tmp_out, language=[...], skip_text|redo_ocr|
-    force_ocr, sidecar=…, jobs=…, optional deskew/rotate/clean)` then atomic
-    rename `tmp_out → OUTPUT`.
-    - Input: resolved paths + `OcrArgs`. Output: searchable PDF (+ sidecar),
-      or a mapped error.
+  - R9 prereqs (loud fail-fast): `--rotate-pages` needs `osd` traineddata
+    (→ `LanguagePackMissing`); `--clean` needs the `unpaper` binary
+    (→ `OcrEngineUnavailable`).
+  - (R5) pre-decrypt: if `--password`, `pikepdf.open(…, password=…)` → 0600
+    `mkstemp` scratch in the OUTPUT dir; OCR that. Related UC: UC-4.
+  - create the output scratch via `mkstemp` (O_EXCL, 0600, `.partial.pdf`) in
+    the OUTPUT dir, then invoke `ocrmypdf.ocr(source, tmp_out, language=[...],
+    skip_text|redo_ocr|force_ocr, sidecar=…, jobs=…, deskew/rotate/clean)` with
+    the two paths **positional**.
+  - **capture the return code:** ocrmypdf RETURNS a non-zero `ExitCode` for some
+    failures (e.g. `invalid_output_pdf`) instead of raising → if `rc != 0` raise
+    `OutputWriteFailed` (a bad output is never promoted to success), else
+    `os.replace(tmp_out, OUTPUT)` (atomic). `finally` shreds the `.partial` and
+    the decrypt scratch on every path (I-3).
+    - Input: resolved paths + `OcrArgs` (+ installed-lang set). Output:
+      searchable PDF (+ sidecar), or a mapped error.
     - Related UC: UC-1, UC-2, UC-3.
-  - (R5, bead 4) pre-decrypt: if `--password`, open with `pikepdf` →
-    decrypted temp → feed ocrmypdf → shred temp. Related UC: UC-4.
 - **Dependencies:** `ocrmypdf` (→ `tesseract`, `ghostscript`, `pikepdf`).
 
 **FC-6 — Result/error mapper & emitter**
 - **Purpose:** uniform stdout success line + `--json-errors` envelope on
   failure; map ocrmypdf exceptions to the exit matrix (§5.2).
 - **Functions:**
-  - map `ocrmypdf.exceptions.*` (`EncryptedPdfError`, `InputFileError`,
-    `MissingDependencyError`, `PriorOcrFoundError`, …) → exit codes +
-    `error_type`; silence noisy `ocrmypdf`/`pikepdf`/`pdfminer` loggers
-    (parity with `pdf_extract.py`).
+  - map ocrmypdf exceptions by **MRO class-name** (not identity imports — robust
+    across ocrmypdf versions, and the engine need not be importable to match):
+    `EncryptedPdfError`→`EncryptedInput`, `PriorOcrFoundError`→`PriorOcrFound`,
+    `InputFileError`/`BadArgsError`/`UnsupportedImageFormatError`/`DpiError`→
+    `InputUnreadable`, `MissingDependencyError`→`OcrEngineUnavailable`,
+    `OutputFileAccessError`→`OutputWriteFailed`; `OSError`→`OutputWriteFailed`;
+    unmapped→`InternalError`. Silence noisy `ocrmypdf`/`pikepdf`/`pdfminer`
+    loggers (parity with `pdf_extract.py`).
     - Related UC: UC-1 A4/A5/A6, UC-4.
 - **Dependencies:** `_errors.report_error` (read-only import).
 
@@ -201,15 +216,16 @@ the error envelope.
 | `mode` | enum | `skip_text` | one of `skip_text` / `redo_ocr` / `force_ocr` (mutex) |
 | `sidecar` | Path \| None | None | optional plain-text dump |
 | `jobs` | int \| None | None | → ocrmypdf `jobs=` (auto = CPU count) |
-| `password` | str \| None | None | R5 (bead 4); argv-visible honest-scope |
-| `deskew` / `rotate_pages` / `clean` | bool | False | R9 (deferred bead) |
+| `password` | str \| None | None | R5 (shipped); argv-visible honest-scope |
+| `deskew` / `rotate_pages` / `clean` | bool | False | R9 (shipped); osd/unpaper prereqs |
 | `json_errors` | bool | False | cross-5 envelope toggle |
 
 ### 4.2. `OcrResult` (success, → stdout one-liner)
 
-```jsonc
-{ "output": "scan.ocr.pdf", "sidecar": "scan.txt|null",
-  "lang": "eng+rus", "mode": "skip_text", "pages": 12 }
+A plain-text summary (not JSON) printed to stdout on success:
+
+```text
+OCR complete: <output> (lang=eng+rus, mode=skip_text[, sidecar=<path>])
 ```
 
 ### 4.3. Error envelope (`--json-errors`, v=1 — `_errors.py`)
@@ -237,8 +253,10 @@ fine-grained reason while the exit code stays coarse (`1`).
   per-page MediaBox as INPUT (R1c). Enforced by ocrmypdf; spot-checked in E2E.
 - **I-2:** with default `skip_text`, pages that already carry a text layer are
   left text-unchanged (R3a). (ocrmypdf contract.)
-- **I-3:** on any non-zero exit, **no** partial OUTPUT remains (atomic
-  `.partial`→rename; tmp shredded on failure).
+- **I-3:** on any non-zero exit, **no** partial OUTPUT or decrypted scratch
+  remains — the searchable PDF is written to an O_EXCL `mkstemp` `.partial.pdf`
+  scratch (unpredictable name, 0600) in the OUTPUT dir, then `os.replace`d into
+  place; the `.partial` and any decrypt scratch are shredded in `finally`.
 
 ---
 
@@ -252,8 +270,8 @@ pdf_ocr.py INPUT.pdf OUTPUT.pdf
            [--skip-text | --redo-ocr | --force-ocr]   # default --skip-text
            [--sidecar PATH.txt]      # also emit plain text
            [--jobs N]                # ocrmypdf worker pool (default: auto)
-           [--password PW]           # R5 (bead 4); decrypt before OCR
-           [--deskew] [--rotate-pages] [--clean]      # R9 (deferred)
+           [--password PW]           # R5 (shipped); decrypt before OCR
+           [--deskew] [--rotate-pages] [--clean]      # R9 (shipped; osd/unpaper)
            [--json-errors]           # cross-5 machine-readable failures
 ```
 
@@ -269,7 +287,7 @@ go to stdout sensibly). OUTPUT is **required** (no implicit `<input>.ocr.pdf`
 | Code | Symbol | When | `error_type` |
 |------|--------|------|--------------|
 | 0 | OK | searchable PDF written | — |
-| 1 | FAIL | engine missing, lang pack missing, encrypted-without-/wrong-password, corrupt/non-PDF input, prior-OCR conflict (non-skip modes), output-write failure, internal error | `OcrEngineUnavailable` / `LanguagePackMissing` / `EncryptedInput` / `InputUnreadable` / `PriorOcrFound` / `OutputWriteFailed` / `InternalError` |
+| 1 | FAIL | input not found, engine missing, lang pack missing, encrypted-without-/wrong-password, corrupt/non-PDF input, prior-OCR conflict (non-skip modes), output-write failure (incl. non-zero ocrmypdf ExitCode), internal error | `InputNotFound` / `OcrEngineUnavailable` / `LanguagePackMissing` / `EncryptedInput` / `InputUnreadable` / `PriorOcrFound` / `OutputWriteFailed` / `InternalError` |
 | 2 | USAGE | argparse error (incl. mode mutex, missing positional) | — |
 | 6 | SELF_OVERWRITE | `resolve(IN)==resolve(OUT)` or sidecar collides | `SelfOverwriteRefused` |
 
@@ -384,8 +402,9 @@ helper set. Therefore:
 - No layout/Markdown reconstruction — that stays `pdf_extract.py` + LLM
   composition. `pdf_ocr.py` produces a searchable PDF (+ optional flat text),
   not structured Markdown.
-- No OCR-accuracy tuning beyond ocrmypdf's own knobs (`--deskew`,
-  `--rotate-pages`, `--clean` are the deferred R9 surface).
+- No OCR-accuracy tuning beyond ocrmypdf's own knobs — `--deskew` /
+  `--rotate-pages` / `--clean` expose the engine's pass-throughs (shipped), with
+  no bespoke tuning on top.
 - No global timeout / decompression-bomb hardening beyond ocrmypdf+gs's own.
 - `--password` argv-visible (S-2). R5 produces an **unencrypted** output (we
   decrypt to OCR; re-encryption is out of scope — compose with a future
@@ -404,12 +423,14 @@ them GREEN.
 | **018-01** | CLI skeleton: argparse contract, mode mutex, path/self-overwrite guards, `--json-errors` wiring, exit-matrix constants; `requirements-ocr.txt` + `install.sh --with-ocr` (probe+hints); fixtures builder (runtime image-only PDF); RED E2E + unit scaffolding | STUB + tests (Red) |
 | **018-02** | FC-3 engine probe + FC-4 language validator (`OcrEngineUnavailable` / `LanguagePackMissing` envelopes, eng+rus default) | LOGIC (Green) |
 | **018-03** | FC-5 OCR runner (ocrmypdf delegate: skip/redo/force, `--sidecar`, `--jobs`, atomic write) + FC-6 exception→exit mapping; **R4 composition E2E** (scan→OCR→`pdf_extract` reads needle) | LOGIC (Green) — MVP gate (R1–R4, R6–R8) |
-| **018-04** | R5 password: `pikepdf` decrypt-to-temp pre-stage + UC-4 tests (post-MVP) | LOGIC |
-| **018-05** | R9 image-prep pass-throughs (`--deskew`/`--rotate-pages`/`--clean`, with `osd` validation + unpaper soft-check) — open only if prioritized | LOGIC (deferrable) |
+| **018-04** | R5 password: `pikepdf` decrypt-to-temp pre-stage + UC-4 tests | LOGIC (shipped) |
+| **018-05** | R9 image-prep pass-throughs (`--deskew`/`--rotate-pages`/`--clean`, with `osd` validation + `unpaper` binary check) | LOGIC (shipped) |
 | **018-06** | Docs polish: `references/ocr.md` (usage + composition + trust model + honest scope) + `SKILL.md` surface + `pdf-to-markdown.md` cross-link; `THIRD_PARTY_NOTICES.md` (ocrmypdf/tesseract/gs); validator + `test_e2e.sh` green; backlog row `pdf-4` → done | DOC + INTEGRATION |
 
-**MVP = beads 01–03 + 06.** Beads 04 (R5) and 05 (R9) are in-scope but gated
-separately and **not** in the MVP acceptance set (resolves M-3 / OQ-3).
+**Status (as-built, 2026-06-03):** **all 6 beads 018-01..06 shipped + verified**
+(the original plan gated R5/R9 as post-MVP, but both were prioritized and
+delivered in the same task). Real-engine composition verified (`test_e2e.sh`
+82/0); `pdf-4` is ✅ DONE.
 
 ---
 
@@ -425,13 +446,13 @@ separately and **not** in the MVP acceptance set (resolves M-3 / OQ-3).
   justified there but **not** for OCR's hard-failure conditions, where no
   output is produced; (c) YAGNI — the envelope already carries the fine-grained
   reason. `10` is reserved to `pdf_extract.py` and not reused.
-- **D-A2 (resolves M-3 / OQ-3 — R5 scope).** R5 (password) is specified now
-  but implemented as **bead 04, post-MVP**, and excluded from the MVP
-  acceptance gate. Rationale: ocrmypdf does **not** natively accept an input
-  password — it requires a `pikepdf` decrypt-to-temp pre-stage (its own
-  testable unit + temp-file security surface, S-3). Cleaner as a dedicated
-  Stub-First bead than bolted onto the MVP. UC-4 is labeled post-MVP
-  accordingly; §2.7 acceptance criteria already exclude password.
+- **D-A2 (resolves M-3 / OQ-3 — R5 scope).** R5 (password) was planned as
+  **bead 04, post-MVP** — but was prioritized and **shipped** in the same task.
+  Rationale for a dedicated bead: ocrmypdf does **not** natively accept an input
+  password — it requires a `pikepdf` decrypt-to-temp pre-stage (its own testable
+  unit + temp-file security surface, S-3), cleaner as a dedicated Stub-First bead
+  than bolted onto the MVP. As-built: the decrypt scratch is `0600` in the OUTPUT
+  dir and shredded in `run_ocr`'s `finally` (S-3, I-3); the output is unencrypted.
 - **D-A3 (password mechanism).** Implement R5 via `pikepdf.open(in,
   password=…)` → save decrypted temp (`0600`, OUTPUT dir) → `ocrmypdf` → shred
   temp in `finally`. Output is unencrypted (re-encryption out of scope, §10).
