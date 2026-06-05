@@ -4,26 +4,48 @@ const path = require('path');
 const { execSync } = require('child_process');
 const marked = require('marked');
 const sizeOf = require('image-size').imageSize;
-const { Document, Packer, Paragraph, TextRun, Table, TableRow, TableCell, ImageRun, HeadingLevel, BorderStyle, WidthType, ShadingType, LevelFormat, AlignmentType, Header, Footer, PageNumber } = require('docx');
+const { Document, Packer, Paragraph, TextRun, Table, TableRow, TableCell, ImageRun, HeadingLevel, BorderStyle, WidthType, ShadingType, LevelFormat, AlignmentType, Header, Footer, PageNumber, PageOrientation } = require('docx');
 
-// Parse CLI arguments: node md2docx.js <input.md> <output.docx> [--header "text"] [--footer "text"]
+// Parse CLI arguments: node md2docx.js <input.md> <output.docx>
+//   [--header "text"] [--footer "text"] [--page-size A4|Letter] [--landscape] [--margins T,R,B,L]
+const USAGE = 'Usage: node md2docx.js <input.md> <output.docx> [--header "text"] [--footer "text"] [--page-size A4|Letter] [--landscape] [--margins T,R,B,L]';
 const args = process.argv.slice(2);
 let inputFile, outputFile, headerText, footerText;
+let pageSizeArg = 'letter';   // default US Letter (backward-compatible)
+let landscape = false;
+let marginsArg = null;        // null → default 1440 dxa on all sides
 const positional = [];
+const VALUE_FLAGS = new Set(['--header', '--footer', '--page-size', '--margins']);
 for (let i = 0; i < args.length; i++) {
-    if (args[i] === '--header' && i + 1 < args.length) {
-        headerText = args[++i];
-    } else if (args[i] === '--footer' && i + 1 < args.length) {
-        footerText = args[++i];
+    const a = args[i];
+    if (a === '--landscape') {
+        landscape = true;
+    } else if (VALUE_FLAGS.has(a)) {
+        if (i + 1 >= args.length) {
+            // TASK 019: a known flag without its value gets a precise diagnostic (not "unknown").
+            console.error(`Missing value for ${a}`);
+            console.error(USAGE);
+            process.exit(1);
+        }
+        const v = args[++i];
+        if (a === '--header') headerText = v;
+        else if (a === '--footer') footerText = v;
+        else if (a === '--page-size') pageSizeArg = v;
+        else marginsArg = v;  // --margins
+    } else if (a.startsWith('--')) {
+        // TASK 019: reject unknown flags instead of silently treating them as positionals.
+        console.error(`Unknown option: ${a}`);
+        console.error(USAGE);
+        process.exit(1);
     } else {
-        positional.push(args[i]);
+        positional.push(a);
     }
 }
 inputFile = positional[0];
 outputFile = positional[1];
 
 if (!inputFile || !outputFile) {
-    console.error("Usage: node md2docx.js <input.md> <output.docx> [--header \"text\"] [--footer \"text\"]");
+    console.error(USAGE);
     process.exit(1);
 }
 
@@ -37,7 +59,50 @@ const tokens = marked.lexer(markdown);
 const border = { style: BorderStyle.SINGLE, size: 1, color: "CCCCCC" };
 const borders = { top: border, bottom: border, left: border, right: border };
 
-const contentWidthDxa = 9360;
+// --- Page geometry (TASK 019) — derive EVERYTHING from the resolved page; no Letter literals ---
+const PAGE_SIZES = { letter: { w: 12240, h: 15840 }, a4: { w: 11906, h: 16838 } };
+const sizeKey = String(pageSizeArg).toLowerCase();
+if (!Object.prototype.hasOwnProperty.call(PAGE_SIZES, sizeKey)) {
+    console.error(`Invalid --page-size "${pageSizeArg}" (expected A4 or Letter).`);
+    process.exit(1);
+}
+// Keep PORTRAIT dims for the section `size`; docx-js swaps them for landscape when given
+// `orientation: LANDSCAPE` (verified). Content geometry uses orientation-aware effective dims.
+const pageW = PAGE_SIZES[sizeKey].w;
+const pageH = PAGE_SIZES[sizeKey].h;
+const effW = landscape ? pageH : pageW;
+const effH = landscape ? pageW : pageH;
+
+// --margins "T,R,B,L" in dxa; each value optionally suffixed "mm" (1 mm ≈ 56.7 dxa).
+function parseMarginToken(tok) {
+    const m = String(tok).trim().match(/^(\d+(?:\.\d+)?)(mm)?$/);
+    if (!m) return null;
+    const v = parseFloat(m[1]);
+    return m[2] ? Math.round(v * 56.7) : Math.round(v);
+}
+let marginT = 1440, marginR = 1440, marginB = 1440, marginL = 1440;
+if (marginsArg !== null) {
+    const parts = marginsArg.split(',');
+    const vals = parts.length === 4 ? parts.map(parseMarginToken) : null;
+    if (!vals || vals.some(v => v === null)) {
+        console.error(`Invalid --margins "${marginsArg}" (expected T,R,B,L in dxa, optional "mm" suffix).`);
+        process.exit(1);
+    }
+    [marginT, marginR, marginB, marginL] = vals;
+}
+
+// contentWidthDxa was a hardcoded 9360 (Letter − 2×1440). Now derived from the resolved
+// page so tables/images never overflow a narrower page (A4 content width = 9026 dxa).
+// 1 dxa = 635 EMU, 1 px = 9525 EMU ⇒ px = dxa / 15 (geometrically exact).
+const contentWidthDxa = effW - marginL - marginR;
+const maxWidthPx = Math.floor(contentWidthDxa / 15);
+const maxHeightPx = Math.floor((effH - marginT - marginB) / 15);
+// TASK 019: guard nonsensical margins (would yield negative geometry → a cryptic docx-lib
+// error). Fail with a clear message instead.
+if (contentWidthDxa <= 0 || (effH - marginT - marginB) <= 0) {
+    console.error(`Margins leave no content area on the ${sizeKey}${landscape ? ' landscape' : ''} page (${effW}×${effH} dxa).`);
+    process.exit(1);
+}
 
 function isRemoteOrDataUrl(ref) {
     return /^https?:\/\//i.test(ref) || /^data:/i.test(ref);
@@ -78,11 +143,10 @@ function buildImageRun(localPath, altText) {
 
     const imgData = fs.readFileSync(localPath);
     const dims = sizeOf(imgData);
-    // Content width: 9360 DXA = 5,943,600 EMU; docx-js: 1px = 9525 EMU; max ~624px
-    const maxWidth = 620;
-    // US Letter height 15840 DXA - 2×1440 margins = 12960 DXA usable ≈ 865px at 96dpi.
-    // Leave headroom for a caption/paragraph, cap images at ~800px tall.
-    const maxHeight = 800;
+    // TASK 019: caps derived from the resolved page geometry (px = dxa/15), not Letter
+    // constants — so images fit the chosen page (A4 content width 9026 dxa < Letter 9360).
+    const maxWidth = maxWidthPx;
+    const maxHeight = maxHeightPx;
     let w = dims.width || maxWidth;
     let h = dims.height || 400;
     // Scale proportionally so the image fits BOTH dimensions.
@@ -275,10 +339,10 @@ try {
                 if (fs.existsSync(pngFile)) {
                     const imgData = fs.readFileSync(pngFile);
                     const dims = sizeOf(imgData);
-                    const mmdMaxWidth = 620;
-                    // Tall flowcharts can easily exceed page height after a
-                    // width-only downscale — bound both dimensions.
-                    const mmdMaxHeight = 800;
+                    // Bound both dimensions to the resolved page geometry (TASK 019) so
+                    // tall flowcharts don't exceed page height after a width-only downscale.
+                    const mmdMaxWidth = maxWidthPx;
+                    const mmdMaxHeight = maxHeightPx;
                     let w = dims.width;
                     let h = dims.height;
                     const scale = Math.min(1, mmdMaxWidth / w, mmdMaxHeight / h);
@@ -342,8 +406,8 @@ try {
 const section = {
     properties: {
         page: {
-            size: { width: 12240, height: 15840 },
-            margin: { top: 1440, right: 1440, bottom: 1440, left: 1440 }
+            size: { width: pageW, height: pageH, orientation: landscape ? PageOrientation.LANDSCAPE : PageOrientation.PORTRAIT },
+            margin: { top: marginT, right: marginR, bottom: marginB, left: marginL }
         }
     },
     children: children

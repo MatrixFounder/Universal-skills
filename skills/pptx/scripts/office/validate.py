@@ -20,6 +20,11 @@ Exit codes:
 
 from __future__ import annotations
 
+import os as _os, sys as _sys  # self-bootstrap prelude (TASK 019) — MUST precede heavy imports
+_sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))  # scripts/
+import _venv_bootstrap  # noqa: E402  (replicated per CLAUDE.md §2)
+_venv_bootstrap.reexec_into_venv(requires=("lxml",), _file=__file__)
+
 import argparse
 import json
 import sys

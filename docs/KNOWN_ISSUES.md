@@ -361,6 +361,53 @@ backlog row). Promoting either to a follow-up is at user discretion.
 
 ---
 
+## DOCX-MERMAID-EXECSYNC (pre-existing; surfaced by TASK 019 vdd-multi)
+
+**Status:** DEFERRED (LOW; pre-existing, out of TASK 019 scope).
+**Severity:** LOW (not exploitable under the single-tenant local-CLI trust model).
+**Location:** [`skills/docx/scripts/md2docx.js`](../skills/docx/scripts/md2docx.js) Mermaid
+branch (`execSync(\`npx -y @mermaid-js/mermaid-cli -i ${mmdFile} -o ${pngFile} ...\`)`).
+**Symptom:** Mermaid temp files use predictable sequential names (`temp_1.mmd`,
+`temp_1.png`, …) created in the **current working directory**, and the render command is
+built as a shell string passed to `execSync`.
+**Why LOW / not fixed in TASK 019:** the interpolated values (`mmdFile`/`pngFile`) are
+derived from an integer counter — **no user input flows into the shell line**, so there is
+no command-injection vector. The predictable-name-in-CWD angle is a symlink-pre-plant
+concern only in a shared/multi-tenant CWD, which the office-skills trust model excludes.
+The TASK 019 spec (§6) explicitly says **"do not touch the Mermaid rendering logic"**, so
+hardening it was out of scope. Flagged by the TASK 019 `/vdd-multi` adversarial pass.
+**Fix path (when prioritised):** (1) render into a `mkstemp`/`fs.mkdtemp` scratch dir
+instead of CWD; (2) switch the `execSync` string to the argv-array form
+(`execFileSync('npx', [...])`) to remove the shell entirely. Both are mechanical and
+behaviour-preserving.
+**Do-not:** claim Mermaid temp-file hardening until this lands.
+
+---
+
+## XLSX-PREVIEW-PNG-ASSERT (pre-existing; surfaced by TASK 019 vdd-multi verification)
+
+**Status:** DEFERRED (LOW; pre-existing, **not** a TASK 019 regression — proven below).
+**Severity:** LOW (test-only; the rendering itself works, the assertion is wrong).
+**Location:** [`skills/xlsx/scripts/tests/test_xlsx_add_comment.py`](../skills/xlsx/scripts/tests/test_xlsx_add_comment.py)
+`TestRenderSmoke.test_single_cell_renders_via_libreoffice` (+ `_render_to_png` helper).
+**Symptom:** the test renders an `.xlsx` via `preview.py` to a `*.preview.png` path and
+asserts a PNG magic header (`\x89PNG\r\n\x1a\n`), but `preview.py` **always emits JPEG**
+(`canvas.save(output, "JPEG", …)` — JPEG is its documented output format, regardless of
+the output path's extension). So `f.read(8)` sees `\xff\xd8\xff\xe0` and the assertion
+fails. Only fires where LibreOffice is installed (otherwise the render path is unavailable).
+**Proven pre-existing (not TASK 019):** `git diff HEAD -- skills/xlsx/scripts/preview.py`
+shows TASK 019 added **only** the 3-line self-bootstrap prelude; the `save(…, "JPEG", …)`
+line is unchanged from HEAD (`git show HEAD:…/preview.py` → same JPEG save). The test
+asserts PNG identically before and after TASK 019.
+**Fix path (xlsx-skill, separate from TASK 019):** either (a) assert JPEG magic
+(`\xff\xd8\xff`) — `preview.py`'s contract is JPEG; or (b) render to a `.jpg` path and
+rename the helper. One-line test change; no `preview.py` change (its JPEG output is by
+design, and it is a 4-skill replicated file).
+**Do-not:** attribute this failure to TASK 019 — the bootstrap prelude does not touch
+`preview.py`'s image-format logic.
+
+---
+
 ## How to add a new entry
 
 1. Append below the relevant category (or create a new top-level

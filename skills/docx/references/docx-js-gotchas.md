@@ -24,7 +24,10 @@ sections: [{
 }]
 ```
 
-`md2docx.js` accepts `--size letter` and does this for you.
+`md2docx.js` **defaults to US Letter** (not the library's A4 default) and accepts
+`--page-size A4|Letter` (plus `--landscape` and `--margins T,R,B,L`); it sets `<w:pgSz>`
+and derives table / image / Mermaid widths from the chosen page for you, so content never
+overflows a narrower page.
 
 ### Landscape orientation — pass PORTRAIT dimensions
 
@@ -49,6 +52,11 @@ orientation flag makes the library swap a second time. The resulting
 page geometry disagrees with the orientation attribute and Word either
 renders a broken layout or refuses to open the file. Always feed
 portrait numbers.
+
+> `md2docx.js --landscape` implements exactly this: it keeps the portrait `size` and
+> passes `orientation: PageOrientation.LANDSCAPE`, deriving the content width from the
+> rotated page — so callers get the correct `<w:pgSz w:orient="landscape"/>` without
+> hitting the double-swap.
 
 ## `<w:pPr>` child-element ordering
 

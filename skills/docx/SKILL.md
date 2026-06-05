@@ -49,7 +49,7 @@ practical knowledge and make the common operations a single command.
 ## 4. Script Contract
 
 - **Commands**:
-  - `node scripts/md2docx.js INPUT.md OUTPUT.docx [--header "TEXT"] [--footer "TEXT"]`
+  - `node scripts/md2docx.js INPUT.md OUTPUT.docx [--header "TEXT"] [--footer "TEXT"] [--page-size A4|Letter] [--landscape] [--margins T,R,B,L]`
   - `node scripts/docx2md.js INPUT.docx OUTPUT.md [--metadata-json PATH] [--no-metadata] [--no-footnotes] [--json-errors]`
   - `node scripts/html2docx.js INPUT OUTPUT.docx [--header "TEXT"] [--footer "TEXT"] [--reader-mode] [--json-errors]` — INPUT may be `.html`/`.htm`, `.mhtml`/`.mht`, or `.webarchive`; sub-resources in archives are extracted to a temp dir automatically (cleaned up on exit incl. SIGINT/SIGTERM). `--reader-mode` swaps the article-root candidate list for a CMS/blog-specific one (`#main-content`/`.entry`/`.post-content`/`article` with per-candidate min-text filter; bare `<main>` deliberately omitted as it wraps whole-site chrome on news sites). Override SVG renderer with `HTML2DOCX_BROWSER=/path/to/chrome` or set it to a non-existent path to force the resvg-js fallback for CI determinism. Set `HTML2DOCX_ALLOW_NO_SANDBOX=1` only inside a trusted CI container — default leaves Chrome's sandbox enabled.
   - `python3 scripts/docx_fill_template.py TEMPLATE.docx DATA.json OUTPUT.docx [--strict]`
@@ -102,15 +102,16 @@ rest are behavioural defaults with their rationale.
 
 ### 7.2 Install dependencies locally
 
-1. **MUST** run `bash scripts/install.sh` once. It creates `scripts/.venv/` and `scripts/node_modules/` locally (nothing installed globally), prints a warning for any missing system tool, and is idempotent.
-2. **External system tools** (checked by `install.sh`, installed manually per project plan §3.3 "внешние инструменты — не бандлятся"):
+1. **MUST** run `bash scripts/install.sh` once. It creates `scripts/.venv/` and `scripts/node_modules/` locally (nothing installed globally), prints a warning for any missing system tool, runs a **smoke-test** of the documented commands before declaring success, and is idempotent.
+2. **Invocation — `python3` is safe.** The Python CLIs **self-bootstrap into `scripts/.venv`**: `python3 scripts/X.py …` and `./.venv/bin/python scripts/X.py …` are equivalent — on a host where `python3` is not the venv (pyenv / conda / system Python), the script re-execs itself into `scripts/.venv`. If the venv is missing, you get a `run: bash scripts/install.sh` hint instead of a raw `ModuleNotFoundError`. (Node CLIs resolve `scripts/node_modules`, also local.)
+3. **External system tools** (checked by `install.sh`, installed manually per project plan §3.3 "внешние инструменты — не бандлятся"):
    - **LibreOffice** (`soffice`) — required by `docx_accept_changes.py`. macOS: `brew install --cask libreoffice`. Debian: `sudo apt install libreoffice --no-install-recommends`. Fedora: `sudo dnf install libreoffice`.
    Commands that need it fail with a clear error until it's installed.
 
 ### 7.3 Creating `.docx` from Markdown
 
 1. Prefer `md2docx.js` over hand-writing `new Document({...})`.
-2. Page size and orientation are fixed (US Letter, portrait) — `md2docx.js` does not currently expose `--size` or `--landscape` flags. If the user needs A4 / landscape / custom margins, drop down to `python-docx` or unpack/edit `word/document.xml` directly via `office/unpack.py`.
+2. **Page size / orientation / margins** are exposed as flags — default **US Letter portrait** (backward-compatible): `--page-size A4|Letter`, `--landscape`, `--margins T,R,B,L` (dxa, each value optionally `mm`-suffixed). Content width, tables, and images/Mermaid diagrams all auto-derive from the chosen page, so they never overflow A4 — no manual `word/document.xml` patching needed. Example: `node scripts/md2docx.js report.md report.docx --page-size A4`.
 3. For headers/footers use `--header "…"` / `--footer "…"`. Multi-line headers are a single string with `\n` — `md2docx.js` splits on the newline.
 
 ### 7.4 Extracting text from `.docx` to Markdown
@@ -192,6 +193,7 @@ Fill a template with JSON data:
 | Task | Command |
 |---|---|
 | Markdown → `.docx` | `node scripts/md2docx.js input.md output.docx` |
+| Markdown → A4 `.docx` | `node scripts/md2docx.js input.md output.docx --page-size A4 [--landscape] [--margins T,R,B,L]` |
 | `.docx` → Markdown | `node scripts/docx2md.js input.docx output.md` |
 | HTML / `.webarchive` / `.mhtml` → `.docx` | `node scripts/html2docx.js input.html output.docx [--header ...] [--footer ...] [--reader-mode] [--json-errors]` |
 | Web page / archive → `.docx` (reader mode, strips chrome) | `node scripts/html2docx.js page.webarchive article.docx --reader-mode` |

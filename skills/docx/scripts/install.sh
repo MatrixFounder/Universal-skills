@@ -149,6 +149,49 @@ fi
 say "Installing npm dependencies into scripts/node_modules/ ..."
 npm install --no-fund --no-audit --silent
 
+# --- Verify Python deps actually import (catches silent wheel-build failures,
+#     e.g. Pillow/lxml lacking prebuilt wheels on fresh interpreters like 3.14) ---
+say "Verifying Python dependencies import..."
+if ! miss=$(./.venv/bin/python - <<'PY'
+import importlib.util, sys                       # NOT bare `import importlib` — .util must be explicit
+# Import names for every requirements.txt wheel (Pillow→PIL, python-docx→docx, msoffcrypto-tool→msoffcrypto)
+missing = [m for m in ("PIL", "lxml", "defusedxml", "docx", "msoffcrypto") if importlib.util.find_spec(m) is None]
+print(",".join(missing))
+sys.exit(1 if missing else 0)
+PY
+); then
+    die "Python dependency import check failed (missing: ${miss:-unknown}). Re-run install or check the wheel build."
+fi
+
+# --- Smoke-test the SKILL.md-documented commands. Proves the self-bootstrap fix:
+#     a BARE `python3 scripts/X.py` must work even when python3 != .venv. ---
+say "Smoke-testing documented commands (md2docx -> validate [-> preview])..."
+SMOKE_DIR="$(mktemp -d)"
+trap 'rm -rf "$SMOKE_DIR"' EXIT
+if ! node md2docx.js ../examples/fixture-simple.md "$SMOKE_DIR/smoke.docx" >/dev/null 2>"$SMOKE_DIR/err"; then
+    cat "$SMOKE_DIR/err" >&2; die "md2docx.js smoke-test failed."
+fi
+# DELIBERATELY bare `python3` (not ./.venv/bin/python): this run IS the proof of the self-bootstrap fix.
+if ! python3 office/validate.py "$SMOKE_DIR/smoke.docx" >/dev/null 2>"$SMOKE_DIR/err"; then
+    cat "$SMOKE_DIR/err" >&2
+    if grep -q "ModuleNotFoundError" "$SMOKE_DIR/err"; then
+        die "office/validate.py failed with ModuleNotFoundError — the self-bootstrap is broken."
+    fi
+    die "office/validate.py smoke-test failed."
+fi
+if [ -n "${SOFFICE:-}" ]; then
+    if ! python3 preview.py "$SMOKE_DIR/smoke.docx" "$SMOKE_DIR/smoke.jpg" >/dev/null 2>"$SMOKE_DIR/err"; then
+        cat "$SMOKE_DIR/err" >&2
+        if grep -q "ModuleNotFoundError" "$SMOKE_DIR/err"; then
+            die "preview.py failed with ModuleNotFoundError — the self-bootstrap is broken."
+        fi
+        die "preview.py smoke-test failed."
+    fi
+    say "Smoke-test PASS (md2docx + validate + preview, all via bare python3)."
+else
+    say "Smoke-test PASS (md2docx + validate via bare python3; preview skipped — soffice absent)."
+fi
+
 echo ""
 if [ "$missing_host" -eq 0 ]; then
     say "All dependencies installed and verified."
@@ -157,7 +200,7 @@ else
 fi
 echo ""
 say "Usage:"
-say "  node scripts/md2docx.js INPUT.md OUTPUT.docx"
+say "  node scripts/md2docx.js INPUT.md OUTPUT.docx [--page-size A4|Letter] [--landscape] [--margins T,R,B,L]"
 say "  node scripts/docx2md.js INPUT.docx OUTPUT.md"
 say "  ./.venv/bin/python scripts/docx_fill_template.py TPL.docx DATA.json OUT.docx"
 say "  ./.venv/bin/python scripts/docx_accept_changes.py IN.docx OUT.docx   # needs soffice"

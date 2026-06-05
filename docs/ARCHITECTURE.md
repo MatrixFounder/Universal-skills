@@ -1,152 +1,160 @@
-# ARCHITECTURE: `pdf_ocr.py` (pdf-4) — OCR scanned PDFs → searchable PDF (eng+rus)
+# ARCHITECTURE: docx-skill hardening (TASK 019) — venv self-bootstrap + A4 page geometry + install verify
 
 > Living document, updated **in place** across tasks (architecture-format-core
 > §"Living Document & Index-Mode"). It tracks the **current active epic**.
-> The prior epic (wiki-ingest modular refactor, TASK 015–017) is complete and
-> **archived** (`docs/tasks/task-01{5,6,7}-*.md`, `docs/plans/plan-01{5,6,7}-*.md`)
-> and preserved in git history; this revision refocuses the living doc on
-> TASK 018. No `architecture-NNN-*.md` snapshot is created.
+> The prior epic (`pdf_ocr.py` / pdf-4, TASK 018) is complete and **archived**
+> (`docs/tasks/task-018-pdf-ocr.md`, `docs/plans/plan-018-pdf-ocr.md`) and preserved
+> in git history; this revision refocuses the living doc on TASK 019. No
+> `architecture-NNN-*.md` snapshot is created.
 
 ---
 
 ## 1. Task Description
 
-- **Source:** [`docs/tasks/task-018-pdf-ocr.md`](tasks/task-018-pdf-ocr.md)
-  (TASK 018, slug `pdf-ocr`, backlog row `pdf-4`; archived on completion, with
-  the plan at [`docs/plans/plan-018-pdf-ocr.md`](plans/plan-018-pdf-ocr.md)).
-- **Review:** [`docs/reviews/task-018-review.md`](reviews/task-018-review.md)
-  — APPROVED WITH COMMENTS; MAJOR items **M-1** (exit codes) and **M-3**
-  (R5 MVP scope) are resolved here (§12 D-A1, D-A2).
-- **Summary:** add a thin, contract-compliant CLI `skills/pdf/scripts/pdf_ocr.py`
-  that wraps [`ocrmypdf`](https://ocrmypdf.readthedocs.io/) to convert an
-  image-only (scanned) PDF into a **searchable PDF** — original page raster
-  preserved, invisible OCR text layer overlaid — defaulting to OCR languages
-  **`eng+rus`**. It is the remediation hop for `pdf_extract.py` exit
-  `10 DocumentScanned`.
-- **Locked decisions (TASK §0):** D-1 ocrmypdf→searchable PDF (+ optional
-  `--sidecar`); D-2 soft-optional `--with-ocr` packaging; D-3 default
-  `--skip-text`.
-- **Template:** Core (architecture-format-core) — "adding a new component to
-  an existing system" (the pdf skill). Relevant Interfaces / Security /
-  Stack subsections are included because the CLI contract and the
-  subprocess/dependency surface are materially load-bearing.
+- **Source:** [`docs/tasks/task-019-docx-skill-hardening.md`](tasks/task-019-docx-skill-hardening.md) (TASK 019, slug `docx-skill-hardening`; archived on completion, plan at [`docs/plans/plan-019-docx-skill-hardening.md`](plans/plan-019-docx-skill-hardening.md)) ←
+  [`docs/docx-skill-improvement-spec.md`](docx-skill-improvement-spec.md).
+- **Summary:** three independent fixes to the `docx` skill, surfaced by a real
+  md+Mermaid → A4 task:
+  - **(A, P0)** Python CLIs crash with `ModuleNotFoundError` when the shell's
+    `python3` is not the skill's `.venv` — fix via a **stdlib-only self-bootstrap
+    prelude** that re-execs each CLI into its own `.venv`.
+  - **(B, P1)** `md2docx.js` is hard-wired to US Letter — add `--page-size`/
+    `--landscape`/`--margins` and **derive all geometry** (`contentWidthDxa`, image/
+    Mermaid caps) from the resolved page, not Letter constants.
+  - **(C, P2)** `install.sh` exits "OK" while leaving a non-working `python3`
+    contract — add a **smoke-test + dependency-import verify** using the exact
+    command `SKILL.md` prescribes.
+- **Replication reality (CLAUDE.md §2):** the (A) fix edits **shared/replicated**
+  files (`preview.py`, the new `_venv_bootstrap.py`, `office/*`, `office_passwd.py`),
+  so this is a **multi-skill** change by force of the byte-identity rule, even though
+  the spec is docx-centric. §9 is the load-bearing section.
+- **Locked decisions (resolve TASK OQ-1…4):** D-A2 (wire CLI entrypoints only,
+  exclude import-only helpers), D-A3 (px = dxa/15; geometry from page), D-A4
+  (`SKILL.md` keeps `python3` + auto-bootstrap note), D-A5 (replication tiers),
+  D-A6 (defer non-docx per-skill CLI wiring), D-A7 (margins grammar). See §12.
+- **Template:** Core (architecture-format-core) — "adding components to an existing
+  system." Interfaces / Security / Replication / Decision-Record subsections are
+  inlined because the CLI contract, the re-exec safety surface, and the cross-skill
+  replication boundary are materially load-bearing.
 
 ---
 
 ## 2. Functional Architecture
 
-A single-process, single-file CLI that runs a linear **parse → guard →
-probe → validate → delegate → map-result** pipeline. No persistent state, no
-network, no concurrency beyond ocrmypdf's own per-page worker pool.
+Three independent functional units, no shared runtime state. Data-first: the central
+data structure is **`PageGeometry`** (§4.1) — everything in Problem B derives from it;
+the central control structure is the **bootstrap decision** (§4.2).
 
 ### 2.1. Functional Components
 
-**FC-1 — Arg & mode parser**
-- **Purpose:** define and parse the CLI contract; enforce the `--skip-text` /
-  `--redo-ocr` / `--force-ocr` mutual exclusion.
+**FC-1 — venv self-bootstrap prelude** (`scripts/_venv_bootstrap.py`, **new**, 4-skill)
+- **Purpose:** make `python3 scripts/X.py` behave identically to
+  `./.venv/bin/python scripts/X.py` on any host (fixes Problem A); fail *legibly*
+  when the venv is absent.
 - **Functions:**
-  - parse argv → `OcrArgs` (§4.1).
-    - Input: `argv`. Output: `OcrArgs` namespace, or argparse exit 2.
+  - `reexec_into_venv(requires: tuple[str, ...] = ()) -> None`
+    - Input: the caller's required top-level module names (e.g. `("PIL",)`).
+    - Output: **none on the happy path** — either `os.execv`-replaces the process
+      with the venv interpreter (same `sys.argv`), returns (already in venv / venv
+      absent-but-deps-present), or `sys.exit(1)` with a remediation line.
     - Related UC: UC-1, UC-3.
-  - mode mutex: at most one of `{skip_text(default), redo_ocr, force_ocr}`.
-    - Related UC: UC-3 A1.
-- **Dependencies:** stdlib `argparse`; `_errors.add_json_errors_argument`.
+- **Algorithm (stdlib only — `os`, `sys`, `importlib.util`):**
+  1. Resolve the skill's `scripts/` root from `__file__` (probe `.venv`/`install.sh` at
+     `dirname(__file__)` and its parent — handles `scripts/*.py` AND `scripts/office/*.py`);
+     `venv_py = <root>/.venv/bin/python`.
+  2. **Consume** the loop-guard env flag first (`os.environ.pop` — read-and-clear, so it
+     can never leak to a child process; SEC-1 fix). If `venv_py` exists: compute
+     **`in_venv = realpath(sys.prefix) == realpath(<root>/.venv)`**. If **not** `in_venv`
+     and the flag was not already set: re-set the flag, then
+     `os.execv(venv_py, [venv_py, *sys.argv])`. Else `return`.
+     - ⚠ **`sys.prefix`, NOT `realpath(sys.executable)`** (verified deviation from the spec's
+       pseudocode, 2026-06-05). A venv's `bin/python` is frequently a *symlink to the same
+       base binary* — on this host `realpath(base python3)` and `realpath(.venv/bin/python)`
+       are byte-identical (`…/pyenv/3.14.4/bin/python3.14`), so the spec's
+       `realpath(sys.executable) != realpath(venv_py)` is **False under base python3 and the
+       re-exec never fires**. `sys.prefix` equals the venv root only when the venv interpreter
+       is actually running, so it is the correct discriminator. *(D-A1 updated.)*
+  3. Else (venv absent): for each `m in requires`, if `importlib.util.find_spec(m)`
+     is `None` → print `dependencies missing (<m…>) — run: bash <root>/install.sh` to
+     stderr and `raise SystemExit(1)`; otherwise `return` (deps somehow present).
+- **Dependencies:** Python stdlib only (must import under *any* interpreter).
+- **Consumers:** the CLI entrypoints in FC-1b (NOT the import-only helpers).
 
-**FC-2 — Path resolver & self-overwrite guard**
-- **Purpose:** resolve INPUT/OUTPUT/`--sidecar` to absolute real paths and
-  refuse destructive aliasing.
-- **Functions:**
-  - resolve + guard: reject `resolve(INPUT)==resolve(OUTPUT)` (exit 6
-    `SelfOverwriteRefused`); reject `--sidecar` ∈ {INPUT, OUTPUT}.
-    - Input: raw paths. Output: resolved `Path`s, or exit 6.
-    - Related UC: UC-1 A3, UC-2.
-  - input existence/readability precheck (exit 1 `InputNotFound`).
-- **Dependencies:** stdlib `pathlib`. Mirrors cross-7 H1 guard in
-  `pdf_extract.py` / `pdf_watermark.py`.
+**FC-1b — entrypoint wiring** (per-file, 1-line prelude)
+- **Purpose:** invoke FC-1 as the **first executable statement**, before any heavy
+  third-party import, in every **CLI entrypoint** (file with `if __name__ ==
+  "__main__"`): `preview.py`, `office/{unpack,pack,validate}.py`, `office_passwd.py`,
+  `docx_accept_changes.py`, `docx_add_comment.py`, `docx_fill_template.py`,
+  `docx_merge.py`, `docx_replace.py`.
+- **Excluded (D-A2):** pure import-only helpers (`_actions.py`, `_relocator.py`,
+  `docx_anchor.py`, `office/_macros.py`) — they have **no `__main__`** and are always
+  imported by an already-bootstrapped entrypoint, so a re-exec/`exit` at *import*
+  scope would be a hazard, not a fix.
+- **office/ path note (BLOCKER fix — verified `unpack.py:29-40`).** The existing
+  heavy imports (`unpack.py:29-30` `defusedxml`/`lxml`; `pack.py:30` `lxml`;
+  `validate.py` via the `office.validators.*` chain) run **before** the existing
+  `__package__`-guarded `sys.path.insert` at `unpack.py:32-40`. Therefore each
+  `office/*.py` entrypoint needs a **new, unconditional 3-line prelude at the very top
+  (above line 29)** — it must NOT reuse or depend on the existing guarded insert:
+  ```python
+  import os, sys
+  sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))  # scripts/
+  import _venv_bootstrap; _venv_bootstrap.reexec_into_venv(requires=("lxml",))     # then heavy imports
+  ```
+  Note the prelude re-runs once after `os.execv` (the re-exec restarts the module from
+  the top under the venv interpreter) — harmless (the second pass takes the `proceed`
+  branch); the Developer must not "optimize away" the second `sys.path` insert.
 
-**FC-3 — Engine-availability probe (lazy import)**
-- **Purpose:** keep the base skill light (D-2); fail loud if the optional
-  engine is absent.
+**FC-2 — page-geometry resolver** (`scripts/md2docx.js`, docx-only)
+- **Purpose:** turn CLI flags into a `PageGeometry` and thread it through every
+  size-bearing construct (section `pgSz`/`pgMar`, table `colWidth`, image/Mermaid
+  caps) — replacing the Letter constants (`9360`, `620`, `800`, `12240×15840`).
 - **Functions:**
-  - `import ocrmypdf` lazily inside the run path; on `ImportError` →
-    `OcrEngineUnavailable` (exit 1 + `error_type`, §12 D-A1) with remediation
-    (`bash install.sh --with-ocr` + system tesseract/gs hints).
-    - Related UC: UC-1 A1.
-- **Dependencies:** optional `ocrmypdf` (from `requirements-ocr.txt`).
-- **Pattern parity:** sibling of pdf-11 `ChromeEngineUnavailable`
-  (`html2pdf_lib/chrome_engine.py:425`).
-- **Scope note (AM-3):** FC-3 probes only the `ocrmypdf` import. The R9
-  pass-throughs need *additional* host checks — `--clean` requires the
-  `unpaper` binary, `--rotate-pages` needs `osd` traineddata — which are
-  implemented in **`run_ocr`** (FC-5) as loud fail-fast prereq checks (never a
-  silent degrade), not folded into FC-3.
+  - parse `--page-size`/`--landscape`/`--margins` (extend `md2docx.js:9-21`).
+    - Output: `{pageW, pageH, marginT/R/B/L}`; unknown/malformed → `exit 1` + usage.
+    - Related UC: UC-2.
+  - derive `PageGeometry` (§4.1): `contentWidthDxa`, `maxWidthPx`, `maxHeightPx`.
+  - apply: `contentWidthDxa` → table width/colWidth (`:233,261`); `maxWidthPx/
+    maxHeightPx` → `buildImageRun` (`:82-89`) + Mermaid (`:278-284`); `{pageW,pageH}`
+    + margins → section `page` (`:343-346`).
+    - Related UC: UC-2, UC-6.
+- **Dependencies:** `docx-js`, `marked`, `image-size` (existing).
 
-**FC-4 — Language validator**
-- **Purpose:** turn tesseract's late, cryptic "missing traineddata" failure
-  into an early, precise signal.
+**FC-3 — install verifier** (`scripts/install.sh`, docx-only)
+- **Purpose:** prove the documented invocation works before the agent's first call.
 - **Functions:**
-  - split `--lang` on `+`; compare against `tesseract --list-langs` (or
-    ocrmypdf's `get_languages()` / `tesseract` API) → missing ⇒
-    `LanguagePackMissing` (exit 1 + `error_type`, naming the pack + per-OS
-    hint).
-    - Input: `["eng","rus"]` (default) or user list. Output: validated list,
-      or exit 1.
-    - Related UC: UC-1 A2.
-- **Dependencies:** `ocrmypdf`/`tesseract` (already gated by FC-3).
+  - dep-import verify: after `pip install`, assert each `requirements.txt` wheel imports
+    in the venv (all five: `PIL`/`lxml`/`defusedxml`/`docx`/`msoffcrypto`); any miss →
+    `die` naming the package (SEC/logic vdd-multi widened this from 3 to 5).
+  - smoke-test: in a `mktemp -d` scratch, `md2docx.js fixture-simple.md` →
+    `preview.py` + `office/validate.py` (the SKILL.md commands); non-zero/
+    `ModuleNotFoundError` → `die`; clean up scratch on exit.
+    - Related UC: UC-4.
+- **Dependencies:** node + the freshly-built venv; `set -euo pipefail` intact.
 
-**FC-5 — OCR runner (ocrmypdf delegate)**
-- **Purpose:** the actual conversion.
-- **Functions:**
-  - R9 prereqs (loud fail-fast): `--rotate-pages` needs `osd` traineddata
-    (→ `LanguagePackMissing`); `--clean` needs the `unpaper` binary
-    (→ `OcrEngineUnavailable`).
-  - (R5) pre-decrypt: if `--password`, `pikepdf.open(…, password=…)` → 0600
-    `mkstemp` scratch in the OUTPUT dir; OCR that. Related UC: UC-4.
-  - create the output scratch via `mkstemp` (O_EXCL, 0600, `.partial.pdf`) in
-    the OUTPUT dir, then invoke `ocrmypdf.ocr(source, tmp_out, language=[...],
-    skip_text|redo_ocr|force_ocr, sidecar=…, jobs=…, deskew/rotate/clean)` with
-    the two paths **positional**.
-  - **capture the return code:** ocrmypdf RETURNS a non-zero `ExitCode` for some
-    failures (e.g. `invalid_output_pdf`) instead of raising → if `rc != 0` raise
-    `OutputWriteFailed` (a bad output is never promoted to success), else
-    `os.replace(tmp_out, OUTPUT)` (atomic). `finally` shreds the `.partial` and
-    the decrypt scratch on every path (I-3).
-    - Input: resolved paths + `OcrArgs` (+ installed-lang set). Output:
-      searchable PDF (+ sidecar), or a mapped error.
-    - Related UC: UC-1, UC-2, UC-3.
-- **Dependencies:** `ocrmypdf` (→ `tesseract`, `ghostscript`, `pikepdf`).
-
-**FC-6 — Result/error mapper & emitter**
-- **Purpose:** uniform stdout success line + `--json-errors` envelope on
-  failure; map ocrmypdf exceptions to the exit matrix (§5.2).
-- **Functions:**
-  - map ocrmypdf exceptions by **MRO class-name** (not identity imports — robust
-    across ocrmypdf versions, and the engine need not be importable to match):
-    `EncryptedPdfError`→`EncryptedInput`, `PriorOcrFoundError`→`PriorOcrFound`,
-    `InputFileError`/`BadArgsError`/`UnsupportedImageFormatError`/`DpiError`→
-    `InputUnreadable`, `MissingDependencyError`→`OcrEngineUnavailable`,
-    `OutputFileAccessError`→`OutputWriteFailed`; `OSError`→`OutputWriteFailed`;
-    unmapped→`InternalError`. Silence noisy `ocrmypdf`/`pikepdf`/`pdfminer`
-    loggers (parity with `pdf_extract.py`).
-    - Related UC: UC-1 A4/A5/A6, UC-4.
-- **Dependencies:** `_errors.report_error` (read-only import).
+**FC-4 — docs reconciliation** (`SKILL.md`, `references/docx-js-gotchas.md`, docx-only)
+- **Purpose:** make the written contract match the code (D1/D2/D3). Align the
+  invocation form (D-A4), advertise the page-size flags, and fix the false
+  `--size letter` claim (`gotchas.md:27`).
 
 ### 2.2. Functional Components Diagram
 
 ```mermaid
 flowchart TD
-    A[argv] --> FC1[FC-1 arg/mode parser]
-    FC1 -->|OcrArgs| FC2[FC-2 path resolve + self-overwrite guard]
-    FC2 -->|resolved paths| FC3[FC-3 engine probe lazy import]
-    FC3 -->|ocrmypdf ok| FC4[FC-4 language validator]
-    FC4 -->|langs ok| FC5[FC-5 OCR runner ocrmypdf]
-    FC5 -->|searchable PDF + sidecar| FC6[FC-6 result/error mapper]
-    FC3 -.engine missing.-> FC6
-    FC4 -.pack missing.-> FC6
-    FC2 -.in==out.-> FC6
-    FC5 -.ocrmypdf raises.-> FC6
-    FC6 --> OUT[(stdout success / stderr envelope + exit code)]
-    FC5 --> EXT[(ocrmypdf -> tesseract + ghostscript)]
+    subgraph A [Problem A — interpreter]
+        EP[CLI entrypoint e.g. preview.py] -->|first statement| BS[FC-1 _venv_bootstrap.reexec_into_venv]
+        BS -->|execv| VENV[(.venv/bin/python)]
+        BS -.venv absent + dep missing.-> ERR[stderr: run install.sh; exit 1]
+        HELP[import-only helpers _actions/_relocator/docx_anchor] -.no bootstrap, inherit venv.-> EP
+    end
+    subgraph B [Problem B — geometry]
+        ARGV[--page-size/--landscape/--margins] --> RES[FC-2 resolver]
+        RES --> PG[PageGeometry]
+        PG --> SECT[pgSz/pgMar] & TBL[table colWidth] & IMG[image/Mermaid caps]
+    end
+    subgraph C [Problem C — install]
+        INST[FC-3 install.sh] --> DV[dep-import verify] --> SMOKE[md2docx→preview→validate smoke]
+    end
 ```
 
 ---
@@ -155,316 +163,327 @@ flowchart TD
 
 ### 3.1. Architectural Style
 
-**Thin single-file CLI wrapper over an external engine** (layered: parse →
-validate → delegate → map). Identical shape to the existing pdf CLIs
-(`pdf_extract.py`, `pdf_watermark.py`, `pdf_merge.py`): one file, argparse,
-`--json-errors`, deterministic exit matrix, no shared internal package.
+**Self-bootstrapping CLI prelude + parametric generator + verifying installer** —
+three small, independent, layered changes. No new service, no new package, no new
+runtime coupling. The defining constraint is **per-skill isolation** (CLAUDE.md §2):
+the bootstrap helper must be *position-independent* (resolve its venv from `__file__`)
+so the **same source bytes** are correct in docx/xlsx/pptx/pdf.
 
-**Justification.** YAGNI — OCR is a 1→1 file transform with a single mature
-engine (ocrmypdf already orchestrates rasterization, tesseract, the text-layer
-overlay, and PDF/A output). A bespoke `pdf_ocr_lib/` package (cf.
-`html2pdf_lib/`) is unwarranted: there is no multi-format input matrix and no
-reusable sub-logic shared with another skill. A single module maximizes the
-"each skill installable/runnable in isolation" property (CLAUDE.md §2).
+**Justification (YAGNI).** Problem A is solved by a ~25-line stdlib prelude, not a
+launcher or a console-entrypoint packaging rework. Problem B is a parametrisation of
+existing constants, not a layout engine. Problem C is a bash smoke-test, not a CI
+framework. Each maximises the "each skill installable/runnable in isolation" property.
 
 ### 3.2. System Components
 
-| Component | Type | Purpose | Tech | Interfaces (in/out) | Deps |
-|-----------|------|---------|------|---------------------|------|
-| `skills/pdf/scripts/pdf_ocr.py` | CLI script | the wrapper (FC-1…FC-6) | Python 3.10+ | in: argv; out: searchable PDF + sidecar + exit code/envelope | `ocrmypdf` (lazy), `_errors` (read-only) |
-| `ocrmypdf` | External Python lib | rasterize + OCR + text-layer overlay + linearize | Python | in: paths + opts; out: PDF | `pikepdf`, `Pillow`, `tesseract`, `ghostscript` |
-| `tesseract` (+ `eng`/`rus` traineddata) | External binary | the OCR engine | C++ | in: image; out: text/hOCR | system pkg |
-| `ghostscript` (`gs`) | External binary | PDF rasterize/repair used by ocrmypdf | C | in/out: PDF | system pkg |
-| `requirements-ocr.txt` | dep manifest | soft-optional pin (ocrmypdf>=…) | text | consumed by `install.sh --with-ocr` | — |
-| `install.sh --with-ocr` | bootstrap | install ocrmypdf into `.venv`; **check** (not install) tesseract/eng/rus/gs | bash | host probe + hints | — |
-| `_errors.py` | shared helper (read-only import) | `--json-errors` envelope (v=1) | Python | in: msg/code/type; out: stderr JSON | — |
-| `references/ocr.md` | doc | usage, composition recipe, trust model, honest scope | md | — | — |
+| Component | Type | Purpose | Tech | Interfaces (in/out) | Replication |
+|---|---|---|---|---|---|
+| `scripts/_venv_bootstrap.py` | **new** helper | re-exec into `.venv`; legible fail | Python stdlib | in: `requires`; out: execv / return / exit 1 | **4-skill** (docx→xlsx,pptx,pdf) |
+| `scripts/preview.py` | CLI | + bootstrap prelude | Python | in: argv; out: PNG grid | **4-skill** |
+| `scripts/office/{unpack,pack,validate}.py` | CLI | + bootstrap prelude | Python | in: argv; out: tree/docx/report | **3-skill** (docx→xlsx,pptx) |
+| `scripts/office/_macros.py` | helper | (no bootstrap — import-only) | Python | imported | **3-skill** |
+| `scripts/office_passwd.py` | CLI | + bootstrap prelude | Python | in: argv; out: docx | **3-skill** |
+| `scripts/docx_{accept_changes,add_comment,fill_template,merge,replace}.py` | CLI | + bootstrap prelude | Python | in: argv; out: docx | docx-only |
+| `scripts/{_actions,_relocator,docx_anchor}.py` | helper | (no bootstrap — import-only) | Python | imported | docx-only |
+| `scripts/md2docx.js` | CLI | page-size flags + derived geometry | Node | in: argv+md; out: docx | docx-only |
+| `scripts/install.sh` | bootstrap | dep-verify + smoke-test | bash | host probe + verify | docx-only |
+| `SKILL.md`, `references/docx-js-gotchas.md` | docs | reconcile contract | md | — | docx-only |
+| `scripts/tests/` | tests | A4/bootstrap/Letter/import-chain | Python+sh | — | docx-only |
 
 ### 3.3. Components Diagram
 
 ```mermaid
 flowchart LR
-    subgraph pdf-skill [skills/pdf]
-        OCR[pdf_ocr.py] -->|read-only import| ERR[_errors.py]
-        OCR -. composition .-> EXTR[pdf_extract.py]
-        REQ[requirements-ocr.txt] --> INST[install.sh --with-ocr]
-        DOC[references/ocr.md]
+    subgraph docx [skills/docx/scripts — MASTER]
+        VB[_venv_bootstrap.py] --> PV[preview.py]
+        VB --> OFF[office/*.py]
+        VB --> OPW[office_passwd.py]
+        VB --> DX[docx_*.py CLIs]
+        MD[md2docx.js] --> INS[install.sh smoke-test]
     end
-    OCR -->|lazy import| OMP[ocrmypdf]
-    OMP --> TES[tesseract + eng/rus]
-    OMP --> GS[ghostscript]
-    OMP --> PK[pikepdf/Pillow]
-    INST -->|pip into .venv| OMP
-    INST -. probe + hint .-> TES
-    INST -. probe + hint .-> GS
+    docx -. byte-identical copy .-> XLSX[skills/xlsx/scripts]
+    docx -. byte-identical copy .-> PPTX[skills/pptx/scripts]
+    VB -. 4-skill .-> PDF[skills/pdf/scripts]
+    PV -. 4-skill .-> PDF
 ```
 
 ---
 
 ## 4. Data Model (Conceptual)
 
-The script is stateless; "data" = the CLI arg record, the result record, and
-the error envelope.
+Both fixes are stateless; "data" = two derived records and a set of invariants.
 
-### 4.1. `OcrArgs` (parsed CLI namespace)
+### 4.1. `PageGeometry` (the crux of Problem B — derive, never hard-code)
 
-| Field | Type | Default | Notes |
-|-------|------|---------|-------|
-| `input` | Path | — (positional) | source PDF |
-| `output` | Path | — (positional) | searchable-PDF destination |
-| `lang` | str | `"eng+rus"` | tesseract `+`-list; validated by FC-4 |
-| `mode` | enum | `skip_text` | one of `skip_text` / `redo_ocr` / `force_ocr` (mutex) |
-| `sidecar` | Path \| None | None | optional plain-text dump |
-| `jobs` | int \| None | None | → ocrmypdf `jobs=` (auto = CPU count) |
-| `password` | str \| None | None | R5 (shipped); argv-visible honest-scope |
-| `deskew` / `rotate_pages` / `clean` | bool | False | R9 (shipped); osd/unpaper prereqs |
-| `json_errors` | bool | False | cross-5 envelope toggle |
+| Field | Type | Source | Notes |
+|---|---|---|---|
+| `pageW`, `pageH` | int (dxa) | `--page-size` (+ `--landscape` swap) | Letter `12240×15840` (default); A4 `11906×16838` |
+| `marginT/R/B/L` | int (dxa) | `--margins` (default `1440`) | optional `mm` suffix → `round(mm × 56.7)` |
+| `contentWidthDxa` | int (dxa) | **derived** `pageW − marginL − marginR` | replaces hard-coded `9360`; A4 default ⇒ **9026** |
+| `maxWidthPx` | int (px) | **derived** `floor(contentWidthDxa / 15)` | 1 dxa = 635 EMU, 1 px = 9525 EMU ⇒ px = dxa/15 (Letter 9360⇒624 ≈ current 620) |
+| `maxHeightPx` | int (px) | **derived** `floor((pageH − marginT − marginB) / 15)` | replaces hard-coded `800` (Letter usable 12960 dxa ⇒ 864) |
 
-### 4.2. `OcrResult` (success, → stdout one-liner)
+**Reference table (portrait, dxa):** Letter `12240×15840`; A4 `11906×16838`.
+**Business rule:** every size-bearing emit (`pgSz`, `pgMar`, table `width`/`colWidth`,
+image & Mermaid `transformation`) reads from this record — there is **no** surviving
+Letter literal on any geometry path (B4(a)…(e)).
 
-A plain-text summary (not JSON) printed to stdout on success:
+### 4.2. `BootstrapContext` (Problem A control record — conceptual)
 
-```text
-OCR complete: <output> (lang=eng+rus, mode=skip_text[, sidecar=<path>])
-```
+| Field | Type | Notes |
+|---|---|---|
+| `venv_py` | path | `<owning scripts/>/.venv/bin/python`, from `__file__` |
+| `current` | path | `realpath(sys.executable)` |
+| `requires` | tuple[str] | caller's heavy top-level modules (e.g. `("PIL",)`, `("defusedxml","lxml")`) |
+| `action` | enum | `reexec` (venv≠current, exists) / `proceed` (already venv) / `fail` (no venv + dep missing) |
 
-### 4.3. Error envelope (`--json-errors`, v=1 — `_errors.py`)
+### 4.3. Derived invariants
 
-The schema is exactly `_errors.report_error`'s envelope — **`{v, error, code,
-type?, details?}`** (no `ok`/`message`/`remediation` keys). The
-`report_error(..., error_type=…)` argument populates the JSON `type` field; the
-remediation text is folded into the `error` **message string** (the same way
-pdf-11's `ChromeEngineUnavailable` message carries its install hint):
-
-```jsonc
-{ "v": 1,
-  "error": "tesseract language pack 'deu' not installed. Install it: macOS `brew install tesseract-lang`; Debian `apt install tesseract-ocr-deu`; Fedora `dnf install tesseract-langpack-deu`.",
-  "code": 1,
-  "type": "LanguagePackMissing",
-  "details": { "missing": ["deu"], "requested": "eng+rus+deu" } }
-```
-
-`type` is the **machine-readable discriminator** (§12 D-A1) — it carries the
-fine-grained reason while the exit code stays coarse (`1`).
-
-### 4.4. Derived invariants
-
-- **I-1:** OUTPUT, when written, is a valid PDF with the same page count and
-  per-page MediaBox as INPUT (R1c). Enforced by ocrmypdf; spot-checked in E2E.
-- **I-2:** with default `skip_text`, pages that already carry a text layer are
-  left text-unchanged (R3a). (ocrmypdf contract.)
-- **I-3:** on any non-zero exit, **no** partial OUTPUT or decrypted scratch
-  remains — the searchable PDF is written to an O_EXCL `mkstemp` `.partial.pdf`
-  scratch (unpredictable name, 0600) in the OUTPUT dir, then `os.replace`d into
-  place; the `.partial` and any decrypt scratch are shredded in `finally`.
+- **I-1 (idempotent re-exec):** after a re-exec the venv interpreter runs, so
+  `sys.prefix == <root>/.venv` → the `proceed` branch (no second exec). A
+  **loop-guard env sentinel** (`_VENV_BOOTSTRAP_REEXEC=1`, set just before `execv`)
+  additionally bounds a pathological venv (dir present but `pyvenv.cfg` broken, which
+  would leave `sys.prefix` unchanged) to at most **one** re-exec **per process** (TASK
+  A4d, UC-1/A3). The sentinel is **consumed (popped) on entry** (SEC-1), so it is a
+  per-process guard that never propagates to a child — a Python-of-Python child
+  bootstraps itself afresh rather than silently inheriting "already re-exec'd".
+- **I-2 (byte-identity safe):** the `scripts/` root (hence `.venv`) derives from
+  `__file__`, never a skill name, so the replicated copy resolves the *calling* skill's
+  `.venv` (TASK A5; §9). Verified: probe under base `python3` re-execs into the **docx**
+  `scripts/.venv`; the same bytes in xlsx/pptx/pdf resolve their own.
+- **I-3 (Letter backward-compat — geometry-equivalent, not byte-identical):** with no
+  flags, the **load-bearing** invariants are exactly the pre-task values — `pgSz =
+  12240×15840` and `contentWidthDxa = 9360` — so `docx_replace.py --insert-after`
+  (calls `md2docx.js` flag-free, verified `_actions.py:204-217`) and every table layout
+  is unaffected. The image/Mermaid caps change from the old **hardcoded 620/800** to the
+  **geometrically-exact derived 624/864** (9360/15, 12960/15) — a ≤4 px difference,
+  strictly *within* the content width, so it can never cause overflow. The Letter
+  regression test (F1d) therefore asserts the exact invariants **`pgSz` + `contentWidthDxa`**,
+  and treats the ≤4 px cap correction as intended (the old literals were conservative
+  approximations of the true content width). UC-6/DoD-6 are "geometry-equivalent," not
+  "byte-for-byte" (TASK updated).
 
 ---
 
 ## 5. Interfaces
 
-### 5.1. Public CLI
+### 5.1. `md2docx.js` public CLI (Problem B)
 
 ```text
-pdf_ocr.py INPUT.pdf OUTPUT.pdf
-           [--lang LANGS]            # default "eng+rus"; tesseract '+'-list
-           [--skip-text | --redo-ocr | --force-ocr]   # default --skip-text
-           [--sidecar PATH.txt]      # also emit plain text
-           [--jobs N]                # ocrmypdf worker pool (default: auto)
-           [--password PW]           # R5 (shipped); decrypt before OCR
-           [--deskew] [--rotate-pages] [--clean]      # R9 (shipped; osd/unpaper)
-           [--json-errors]           # cross-5 machine-readable failures
+node md2docx.js IN.md OUT.docx
+     [--header TEXT] [--footer TEXT]          # existing
+     [--page-size A4|Letter]                  # default Letter (backward-compat)
+     [--landscape]                            # swap width/height
+     [--margins T,R,B,L]                      # dxa; per-value optional 'mm' suffix
 ```
 
-**Decision D-A5 (resolves TASK OQ-2):** positional `INPUT OUTPUT`, not
-`-o`. OCR is a 1→1 transform that reads most naturally as `in → out`
-(matches `pdf_merge.py OUT A B` family); `pdf_extract.py`'s `-o` exists
-because its default sink is stdout, which does not apply here (a PDF cannot
-go to stdout sensibly). OUTPUT is **required** (no implicit `<input>.ocr.pdf`
-— explicit sink avoids the same-name overwrite foot-gun).
+- `--page-size A4` ⇒ `<w:pgSz w:w="11906" w:h="16838"/>`; Letter unchanged.
+- `--landscape` ⇒ swaps **`pageW ↔ pageH` only** (`<w:pgSz>` dims; `w:orient` attr
+  optional, non-load-bearing). Margins are applied **as-authored** to the swapped page
+  (top stays top); `maxWidthPx`/`maxHeightPx` recompute from the **post-swap** geometry.
+- `--margins` ⇒ `<w:pgMar w:top/right/bottom/left>`.
+- **Arg-loop change (MINOR #7):** the existing loop (`md2docx.js:13-21`) silently pushes
+  unrecognised tokens into `positional[]` — so a typo (`--page-sizes A4`) would currently
+  be mis-read as `outputFile`. The new parser MUST **reject unknown `--`-prefixed flags**
+  with a non-zero exit + usage. Malformed `--margins`/unknown `--page-size` likewise exit
+  non-zero (parity with the `!inputFile||!outputFile` exit-1 path, `md2docx.js:25-28`).
 
-### 5.2. Exit-code matrix (resolves M-1 / TASK OQ-4 — see §12 D-A1)
+### 5.2. `_venv_bootstrap` API (Problem A)
 
-| Code | Symbol | When | `error_type` |
-|------|--------|------|--------------|
-| 0 | OK | searchable PDF written | — |
-| 1 | FAIL | input not found, engine missing, lang pack missing, encrypted-without-/wrong-password, corrupt/non-PDF input, prior-OCR conflict (non-skip modes), output-write failure (incl. non-zero ocrmypdf ExitCode), internal error | `InputNotFound` / `OcrEngineUnavailable` / `LanguagePackMissing` / `EncryptedInput` / `InputUnreadable` / `PriorOcrFound` / `OutputWriteFailed` / `InternalError` |
-| 2 | USAGE | argparse error (incl. mode mutex, missing positional) | — |
-| 6 | SELF_OVERWRITE | `resolve(IN)==resolve(OUT)` or sidecar collides | `SelfOverwriteRefused` |
-
-**`PriorOcrFound` reachability (AM-4):** with the default `--skip-text` mode
-this error is **never** raised (skip-text is precisely the no-conflict path,
-D-3); it is reachable only in `--redo-ocr` / `--force-ocr` if ocrmypdf still
-detects a conflict. A reader should not expect it on the default path.
-
-**No new exit codes 10/11/12.** `10` belongs to `pdf_extract.py`
-(`DocumentScanned`) and is intentionally not reused here. The originally
-proposed `11`/`12` are dropped (see D-A1): the `--json-errors` envelope
-`error_type` already provides the programmatic discriminator, so inventing
-exit codes for dependency-failure conditions is unjustified (YAGNI) and would
-diverge from the established `ChromeEngineUnavailable → exit 1` precedent in
-the same skill.
-
-### 5.3. Composition contract with `pdf_extract.py`
-
-```bash
-pdf_extract.py scan.pdf            # exit 10 DocumentScanned  (the trigger)
-pdf_ocr.py     scan.pdf scan.ocr.pdf     # exit 0  (searchable PDF, eng+rus)
-pdf_extract.py scan.ocr.pdf        # exit 0, doc_scanned=false, text present
+```python
+# first executable line of every CLI entrypoint, before heavy imports:
+import _venv_bootstrap; _venv_bootstrap.reexec_into_venv(requires=("PIL",))
 ```
 
-**Contract guarantee (R4a):** for the canonical image-only fixture, the OCR'd
-output makes `pdf_extract.py` report `doc_scanned=false` with non-empty
-per-page `text`. This is the architecture's primary acceptance hinge and is
-asserted by the E2E (tolerant case-insensitive needle; OCR is not bit-exact).
+`requires` names only the **third-party top-level module whose absence is the
+diagnostic signal** (not an exhaustive set, and not first-party `office.*` helpers).
+Per-entrypoint, matched to the file's actual top imports (verified):
+`preview.py`→`("PIL",)`; `office/unpack.py`→`("defusedxml","lxml")`;
+`office/pack.py`→`("lxml",)` (lxml-only, no defusedxml); `office/validate.py`→`("lxml",)`
+(a **proxy** for the `office.validators.*` chain — lxml is its first failing third-party
+import); `office_passwd.py`→`("msoffcrypto",)` (lazy import at `:78`, but it is the real dep);
+`docx_add_comment.py`/`docx_fill_template.py`/`docx_merge.py`→`("docx",)` (top-level
+`docx`); `docx_replace.py`/`docx_accept_changes.py`→`("lxml",)` (**no** heavy top import —
+`lxml` pulled transitively via `_actions`/`office.*`/`office._macros`). **Derivation rule:**
+name the third-party module the entrypoint needs first, directly or transitively (it only
+shapes the venv-absent diagnostic; the re-exec is unconditional). Identical `requires`
+across a replicated file's copies ⇒ byte-identity holds (the list is content, not
+skill-specific).
 
-### 5.4. Internal interface
+### 5.3. `install.sh` smoke-test contract (Problem C)
 
-Only one external symbol set is consumed read-only:
-`_errors.add_json_errors_argument` and `_errors.report_error`. No `office/`,
-no shared-helper, no cross-skill import → **no replication** (CLAUDE.md §2;
-see §9).
+Appended after the existing npm install (`install.sh:150`). Fixture
+`examples/fixture-simple.md` (**verified present**). Runs the **SKILL.md** commands in a
+`mktemp -d`; `die` on any non-zero / `ModuleNotFoundError`; `trap`-clean the scratch.
+**Deliberately invokes bare `python3 scripts/preview.py …`** (NOT `./.venv/bin/python`)
+— on a host where `python3 ≠ .venv`, this bare-`python3` smoke-test *is* the proof that
+fix A works (UC-4); using the venv interpreter directly would mask the very bug it must
+catch. Exit 0 ⇒ the documented path is proven end-to-end.
+
+### 5.4. SKILL.md / gotchas invocation contract (D-A4, Problem D)
+
+`SKILL.md` retains `python3 scripts/X.py` (readable, now safe via FC-1) and adds a
+§7.2 one-liner: *"Python CLIs self-bootstrap into `scripts/.venv`; bare `python3` and
+`./.venv/bin/python` are equivalent."* `install.sh` hints stay as-is — the two no
+longer conflict. §4/§10 gain the page-size flags. `gotchas.md:27` `--size letter` →
+`--page-size`.
 
 ---
 
 ## 6. Technology Stack
 
-| Layer | Choice | Floor | Justification |
-|-------|--------|-------|---------------|
-| Runtime | Python | 3.10+ | matches base `install.sh` floor |
-| OCR orchestration | `ocrmypdf` | a **current** release (`>=16`) | per memory "prefer dependency upgrades" — pin a `>=` floor to a current artifact, not an old one; finalize the exact pin at impl time against PyPI |
-| OCR engine | `tesseract` (LSTM) | `>=4` | system pkg; `eng`+`rus` traineddata required by default |
-| PDF raster/repair | `ghostscript` | system `gs` | ocrmypdf hard dep |
-| PDF crypto (R5) | `pikepdf` | (ocrmypdf transitive) | decrypt-to-temp pre-stage; already pulled by ocrmypdf |
-| Envelope | `_errors.py` | in-repo | cross-5 parity |
+| Layer | Choice | Notes |
+|---|---|---|
+| Bootstrap | Python **stdlib only** (`os`, `sys`, `importlib.util`) | must import under any interpreter; no third-party |
+| Generator | Node `docx-js` + `marked` + `image-size` | existing; only constants parametrised |
+| Installer | bash (`set -euo pipefail`) + `mktemp` | smoke-test scratch isolated + trap-cleaned |
+| Tests | `unittest` (per-skill `.venv`) + shell | run via `./.venv/bin/python -m unittest` |
 
-`requirements.txt` (base) is **unchanged**; OCR deps live in
-`requirements-ocr.txt` and are installed only via `install.sh --with-ocr`.
+`requirements.txt` / `package.json` are **unchanged** (no new dependency).
 
 ---
 
 ## 7. Security
 
-Trust model is inherited and stated inline (the pdf skill has no
-`references/security.md`; the OCR-specific statement goes in
-`references/ocr.md`, R8c): **single-tenant, operator-supplied input;
-non-multi-tenant output directory.**
+Trust model inherited: single-tenant, operator-supplied input; local CLI, no network.
 
-- **S-1 No shell injection.** Invoke ocrmypdf via its **Python API** (or an
-  argv list), never `shell=True`; user strings (`--lang`, paths) are never
-  interpolated into a shell line. `--lang` is additionally constrained by
-  FC-4 validation against the installed-language set before use.
-- **S-2 `--password` honest-scope.** argv-visible in `ps` — documented,
-  identical to `pdf_extract.py`. (No env/file alternative in v1.)
-- **S-3 Temp-file lifecycle (R5 + atomic write).** Decrypted temp (R5) and
-  the `.partial` output live in the OUTPUT directory (same filesystem for an
-  atomic rename), are created `0600`, and are unlinked on success **and** on
-  any failure path (`try/finally`). I-3.
-- **S-4 Resource/DoS honest-scope.** ocrmypdf→gs/tesseract over a hostile PDF
-  can be slow or memory-heavy; no global timeout in v1 (matches
-  `pdf_extract.py` honest-scope). Documented in `references/ocr.md`; if a real
-  hang is observed, add a `KNOWN_ISSUES.md` entry + optional `--timeout`.
-- **S-5 No new auth surface.** Local CLI; no network, no AuthN/AuthZ (N/A by
-  design — single-user local tool).
+- **S-1 Re-exec safety.** `os.execv(venv_py, [venv_py, *sys.argv])` — **no shell**, no
+  string interpolation; argv passed as a list. `venv_py` is a fixed path derived from
+  `__file__`, not from env/argv, so it is not attacker-influenceable. The `sys.prefix`
+  detection + env-sentinel loop guard bound it to a single exec (I-1) — no fork-bomb /
+  exec loop.
+- **S-2 No new attack surface.** Bootstrap touches only process image + stderr; the
+  page-size flags only widen existing numeric constants; the installer smoke-test runs
+  the skill's own commands on its own fixture in a private `mktemp` dir.
+- **S-3 venv-path integrity.** Deriving from `__file__` (not `$VIRTUAL_ENV`/`$PATH`)
+  avoids hijack via a planted env var; if `.venv` is absent we fail closed (exit 1),
+  never silently fall through to an arbitrary interpreter.
+- **S-4 No AuthN/AuthZ.** N/A — local single-user tooling (unchanged).
 
 ---
 
-## 8. Scalability and Performance
+## 8. Scalability & Performance
 
-- OCR is CPU-bound; cost ≈ pages × DPI × languages. ocrmypdf parallelizes
-  across pages — expose `--jobs N` (default: ocrmypdf auto = CPU count).
-- **Honest scope:** no wall-clock budget is asserted in the suite (inputs vary
-  too widely); no streaming/partial output (a PDF is produced whole). These
-  are documented non-goals, not regressions.
+- Re-exec adds one `execv` (a few ms) only on the wrong-interpreter path; **zero**
+  overhead when already in venv (the common case). No per-call import cost beyond the
+  stdlib helper.
+- Geometry change is constant-time arithmetic; no effect on generation cost.
 
 ---
 
-## 9. Cross-Skill Replication Boundary (CLAUDE.md §2)
+## 9. Cross-Skill Replication Boundary (CLAUDE.md §2 — load-bearing)
 
-`pdf_ocr.py` is a **docx-style per-skill CLI** (like `pdf_extract.py`,
-`pdf_*.py`): it imports `_errors.py` **read-only** and touches **nothing**
-under `office/` or the shared `_soffice.py` / `preview.py` / `office_passwd.py`
-helper set. Therefore:
+This task **does** trigger replication (unlike pdf-4). docx is the **only** edited
+master; copies are byte-identical.
 
-- **No 3/4-skill replication is triggered.** No `diff -qr office` obligation,
-  no copy to xlsx/pptx/docx.
-- `requirements-ocr.txt`, `install.sh` changes, and `references/ocr.md` are
-  **pdf-only** artifacts.
-- Verification at merge: the existing cross-skill `diff -q` matrix
-  (`_errors.py`, `preview.py`) must stay **silent** — i.e. this task must not
-  edit those shared files. (`_errors.py` is imported, not modified.)
+| Master (docx) | Tier | Replicate to | Gate (must be silent) |
+|---|---|---|---|
+| `scripts/_venv_bootstrap.py` (**new**) | 4-skill | xlsx, pptx, pdf | `diff -q` ×3 |
+| `scripts/preview.py` | 4-skill | xlsx, pptx, pdf | `diff -q` ×3 |
+| `scripts/office/` (unpack, pack, validate, _macros, …) | 3-skill | xlsx, pptx | `diff -qr office` ×2 |
+| `scripts/office_passwd.py` | 3-skill | xlsx, pptx | `diff -q` ×2 |
+| `md2docx.js`, `install.sh`, `SKILL.md`, `gotchas.md`, `docx_*.py` | docx-only | — | — |
+
+**Protocol (CLAUDE.md §2, per shared edit, same commit):** edit docx master → run
+docx tests → `cp`/`cp -R` to targets → clean `__pycache__` → `diff`/`diff -qr` silent
+→ `validate_skill.py` exit 0 for **all four** skills → each target's E2E/unit suite
+green. **Never** edit an xlsx/pptx/pdf copy directly; **never** replicate xlsx→docx.
+
+**Why a new shared file is safe.** `_venv_bootstrap.py` resolves its venv from
+`__file__` (I-2), so the byte-identical copy in xlsx/pptx/pdf finds *that* skill's
+`scripts/.venv`. Confirmed targets exist (xlsx/pptx/pdf have `preview.py`+`install.sh`;
+xlsx/pptx have `office/`+`office_passwd.py`) and are byte-identical *today* — so adding
+the prelude to docx masters and replicating preserves identity.
+
+**Free side-benefit:** xlsx/pptx/pdf `preview.py` and xlsx/pptx `office/*`+`office_passwd.py`
+gain self-bootstrap automatically (their CLIs already `__main__`-gate). Their *own*
+per-skill CLIs (`xlsx_*`, `pptx_*`, `pdf_*`) are **not** wired here — D-A6.
 
 ---
 
 ## 10. Honest Scope (v1)
 
-- No bundled OCR engine — tesseract/gs/lang packs are detected (`--with-ocr`
-  probe), never installed by us.
-- No layout/Markdown reconstruction — that stays `pdf_extract.py` + LLM
-  composition. `pdf_ocr.py` produces a searchable PDF (+ optional flat text),
-  not structured Markdown.
-- No OCR-accuracy tuning beyond ocrmypdf's own knobs — `--deskew` /
-  `--rotate-pages` / `--clean` expose the engine's pass-throughs (shipped), with
-  no bespoke tuning on top.
-- No global timeout / decompression-bomb hardening beyond ocrmypdf+gs's own.
-- `--password` argv-visible (S-2). R5 produces an **unencrypted** output (we
-  decrypt to OCR; re-encryption is out of scope — compose with a future
-  `office_passwd`-style step if needed).
+- **Default stays US Letter** (compat, §4.3 I-3). A4 + Letter only — no A3/legal/custom
+  named sizes (custom geometry achievable via `--margins`, not arbitrary `pgSz`).
+- **Non-docx per-skill CLIs not wired** (D-A6 / TASK OQ-1). After replication,
+  xlsx/pptx/pdf ship `_venv_bootstrap.py` and self-bootstrapping `preview`/`office`,
+  but `xlsx_*.py`/`pptx_*.py`/`pdf_*.py` still call deps directly — a documented,
+  deferrable follow-up, not a regression (the spec's pain was docx).
+- **Bootstrap is best-effort when venv is absent:** it fails *legibly* only for the
+  modules a CLI declares in `requires`; it does not enumerate the full dependency set.
+- **`--landscape` orientation attribute** (`w:orient`) is optional cosmetic; the
+  load-bearing effect is the swapped `pgSz` dimensions.
+- No re-architecture of install structure; no new runtime dependency.
 
 ---
 
 ## 11. Atomic-Chain Skeleton (Planner handoff — Stub-First)
 
-Proposed bead decomposition for the Planning phase (`/vdd-plan`). Stub-First:
-bead 01 lands the CLI skeleton + RED E2E/unit scaffolding; later beads turn
-them GREEN.
+Proposed beads for `/vdd-plan`. **Replication is in-bead** (CLAUDE.md "same commit"):
+any bead that edits a replicated master replicates + gates at its own close — never a
+separate "replication bead".
 
 | Bead | Scope (RTM) | Stub-First role |
-|------|-------------|-----------------|
-| **018-01** | CLI skeleton: argparse contract, mode mutex, path/self-overwrite guards, `--json-errors` wiring, exit-matrix constants; `requirements-ocr.txt` + `install.sh --with-ocr` (probe+hints); fixtures builder (runtime image-only PDF); RED E2E + unit scaffolding | STUB + tests (Red) |
-| **018-02** | FC-3 engine probe + FC-4 language validator (`OcrEngineUnavailable` / `LanguagePackMissing` envelopes, eng+rus default) | LOGIC (Green) |
-| **018-03** | FC-5 OCR runner (ocrmypdf delegate: skip/redo/force, `--sidecar`, `--jobs`, atomic write) + FC-6 exception→exit mapping; **R4 composition E2E** (scan→OCR→`pdf_extract` reads needle) | LOGIC (Green) — MVP gate (R1–R4, R6–R8) |
-| **018-04** | R5 password: `pikepdf` decrypt-to-temp pre-stage + UC-4 tests | LOGIC (shipped) |
-| **018-05** | R9 image-prep pass-throughs (`--deskew`/`--rotate-pages`/`--clean`, with `osd` validation + `unpaper` binary check) | LOGIC (shipped) |
-| **018-06** | Docs polish: `references/ocr.md` (usage + composition + trust model + honest scope) + `SKILL.md` surface + `pdf-to-markdown.md` cross-link; `THIRD_PARTY_NOTICES.md` (ocrmypdf/tesseract/gs); validator + `test_e2e.sh` green; backlog row `pdf-4` → done | DOC + INTEGRATION |
+|---|---|---|
+| **019-01** | FC-1 `_venv_bootstrap.py` helper (re-exec + friendly-fail) + RED tests (self-bootstrap, venv-absent, import-chain idempotency) | STUB + tests (Red) |
+| **019-02** | FC-1b wire bootstrap into docx CLI entrypoints (exclude import-only helpers) + **4/3-skill replication** of `_venv_bootstrap.py`/`preview.py`/`office/*`/`office_passwd.py` + `diff` gates + 4× `validate_skill`. **Exit-gate (CLAUDE.md §2, not mechanical `cp`):** after replication, each target skill's E2E/unit suite (xlsx, pptx, pdf) must pass — bead is not "done" until docx **and** all replicate-target suites are green | LOGIC (Green) — Problem A done |
+| **019-03** | FC-2 `md2docx.js` flags + `PageGeometry` derivation + tests (A4 pgSz, no-overflow, landscape, margins, **Letter regression**) | LOGIC (Green) — Problem B done |
+| **019-04** | FC-3 `install.sh` dep-verify + smoke-test | LOGIC (Green) — Problem C done |
+| **019-05** | FC-4 docs: `SKILL.md` (invocation note + page-size flags) + `gotchas.md` (`--size`→`--page-size`) | DOC |
+| **019-06** | Dogfood on `tmp7/` (one-command A4, golden parity) + promote `examples/fixture-mermaid-a4.md` + backlog `docx-9` → done | INTEGRATION + DOC |
 
-**Status (as-built, 2026-06-03):** **all 6 beads 018-01..06 shipped + verified**
-(the original plan gated R5/R9 as post-MVP, but both were prioritized and
-delivered in the same task). Real-engine composition verified (`test_e2e.sh`
-82/0); `pdf-4` is ✅ DONE.
+MVP gate = 019-01…04 (the headline scenario passes with zero workarounds). **C2
+(dep-import verify) is promoted to MVP** inside bead 019-04 — it is ~5 lines of bash and
+directly addresses the spec §4 Python-3.14 silent-wheel-failure pain (TASK RTM updated
+C2 ⬜→✅). The **only** remaining ⬜ non-MVP item is 019-06 F3 (fixture promotion).
+
+**Status (as-built, 2026-06-05):** **all 6 beads shipped + verified.** Key as-built
+deviation from the spec: the re-exec guard keys on **`sys.prefix`**, not
+`realpath(sys.executable)` — the spec's pseudocode is broken on a pyenv symlink-venv
+(verified empirically; see §2.1 FC-1 ⚠ note). `/vdd-multi` adversarial pass (4 critics,
+38 agents) **CONVERGED**: 18 INFO-level positive confirmations of the design (sys.prefix
+fix, position-independence, byte-identity, backward-compat, XXE, smoke-test) + 2 actionable
+MEDIUM fixed in `md2docx.js` (flag-missing-value diagnostic; oversized-margins guard, +2
+tests). One pre-existing Mermaid `execSync` item deferred to `KNOWN_ISSUES.md`
+(out-of-scope per spec §6). A **second `/vdd-multi`** (user-invoked completeness + regression
+pass) reconfirmed all DoD-1..9 against code and fixed 2 more LOW items: **SEC-1** (consume the
+loop-guard sentinel so it cannot leak to a Python-of-Python grandchild — §4.3 I-1; proven with
+a parent→child probe + regression test) and the dep-verify widening to 5 wheels (§2.1 FC-3). It
+also surfaced one **pre-existing, unrelated** xlsx test failure (`XLSX-PREVIEW-PNG-ASSERT`,
+proven not-a-regression via `git diff` → `KNOWN_ISSUES.md`). Final gates: docx **190** unit + 52
+office + 153 E2E, xlsx **513/514** (the 1 fail is the pre-existing item), pptx 52 office, pdf
+284 — all green; `diff` matrix silent; `validate_skill` ×4 PASS; install smoke PASS; dogfood
+golden-parity on the real document.
 
 ---
 
 ## 12. Decision-Record Summary
 
-- **D-A1 (resolves M-1 / OQ-4 — exit codes).** Drop the tentative
-  `11 OcrEngineUnavailable` / `12 LanguagePackMissing` codes. **All hard
-  failures exit `1`**, discriminated by the `--json-errors` envelope
-  `error_type`. Rationale: (a) matches the only existing optional-engine
-  precedent in the skill, `ChromeEngineUnavailable → exit 1`
-  (`html2pdf.py:302`); (b) `pdf_extract.py`'s `10 DocumentScanned` is a
-  *non-failure, actionable* outcome (output IS emitted) — a distinct code is
-  justified there but **not** for OCR's hard-failure conditions, where no
-  output is produced; (c) YAGNI — the envelope already carries the fine-grained
-  reason. `10` is reserved to `pdf_extract.py` and not reused.
-- **D-A2 (resolves M-3 / OQ-3 — R5 scope).** R5 (password) was planned as
-  **bead 04, post-MVP** — but was prioritized and **shipped** in the same task.
-  Rationale for a dedicated bead: ocrmypdf does **not** natively accept an input
-  password — it requires a `pikepdf` decrypt-to-temp pre-stage (its own testable
-  unit + temp-file security surface, S-3), cleaner as a dedicated Stub-First bead
-  than bolted onto the MVP. As-built: the decrypt scratch is `0600` in the OUTPUT
-  dir and shredded in `run_ocr`'s `finally` (S-3, I-3); the output is unencrypted.
-- **D-A3 (password mechanism).** Implement R5 via `pikepdf.open(in,
-  password=…)` → save decrypted temp (`0600`, OUTPUT dir) → `ocrmypdf` → shred
-  temp in `finally`. Output is unencrypted (re-encryption out of scope, §10).
-- **D-A4 (language validation owner).** `pdf_ocr.py` validates `--lang`
-  **before** invoking ocrmypdf (FC-4), so the error is precise and early,
-  rather than surfacing tesseract's late generic failure. Default exactly
-  `eng+rus` (user requirement); generic for any installed pack (not
-  hard-coded to two).
-- **D-A5 (CLI shape, resolves OQ-2).** Positional `INPUT OUTPUT`, OUTPUT
-  required; no `-o`, no implicit output name. (See §5.1.)
-- **D-A6 (no lib package).** Single `pdf_ocr.py`, no `pdf_ocr_lib/` — YAGNI;
-  preserves skill-isolation (§3.1).
+- **D-A1 (bootstrap signature).** `reexec_into_venv(requires=())` — a single
+  stdlib-only helper; `requires` lets each CLI declare its heavy modules so the
+  venv-absent path fails legibly (TASK A1/A2). Position-independent (venv from
+  `__file__`) for byte-identity (I-2).
+- **D-A2 (wire entrypoints only).** Bootstrap goes in files with `__main__`
+  (CLI entrypoints) as the first statement; pure import-only helpers
+  (`_actions.py`, `_relocator.py`, `docx_anchor.py`, `office/_macros.py`) are
+  **excluded** — they inherit the venv from the entrypoint that imports them. Putting
+  a re-exec/`exit` at import scope is the hazard this avoids (resolves task-review
+  M1/M2; verified none of the four has `__main__`).
+- **D-A3 (geometry derivation).** `contentWidthDxa = pageW − marginL − marginR`;
+  `maxWidthPx = floor(contentWidthDxa/15)`; `maxHeightPx = floor((pageH − marginT −
+  marginB)/15)`. The `/15` factor is exact (635/9525 EMU) and reproduces the current
+  Letter caps within 1 px. **No Letter literal survives on any geometry path.**
+- **D-A4 (invocation form).** `SKILL.md` keeps `python3 scripts/X.py` (now safe via
+  FC-1) + a one-line auto-bootstrap note; `install.sh` hints unchanged. Avoids a
+  ~15-line churn to `.venv/bin/python` while satisfying "SKILL.md ↔ install.sh agree"
+  (resolves TASK OQ-2).
+- **D-A5 (replication tiers).** `_venv_bootstrap.py`+`preview.py` → 4-skill;
+  `office/*`+`office_passwd.py` → 3-skill; everything else docx-only (§9). Forced by
+  CLAUDE.md §2 byte-identity, not optional.
+- **D-A6 (defer non-docx CLI wiring).** Keep this task docx-scoped + atomic; the helper
+  lands in all four skills via replication for a fast follow-up (resolves TASK OQ-1).
+- **D-A7 (margins grammar).** `--margins T,R,B,L`, all four required, each a dxa
+  integer with optional trailing `mm` (`round(mm×56.7)`) (resolves TASK OQ-4).
 
 ---
 
@@ -472,10 +491,9 @@ delivered in the same task). Real-engine composition verified (`test_e2e.sh`
 
 All TASK open questions are resolved at the architecture layer:
 
-- **OQ-1 (default lang):** locked `eng+rus`. ✅
-- **OQ-2 (positional vs `-o`):** positional `INPUT OUTPUT` — D-A5. ✅
-- **OQ-3 (R5/R9 scheduling):** R5 = bead 04 post-MVP; R9 = bead 05 deferrable
-  — D-A2 / §11. ✅
-- **OQ-4 (new exit codes):** dropped; exit 1 + `error_type` — D-A1. ✅
+- **OQ-1 (non-docx CLI wiring):** deferred — D-A6. ✅
+- **OQ-2 (SKILL.md invocation form):** keep `python3` + note — D-A4. ✅
+- **OQ-3 (px-from-dxa factor):** `floor(contentWidthDxa/15)` — D-A3. ✅
+- **OQ-4 (`--margins` grammar):** `T,R,B,L` dxa + optional `mm` — D-A7. ✅
 
 No blocking questions remain for the Planning phase.
