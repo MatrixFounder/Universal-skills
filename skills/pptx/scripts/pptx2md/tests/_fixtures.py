@@ -71,6 +71,42 @@ def build_deck_with_two_images(path: Path) -> Path:
     return path
 
 
+def build_deck_with_picture_placeholder(path: Path) -> Path:
+    """A 1-slide deck whose image lives in a PICTURE PLACEHOLDER (shape_type ==
+    PLACEHOLDER, but `isinstance(shape, Picture)` is True) — Fix A regression."""
+    from pptx.enum.shapes import PP_PLACEHOLDER
+
+    prs = Presentation()
+    slide = prs.slides.add_slide(prs.slide_layouts[8])  # "Picture with Caption"
+    for ph in slide.placeholders:
+        if ph.placeholder_format.type == PP_PLACEHOLDER.PICTURE:
+            ph.insert_picture(io.BytesIO(_png_bytes((1, 2, 3))))
+            break
+    prs.save(str(path))
+    return path
+
+
+def build_deck_with_background_image(path: Path) -> Path:
+    """A 1-slide deck whose whole slide is a BACKGROUND image (`p:cSld/p:bg` blip,
+    no shapes) — like a marp/exported deck. Fix B regression."""
+    from pptx.oxml import parse_xml
+    from pptx.oxml.ns import qn
+
+    prs = Presentation()
+    slide = prs.slides.add_slide(prs.slide_layouts[6])  # blank
+    _part, rid = slide.part.get_or_add_image_part(io.BytesIO(_png_bytes((50, 60, 70))))
+    nsd = ('xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" '
+           'xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" '
+           'xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"')
+    bg = parse_xml(
+        f'<p:bg {nsd}><p:bgPr><a:blipFill><a:blip r:embed="{rid}"/>'
+        f'<a:stretch><a:fillRect/></a:stretch></a:blipFill><a:effectLst/></p:bgPr></p:bg>'
+    )
+    slide._element.find(qn("p:cSld")).insert(0, bg)  # p:bg must be first child of cSld
+    prs.save(str(path))
+    return path
+
+
 def build_deck_with_notes(path: Path) -> Path:
     """A 1-slide deck whose slide carries non-empty speaker notes."""
     prs = Presentation()

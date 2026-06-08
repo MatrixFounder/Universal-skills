@@ -18,7 +18,7 @@ if str(_SCRIPTS) not in sys.path:
 
 from PIL import Image
 
-from pptx2md import cli, ocr
+from pptx2md import cli, images, ocr
 from pptx2md.exceptions import LanguagePackMissing, OcrEngineUnavailable
 from pptx2md.tests._fixtures import (
     build_deck_with_duplicate_image,
@@ -124,6 +124,78 @@ class TestOcrAsset(unittest.TestCase):
              contextlib.redirect_stderr(io.StringIO()):
             self.assertEqual(ocr.ocr_asset(b"x", "eng", 5.0), "")
         big.save.assert_not_called()  # rejected before the full-decode .save()
+
+
+class TestRasteriseVector(unittest.TestCase):
+    """images.rasterise_vector — soffice WMF/EMF → PNG bytes (shared by materialise + ocr)."""
+
+    def test_non_vector_format_returns_none(self):
+        # a raster format (e.g. a decompression-bomb PNG) must NOT invoke soffice.
+        self.assertIsNone(images.rasterise_vector(b"x", "PNG", 60))
+        self.assertIsNone(images.rasterise_vector(b"x", "", 60))
+
+    def test_soffice_absent_returns_none(self):
+        import _soffice
+        with mock.patch.object(_soffice, "find_soffice",
+                               side_effect=_soffice.SofficeError("not installed")):
+            self.assertIsNone(images.rasterise_vector(b"wmf", "WMF", 60))
+
+    def test_wmf_success_returns_png_bytes(self):
+        import _soffice
+
+        def fake_convert(src, out_dir, target, *, timeout=180):
+            p = Path(out_dir) / f"{Path(src).stem}.{target}"
+            p.write_bytes(b"\x89PNG-rendered")
+            return p
+
+        with mock.patch.object(_soffice, "find_soffice", return_value="/x/soffice"), \
+             mock.patch.object(_soffice, "convert_to", side_effect=fake_convert):
+            self.assertEqual(images.rasterise_vector(b"wmfbytes", "WMF", 60),
+                             b"\x89PNG-rendered")
+
+    def test_conversion_failure_returns_none(self):
+        import _soffice
+        with mock.patch.object(_soffice, "find_soffice", return_value="/x/soffice"), \
+             mock.patch.object(_soffice, "convert_to",
+                               side_effect=_soffice.SofficeError("boom")):
+            self.assertIsNone(images.rasterise_vector(b"wmf", "WMF", 60))
+
+    def test_runtime_warning_does_not_escape(self):
+        # AR-1: _soffice.run can surface a RuntimeWarning (macOS hardened-shim path);
+        # under a RuntimeWarning-as-error filter it is raised. The bare except must
+        # catch it → None, never raising.
+        import warnings
+
+        import _soffice
+
+        def warn_then_fail(src, out_dir, target, *, timeout=180):
+            warnings.warn("hardened shim", RuntimeWarning)  # → raised under the filter
+            raise AssertionError("unreachable under error filter")
+
+        with mock.patch.object(_soffice, "find_soffice", return_value="/x/soffice"), \
+             mock.patch.object(_soffice, "convert_to", side_effect=warn_then_fail), \
+             warnings.catch_warnings():
+            warnings.simplefilter("error", RuntimeWarning)
+            self.assertIsNone(images.rasterise_vector(b"wmf", "WMF", 60))
+
+    def test_ocr_asset_uses_rasterise_for_wmf(self):
+        # When Pillow can't .save() a WMF, ocr_asset routes to rasterise_vector, writes
+        # the returned PNG bytes to the temp, then OCRs it. Mock Pillow + the helper.
+        from PIL import Image as PILImage
+
+        bad_img = mock.MagicMock()
+        bad_img.format = "WMF"
+        bad_img.size = (100, 100)
+        bad_img.save.side_effect = OSError("cannot find loader for this WMF file")
+
+        def fake_run(argv, **kw):
+            return subprocess.CompletedProcess(argv, 0, stdout="WMF TEXT", stderr="")
+
+        with mock.patch.object(ocr.shutil, "which", return_value="/usr/bin/tesseract"), \
+             mock.patch.object(PILImage, "open", return_value=bad_img), \
+             mock.patch.object(ocr, "rasterise_vector", return_value=b"\x89PNGbytes"), \
+             mock.patch.object(ocr.subprocess, "run", side_effect=fake_run):
+            self.assertEqual(ocr.ocr_asset(b"wmfblob", "eng", 60), "WMF TEXT")
 
 
 class TestOcrPipeline(unittest.TestCase):

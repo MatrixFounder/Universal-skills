@@ -19,12 +19,17 @@ from zipfile import BadZipFile
 from pptx import Presentation
 from pptx.enum.shapes import MSO_SHAPE_TYPE
 from pptx.exc import PackageNotFoundError
+from pptx.oxml.ns import qn
+from pptx.parts.image import Image as _PptxImage
+from pptx.shapes.picture import Picture
 
 from office._encryption import assert_not_encrypted
 
 from .exceptions import BadInput
 from .images import safe_image_meta
 from .model import Block, Bullets, BulletItem, Deck, Heading, ImageRef, Placeholder, Slide, Table
+
+_BLIP_TAG = qn("a:blip")  # {drawingml}blip — appears in pictures, shape fills, and bg fills
 
 
 def _warn(message: str) -> None:
@@ -165,8 +170,12 @@ def _walk_shapes(shapes, blocks: list[Block], slide_index: int, skip_id, counter
         # That is what makes (slide, shape) a deterministic dedup/placeholder key (R-A5).
         shape_idx = next(counter)
 
-        # AR-1: classify on shape_type before touching shape.image.
-        if st == MSO_SHAPE_TYPE.PICTURE:
+        # AR-1: classify before touching shape.image (isinstance is a safe check;
+        # safe_image_meta guards the .image access). `isinstance(shape, Picture)`
+        # catches BOTH a plain PICTURE and a **picture-placeholder** (PlaceholderPicture
+        # subclasses Picture but reports shape_type==PLACEHOLDER, so `== PICTURE` missed
+        # it — that silently dropped image-content slides, e.g. tmp8/slides-5 sl 2-3).
+        if isinstance(shape, Picture):
             meta = safe_image_meta(shape)
             if meta is None:
                 blocks.append(Placeholder(slide=slide_index, shape=shape_idx,
@@ -208,6 +217,45 @@ def _walk_shapes(shapes, blocks: list[Block], slide_index: int, skip_id, counter
         # Other shapes (empty placeholders, undetectable SmartArt) are skipped.
 
 
+def _collect_nonpic_images(slide, slide_index: int, counter, blobs: dict, captured_sha1s: set) -> list:
+    """Collect images NOT carried by a ``Picture`` shape (R-A1 extension).
+
+    Two real sources the shape walk cannot reach: **slide-background fills**
+    (``p:cSld/p:bg`` — the whole marp/exported slide is a full-page background PNG)
+    and **shape blip-fills**. Each ``a:blip`` embed rId is resolved to its image part
+    via the slide's relationships. Deduped by rId within the slide and by ``sha1``
+    against pictures already emitted on the same slide. Unreadable/unresolvable →
+    ``Placeholder`` (never a crash, AR-1).
+    """
+    results: list = []
+    seen_rids: set = set()
+    for blip in slide._element.iter(_BLIP_TAG):
+        # Blips inside a p:pic are handled by the shape walk (isinstance Picture); skip.
+        if blip.xpath("ancestor::p:pic"):
+            continue
+        rid = blip.get(qn("r:embed"))
+        if not rid or rid in seen_rids:
+            continue
+        seen_rids.add(rid)
+        shape_idx = next(counter)
+        try:
+            part = slide.part.related_part(rid)
+            image = _PptxImage.from_blob(part.blob)
+            blob, sha1, ext, ct = image.blob, image.sha1, image.ext, image.content_type
+        except Exception as exc:  # noqa: BLE001 — unresolvable/unreadable bg/fill → placeholder
+            results.append(Placeholder(slide=slide_index, shape=shape_idx,
+                                       kind="image", note="unreadable background/fill image"))
+            _warn(f"slide {slide_index}: unreadable background/fill image "
+                  f"({type(exc).__name__}) → placeholder")
+            continue
+        if sha1 in captured_sha1s:
+            continue  # same image already emitted as a Picture on this slide
+        blobs.setdefault(sha1, (blob, ct))
+        results.append(ImageRef(slide=slide_index, shape=shape_idx,
+                                sha1=sha1, ext=ext, alt="background"))
+    return results
+
+
 def build_deck(prs, opts, source_name: str = "") -> Deck:
     """Walk a python-pptx ``Presentation`` into the document model.
 
@@ -235,6 +283,10 @@ def build_deck(prs, opts, source_name: str = "") -> Deck:
 
         counter = itertools.count(1)
         _walk_shapes(slide.shapes, blocks, idx, skip_id, counter, blobs)
+        # Slide-background + shape-fill images the shape walk can't see (marp/exported
+        # decks whose whole slide is a background image; picture-fills on autoshapes).
+        captured = {b.sha1 for b in blocks if isinstance(b, ImageRef)}
+        blocks.extend(_collect_nonpic_images(slide, idx, counter, blobs, captured))
 
         slides.append(Slide(index=idx, blocks=blocks, notes=_extract_notes(slide)))
 

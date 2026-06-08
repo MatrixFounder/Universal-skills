@@ -449,17 +449,32 @@ silent (proves no shared file was touched) + `validate_skill.py` exit 0 for pptx
 - **OCR is best-effort, no layout.** tesseract returns a flat text block per image; no
   reading-order reconstruction inside an image, no table-in-image parsing. Engine +
   language packs are **detected, never installed** by us.
-- **EMF/WMF/SVG/video** → placeholder marker, not rasterised/converted.
+- **SVG/video** → placeholder marker (Pillow can't identify → no file). **WMF/EMF**
+  (vector) is **rendered to an inline `.png`** at extraction time via LibreOffice
+  (`images.rasterise_vector`, soft-optional, **fail-closed**) so the diagram displays
+  inline in any Markdown viewer; under `--ocr` the same PNG is OCR'd (no second soffice
+  call — `materialise` updates `deck.blobs` to the PNG). If `soffice` is absent (or the
+  render fails) the original `.wmf`/`.emf` bytes are written instead and `--ocr` skips
+  that one image with a `non-rasterisable image` warning — the run never fails. Vectors
+  are pre-rendered up front across `--jobs` workers (each render is profile-isolated;
+  default `--jobs 1` = serial, ~2–3 s LibreOffice startup *per unique vector*; sha1-
+  deduped so identical vectors render once). The inline PNG **bytes** are not byte-
+  reproducible across runs (LibreOffice render metadata) but the `.md` + media
+  **filenames** are stable. See D-11.
 - **`.pptm`** opens normally; macros are **not read** (read-only path) and not warned
   about (the pack-time macro helper does not apply to a reader).
-- **Image-only & background-image decks (AR-8 corpus reality).** `tmp8/` (now 6 decks,
-  **no PDF**) includes two zero-extractable-text decks — `slides-5.pptx` (3 sl, image
-  -only) and `FRAMEWORK_WEBINAR.marp.pptx` (19 sl, marp-rendered; the slide content is
-  carried as **slide-background images / non-`Picture` shapes** my probe does not
-  classify). For these, the no-OCR path emits mostly `## Slide N` headers with empty
-  bodies — **only `--ocr` recovers text**, and even then a marp background image may
-  not surface as a `PICTURE` shape (background fills are out of v1 scope: a documented
-  limitation, not a silent drop). This is the honest boundary of a python-pptx reader.
+- **Image-only & background-image decks — NOW HANDLED (post-dogfood fix, 2026-06-09).**
+  Beyond `Picture` shapes, `extract` also recovers (a) **picture-placeholders**
+  (`shape_type==PLACEHOLDER` but `isinstance(shape, Picture)` — e.g. `slides-5` sl 2-3)
+  via the `isinstance(shape, Picture)` classifier, and (b) **slide-background + shape-
+  fill images** (`p:cSld/p:bg` / `a:blipFill` blips, which carry no shape at all — the
+  whole marp/exported slide is a full-page background PNG) via `_collect_nonpic_images`
+  (iterate `a:blip` not under a `p:pic`, resolve the embed rId → image part → blob,
+  emit `ImageRef(alt="background")`). So `FRAMEWORK_WEBINAR.marp.pptx` (19 bg slides)
+  and `slides-5` (picture-placeholders) now extract every image + `--ocr` recovers the
+  text — **0 empty slides** across the tmp8 corpus. *Remaining honest limit:* a
+  background inherited from the slide **layout/master** (not on the slide itself) is
+  not collected (`slide._element` only sees the slide's own bg) — rare; deferred.
 - No new Python dependency; no cross-skill replication; no change to existing scripts.
 
 ---
@@ -542,6 +557,27 @@ both the extract and OCR paths, and the 0.23 s baseline — and hardened five it
   basename message instead of echoing `str(exc)` (the shared
   `office._encryption.EncryptedFileError` embeds the resolved absolute path);
   `InternalError` is redacted to the exception class name. (vdd-multi security LOW-1.)
+- **D-11 (WMF/EMF rendered to inline PNG via a soft-optional LibreOffice render).**
+  Pillow can identify but not *decode* WMF/EMF on macOS/Linux, and most Markdown viewers
+  won't display raw `.wmf`/`.emf`, so the converter renders each vector to a **`.png`**
+  via the shared `images.rasterise_vector` → `_soffice.convert_to(..., "png")` and writes
+  *that* as the sidecar media file (links display inline). This happens at extraction
+  time **regardless of `--ocr`**: `materialise` pre-renders all unique vectors
+  (`_prerender_vectors`, parallel over `--jobs`, sha1-deduped so each renders once) and
+  swaps the blob to the PNG in `deck.blobs`, so a subsequent `--ocr` OCRs the PNG with
+  **no second soffice call** (extraction reads `deck.blobs` serially, then mutates
+  serially — no race). `ocr.ocr_asset` calls the *same* `rasterise_vector` only as a
+  defensive fallback (e.g. `--no-images` decks never pre-rendered). **Reuses the engine
+  the skill already trusts** (`pptx_to_pdf.py` / `pptx_thumbnails.py` already feed
+  untrusted decks to soffice — no new trust boundary; argv-no-shell; per-call throw-away
+  `UserInstallation` profile → safe under `--jobs>1`; `--ocr-timeout`-bounded).
+  Fail-closed: absent/failed soffice → keep the original `.wmf`/`.emf` bytes (and under
+  `--ocr` skip that image + warn), never crash — guarded by a **bare `except Exception`**
+  (a narrow `SofficeError`/`OSError` catch would let a `RuntimeWarning`-as-error escape
+  and break AR-1; found by the post-dogfood logic roast). The PNG **bytes** are not
+  byte-reproducible (LibreOffice render metadata), but filenames + the `.md` are stable.
+  Cost: ~2–3 s of LibreOffice startup per unique vector; default `--jobs 1` is serial —
+  raise `--jobs` on vector-heavy decks, or `--no-images` to skip rendering entirely.
 
 ---
 

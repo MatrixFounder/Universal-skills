@@ -253,7 +253,8 @@ def convert(
     prs = extract.open_deck(input_path)
     deck = extract.build_deck(prs, args, source_name=input_path.name)
     assets = images.materialise(
-        deck, media_dir, link_base, no_images=args.no_images, input_path=input_path
+        deck, media_dir, link_base, no_images=args.no_images, input_path=input_path,
+        vector_timeout=args.ocr_timeout, jobs=args.jobs,
     )
     ocr_text = _build_ocr_text(deck, assets, args) if args.ocr else {}
     if (

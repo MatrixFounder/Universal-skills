@@ -96,6 +96,48 @@ class TestMaterialise(unittest.TestCase):
             self.assertFalse(media.exists())
 
 
+class TestVectorRasterise(unittest.TestCase):
+    def test_materialise_renders_wmf_to_png(self):
+        # A WMF ImageRef → materialise rasterises to PNG (via mocked rasterise_vector):
+        # the media file is .png, the link is .png, deck.blobs is updated so OCR reuses
+        # the PNG, and the original WMF bytes are NOT written.
+        from unittest import mock
+
+        ref = model.ImageRef(slide=1, shape=1, sha1="w", ext="wmf", alt="diagram")
+        deck = model.Deck(
+            slides=[model.Slide(index=1, blocks=[ref])],
+            source_name="t.pptx",
+            blobs={"w": (b"WMF-RAW-BYTES", "image/wmf")},
+        )
+        with tempfile.TemporaryDirectory() as d:
+            media = Path(d) / "m"
+            with mock.patch.object(images, "rasterise_vector", return_value=b"\x89PNGdata"):
+                assets = images.materialise(deck, media, "m")
+            asset = assets[ref]
+            self.assertTrue(asset.filename.endswith(".png"), asset.filename)
+            self.assertTrue(asset.rel_path.endswith(".png"))
+            self.assertEqual(asset.content_type, "image/png")
+            # PNG written, not the raw WMF
+            self.assertEqual((media / asset.filename).read_bytes(), b"\x89PNGdata")
+            # deck.blobs updated so --ocr OCRs the PNG (no second soffice call)
+            self.assertEqual(deck.blobs["w"], (b"\x89PNGdata", "image/png"))
+
+    def test_materialise_keeps_wmf_when_soffice_absent(self):
+        # rasterise_vector returns None (no soffice) → keep the original .wmf.
+        from unittest import mock
+
+        ref = model.ImageRef(slide=1, shape=1, sha1="w", ext="wmf", alt="x")
+        deck = model.Deck(slides=[model.Slide(index=1, blocks=[ref])],
+                          blobs={"w": (b"WMF-RAW", "image/wmf")})
+        with tempfile.TemporaryDirectory() as d:
+            media = Path(d) / "m"
+            with mock.patch.object(images, "rasterise_vector", return_value=None):
+                assets = images.materialise(deck, media, "m")
+            asset = assets[ref]
+            self.assertTrue(asset.filename.endswith(".wmf"), asset.filename)
+            self.assertEqual((media / asset.filename).read_bytes(), b"WMF-RAW")
+
+
 class TestSafeImageMeta(unittest.TestCase):
     def test_unreadable_returns_none(self):
         class _Bad:

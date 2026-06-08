@@ -19,8 +19,10 @@ from pptx.enum.shapes import MSO_SHAPE_TYPE
 
 from pptx2md import extract, model
 from pptx2md.tests._fixtures import (
+    build_deck_with_background_image,
     build_deck_with_hidden_slide,
     build_deck_with_notes,
+    build_deck_with_picture_placeholder,
     build_deck_with_table,
     build_minimal_deck,
 )
@@ -85,7 +87,17 @@ class TestWalkShapes(unittest.TestCase):
         self.assertEqual(blocks[0].items[0].text, "grouped text")
 
     def test_unreadable_image_becomes_placeholder(self):
-        pic = _FakeShape(MSO_SHAPE_TYPE.PICTURE, image=None)  # .image raises
+        # A real picture IS a Picture instance (the production check is now
+        # isinstance(shape, Picture), which also catches picture-placeholders); use a
+        # Picture-spec mock whose .image raises so safe_image_meta degrades to None.
+        from unittest import mock
+
+        from pptx.shapes.picture import Picture
+
+        pic = mock.MagicMock(spec=Picture)
+        pic.shape_type = MSO_SHAPE_TYPE.PICTURE
+        pic.shape_id = 99
+        type(pic).image = mock.PropertyMock(side_effect=ValueError("no embedded image"))
         blocks: list = []
         extract._walk_shapes([pic], blocks, 3, None, itertools.count(1), {})
         self.assertEqual(len(blocks), 1)
@@ -197,6 +209,27 @@ class TestBuildDeck(unittest.TestCase):
             deck2 = extract.build_deck(prs2, _Opts())
             self.assertIsNone(deck2.slides[0].notes)
             self.assertFalse(prs2.slides[0].has_notes_slide)
+
+    def test_picture_placeholder_emits_imageref(self):
+        # Fix A: a picture-placeholder (shape_type==PLACEHOLDER but isinstance Picture)
+        # must be extracted as an ImageRef, not silently skipped.
+        with tempfile.TemporaryDirectory() as d:
+            deck = extract.build_deck(_open(build_deck_with_picture_placeholder(
+                Path(d) / "pph.pptx")), _Opts())
+            refs = [b for s in deck.slides for b in s.blocks if isinstance(b, model.ImageRef)]
+            self.assertEqual(len(refs), 1, "picture-placeholder image must be captured")
+            self.assertIn(refs[0].sha1, deck.blobs)
+
+    def test_background_image_collected(self):
+        # Fix B: a slide-background image (p:cSld/p:bg blip, no shapes) must be
+        # collected as an ImageRef so the (otherwise empty) slide carries content.
+        with tempfile.TemporaryDirectory() as d:
+            deck = extract.build_deck(_open(build_deck_with_background_image(
+                Path(d) / "bg.pptx")), _Opts())
+            refs = [b for s in deck.slides for b in s.blocks if isinstance(b, model.ImageRef)]
+            self.assertEqual(len(refs), 1, "slide-background image must be collected")
+            self.assertEqual(refs[0].alt, "background")
+            self.assertIn(refs[0].sha1, deck.blobs)
 
     def test_hidden_slide_skipped_then_included(self):
         with tempfile.TemporaryDirectory() as d:

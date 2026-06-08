@@ -225,15 +225,18 @@ class TestMainPipeline(unittest.TestCase):
             self.assertIn("| --- |", out.read_text())
 
 
-@unittest.skipUnless((_TMP8 / "slodes-3.pptx").exists(), "tmp8/slodes-3.pptx absent")
+@unittest.skipUnless((_TMP8 / "slides-3.pptx").exists(), "tmp8/slides-3.pptx absent")
 class TestDogfoodSlodes3(unittest.TestCase):
     def test_gfm_tables_from_slodes3(self):
         with tempfile.TemporaryDirectory() as d:
             out = Path(d) / "slodes3.md"
-            code, _ = _run([str(_TMP8 / "slodes-3.pptx"), str(out)])
+            # --no-images: this checks GFM tables only; skipping image extraction
+            # avoids the real LibreOffice WMF→PNG renders this deck would otherwise do
+            # (covered by the mocked rasterise_vector/materialise unit tests).
+            code, _ = _run([str(_TMP8 / "slides-3.pptx"), str(out), "--no-images"])
             self.assertEqual(code, 0)
             text = out.read_text()
-            self.assertIn("| --- |", text)  # slodes-3 has 2 tables
+            self.assertIn("| --- |", text)  # slides-3 has 2 tables
             self.assertEqual(text.count("## Slide "), 82)
 
 

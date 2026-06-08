@@ -16,6 +16,7 @@ import subprocess  # noqa: S404 — fixed argv, no shell (S-2)
 import sys
 
 from .exceptions import LanguagePackMissing, OcrEngineUnavailable
+from .images import rasterise_vector  # shared WMF/EMF → PNG (LibreOffice) helper
 
 
 def _installed_languages(exe: str) -> set[str]:
@@ -97,6 +98,7 @@ def ocr_asset(blob: bytes, langs: str, timeout: float) -> str:
     fd, png_path = tempfile.mkstemp(suffix=".png")
     os.close(fd)
     try:
+        img = None  # bound before the try so the except's getattr(img, ...) is safe
         try:
             import io
 
@@ -117,9 +119,21 @@ def ocr_asset(blob: bytes, langs: str, timeout: float) -> str:
                         f"{w * h} pixels exceeds the {limit}px OCR cap"
                     )
             img.save(png_path, "PNG")
-        except Exception as exc:  # noqa: BLE001 — unreadable/bomb image → skip, never crash
-            sys.stderr.write(f"warning: OCR skipped an unreadable image ({type(exc).__name__})\n")
-            return ""
+        except Exception as exc:  # noqa: BLE001 — non-rasterisable/bomb image → fallback or skip
+            # Pillow couldn't rasterise. For a vector image it CAN identify but not
+            # decode (WMF/EMF), try LibreOffice as a soft-optional fallback so its text
+            # can still be OCR'd; otherwise (bomb = raster format → ext gate rejects it;
+            # soffice absent; conversion fails) skip OCR for this one image.
+            fmt = (getattr(img, "format", "") or "").upper()
+            png = rasterise_vector(blob, fmt, timeout)
+            if png is None:
+                reason = " ".join(str(exc).split()) or type(exc).__name__
+                sys.stderr.write(
+                    f"warning: OCR skipped a non-rasterisable image: {reason}\n"
+                )
+                return ""
+            with open(png_path, "wb") as fh:
+                fh.write(png)
         try:
             proc = subprocess.run(  # noqa: S603 — fixed argv, no shell (S-2)
                 [exe, png_path, "stdout", "-l", langs],

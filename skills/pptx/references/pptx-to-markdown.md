@@ -19,8 +19,9 @@ One section per slide, in presentation order:
   `![alt](…/slideN-imgM.ext)`. Identical images are written once (sha1-deduped) and
   all references point at the canonical first-occurrence file.
 - Speaker notes (when present) → a `> **Notes:**` block (suppress with `--no-notes`).
-- Charts / EMF·WMF·SVG / video → a `[kind]` placeholder marker + a warning (never a
-  hard failure). **SmartArt diagrams are silently skipped** (see Limitations).
+- Charts / SVG / video → a `[kind]` placeholder marker + a warning (never a hard
+  failure). WMF/EMF vector images are rendered to inline PNG via LibreOffice (see
+  Limitations). **SmartArt diagrams are silently skipped** (see Limitations).
 
 ## When to reach for `--ocr`
 
@@ -46,7 +47,8 @@ Is the slide content extractable text (you saw bullets/titles in the no-OCR run)
 Is the text baked into an image / screenshot?
   yes → re-run with --ocr (needs tesseract + the eng/rus packs installed).
 Is the deck a marp/Keynote export whose slides are full-slide BACKGROUND images?
-  → see Limitations: background fills are not surfaced as pictures in v1.
+  → handled: slide-background + shape-fill + picture-placeholder images are all
+    extracted; re-run with --ocr to recover their text.
 ```
 
 ## Setup (OCR is soft-optional)
@@ -83,11 +85,29 @@ Append `--json-errors` for a single-line JSON envelope on stderr.
   classifier, so a SmartArt diagram is **silently skipped** (no marker, no warning;
   its text is lost). Use `pptx_thumbnails.py` for a visual if a deck leans on SmartArt.
 - **Merged table cells** → anchor value + blanks (no rowspan/colspan reconstruction).
-- **EMF/WMF/SVG/video** → placeholder markers, not rasterised.
-- **Background-image / marp decks**: content carried as a slide-*background* fill is
-  **not** surfaced by python-pptx as a `PICTURE` shape, so such a slide yields a
-  header with an empty body even under `--ocr`. Use the deck's source, or
-  `pptx_thumbnails.py` for a visual, in that case.
+- **SVG / video** (and any EMF Pillow can't identify at all) → `[image]`/`[media]`
+  placeholder markers (no file written). WMF — and the EMF variants Pillow *does*
+  identify — are handled by the vector bullet below.
+- **WMF / EMF** (vector) → **rendered to an inline `.png`** via **LibreOffice**
+  (`soffice`) and linked, so the diagram **displays inline** in any Markdown viewer
+  (most won't render raw `.wmf`/`.emf`). The render happens at extraction time
+  (regardless of `--ocr`); under `--ocr` the same PNG is OCR'd, so text inside a
+  WMF/EMF diagram **is** recovered with no second LibreOffice call. The render is
+  **soft-optional and fail-closed**: if `soffice` is absent (or the render fails) the
+  original `.wmf`/`.emf` bytes are written instead and, under `--ocr`, that one image's
+  OCR is skipped with `warning: OCR skipped a non-rasterisable image: …` — the run
+  always continues. Each render is profile-isolated, so it parallelises safely; vectors
+  are pre-rendered up front across `--jobs` workers (default `--jobs 1` = serial, ~2–3 s
+  of LibreOffice startup *per unique vector* — raise `--jobs` on vector-heavy decks).
+  Identical vectors (same sha1) are rendered once. *Note:* the inline PNG **bytes** are
+  not byte-reproducible across runs (LibreOffice stamps render metadata), but the
+  emitted `.md` and the media **filenames** are stable — don't byte-diff `media/` between
+  runs, diff the `.md`.
+- **Background-image / marp decks are handled**: slide-*background* images
+  (`p:cSld/p:bg`), shape-*fill* images, and *picture-placeholders* are all extracted
+  to the sidecar `media/` folder and linked (as `background` alt); run `--ocr` to
+  recover the text they carry. *Only* a background inherited from the slide
+  **layout/master** (not set on the slide itself) is not collected — rare; deferred.
 - **OCR** is best-effort flat text per image — no in-image layout/table reconstruction.
 - Inline HTML inside a cell value is passed through (Markdown renders it); this matches
   the single-tenant local-CLI trust model and `xlsx2md` behaviour.
