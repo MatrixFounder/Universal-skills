@@ -59,7 +59,7 @@ duration: "{{HH:MM}}"            # total across all parts
 languages:
   - "{{primary_language}}"
 sources:                         # provenance — THIS WORKFLOW; one entry per source recording/transcript
-  - file: "{{transcript_filename}}"  # REQUIRED — the local transcript actually summarized (works for ANY source)
+  - file: "{{transcript_vault_rel_path}}"  # REQUIRED — the local transcript actually summarized, as a path RELATIVE TO THE VAULT ROOT (e.g. "<folder>/_transcripts/<id>.ru.txt"), not a bare filename, so the reference stays unambiguous when the same filename exists in other folders
     url: "{{source_url}}"            # optional — canonical web origin if any (YouTube/Vimeo/Skool/article/podcast/…)
     id: "{{platform_id}}"            # optional — platform-native id when the source has one (e.g. YouTube video slug)
 tags:
@@ -86,12 +86,12 @@ prerequisites:                    # what the learner should know before this les
 ```
 
 **Rules**:
-- `sources` — provenance of the lesson. One list entry **per source recording/transcript** (multi-part lectures get multiple entries, in Part order). `file` (the local transcript filename actually summarized) is the **only required** key and works for **any** source. `url` (canonical web origin) and `id` (platform-native id) are **optional** — include them only when the source actually has them. Conventions by source type:
+- `sources` — provenance of the lesson. One list entry **per source recording/transcript** (multi-part lectures get multiple entries, in Part order). `file` is the **only required** key and works for **any** source: set it to the transcript's path **relative to the vault root** (e.g. `<folder>/_transcripts/<id>.ru.txt`) — **not** a bare filename — so the reference stays unambiguous when the same basename exists in more than one folder. `url` (canonical web origin) and `id` (platform-native id) are **optional** — include them only when the source actually has them. Conventions by source type:
   - **YouTube** → `id` = the 11-char video slug (preserve a leading `-`), `url` = `https://youtu.be/<id>`; for `<id>.ru.txt`-style transcript filenames both are derivable from the filename (the part before the first `.`).
   - **Other web sources** (Vimeo, Skool, article, podcast, …) → use that platform's native `url`, and `id` only if it exposes a stable one.
   - **No web origin** (local recording, uploaded file) → keep only `file`; omit `id`/`url`.
 
-  This is the structured, frontmatter-level mirror of the `Source files` line in the Content Fingerprint block (§ Agent & RAG Metadata) — the `file` values MUST stay consistent with it.
+  This is the structured, frontmatter-level mirror of the `Source files` line in the Content Fingerprint block (§ Agent & RAG Metadata): both list the SAME source set, but `sources[].file` carries the machine-readable **vault-relative path** while the body line stays the human-readable basename.
 - `content_type: lesson-summary` is a **fixed** value — always use it for educational summaries.
 - `concepts` — extract up to 5–15 top-level concepts. These become RAG index terms. Use the speaker's terminology (not synonyms). If the material contains fewer than 5 concepts — extract all that exist, do not fabricate.
 - `prerequisites` — infer from the speaker's references to prior knowledge. Use `[[wiki-links]]` to other lessons if identifiable. If none — omit the field.
@@ -347,7 +347,7 @@ Place this block at the very end of the document, after the Takeaways section:
 - `Concept Definitions` table — one row per concept from the `concepts` frontmatter field. Definition must be a single sentence (for embedding). Related concepts create a graph.
 - `Chunk Boundaries` — estimate token count per section (~3 chars/token for Russian/Cyrillic, ~4 chars/token for English/Latin). This helps RAG pipelines decide chunking strategy.
 - `Content Fingerprint` — quantitative summary for pipeline validation (e.g., "did the agent actually extract enough?").
-- `Source files` — list all input transcript filenames (not full paths). These MUST match the `file` values of the frontmatter `sources` field (§ Frontmatter Extension) — the body line is the human-readable view, `sources` is the machine-readable one.
+- `Source files` — list all input transcript **basenames** (human-readable, no paths). These refer to the SAME sources as the frontmatter `sources[].file` values (§ Frontmatter Extension), which instead carry the **vault-relative path** — the body line is the human-readable view, `sources` is the machine-readable one. Keep the set consistent (same recordings, same order).
 
 ---
 
