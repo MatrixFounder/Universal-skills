@@ -58,6 +58,10 @@ participants:                    # for lectures, contains speaker(s) only
 duration: "{{HH:MM}}"            # total across all parts
 languages:
   - "{{primary_language}}"
+sources:                         # provenance — THIS WORKFLOW; one entry per source video/transcript
+  - id: "{{youtube_video_id}}"   # 11-char YouTube ID, e.g. 059RZHWA5Qg (preserve a leading '-')
+    url: "https://youtu.be/{{youtube_video_id}}"
+    file: "{{transcript_filename}}"   # source transcript file, e.g. 059RZHWA5Qg.ru.txt
 tags:
   - lesson                       # from Educational Type in tag_taxonomy.md
   - "{{educational-type-tag}}"   # e.g. lecture, workshop, course-material
@@ -82,6 +86,7 @@ prerequisites:                    # what the learner should know before this les
 ```
 
 **Rules**:
+- `sources` — provenance of the lesson. One list entry **per source video/transcript** (multi-part lectures get multiple entries, in Part order). Each entry carries `id` (the YouTube video ID — the 11-char slug, preserving any leading `-`), `url` (`https://youtu.be/<id>`), and `file` (the source transcript filename, e.g. `059RZHWA5Qg.ru.txt`). Derive `id` from the transcript filename (the part before the first `.`). This is the structured, frontmatter-level mirror of the `Source files` line in the Content Fingerprint block (§ Agent & RAG Metadata) — the two MUST stay consistent. If the source has no YouTube origin (e.g. a local recording), omit `id`/`url` and keep `file`.
 - `content_type: lesson-summary` is a **fixed** value — always use it for educational summaries.
 - `concepts` — extract up to 5–15 top-level concepts. These become RAG index terms. Use the speaker's terminology (not synonyms). If the material contains fewer than 5 concepts — extract all that exist, do not fabricate.
 - `prerequisites` — infer from the speaker's references to prior knowledge. Use `[[wiki-links]]` to other lessons if identifiable. If none — omit the field.
@@ -337,7 +342,7 @@ Place this block at the very end of the document, after the Takeaways section:
 - `Concept Definitions` table — one row per concept from the `concepts` frontmatter field. Definition must be a single sentence (for embedding). Related concepts create a graph.
 - `Chunk Boundaries` — estimate token count per section (~3 chars/token for Russian/Cyrillic, ~4 chars/token for English/Latin). This helps RAG pipelines decide chunking strategy.
 - `Content Fingerprint` — quantitative summary for pipeline validation (e.g., "did the agent actually extract enough?").
-- `Source files` — list all input transcript filenames (not full paths).
+- `Source files` — list all input transcript filenames (not full paths). These MUST match the `file` values of the frontmatter `sources` field (§ Frontmatter Extension) — the body line is the human-readable view, `sources` is the machine-readable one.
 
 ---
 
