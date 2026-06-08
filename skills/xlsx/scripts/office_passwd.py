@@ -155,16 +155,61 @@ def _refuse_self_overwrite(
     return None
 
 
-def _format_msoffcrypto_error(exc: BaseException) -> str:
-    """Map opaque msoffcrypto/CPython errors into user-actionable text.
+def _looks_like_olefile_defect(exc: BaseException) -> bool:
+    """True when `exc` is an olefile CFB structural-parse error.
 
-    The notable case: CPython 3.11+ guards `int()` on long digit strings
-    and raises a ValueError mentioning `int_max_str_digits`. msoffcrypto
-    parses some CFB internal field as an integer; on a malformed CFB
-    that field is huge garbage and the user sees the cryptic
-    `"Exceeds the limit (4300 digits) for integer string conversion;
-    use sys.set_int_max_str_digits()"`. The right remediation is "this
-    isn't a real encrypted Office file", not "set sys.set_int_max_str_digits".
+    olefile (msoffcrypto's Compound-File backend) signals a corrupt
+    container two ways, and we must recognise BOTH:
+
+      * `olefile.OleFileError` (a subclass of OSError) raised via
+        `_raise_defect()` — e.g. `'OLE sector index out of range'`.
+        Detected by walking the MRO for the class name so we don't have
+        to import olefile just to compare types.
+      * a plain `IOError`/`ValueError` raised directly with one of
+        olefile's structural messages (olefile.py raises a bare
+        `IOError('incorrect OLE FAT, sector index out of range')` in a
+        couple of spots that bypass `_raise_defect`). Matched by token.
+
+    Safe to match broadly here: this helper is only consulted AFTER
+    `is_cfb_container()` has confirmed the file carries the CFB magic, so
+    a structural defect genuinely means "this CFB is garbage" — never a
+    real I/O error like disk-full, which carries none of these tokens.
+    """
+    if any(cls.__name__ in ("OleFileError", "NotOleFileError")
+           for cls in type(exc).__mro__):
+        return True
+    if type(exc).__module__.split(".", 1)[0] == "olefile":
+        return True
+    msg = str(exc).lower()
+    tokens = (
+        "ole sector", "ole fat", "ole difat", "difat", "ole dir",
+        "ole stream", "ole document", "ole directory", "ole2",
+        "minifat", "mini fat", "mini stream", "sector index",
+        "sector size", "not an ole",
+    )
+    return any(tok in msg for tok in tokens)
+
+
+def _format_msoffcrypto_error(exc: BaseException) -> str:
+    """Map opaque msoffcrypto/CPython/olefile errors into user-actionable text.
+
+    Two notable cases, both meaning "this isn't a real encrypted Office
+    file" rather than anything the user can act on at the library level:
+
+    1. CPython 3.11+ guards `int()` on long digit strings and raises a
+       ValueError mentioning `int_max_str_digits`. msoffcrypto parses some
+       CFB internal field as an integer; on a malformed CFB that field is
+       huge garbage and the user sees the cryptic `"Exceeds the limit
+       (4300 digits) for integer string conversion; use
+       sys.set_int_max_str_digits()"`. The right remediation is "this
+       isn't a real encrypted Office file", not "set int_max_str_digits".
+
+    2. olefile (msoffcrypto's CFB backend) raises structural-parse errors
+       such as `"OLE sector index out of range"` when the CFB magic is
+       present but the body is garbage. Which of (1) or (2) fires depends
+       on *which* internal field the random bytes corrupt, so a fuzzed
+       malformed CFB hits either path nondeterministically — both must
+       reskin to the same friendly message or the contract is flaky.
     """
     msg = str(exc)
     if "digits" in msg and "integer string conversion" in msg:
@@ -173,6 +218,13 @@ def _format_msoffcrypto_error(exc: BaseException) -> str:
             "(internal CFB integer field overflowed CPython's "
             "int-string-conversion limit while parsing). The file is "
             "almost certainly malformed or not actually encrypted."
+        )
+    if _looks_like_olefile_defect(exc):
+        return (
+            "input does not look like a real encrypted Office file "
+            f"(its CFB/OLE container is malformed: {msg}). The file is "
+            "almost certainly corrupt or not actually an encrypted "
+            "Office document."
         )
     return msg
 

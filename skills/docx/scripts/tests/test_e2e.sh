@@ -980,9 +980,39 @@ for cls in needed:
     && ok "M2: ParseError + DecryptionError + EncryptionError in runtime catch tuple" \
     || nok "M2 runtime errors" "see python output"
 
-# M3: malformed CFB must produce a friendly user message, NOT the
-# CPython int-string-conversion diagnostic. Guard test: make sure the
-# user-facing message does NOT mention sys.set_int_max_str_digits.
+# M3: a malformed CFB must produce a friendly user message regardless of
+# WHICH internal field the garbage corrupts. A fuzzed CFB nondeterministi-
+# cally raises either the CPython int-string-conversion ValueError OR an
+# olefile structural defect (e.g. "OLE sector index out of range"); both
+# must reskin to the same "malformed / not a real encrypted" text. This
+# deterministic check exercises both branches directly so the contract
+# can't go flaky on the random draw (regression: CI hit the olefile path
+# while the reskin only covered the int-limit one).
+"$PY" -c "
+import sys
+sys.path.insert(0, '.')
+from office_passwd import _format_msoffcrypto_error
+import olefile
+cases = [
+    olefile.olefile.OleFileError('OLE sector index out of range'),
+    olefile.olefile.NotOleFileError('not an OLE2 structured storage file'),
+    IOError('incorrect OLE FAT, sector index out of range'),
+    ValueError('Exceeds the limit (4300 digits) for integer string conversion; use sys.set_int_max_str_digits()'),
+]
+for exc in cases:
+    out = _format_msoffcrypto_error(exc)
+    low = out.lower()
+    assert 'malformed' in low or 'not a real encrypted' in low, f'{type(exc).__name__}: {out!r}'
+    assert 'set_int_max_str_digits' not in out, f'leaked int-limit hint: {out!r}'
+# Negative: a genuine OS error (disk-full) must pass through verbatim.
+df = OSError('[Errno 28] No space left on device')
+assert _format_msoffcrypto_error(df) == str(df), 'disk-full must not be reskinned'
+" \
+    && ok "M3: int-limit AND olefile defects both reskin (disk-full passes through)" \
+    || nok "M3 reskin (deterministic)" "see python output"
+
+# M3 integration: a real fuzzed malformed CFB must exit 1 with the
+# friendly message and never leak the CPython int-limit diagnostic.
 { printf '\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1'; head -c 1024 /dev/urandom; } > "$TMP/fakedoc.bin"
 set +e
 err=$("$PY" office_passwd.py "$TMP/fakedoc.bin" "$TMP/fakedoc-dec.docx" --decrypt anypw 2>&1 >/dev/null)
@@ -990,8 +1020,8 @@ rc=$?
 set -e
 [ "$rc" -eq 1 ] && ! echo "$err" | grep -q "set_int_max_str_digits" \
     && echo "$err" | grep -qi "malformed\|not a real encrypted" \
-    && ok "M3: CPython int-limit error reskinned to user-friendly text" \
-    || nok "M3 reskin" "rc=$rc msg=$err"
+    && ok "M3: fuzzed malformed CFB reskinned to user-friendly text" \
+    || nok "M3 reskin (fuzz)" "rc=$rc msg=$err"
 
 # M3 also validates JSON envelope stays single-line on the same input.
 set +e
