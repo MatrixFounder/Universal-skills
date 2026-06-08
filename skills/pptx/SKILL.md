@@ -1,6 +1,6 @@
 ---
 name: pptx
-description: Use when the user asks to create, edit, convert, preview, clean, or password-protect Microsoft PowerPoint .pptx presentations. Triggers include "markdown to pptx", "slides from outline", "mermaid in slides", "pptx to pdf", "slide thumbnails", "drop orphan slides", "encrypt/decrypt pptx", and related presentation or OOXML round-trip tasks.
+description: Use when the user asks to create, edit, convert, preview, clean, or password-protect Microsoft PowerPoint .pptx presentations. Triggers include "markdown to pptx", "pptx to markdown", "slides from outline", "mermaid in slides", "pptx to pdf", "slide thumbnails", "drop orphan slides", "OCR slide images", "encrypt/decrypt pptx", and related presentation or OOXML round-trip tasks.
 tier: 2
 version: 1.0
 license: LicenseRef-Proprietary
@@ -23,6 +23,11 @@ removes that variance.
 - "I'll edit the .pptx with python-pptx, it's simpler." → **WRONG** for anything touching the slide master, theme, or relationships. Use `office/unpack.py` + hand-edit + `office/pack.py` for those — see [references/editing-workflow.md](references/editing-workflow.md).
 
 ## 2. Capabilities
+- Convert a `.pptx`/`.pptm` deck **into structured Markdown** via `pptx2md.py`: one
+  `## Slide N` section per slide (title→`### `, body→nested bullets, tables→GFM,
+  images→sidecar `media/` folder + links, optional speaker notes; charts/EMF→`[kind]`
+  placeholders; SmartArt silently skipped — v1 limitation). **Opt-in `--ocr`** recovers text baked into images using
+  the system `tesseract` engine (`eng+rus` default), called directly per image.
 - Convert Markdown (split by `---`) into a `.pptx` with consistent typography, bullet styling, and theme via `md2pptx.js`. Mermaid diagrams render with a bundled Cyrillic-capable font stack via `scripts/mermaid-config.json` (override with `--mermaid-config PATH`).
 - Sketch a slide skeleton from a heading-only Markdown outline (`outline2pptx.js`) — `#` becomes a title slide, `##` becomes a content slide with TODO placeholder. Useful for brainstorming the deck structure before writing prose.
 - Convert a `.pptx` to PDF via headless LibreOffice for print, email, or review pipelines.
@@ -43,6 +48,7 @@ removes that variance.
 ## 4. Script Contract
 
 - **Commands**:
+  - `python3 scripts/pptx2md.py INPUT.pptx [OUTPUT.md|-] [--no-images] [--media-dir DIR] [--no-notes] [--include-hidden] [--ocr] [--ocr-lang LANGS] [--jobs N] [--ocr-timeout SEC]` — deck → structured Markdown (images to a sidecar `media/` folder; opt-in `--ocr` via system tesseract). Exit: 0 ok / 1 ocr-engine·input·internal / 2 usage / 3 encrypted-or-legacy / 6 self-overwrite.
   - `node scripts/md2pptx.js INPUT.md OUTPUT.pptx [--size 16:9|4:3] [--theme theme.json] [--via-marp] [--marp-theme NAME] [--mermaid-config PATH | --no-mermaid-config]`
   - `node scripts/outline2pptx.js INPUT.md OUTPUT.pptx [--size 16:9|4:3] [--theme theme.json]`
   - `python3 scripts/pptx_to_pdf.py INPUT.pptx [OUTPUT.pdf] [--timeout 180]`
@@ -110,6 +116,7 @@ pre-step for thumbnail generation.
 2. **System tools the skill depends on** (checked by `install.sh`, installed manually):
    - **LibreOffice** (`soffice`) — required by `pptx_to_pdf.py`, `pptx_thumbnails.py`, and `md2pptx.js --via-marp`. macOS: `brew install --cask libreoffice`. Debian: `sudo apt install libreoffice --no-install-recommends`. Fedora: `sudo dnf install libreoffice`.
    - **Poppler** (`pdftoppm`) — required by `pptx_thumbnails.py`. macOS: `brew install poppler`. Debian: `sudo apt install poppler-utils`.
+   - **Tesseract** (`tesseract` + `eng`/`rus` language data) — **soft-optional**, required only by `pptx2md.py --ocr`. macOS: `brew install tesseract tesseract-lang`. Debian: `sudo apt install tesseract-ocr tesseract-ocr-eng tesseract-ocr-rus`. Fedora: `sudo dnf install tesseract tesseract-langpack-eng tesseract-langpack-rus`. The base converter does not need it; `--ocr` fails loud with a hint if it is absent. (Reuses the engine the `pdf` skill's OCR is built on — called directly per image, no ocrmypdf/ghostscript.)
    External deps are NOT bundled (per project plan §3.3 "внешние инструменты — не бандлятся") — install them once with your package manager; commands that need them will fail with a clear error message until you do.
 
 ## 8. Workflows (Optional)
@@ -164,6 +171,8 @@ Convert to PDF:
 
 | Task | Command |
 |---|---|
+| .pptx → Markdown (text + tables + sidecar images + notes) | `python3 scripts/pptx2md.py deck.pptx deck.md` |
+| .pptx → Markdown + OCR text baked into images | `python3 scripts/pptx2md.py deck.pptx deck.md --ocr [--ocr-lang eng+rus]` |
 | Markdown → .pptx (programmatic, built-in) | `node scripts/md2pptx.js deck.md deck.pptx` |
 | Markdown → .pptx (professional quality via marp-slide) | `node scripts/md2pptx.js deck.md deck.pptx --via-marp` |
 | Heading-only outline → slide skeleton | `node scripts/outline2pptx.js outline.md skeleton.pptx` |
@@ -206,6 +215,8 @@ The script writes `deck.pdf` next to the source.
 
 ## 12. Resources
 
+- [references/pptx-to-markdown.md](references/pptx-to-markdown.md) — `pptx2md.py` guide: output shape, the `--ocr` decision tree, setup, exit codes, honest-scope limitations.
+- [scripts/pptx2md.py](scripts/pptx2md.py) — `.pptx`/`.pptm` → structured Markdown (python-pptx; sidecar media + sha1 dedup; opt-in per-image tesseract OCR). Body lives in the `pptx2md/` package; pptx-specific (not cross-skill replicated).
 - [references/pptxgenjs-basics.md](references/pptxgenjs-basics.md) — API primer: slide sizes, text options, lists, tables, images, common pitfalls.
 - [references/editing-workflow.md](references/editing-workflow.md) — python-pptx vs unpack/patch/pack vs LibreOffice dispatch; placeholder cleanup.
 - [references/design-principles.md](references/design-principles.md) — typography, colour contrast, bullet density, default palette, exit criteria.

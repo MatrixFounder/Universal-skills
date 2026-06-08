@@ -89,6 +89,23 @@ else
     missing_host=1
 fi
 
+# --- tesseract (soft-optional; only for `pptx2md.py --ocr`) ---
+# Not gating: the base converter never needs it, so a miss does NOT set
+# missing_host. Probe + hint only (parallel to the pdf skill's --with-ocr probe;
+# pptx OCR uses the SYSTEM tesseract directly, so there is no Python pkg to install).
+if command -v tesseract >/dev/null 2>&1; then
+    say "tesseract: $(tesseract --version 2>&1 | head -1)  (for pptx2md.py --ocr)"
+    if ! tesseract --list-langs 2>&1 | grep -qx rus; then
+        warn "tesseract found but the 'rus' language pack is missing — pptx2md.py --ocr"
+        warn "defaults to eng+rus. Install: macOS 'brew install tesseract-lang';"
+        warn "Debian 'apt install tesseract-ocr-rus'. (Optional; only affects --ocr.)"
+    fi
+else
+    say "tesseract: not found (OPTIONAL — only pptx2md.py --ocr needs it)."
+    say "  Install for OCR: macOS 'brew install tesseract tesseract-lang';"
+    say "  Debian 'apt install tesseract-ocr tesseract-ocr-eng tesseract-ocr-rus'."
+fi
+
 # --- Python venv ---
 if [ ! -x ".venv/bin/python" ]; then
     say "Creating Python venv at scripts/.venv/..."
@@ -121,6 +138,8 @@ else
 fi
 echo ""
 say "Usage:"
+say "  ./.venv/bin/python scripts/pptx2md.py DECK.pptx OUT.md        # deck → Markdown"
+say "  ./.venv/bin/python scripts/pptx2md.py DECK.pptx OUT.md --ocr  # + OCR (needs tesseract)"
 say "  node scripts/md2pptx.js INPUT.md OUTPUT.pptx"
 say "  node scripts/md2pptx.js INPUT.md OUTPUT.pptx --via-marp   # needs soffice"
 say "  ./.venv/bin/python scripts/pptx_to_pdf.py DECK.pptx"

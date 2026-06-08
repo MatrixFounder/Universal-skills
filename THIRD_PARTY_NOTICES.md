@@ -81,7 +81,7 @@ are bundled in this repository.
 | LibreOffice (`soffice`) | MPL-2.0 | docx (accept changes), xlsx (recalc), pptx (convert to PDF, thumbnails) |
 | Poppler (`pdftoppm`) | GPL-2.0-or-later | pptx (thumbnails) |
 | Pandoc | GPL-2.0-or-later | optional alternative paths in docx/pdf |
-| Tesseract OCR (`tesseract`) | Apache-2.0 | pdf (OCR engine behind `pdf_ocr.py`; soft-optional; needs the `eng`+`rus` language data) |
+| Tesseract OCR (`tesseract`) | Apache-2.0 | pdf (OCR engine behind `pdf_ocr.py`); pptx (OCR engine behind `pptx2md.py --ocr`, called directly per image — NOT via ocrmypdf/ghostscript). Soft-optional; needs the `eng`+`rus` language data |
 | Ghostscript (`gs`) | AGPL-3.0-or-later | pdf (PDF rasterize/repair invoked by `ocrmypdf` for `pdf_ocr.py`; soft-optional) |
 
 GPL- and AGPL-licensed tools are invoked as unmodified standalone binaries

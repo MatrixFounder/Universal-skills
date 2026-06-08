@@ -154,6 +154,19 @@
   `NumberToken` upstream bug на Material 3 / GM3-prefixed CSS (Gmail
   no longer crashes).
   103/103 unit-тестов зелёные после всех фиксов.
+- **pptx-6 `pptx2md.py` (pptx → Markdown) — TASK 020, 2026-06-08**: pptx-аналог
+  xlsx-9. Пакет `skills/pptx/scripts/pptx2md/` (cli/extract/images/ocr/emit/model/
+  exceptions, ~1240 LOC) + thin shim; pptx-specific, НЕ реплицируется (`_errors.py`+
+  `office/_encryption.py` импортируются read-only — §9 матрицы silent). Один
+  `## Slide N` на слайд (title→`### `, bullets с уровнями, tables→GFM с
+  `\`-before-`|` escape, images→sidecar `media/`+links с sha1 first-occurrence dedup,
+  notes; charts/EMF→`[kind]`, SmartArt silently skipped — v1). **Opt-in `--ocr`**:
+  per-image tesseract `eng+rus` прямым subprocess (НЕ ocrmypdf/ghostscript/pytesseract,
+  AGPL-clean), `--jobs` параллелизм, thread-local decompression-bomb guard. VDD:
+  6 atomic beads + per-bead adversarial roast (поймали 3 реальных deck-crash бага +
+  DecompressionBomb DoS) → 3-critic `/vdd-multi` (все converged). 63 unit + e2e +
+  legacy `test_e2e.sh` (48) зелёные; dogfood 6 декингов tmp8 (slodes-3 82сл/16MB →
+  0.23s; slides-5 image-only `--ocr` → eng+rus текст).
 
 ---
 
@@ -182,7 +195,8 @@
 | pptx-2 | `pptx_apply_theme.py` | Сменить тему/палитру/шрифты целиком. Часто нужно для «привести презентацию из template-1 в брендинг template-2». | L | M | pptx-1 | Сложно: переносить layout-mappings + theme.xml + slideMasters. |
 | pptx-3 | `outline2pptx.js` ✅ DONE | Markdown-outline (только заголовки) → каркас презентации с пустыми слайдами. `#` → title slide; `##` → content slide с placeholder; `###+` → bullets. Использует pptxgenjs, валидируется через office.validate. E2E: 4 проверки. | S | L | — | Реализован как .js (для использования pptxgenjs без bridge). |
 | pptx-4 | XSD-валидаторы для pptx ✅ DONE | `office/validators/pptx.py` теперь делает структурно-семантическую проверку: slide-chain через presentation.xml.rels, layout/master-цепочка для каждого слайда, media-references (`<a:blip r:embed>`, `<p:videoFile r:link>`) к существующим частям, notes-slide reciprocity, sldId rules (uniqueness + ECMA-376 §19.2.1.34 диапазон 256-2147483647), orphan slides. XSD-binding (pml.xsd) подхватывается автоматически для каждого slideN/slideLayoutN/slideMasterN при наличии schemas (run `office/schemas/fetch.sh`). 9 unit-тестов в `office/tests/test_pptx_validator.py` + 4 E2E в pptx skill. | L | M | — | Полезно после ручных правок XML. |
-| pptx-5 | Presenter notes export | При pptx2md выгружать заметки докладчика отдельным разделом (или сайдкар). | S | L | — | Покрывает use-case: репетировать с notes отдельно. |
+| pptx-5 | Presenter notes export ✅ DONE | Реализовано внутри `pptx2md.py` (pptx-6): заметки докладчика выгружаются per-slide блоком `> **Notes:**`; `--no-notes` подавляет. Покрыто E2E. | S | L | pptx-6 | Покрывает use-case: репетировать с notes отдельно. |
+| pptx-6 | `pptx2md.py` — pptx → Markdown ✅ DONE (TASK 020) | Read-back конвертер (аналог `xlsx2md`): один `## Slide N` на слайд (title→`### `, body→nested bullets, tables→GFM, images→sidecar `media/`+links с sha1-dedup, notes; charts/EMF→`[kind]` placeholders; SmartArt silently skipped — v1). Пакет `scripts/pptx2md/` (cli/extract/images/ocr/emit/model/exceptions) + shim, pptx-specific (НЕ реплицируется; `_errors.py`+`office/_encryption.py` импортируются read-only). **Opt-in `--ocr`**: per-image tesseract (`eng+rus`, прямой subprocess — НЕ ocrmypdf/ghostscript/pytesseract, AGPL-clean). VDD: 6 atomic beads, adversarial roast каждого (логика+безопасность), нашли+починили реальные баги (shape_type/group crash, DecompressionBomb DoS); 59 unit + e2e. Dogfood: 6 декингов tmp8 (slodes-3 82сл/16MB/136img → 0.23s; slides-5 image-only → --ocr вернул eng+rus текст). | M | H | — | pptx-аналог xlsx-9. |
 
 ### xlsx
 
@@ -597,6 +611,7 @@
 | cross-3 | graceful fail на encrypted | ✅ |
 | pdf-6 + cross-6 | mermaid config + cyrillic preset | ✅ |
 | pptx-3 | `outline2pptx.js` | ✅ |
+| pptx-6 | `pptx2md.py` (+ pptx-5 notes) | ✅ 2026-06-08 (TASK 020) |
 | xlsx-2 | `json2xlsx.py` | ✅ 2026-05-11 |
 | xlsx-3 | `md_tables2xlsx.py` | ✅ 2026-05-11 |
 | docx-6 + docx-6.5/6.6/6.7 | `docx_replace.py` + relocators + scope filter | ✅ 2026-05-12 |
@@ -694,8 +709,14 @@ real-world masterdata fixture) закрыты 2026-05-14.
 
 **P2 — полезно, не блокирующее:**
 
-- **pptx-5** Presenter notes export (S) — round-trip pptx2md без
-  notes теряет сценарий выступления.
+- ~~**pptx-6** `pptx2md.py` (pptx → Markdown)~~ ✅ **DONE 2026-06-08 (TASK 020)**
+  — pptx-аналог xlsx-9: read-back конвертер (один `## Slide N` на слайд,
+  title→`### `, bullets, tables→GFM, images→sidecar `media/`+links с sha1-dedup,
+  notes; opt-in `--ocr` per-image tesseract eng+rus, прямой subprocess без
+  ocrmypdf/gs). Замыкает `pptx → md → AI-правки` half-loop (md2pptx обратное).
+  6 atomic beads + per-bead adversarial roast + 3-critic `/vdd-multi` (converged).
+- ~~**pptx-5** Presenter notes export (S)~~ ✅ **DONE 2026-06-08** — реализовано
+  внутри pptx-6 (`> **Notes:**` per-slide, `--no-notes` подавляет).
 - **pdf-3** `pdf_compress.py` (M) — обёртка над `gs`; delivery, не
   core.
 
