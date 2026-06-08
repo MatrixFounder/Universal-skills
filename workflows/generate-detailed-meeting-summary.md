@@ -58,10 +58,10 @@ participants:                    # for lectures, contains speaker(s) only
 duration: "{{HH:MM}}"            # total across all parts
 languages:
   - "{{primary_language}}"
-sources:                         # provenance — THIS WORKFLOW; one entry per source video/transcript
-  - id: "{{youtube_video_id}}"   # 11-char YouTube ID, e.g. 059RZHWA5Qg (preserve a leading '-')
-    url: "https://youtu.be/{{youtube_video_id}}"
-    file: "{{transcript_filename}}"   # source transcript file, e.g. 059RZHWA5Qg.ru.txt
+sources:                         # provenance — THIS WORKFLOW; one entry per source recording/transcript
+  - file: "{{transcript_filename}}"  # REQUIRED — the local transcript actually summarized (works for ANY source)
+    url: "{{source_url}}"            # optional — canonical web origin if any (YouTube/Vimeo/Skool/article/podcast/…)
+    id: "{{platform_id}}"            # optional — platform-native id when the source has one (e.g. YouTube video slug)
 tags:
   - lesson                       # from Educational Type in tag_taxonomy.md
   - "{{educational-type-tag}}"   # e.g. lecture, workshop, course-material
@@ -86,7 +86,12 @@ prerequisites:                    # what the learner should know before this les
 ```
 
 **Rules**:
-- `sources` — provenance of the lesson. One list entry **per source video/transcript** (multi-part lectures get multiple entries, in Part order). Each entry carries `id` (the YouTube video ID — the 11-char slug, preserving any leading `-`), `url` (`https://youtu.be/<id>`), and `file` (the source transcript filename, e.g. `059RZHWA5Qg.ru.txt`). Derive `id` from the transcript filename (the part before the first `.`). This is the structured, frontmatter-level mirror of the `Source files` line in the Content Fingerprint block (§ Agent & RAG Metadata) — the two MUST stay consistent. If the source has no YouTube origin (e.g. a local recording), omit `id`/`url` and keep `file`.
+- `sources` — provenance of the lesson. One list entry **per source recording/transcript** (multi-part lectures get multiple entries, in Part order). `file` (the local transcript filename actually summarized) is the **only required** key and works for **any** source. `url` (canonical web origin) and `id` (platform-native id) are **optional** — include them only when the source actually has them. Conventions by source type:
+  - **YouTube** → `id` = the 11-char video slug (preserve a leading `-`), `url` = `https://youtu.be/<id>`; for `<id>.ru.txt`-style transcript filenames both are derivable from the filename (the part before the first `.`).
+  - **Other web sources** (Vimeo, Skool, article, podcast, …) → use that platform's native `url`, and `id` only if it exposes a stable one.
+  - **No web origin** (local recording, uploaded file) → keep only `file`; omit `id`/`url`.
+
+  This is the structured, frontmatter-level mirror of the `Source files` line in the Content Fingerprint block (§ Agent & RAG Metadata) — the `file` values MUST stay consistent with it.
 - `content_type: lesson-summary` is a **fixed** value — always use it for educational summaries.
 - `concepts` — extract up to 5–15 top-level concepts. These become RAG index terms. Use the speaker's terminology (not synonyms). If the material contains fewer than 5 concepts — extract all that exist, do not fabricate.
 - `prerequisites` — infer from the speaker's references to prior knowledge. Use `[[wiki-links]]` to other lessons if identifiable. If none — omit the field.
