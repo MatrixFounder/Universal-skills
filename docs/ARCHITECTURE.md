@@ -578,6 +578,26 @@ both the extract and OCR paths, and the 0.23 s baseline — and hardened five it
   byte-reproducible (LibreOffice render metadata), but filenames + the `.md` are stable.
   Cost: ~2–3 s of LibreOffice startup per unique vector; default `--jobs 1` is serial —
   raise `--jobs` on vector-heavy decks, or `--no-images` to skip rendering entirely.
+- **D-12 (OCR noise reduction is opt-in `--ocr-denoise`; default output unchanged).**
+  TASK 021. `--ocr` writes every image's tesseract text verbatim — including garbage
+  from decorative logos/icons/blank banners (purely additive noise; a corpus audit
+  confirmed real content is recovered well). `--ocr-denoise` (OFF by default — the
+  plain per-image `tesseract … stdout` path stays byte-identical, locked by the whole
+  pre-existing OCR suite) layers three **subtractive-of-noise-only** filters: a
+  **size-gate** in `ocr.ocr_asset` (skip a raster whose smaller side `< --ocr-min-px`,
+  default 48; vector-rasterised PNGs are exempt — they are diagrams), a
+  **confidence-gate** (`ocr.ocr_asset` switches tesseract to the `tsv` config and
+  `ocr._filter_tsv` keeps words with `conf >= --ocr-min-confidence` (default 50),
+  dropping an image with **< 2** confident words and stripping low-conf garble from the
+  rest), and **dedup** in `emit.render_deck` (an identical OCR text already emitted is
+  shown once; the image link still renders). **Calibration finding locked by dogfood:**
+  the confidence gate keys on the *count* of confident words, **not their mean** — a
+  mean gate wrongly dropped dense real screenshots whose UI chrome drags the average
+  down; the count cleanly separates a noise banner (≤1 confident word) from a real
+  screenshot (dozens). All three live wholly in the pptx-specific `ocr.py`/`emit.py`/
+  `cli.py` (no replicated file touched). The pdf skill's OCR is ocrmypdf-based
+  (whole-page, output owned by ocrmypdf) — these filters do not translate; its noise
+  lever is ocrmypdf's own cleanup flags, tracked as a separate future task.
 
 ---
 

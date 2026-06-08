@@ -77,7 +77,15 @@ def probe(langs: str) -> None:
         )
 
 
-def ocr_asset(blob: bytes, langs: str, timeout: float) -> str:
+def ocr_asset(
+    blob: bytes,
+    langs: str,
+    timeout: float,
+    *,
+    denoise: bool = False,
+    min_px: int = 48,
+    min_conf: float = 50.0,
+) -> str:
     """OCR one image blob → recovered text (``""`` on empty/failure).
 
     Pillow-normalises the blob to a temp PNG (handles JPEG/GIF/BMP/TIFF/WMF
@@ -85,6 +93,16 @@ def ocr_asset(blob: bytes, langs: str, timeout: float) -> str:
     shell, S-2), bounded by ``timeout``. Any per-image failure (unreadable blob,
     tesseract non-zero, timeout, OSError) is a warning + ``""`` — one bad image never
     aborts the deck (R-C4c). The temp file is always unlinked.
+
+    ``denoise`` (TASK 021, opt-in — default OFF keeps the path above byte-identical):
+    * **size-gate (R1):** a raster image whose smaller side is ``< min_px`` is skipped
+      (``""``) before tesseract runs — decorative icons/glyphs are never body text.
+      Vector-rasterised images (WMF/EMF → PNG) are exempt: they are diagrams, not icons.
+    * **confidence-gate (R2):** tesseract is invoked in ``tsv`` mode and
+      :func:`_filter_tsv` keeps only words with ``conf >= min_conf``, dropping the
+      whole image when fewer than two survive (a text-free/low-contrast image yields
+      ≤1 confident word; a real screenshot yields dozens) and stripping low-confidence
+      garble from the blocks it keeps.
     """
     import os
     import tempfile
@@ -111,13 +129,21 @@ def ocr_asset(blob: bytes, langs: str, timeout: float) -> str:
             # decode), so `.size` is the declared dimensions from the header; reject
             # anything over Pillow's warn threshold before the full-decode .save().
             img = Image.open(io.BytesIO(blob))
+            w, h = img.size
             limit = Image.MAX_IMAGE_PIXELS
-            if limit is not None:
-                w, h = img.size
-                if w * h > limit:
-                    raise Image.DecompressionBombError(
-                        f"{w * h} pixels exceeds the {limit}px OCR cap"
-                    )
+            if limit is not None and w * h > limit:
+                raise Image.DecompressionBombError(
+                    f"{w * h} pixels exceeds the {limit}px OCR cap"
+                )
+            # R1 size-gate: a tiny raster is a decorative icon/glyph, not body text —
+            # skip OCR before tesseract can emit edge noise. (Opt-in; default min_px=48
+            # is below readable slide-text size.) Vectors are EXEMPT: Pillow *opens* a
+            # WMF/EMF and exposes a tiny logical-unit `.size`, but `.save()` below raises
+            # → the except branch rasterises the (full-size) diagram. Gating on that
+            # placeholder `.size` would wrongly drop a real diagram (critic-logic MED-1).
+            fmt = (img.format or "").upper()
+            if denoise and fmt not in ("WMF", "EMF") and min(w, h) < min_px:
+                return ""
             img.save(png_path, "PNG")
         except Exception as exc:  # noqa: BLE001 — non-rasterisable/bomb image → fallback or skip
             # Pillow couldn't rasterise. For a vector image it CAN identify but not
@@ -134,9 +160,16 @@ def ocr_asset(blob: bytes, langs: str, timeout: float) -> str:
                 return ""
             with open(png_path, "wb") as fh:
                 fh.write(png)
+        # tesseract argv = <image> <outputbase> [options] [configfile]. The outputbase
+        # is ALWAYS "stdout" (prints to stdout); under denoise we APPEND the built-in
+        # "tsv" config (after -l) so the same stdout carries per-word confidence for the
+        # R2 gate. (Putting "tsv" in the outputbase slot would write a file, not stdout.)
+        argv = [exe, png_path, "stdout", "-l", langs]
+        if denoise:
+            argv.append("tsv")
         try:
             proc = subprocess.run(  # noqa: S603 — fixed argv, no shell (S-2)
-                [exe, png_path, "stdout", "-l", langs],
+                argv,
                 capture_output=True, text=True, timeout=timeout, check=False,
             )
         except subprocess.TimeoutExpired:
@@ -148,9 +181,89 @@ def ocr_asset(blob: bytes, langs: str, timeout: float) -> str:
         if proc.returncode != 0:
             sys.stderr.write(f"warning: tesseract exited {proc.returncode} on one image\n")
             return ""
+        if denoise:
+            return _filter_tsv(proc.stdout, min_conf)
         return proc.stdout.strip()
     finally:
         try:
             os.unlink(png_path)
         except OSError:
             pass
+
+
+_MIN_CONFIDENT_WORDS = 2  # a kept OCR block must have at least this many high-conf words
+
+
+def _filter_tsv(tsv: str, min_conf: float, min_words: int = _MIN_CONFIDENT_WORDS) -> str:
+    """R2 confidence-gate: reduce tesseract ``tsv`` output to denoised text.
+
+    Pure function (no I/O) so it is unit-testable on synthetic TSV. tesseract's
+    ``tsv`` output is one tab-separated row per layout node with a header row; word
+    rows carry a ``conf`` in 0–100 (structural rows are ``-1``/blank-text).
+
+    Policy (calibrated on real dogfood data — a *mean*-confidence gate wrongly
+    dropped dense real screenshots whose UI chrome drags the mean down, so the
+    discriminator is the **count** of confident words, not their average):
+
+    * keep word rows with non-empty text and ``conf >= min_conf`` (the *survivors*);
+    * if **fewer than ``min_words``** survive, return ``""`` — the image is noise
+      (a text-free / low-contrast image yields ≤1 confident word: the N2 class; a
+      real screenshot yields dozens);
+    * otherwise reconstruct text **from the survivors only** — this also strips the
+      low-confidence garble (UI glyphs, mojibake) *inside* an otherwise-real block —
+      grouping words by ``(block, par, line)`` into lines with a blank line at each
+      paragraph/block boundary.
+
+    Malformed/empty/headerless TSV degrades to ``""`` and never raises (AR-1/R5).
+    """
+    rows = tsv.splitlines()
+    if not rows:
+        return ""
+    header = rows[0].split("\t")
+    try:
+        ci = header.index("conf")
+        ti = header.index("text")
+        bi = header.index("block_num")
+        pi = header.index("par_num")
+        li = header.index("line_num")
+    except ValueError:
+        return ""  # not the expected tesseract TSV schema → no usable text
+    need = max(ci, ti, bi, pi, li)
+    survivors: list[tuple[str, str, str, str]] = []  # (block, par, line, text)
+    for row in rows[1:]:
+        cols = row.split("\t")
+        if len(cols) <= need:
+            continue
+        text = cols[ti].strip()
+        if not text:
+            continue
+        try:
+            # ".replace(',', '.')": tesseract conf is 0–100 (no thousands separator), so
+            # tolerate a comma decimal from a non-C LC_NUMERIC host (critic-logic LOW-1).
+            conf = float(cols[ci].replace(",", "."))
+        except ValueError:
+            continue
+        if conf < min_conf:  # drops conf=-1 structural rows AND low-confidence junk
+            continue
+        survivors.append((cols[bi], cols[pi], cols[li], text))
+    if len(survivors) < min_words:
+        return ""
+    out_lines: list[str] = []
+    cur_line_key = None
+    cur_para_key = None
+    cur: list[str] = []
+    for block, par, line, text in survivors:
+        line_key = (block, par, line)
+        para_key = (block, par)
+        if line_key != cur_line_key:
+            if cur:
+                out_lines.append(" ".join(cur))
+                cur = []
+            if cur_para_key is not None and para_key != cur_para_key:
+                out_lines.append("")  # blank line between paragraphs/blocks
+            cur_line_key = line_key
+            cur_para_key = para_key
+        cur.append(text)
+    if cur:
+        out_lines.append(" ".join(cur))
+    return "\n".join(out_lines).strip()

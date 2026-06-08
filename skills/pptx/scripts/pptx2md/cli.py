@@ -108,6 +108,39 @@ def build_parser() -> argparse.ArgumentParser:
         default=120.0,
         help="Per-image OCR timeout in seconds (default: 120).",
     )
+    p.add_argument(
+        "--ocr-denoise",
+        action="store_true",
+        default=False,
+        help=(
+            "Opt-in: filter OCR noise from decorative images (off by default — the "
+            "plain per-image text path is unchanged). Enables a size-gate "
+            "(--ocr-min-px), a confidence-gate (--ocr-min-confidence), and dedup of "
+            "identical OCR blocks. Subtractive of noise only; never alters non-OCR text."
+        ),
+    )
+    p.add_argument(
+        "--ocr-min-px",
+        metavar="N",
+        type=int,
+        default=48,
+        help=(
+            "With --ocr-denoise: skip OCR on an image whose smaller side is < N px "
+            "(decorative icons/glyphs are never body text; default: 48). No-op without "
+            "--ocr-denoise."
+        ),
+    )
+    p.add_argument(
+        "--ocr-min-confidence",
+        metavar="C",
+        type=float,
+        default=50.0,
+        help=(
+            "With --ocr-denoise: keep only tesseract words with confidence >= C and "
+            "drop an image whose OCR has fewer than two such words (0–100; default: "
+            "50). No-op without --ocr-denoise."
+        ),
+    )
 
     _errors.add_json_errors_argument(p)
     return p
@@ -202,7 +235,11 @@ def _build_ocr_text(deck, assets: dict, args: argparse.Namespace) -> dict:
         entry = deck.blobs.get(a.sha1)  # (blob, content_type) — always present for an asset
         if entry is None:
             return a, ""
-        return a, ocr.ocr_asset(entry[0], args.ocr_lang, args.ocr_timeout)
+        return a, ocr.ocr_asset(
+            entry[0], args.ocr_lang, args.ocr_timeout,
+            denoise=args.ocr_denoise, min_px=args.ocr_min_px,
+            min_conf=args.ocr_min_confidence,
+        )
 
     if args.jobs and args.jobs > 1:
         from concurrent.futures import ThreadPoolExecutor

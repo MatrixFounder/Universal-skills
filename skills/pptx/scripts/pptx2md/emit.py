@@ -73,6 +73,12 @@ def render_deck(deck, assets: dict, ocr_text: dict, opts) -> Iterator[str]:
     ``--ocr``). Pure generator over data → deterministic.
     """
     no_notes = bool(getattr(opts, "no_notes", False))
+    # R3 dedup (opt-in): an OCR block whose text was already emitted earlier in the
+    # document is suppressed (the image LINK still renders — only the repeated OCR
+    # blockquote is dropped). Targets an identical logo/banner OCR'd the same way on
+    # many slides (N3). Off by default → `seen_ocr` stays unused, output unchanged.
+    denoise = bool(getattr(opts, "ocr_denoise", False))
+    seen_ocr: set[str] = set()
     for slide in deck.slides:
         yield f"## Slide {slide.index}\n\n"
         for block in slide.blocks:
@@ -87,6 +93,12 @@ def render_deck(deck, assets: dict, ocr_text: dict, opts) -> Iterator[str]:
                 ocr = ""
                 if isinstance(asset, MediaAsset):
                     ocr = ocr_text.get(asset, "") or ""
+                    if denoise and ocr:
+                        norm = ocr.strip()
+                        if norm in seen_ocr:
+                            ocr = ""  # identical OCR already shown → suppress repeat
+                        else:
+                            seen_ocr.add(norm)
                 yield from _render_image(block, asset, ocr)
             elif isinstance(block, Placeholder):
                 yield f"[{block.kind}]\n\n"

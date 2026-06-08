@@ -51,6 +51,37 @@ Is the deck a marp/Keynote export whose slides are full-slide BACKGROUND images?
     extracted; re-run with --ocr to recover their text.
 ```
 
+### Reducing OCR noise — `--ocr-denoise`
+
+`tesseract` will emit garbage for decorative images that contain no real text —
+logos, icon glyphs, blank banners, brand wordmarks. By default every such block is
+kept (the recovered text is verified-good for *real* images; the noise is purely
+additive). Add **`--ocr-denoise`** (opt-in, off by default — never changes the
+non-denoise output) to filter it:
+
+```bash
+python3 scripts/pptx2md.py deck.pptx out.md --ocr --ocr-denoise [--jobs 4]
+```
+
+It applies three subtractive-of-noise-only filters:
+
+- **size-gate** (`--ocr-min-px`, default 48) — skips OCR on an image whose smaller
+  side is below the threshold (decorative icons/glyphs are never body text).
+- **confidence-gate** (`--ocr-min-confidence`, default 50) — runs tesseract in `tsv`
+  mode, keeps only words at/above the confidence threshold, and **drops an image
+  whose OCR has fewer than two confident words** (a text-free/low-contrast image
+  yields ≤1; a real screenshot yields dozens). It also strips low-confidence garble
+  *inside* the blocks it keeps, so kept screenshots come out cleaner.
+- **dedup** — an OCR block whose text was already emitted earlier (a logo OCR'd
+  identically on many slides) is shown once; the image link still renders on each
+  slide.
+
+Tuning: raise `--ocr-min-confidence` to be stricter (more dropped), lower it to keep
+more low-contrast text. The gate keys on the *count* of confident words, not their
+average, so it does **not** drop a dense real screenshot whose UI chrome has many
+low-confidence glyphs. It is best-effort (tesseract's per-word confidence is
+heuristic) — for a verbatim dump of everything tesseract sees, omit `--ocr-denoise`.
+
 ## Setup (OCR is soft-optional)
 
 The base converter needs only `python-pptx` + `Pillow` (in `scripts/requirements.txt`,

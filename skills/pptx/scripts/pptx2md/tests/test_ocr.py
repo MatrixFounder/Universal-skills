@@ -222,7 +222,7 @@ class TestOcrPipeline(unittest.TestCase):
             deck = build_deck_with_two_images(Path(d) / "two.pptx")
             out = Path(d) / "out.md"  # SAME path both runs (media dir identical)
             # give each distinct blob a distinct OCR text so ordering is observable.
-            def _fake(b, l, t):
+            def _fake(b, l, t, **kw):  # **kw: tolerate the denoise kwargs (TASK 021)
                 return f"OCR:{len(b)}"
             with mock.patch.object(ocr, "probe"), \
                  mock.patch.object(ocr, "ocr_asset", side_effect=_fake):
