@@ -97,6 +97,28 @@ pdf_ocr.py INPUT.pdf OUTPUT.pdf
   (`brew install unpaper` / `apt install unpaper`). Missing `osd`/`unpaper` fails
   loud, never silent.
 
+### Improving OCR quality on noisy or skewed scans
+
+If the recognised text is garbled, the fix is almost always to **clean the source
+image before OCR**, not to filter the result. `pdf_ocr` writes the OCR text into an
+**invisible searchable layer** behind the original page image, so OCR noise mostly
+shows up as bad `Ctrl+F` hits or messy copy-paste — and a cleaner input image fixes
+it at the source. Reach for these three (in roughly this order of impact) when a scan
+OCRs poorly:
+
+- **`--clean`** — despeckle: removes scanner speckles, dust, and stray lines that
+  tesseract otherwise reads as junk characters. The single biggest quality lever for
+  a noisy scan. (Needs `unpaper`.)
+- **`--deskew`** — straighten: a few degrees of tilt badly degrades line detection.
+- **`--rotate-pages`** — auto-orient sideways / upside-down pages (a wrong-orientation
+  page OCRs to near-total garbage). (Needs the tesseract `osd` data.)
+
+For a poor scan, combine all three. They affect only the OCR pipeline — the **visible**
+page image is unchanged (`--clean` despeckles the copy fed to tesseract, not the page
+you see). There is intentionally **no** confidence/word-level filter on the output text
+layer: ocrmypdf owns that layer, and a few low-confidence words in an invisible layer
+are not worth post-processing the PDF for. Fixing the input is both simpler and better.
+
 ### Examples
 
 ```bash
@@ -108,6 +130,9 @@ pdf_ocr.py письмо.pdf письмо.ocr.pdf --lang rus --sidecar письм
 
 # Re-OCR a badly-OCR'd file; deskew + auto-rotate
 pdf_ocr.py old.pdf new.pdf --redo-ocr --deskew --rotate-pages
+
+# Noisy / skewed scan: clean the source image before OCR (best quality lever)
+pdf_ocr.py noisy-scan.pdf clean-ocr.pdf --clean --deskew --rotate-pages
 
 # Encrypted scan
 pdf_ocr.py secret-scan.pdf out.pdf --password s3cr3t
