@@ -1,6 +1,7 @@
 # TASK 021 — pptx2md OCR noise reduction (`--ocr-denoise`)
 
-**Status:** Analysis
+**Status:** Done — implemented & dogfooded (91 unit tests, validate PASS, e2e 48/0;
+adversarial logic-review applied). Not yet committed.
 **Skill:** `pptx` (package `skills/pptx/scripts/pptx2md/`)
 **Predecessor:** TASK 020 (`pptx2md` MVP + WMF→inline-PNG) — DONE & archived.
 **Scope boundary (user-approved 2026-06-09):** `pptx2md` **only**. The pdf skill's

@@ -303,6 +303,8 @@ python3 scripts/pptx2md.py INPUT.pptx [OUTPUT.md|-]
      [--include-hidden]                         # default: skip hidden slides
      [--ocr] [--ocr-lang LANGS]                 # default off; LANGS default "eng+rus"
      [--jobs N] [--ocr-timeout SEC]             # OCR parallelism + per-image bound
+     [--ocr-denoise]                            # opt-in OCR noise filter (D-12); default off
+     [--ocr-min-px N] [--ocr-min-confidence C]  # denoise knobs: default 48 px / 50 conf
      [--json-errors]                            # shared _errors envelope (v=1)
 ```
 

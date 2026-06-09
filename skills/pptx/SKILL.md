@@ -48,7 +48,7 @@ removes that variance.
 ## 4. Script Contract
 
 - **Commands**:
-  - `python3 scripts/pptx2md.py INPUT.pptx [OUTPUT.md|-] [--no-images] [--media-dir DIR] [--no-notes] [--include-hidden] [--ocr] [--ocr-lang LANGS] [--jobs N] [--ocr-timeout SEC]` — deck → structured Markdown (images to a sidecar `media/` folder; opt-in `--ocr` via system tesseract). Exit: 0 ok / 1 ocr-engine·input·internal / 2 usage / 3 encrypted-or-legacy / 6 self-overwrite.
+  - `python3 scripts/pptx2md.py INPUT.pptx [OUTPUT.md|-] [--no-images] [--media-dir DIR] [--no-notes] [--include-hidden] [--ocr] [--ocr-lang LANGS] [--jobs N] [--ocr-timeout SEC] [--ocr-denoise] [--ocr-min-px N] [--ocr-min-confidence C]` — deck → structured Markdown (images to a sidecar `media/` folder; opt-in `--ocr` via system tesseract; opt-in `--ocr-denoise` filters noise from decorative images — size-gate + confidence-gate + dedup, off by default). Exit: 0 ok / 1 ocr-engine·input·internal / 2 usage / 3 encrypted-or-legacy / 6 self-overwrite.
   - `node scripts/md2pptx.js INPUT.md OUTPUT.pptx [--size 16:9|4:3] [--theme theme.json] [--via-marp] [--marp-theme NAME] [--mermaid-config PATH | --no-mermaid-config]`
   - `node scripts/outline2pptx.js INPUT.md OUTPUT.pptx [--size 16:9|4:3] [--theme theme.json]`
   - `python3 scripts/pptx_to_pdf.py INPUT.pptx [OUTPUT.pdf] [--timeout 180]`
