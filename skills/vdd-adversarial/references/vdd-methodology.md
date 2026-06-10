@@ -20,7 +20,7 @@ Before adversarial stress-testing begins, the code must be functionally verified
 #### 3. Iterative Adversarial Refinement (The "Roast")
 The verified codebase is presented to Sarcasmotron. This phase is defined by "The Roast":
 - Negative Prompting: The Adversary is prompted to have zero tolerance for human error or "lazy" AI patterns (e.g., placeholder comments, inefficient loops, or generic error handling).
-- Context Resetting: A fresh context window is used for Sarcasmotron on every turn. This prevents "relationship drift" or the AI becoming too agreeable, ensuring every critique is as harsh and detached as the first.
+- Context Resetting: A fresh context window is used for Sarcasmotron on every turn, ensuring every critique is as rigorous and detached as the first. Grounding (audit-067 C-02 — replaces the pre-2026 anthropomorphic "drift" framing): (1) **multi-turn context interference / assumption lock-in** — models lock onto early assumptions and degrade ~39% vs single-turn on the same tasks (arXiv:2505.06120); (2) **context rot** — effective attention degrades as accumulated history grows (Chroma 2025); (3) **pushback-driven sycophantic belief updates** — in-session pushback measurably flips correct judgments (TRUTH DECAY / SYCON-Bench).
 
 #### 4. Feedback Integration
 The critique from Sarcasmotron is fed back to the Builder. The Builder must then:
@@ -35,7 +35,7 @@ As the refinement cycle progresses, the adversarial pressure often reveals edge 
 - Automated Correctness Gating: Once these formal methods are established, they are added to the CI/CD pipeline. The Builder is then tasked with ensuring every PR not only passes the "Roast" but also satisfies the mathematical proof requirements of the formal verifiers.
 
 ### IV. Convergence and the Exit Strategy (Objective Convergence)
-VDD terminates on an **objective bar** ("Objective Convergence"), not on a subjective "the critic ran out of real bugs" signal. The refinement cycle continues until all four conditions hold simultaneously: (1) the full test run has actually been executed, (2) zero CRITICAL findings, (3) zero legitimate findings in logic / security / slop, and (4) only bikeshedding/style remains.
+VDD terminates on an **objective bar** ("Objective Convergence"), not on a subjective "the critic ran out of real bugs" signal. The refinement cycle continues until all four conditions hold simultaneously: (1) the full test run has actually been executed (by you, or — in critic/subagent mode — via execution evidence supplied by the orchestrator; if neither exists, the condition is unverifiable: report the finding 'exit-bar condition unverifiable', never approve), (2) zero CRITICAL findings, (3) zero legitimate findings in logic / security / slop, and (4) only bikeshedding/style remains.
 - Maximum Viable Refinement ("Zero-Slop"): the state in which the code provably clears the objective bar above — not the state in which a hyper-critical adversary feels forced to invent problems.
 - The Exit Signal: approval is bound to the objective bar. A lazy or sycophantic adversary that fabricates a nitpick to exit early is exactly the failure mode this criterion eliminates; until the bar is met, the cycle continues.
 
@@ -43,6 +43,6 @@ VDD terminates on an **objective bar** ("Objective Convergence"), not on a subje
 1. Anti-Slop Bias: Assumes that the first "correct" version of code is likely the most dangerous due to hidden technical debt.
 2. Exhaustive Reporting (supersedes "Forced Negativity"): the reviewer must report every issue, including low-confidence ones, attaching confidence + severity to each finding; filtering happens downstream. (The pre-2026 rationale — adversarial tone to bypass the model's default agreeableness — is retired per audit-067 C-01: vendors now train sycophancy out, and the documented recall lever is the reporting-threshold instruction, not tone.)
 3. Linear Accountability: The Chainlink "beads" ensure that every line of code has a corresponding issue and verification step.
-4. Entropy Resistance: By cycling context windows, VDD resists the natural tendency for long-running AI conversations to lose focus or quality.
+4. Context-Interference Resistance (formerly "Entropy Resistance"): by cycling context windows, VDD sidesteps the documented multi-turn failure modes — assumption lock-in (arXiv:2505.06120), context rot (Chroma 2025), and pushback-driven belief updates (TRUTH DECAY / SYCON) — not a vague "loss of focus."
 
 > "VDD turns code generation into a survival-of-the-fittest environment where only the most robust logic survives the Sarcasmotron."
