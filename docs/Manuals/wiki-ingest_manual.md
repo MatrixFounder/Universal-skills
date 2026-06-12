@@ -252,6 +252,66 @@ You can use any of the three independently, but the composition is where the val
 
 ---
 
+## Pairing with obsidian-cli (live-app layer)
+
+[`skills/obsidian-cli`](../../skills/obsidian-cli/SKILL.md) drives the **running Obsidian
+desktop app** — the things the file layer cannot reach: link-safe rename/move (the app
+rewrites inbound `[[wikilinks]]`), typed frontmatter properties, task checkboxes, the
+daily note, template insertion, Base queries, file-history recovery. The two skills have
+non-overlapping domains and one contact point:
+
+| Layer | Owner |
+|---|---|
+| `_sources/`, `_concepts/`, `_entities/`, `index.md`, `log.md` | **wiki-ingest** (ingest, upsert, query, lint, reindex) |
+| The "living" vault: daily notes, tasks, properties, Bases, workspace, history | **obsidian-cli** |
+| Link-safe rename/move of `_concepts/`/`_entities/` pages | **obsidian-cli**, then **`wiki-ingest reindex`** in the same turn |
+
+The coherence burden is small because `index.md` is a **catalog of pages** (slug, title,
+date, one-liner) — content edits never stale it. Only structural operations on wiki-layer
+pages (rename / move / delete) need a follow-up `reindex`.
+
+Two hard rules the pairing cannot relax:
+
+1. **Never rename/move a `_sources/*.md` page** — footnote tags `[^src-<slug>]` on
+   concept/entity pages are not links; the app won't rewrite them and every citation of
+   that source silently desyncs.
+2. **Never create wiki pages via `obsidian create`** — it bypasses `upsert-page`'s
+   templates, footnote structure, and case/NFKC collision safety.
+
+### Typical CLAUDE.md for a paired vault
+
+Drop this block into the target vault's `CLAUDE.md` / `GEMINI.md` / `AGENTS.md` (keep
+them in lockstep). It assumes the `wiki-ingest` wrapper is on PATH
+(`ln -s "$PWD/skills/wiki-ingest/scripts/wiki-ingest" ~/.local/bin/wiki-ingest`);
+otherwise replace `wiki-ingest <sub>` with
+`python3 <skills-repo>/skills/wiki-ingest/scripts/wiki_ops.py <sub>`.
+
+```markdown
+## Tooling contract: wiki-ingest × obsidian-cli
+
+The wiki layer (`_sources/`, `_concepts/`, `_entities/`, `index.md`, `log.md`)
+is OWNED by `wiki-ingest`. The live vault (daily notes, tasks, properties,
+Bases, workspace, history) is OWNED by the `obsidian` CLI.
+
+- Knowledge questions about vault content → `wiki-ingest` query mode FIRST
+  (`wiki-ingest find <vault> --terms "..."` → read top hits → cite `[[slug]]`).
+  App `search` is a live complement, not the default.
+- Wiki page creation → ONLY `wiki-ingest upsert-page`. NEVER `obsidian create`
+  inside the wiki dirs (bypasses templates, footnotes, collision safety).
+- NEVER rename/move `_sources/*.md` via any tool — footnote tags
+  `[^src-<slug>]` are not links; the app won't rewrite them.
+- Link-safe rename/move of `_concepts/`/`_entities/` pages → `obsidian
+  rename/move` (rewrites inbound [[wikilinks]]), then ALWAYS
+  `wiki-ingest reindex <vault>` in the same turn.
+- `obsidian delete` of a wiki page → `wiki-ingest reindex` + `wiki-ingest lint`.
+- Content edits (`append`/`property:set`/`task`) and anything outside the
+  wiki dirs need NO coherence step — `index.md` catalogs pages, not content.
+- Headless/CI: never call `obsidian` (any subcommand launches the GUI);
+  wiki-ingest only.
+```
+
+---
+
 ## Examples
 
 ### Sample summary fixture
@@ -320,4 +380,4 @@ Full anti-rationalisation table: [`SKILL.md`](../../skills/wiki-ingest/SKILL.md)
 
 ---
 
-> **Related**: [Summarizing Meetings Manual](summarizing-meetings_manual.md) · [Transcript Fetcher Manual](transcript-fetcher_manual.md)
+> **Related**: [Summarizing Meetings Manual](summarizing-meetings_manual.md) · [Transcript Fetcher Manual](transcript-fetcher_manual.md) · [obsidian-cli SKILL](../../skills/obsidian-cli/SKILL.md)

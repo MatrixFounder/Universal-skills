@@ -83,6 +83,7 @@ are bundled in this repository.
 | Pandoc | GPL-2.0-or-later | optional alternative paths in docx/pdf |
 | Tesseract OCR (`tesseract`) | Apache-2.0 | pdf (OCR engine behind `pdf_ocr.py`); pptx (OCR engine behind `pptx2md.py --ocr`, called directly per image — NOT via ocrmypdf/ghostscript). Soft-optional; needs the `eng`+`rus` language data |
 | Ghostscript (`gs`) | AGPL-3.0-or-later | pdf (PDF rasterize/repair invoked by `ocrmypdf` for `pdf_ocr.py`; soft-optional) |
+| Obsidian CLI (`obsidian`) | Proprietary freeware (Obsidian license; CLI ships with the desktop app ≥ 1.12) | obsidian-cli (drives the running Obsidian desktop app: link-safe rename/move, properties, tasks, daily notes, Bases, history) |
 
 GPL- and AGPL-licensed tools are invoked as unmodified standalone binaries
 via `subprocess` (Ghostscript indirectly, through `ocrmypdf`); this
