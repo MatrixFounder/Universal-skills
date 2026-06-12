@@ -302,7 +302,10 @@ Bases, workspace, history) is OWNED by the `obsidian` CLI.
   `[^src-<slug>]` are not links; the app won't rewrite them.
 - Link-safe rename/move of `_concepts/`/`_entities/` pages → `obsidian
   rename/move` (rewrites inbound [[wikilinks]]), then ALWAYS
-  `wiki-ingest reindex <vault>` in the same turn.
+  `wiki-ingest reindex <vault>` in the same turn. Precondition: Obsidian's
+  *Settings → Files & Links → Automatically update internal links* is ON —
+  with it off the CLI renames WITHOUT rewriting links (and can block);
+  verify once per vault before relying on app-side renames.
 - `obsidian delete` of a wiki page → `wiki-ingest reindex` + `wiki-ingest lint`.
 - Content edits (`append`/`property:set`/`task`) and anything outside the
   wiki dirs need NO coherence step — `index.md` catalogs pages, not content.
