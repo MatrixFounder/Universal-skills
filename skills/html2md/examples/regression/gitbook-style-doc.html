@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta property="og:title" content="Battery Regression Doc">
+  <title>Battery Regression Doc</title>
+  <style>.x{display:none}</style>
+</head>
+<body>
+  <!-- chrome that must be stripped -->
+  <button type="button" aria-label="Copy page"><svg></svg><span class="button-content">Copy</span></button>
+  <nav role="navigation">
+    <a href="https://example.com/docs/overview"><div><div>Sidebar Nav Link</div></div></a>
+  </nav>
+  <p>Search...</p>
+  <p>⌘K</p>
+
+  <main role="main">
+    <article>
+      <h1>Battery Regression Doc</h1>
+      <p>UNIQUE-BODY-MARKER-ALPHA — this paragraph must survive conversion intact.</p>
+
+      <h2 id="parameters">Parameters</h2>
+
+      <p>Each request takes the following headers and body fields:</p>
+
+      <!-- ARIA-role table (GitBook): header in a sibling rowgroup, body in role="table" -->
+      <div class="table-wrap">
+        <div role="rowgroup">
+          <div role="row">
+            <div role="columnheader">Name</div>
+            <div role="columnheader">Type</div>
+            <div role="columnheader">Description</div>
+          </div>
+        </div>
+        <div role="table">
+          <div role="rowgroup">
+            <div role="row">
+              <div role="cell"><p>Content-Type</p></div>
+              <div role="cell"><p>String</p></div>
+              <div role="cell"><p>application/json</p></div>
+            </div>
+            <div role="row">
+              <div role="cell"><p>type</p></div>
+              <div role="cell"><p>String</p></div>
+              <div role="cell"><p>allMids</p></div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <button type="button"><svg></svg><span>Copy</span></button>
+      <pre><code>{ "type": "allMids" }</code></pre>
+
+      <!-- icon-anchor (hash-link) heading like GitBook/Mintlify: the heading's only
+           content is a zero-width-space hash link (&#8203;), title text in a sibling.
+           turndown → "## [​](#usage)"; the <a> rule empties it → "## "; md_clean merges. -->
+      <h2 id="usage"><a href="#usage" class="hash">&#8203;</a></h2>
+      <p>Usage</p>
+      <p>Run the command to begin.</p>
+
+      <!-- block-content link (turndown would split it across lines without the <a> rule) -->
+      <p>See also:</p>
+      <a href="https://example.com/docs/related"><div><div>Related Doc Link</div></div></a>
+    </article>
+  </main>
+
+  <!-- AI-assistant + feedback widget chrome that must be stripped -->
+  <footer role="contentinfo">
+    <p>Was this page helpful?</p>
+    <p>YesNo</p>
+    <p>Ask AI</p>
+    <p>Assistant</p>
+    <p>Responses are generated using AI and may contain mistakes.</p>
+  </footer>
+</body>
+</html>

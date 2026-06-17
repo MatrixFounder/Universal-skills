@@ -1,0 +1,21 @@
+This Skill (skills/html2md/) is licensed under the proprietary terms
+in the LICENSE file in this directory.
+
+It is a DERIVED WORK that embeds byte-identical copies of proprietary
+code from the docx and pdf skills — the turndown HTML→Markdown core
+(replicated from skills/docx/), and the `web_clean` HTML-cleaning
+cluster (replicated from skills/pdf/scripts/html2pdf_lib/) — and is
+therefore governed by the same proprietary license, NOT Apache-2.0.
+
+It incorporates third-party components whose own licenses, copyrights,
+and attribution requirements are preserved unchanged. The complete list
+of third-party material — runtime dependencies (Python, Node.js, httpx,
+trafilatura, turndown, turndown-plugin-gfm, Playwright) — together with
+their respective licenses, is documented in:
+
+    /THIRD_PARTY_NOTICES.md  (repository root)
+
+Those third-party licenses govern their respective components and are
+not modified by this Skill's proprietary LICENSE. The proprietary
+license applies only to the original work authored by the copyright
+holder.

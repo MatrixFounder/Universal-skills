@@ -1,0 +1,128 @@
+{
+ "gitbook-style-doc.html": {
+  "platform": "synthetic",
+  "whole": {
+   "lines": 25,
+   "headings": 3,
+   "table_rows": 3,
+   "code_fences": 2,
+   "size_kb": 0.7,
+   "empty_headings": 0,
+   "stray_chrome": 0,
+   "required_needles": [
+    "UNIQUE-BODY-MARKER-ALPHA",
+    "## Parameters",
+    "## Usage",
+    "| Name | Type | Description |",
+    "| Content-Type | String | application/json |",
+    "[Related Doc Link](https://example.com/docs/related)"
+   ]
+  },
+  "reader": {
+   "lines": 24,
+   "headings": 3,
+   "table_rows": 3,
+   "code_fences": 2,
+   "size_kb": 0.6,
+   "empty_headings": 0,
+   "stray_chrome": 0
+  }
+ },
+ "Hyperliquid_Docs_gitbook.webarchive": {
+  "platform": "gitbook",
+  "whole": {
+   "lines": 1313,
+   "headings": 86,
+   "table_rows": 186,
+   "code_fences": 70,
+   "size_kb": 35.4,
+   "empty_headings": 0,
+   "stray_chrome": 0,
+   "required_needles": [
+    "# Info endpoint",
+    "| Name | Type | Description |"
+   ]
+  },
+  "reader": {
+   "lines": 1310,
+   "headings": 85,
+   "table_rows": 186,
+   "code_fences": 70,
+   "size_kb": 34.4,
+   "empty_headings": 0,
+   "stray_chrome": 0
+  }
+ },
+ "OpenRouter Quickstart Guide - fern.webarchive": {
+  "platform": "fern",
+  "whole": {
+   "lines": 150,
+   "headings": 6,
+   "table_rows": 4,
+   "code_fences": 14,
+   "size_kb": 6.7,
+   "empty_headings": 0,
+   "stray_chrome": 0,
+   "required_needles": [
+    "OpenRouter"
+   ]
+  },
+  "reader": {
+   "lines": 141,
+   "headings": 6,
+   "table_rows": 4,
+   "code_fences": 14,
+   "size_kb": 6.0,
+   "empty_headings": 0,
+   "stray_chrome": 0
+  }
+ },
+ "OAuth2 and Permissions - Documentation - Discord.webarchive": {
+  "platform": "discord",
+  "whole": {
+   "lines": 98,
+   "headings": 15,
+   "table_rows": 8,
+   "code_fences": 0,
+   "size_kb": 7.9,
+   "empty_headings": 0,
+   "stray_chrome": 0,
+   "required_needles": [
+    "OAuth2"
+   ]
+  },
+  "reader": {
+   "lines": 45,
+   "headings": 6,
+   "table_rows": 8,
+   "code_fences": 0,
+   "size_kb": 3.3,
+   "empty_headings": 0,
+   "stray_chrome": 0
+  }
+ },
+ "JetBrains IDEs - Claude Code Docs.webarchive": {
+  "platform": "mintlify",
+  "whole": {
+   "lines": 190,
+   "headings": 27,
+   "table_rows": 0,
+   "code_fences": 10,
+   "size_kb": 12.1,
+   "empty_headings": 0,
+   "stray_chrome": 0,
+   "required_needles": [
+    "JetBrains IDEs"
+   ]
+  },
+  "reader": {
+   "lines": 119,
+   "headings": 22,
+   "table_rows": 0,
+   "code_fences": 10,
+   "size_kb": 7.0,
+   "empty_headings": 0,
+   "stray_chrome": 0
+  }
+ }
+}

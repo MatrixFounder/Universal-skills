@@ -408,6 +408,50 @@ design, and it is a 4-skill replicated file).
 
 ---
 
+## HTML2MD (TASK 022) — honest-scope limitations
+
+All deferred-by-design; the backlog row `docs/office-skills-backlog.md` §2 «html2md»
+owns the decisions. Cross-skill replication (G-1/G-3) and security guards are tested,
+not listed here.
+
+### HTML2MD-1 — anti-scraper sites (HTTP 403) are not fetchable
+**Status:** open (honest-scope) • **Severity:** LOW • **Location:** `acquire._http_get_bytes`.
+**Symptom:** researchgate / papers.ssrn / some publishers reject the lite User-Agent →
+clean `FetchFailed` (exit 10). **Workaround:** `--engine chrome` (after
+`install.sh --with-chrome`) with a browser UA, or save the page manually and convert the
+`.webarchive`/`.html`. **Do-not:** treat exit 10 as a bug — it is a remote 403/timeout.
+
+### HTML2MD-2 — PDFs / binary URLs are not converted
+**Status:** open (by design) • **Severity:** LOW • **Location:** `acquire._fetch_lite_html`.
+**Symptom:** a `*.pdf` (or binary) URL → `FetchFailed kind=pdf/binary` with a pointer to the
+pdf skill. html2md is HTML→Markdown only. **Fix path:** use `skills/pdf/scripts/pdf_extract.py`.
+**Do-not:** feed PDF bytes to turndown (it overflowed the Node stack before the guard).
+
+### HTML2MD-3 — data-grid SPAs degrade
+**Status:** open (honest-scope) • **Severity:** LOW.
+**Symptom:** market-data dashboards / virtualized registries (e.g. a TradingView ideas
+listing) have no table semantics (no `<table>`/`role=table`) — ticker widgets flatten to
+loose lines. **Workaround:** none for Markdown; this is the wrong *kind* of page. Mirrors
+the pdf-10 "data-heavy SPA" note.
+
+### HTML2MD-4 — SSRF residuals (lite path hardened)
+**Status:** open (honest-scope) • **Severity:** LOW • **Location:** `acquire._host_is_public`
++ `_fetch_chrome_html`. The lite path blocks private/loopback/link-local/metadata on every
+redirect hop and streams with `--max-bytes`. **NOT covered:** (a) DNS-rebinding (resolve-
+then-connect TOCTOU); (b) the opt-in Chrome engine does NO network hardening. **Workaround:**
+run untrusted conversions in an egress-restricted sandbox.
+
+### HTML2MD-5 — cosmetic conversion quirks
+**Status:** open (low-priority) • **Severity:** LOW.
+(a) **Slug collision** — distinct inputs with the same filename/URL stem write
+`<slug>-2.md`, `<slug>-3.md` (idempotent via a hidden source-id marker), so the output name
+is not always the bare stem. (b) **Empty-heading merge** (`md_clean`) re-levels the line
+after an empty heading into that heading — for the targeted GitBook/Mintlify pattern this is
+correct, but a body paragraph directly after an empty heading would be mis-leveled (never
+deleted). **Related:** `docs/office-skills-backlog.md` §2 «html2md».
+
+---
+
 ## How to add a new entry
 
 1. Append below the relevant category (or create a new top-level

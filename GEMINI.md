@@ -103,6 +103,29 @@ Out of scope (docx-only, no replication): `skills/docx/scripts/docx_*.py`,
 `skills/docx/examples/`, `skills/docx/scripts/package.json`,
 `skills/docx/scripts/requirements.txt`, `skills/docx/scripts/install.sh`.
 
+### Future skill `html2md` — TWO-master replication (forward-looking)
+
+A new standalone skill **`html2md`** (**Proprietary, All Rights Reserved** —
+embeds proprietary docx/pdf code, joins the office-proprietary set, NOT
+Apache-2.0; Web/HTML → Markdown for Obsidian + agent workflows; see
+[`docs/office-skills-backlog.md` §2 «html2md»](docs/office-skills-backlog.md)
+and TASK 022) reuses code from **both** docx and pdf. It is the **one
+documented exception** to "docx is always master" — it has **two masters**.
+Forward-looking: when built, follow this topology and do NOT fork.
+
+1. **HTML→MD core — MASTER = docx.** `html2md_core.js` = verbatim lift of
+   `buildTurndown` + `expandTableToGrid` from `skills/docx/scripts/docx2md.js`.
+2. **HTML-cleaning cluster — MASTER = pdf** (the exception).
+   `archives.py`, `reader_mode.py`, `preprocess.py`, `dom_utils.py`,
+   `normalize_css.py` → `skills/html2md/scripts/web_clean/`. **NEVER copy
+   `render.py` / `chrome_engine.py` / package `__init__.py`** (the only
+   weasyprint/playwright carriers). html2md ships its OWN thin
+   `web_clean/__init__.py`. Carry the modules WHOLE (do not trim — trimming
+   breaks `diff -q` and forks). A smoke-test MUST assert `weasyprint` /
+   `playwright` stay out of `sys.modules` after importing `web_clean`.
+3. **Shared helpers — MASTER = docx.** `_errors.py` + `_venv_bootstrap.py`
+   extend their replication loop 4→5-skill (add html2md).
+
 ### Anti-patterns — DO NOT
 
 - ❌ Edit `skills/xlsx/scripts/office/foo.py` directly.
@@ -110,6 +133,8 @@ Out of scope (docx-only, no replication): `skills/docx/scripts/docx_*.py`,
 - ❌ Symlink `skills/xlsx/scripts/office -> ../../docx/scripts/office`.
 - ❌ Forget to clean `__pycache__` before `diff -qr` (false positives).
 - ❌ Replicate without running tests + validator afterwards.
+- ❌ Re-point the future `html2md` `web_clean/` cluster to docx-master —
+  its master is **pdf** (documented exception above).
 
 Full protocol with rationale:
 [`docs/CONTRIBUTING.md` §3](docs/CONTRIBUTING.md#3-office-skills-modification-protocol-strict).
@@ -159,6 +184,10 @@ This repository uses a **split licensing model** (effective
   files (e.g. [`skills/docx/LICENSE`](skills/docx/LICENSE)). Source
   is available for audit only; any use, execution, copying,
   modification, or distribution requires prior written permission.
+- **Planned (TASK 022):** `skills/html2md/` will **also be Proprietary,
+  All Rights Reserved** — it embeds byte-identical copies of proprietary
+  `docx`/`pdf` code and therefore **cannot** be Apache-2.0; it needs its
+  own per-skill `LICENSE`/`NOTICE` when built.
 
 All third-party material (XSD schemas from ECMA-376 / Microsoft OSP
 / W3C, runtime dependencies, external CLI tools) is attributed in

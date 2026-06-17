@@ -236,6 +236,53 @@
 
 ---
 
+### html2md (новый скилл — Web/HTML → Markdown для Obsidian и агентных workflow)
+
+> **✅ ALL DONE — shipped 2026-06-17 via `/vdd-develop-all`** (7 beads 022-01…07,
+> per-bead adversarial roast; 2 roasts found+fixed real HIGH security bugs —
+> image-path-traversal exfil (CWE-22/73) and redirect-SSRF to cloud-metadata).
+> 45 tests green; `validate_skill` ×5 exit 0; G-1 `diff -q` silent; G-3 docx
+> byte-identical to HEAD; G-4 CI gate wired into `office-skills.yml`. Dogfooded on
+> live URL + `.webarchive` (elma365, Habr) + `.mhtml` (Confluence). **NOT committed.**
+
+Новый **standalone** скилл (TASK 022). **Вход**: живая веб-ссылка (URL),
+либо скачанный `.html`/`.htm`, `.mhtml`/`.mht`, `.webarchive`. **Выход**:
+чистый Markdown + YAML-frontmatter + локальные вложения. Два сценария:
+**(1)** веб-клиппер заметок в Obsidian (self-contained note); **(2)**
+универсальный шаг любого агентного workflow (markdown в stdout +
+`--json-errors` envelope). Лицензия — **Proprietary, All Rights Reserved**:
+скилл везёт байт-идентичные копии проприетарного кода docx/pdf (turndown-ядро,
+`web_clean/` кластер, `_errors.py`, `_venv_bootstrap.py`), поэтому как
+производная работа **входит в office-проприетарный набор** (свой `LICENSE`/
+`NOTICE`, как у четырёх; re-point `THIRD_PARTY_NOTICES.md`). НЕ Apache-2.0.
+
+**Движки парсинга (зафиксировано аудитом):** настоящий DOM-парс
+происходит ровно один раз — `@mixmark-io/domino` v2.2.0 внутри turndown
+(HTML→MD); чистка HTML из pdf — **regex-only + stdlib** (без lxml/bs4/
+cheerio); новый fetch-слой добавляет `httpx` + `readability-lxml`/
+`trafilatura` с Playwright-fallback. **Fork-free топология (two-master,
+adversarial-verified)** — см. правило в [`CLAUDE.md` §2 «html2md»](../CLAUDE.md)
+и spec [`docs/TASK.md` (TASK 022)](TASK.md): turndown-ядро мастерит docx,
+HTML-cleaning кластер мастерит pdf, `_errors.py`/`_venv_bootstrap.py`
+расширяются 4→5-skill (master=docx).
+
+| ID | Название | Что/Зачем | Effort | Value | Dep | Notes |
+|---|---|---|---|---|---|---|
+| html2md-1 | `html2md_core.js` — turndown HTML→MD core | Вынести `buildTurndown` + `expandTableToGrid` из [`docx2md.js:258-336`](../skills/docx/scripts/docx2md.js) в standalone-модуль `htmlToMarkdown(html) → md`; `docx2md.js` зовёт его на :411 — чистый black-box рефактор (ни один docx-тест не импортирует функции white-box; footnote-sentinels живут вне turndown-стадии, в `_metadata.js`). GFM-таблицы (rowspan/colspan→flat grid), atx-заголовки, fenced-код, h1–h6→`<strong>` в ячейках. | M | H | — | **master=docx**, `diff -q` gate. Регресс-гейт: docx `test_e2e.sh` + `test_battery.py` round-trip до/после = идентичный вывод. |
+| html2md-2 | `web_clean/` — HTML-cleaning кластер | Байт-идентичная реплика **5 чистых модулей** из pdf `html2pdf_lib/`: `archives.py` (webarchive/mhtml + subframe pdf-8, stdlib email/plistlib), `reader_mode.py` (universal SPA-chrome heuristic pdf-9), `preprocess.py` (regex-пассы чистки), `dom_utils.py`, `normalize_css.py`. **Исключить** `render.py` / `chrome_engine.py` / package `__init__.py` — единственные носители weasyprint/playwright (import на уровне модуля только в `render.py:15`). | M | H | — | **master=pdf** (явное исключение из «docx-always-master»). html2md везёт СВОЙ тонкий `__init__.py` (вне gate), импортит модули плоско. Smoke-тест: `weasyprint`/`playwright` НЕ в `sys.modules` после импорта слоя. Мёртвые CSS-функции остаются present-but-unused (byte-identity > чистота). |
+| html2md-3 | `acquire.py` — получение HTML по URL | **Новый код** — fetch-слоя нет ни в docx, ни в pdf (оба принципиально offline: weasyprint `_offline_url_fetcher` кидает на http/https, chrome-движок блокирует remote-роуты). Диспетчер: URL → `httpx`+`trafilatura` (lite, default — даёт ещё и title/date/author для frontmatter; `readability-lxml` — fallback) с авто-fallback на Playwright/Chrome для JS/SPA; архив → `web_clean/archives.py`; файл → read. Soft-optional Chrome (`requirements-chrome.txt`, `install.sh --with-chrome`). | L | H | html2md-2 | Переиспользует hardening-паттерн `chrome_engine.py` (network-block, DOM-normalize, offline-patch). Honest scope: paywall/auth вне охвата; robots/rate-limit на стороне пользователя. |
+| html2md-4 | `emit.py` — Markdown + Obsidian-обвязка | **Новый код**: YAML-frontmatter (source/title/date/author/tags); `--download-images` / `--no-download-images` (**default ON**) → вложения в `_attachments/` с sha1-dedup и относительными ссылками; `--attachments-dir _attachments` (переопределяемо); dual-output (regular + reader) с **общим** `_attachments/`; markdown в stdout + `--json-errors` envelope для агентов. | M | H | html2md-1, html2md-3 | `--no-download-images` оставляет remote-URL — режим для агентного шага. Dual-output не дублирует картинки (дедуп по hash). |
+| html2md-5 | Репликация-wiring + fork-gate (CI) | CLAUDE.md §2 + CONTRIBUTING §3: зарегистрировать два мастера (docx → `html2md_core.js`; pdf → `web_clean/*`), расширить 4→5-skill loop для `_errors.py`/`_venv_bootstrap.py`. Добавить CI `diff -q`/`diff -qr` gate в `.github/workflows/office-skills.yml` (сейчас репликация **только human-enforced** — это единственная надёжная защита от тихого форка при доработках docx/pdf). | S | M | html2md-1, html2md-2 | governance. Громко пометить pdf-master-исключение, чтобы ревьюер не «починил» направление обратно на docx. |
+
+**Honest scope (наследуемый + новый):** turndown-ограничения — rowspan/
+colspan сворачиваются в flat grid, inline-CSS/классы игнорируются; fetch —
+paywall/auth-страницы и JS-сайты без Chrome-fallback вне охвата; robots/
+rate-limit — ответственность пользователя. Артефакты VDD: `docs/TASK.md`
+(TASK 022) + `docs/ARCHITECTURE.md` §html2md + `docs/PLAN.md` (на фазе
+планирования).
+
+---
+
 ## 3. Cross-cutting (затрагивают все 4 скилла)
 
 | ID | Название | Что/Зачем | Effort | Value | Dep | Notes |

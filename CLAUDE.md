@@ -166,6 +166,54 @@ The `msoffcrypto-tool>=5.4.0` dependency must stay in
 `requirements.txt` of all three OOXML skills; it is NOT a pdf
 dependency.
 
+### Future skill `html2md` — TWO-master replication (forward-looking)
+
+A new standalone skill **`html2md`** (**Proprietary, All Rights Reserved** —
+it embeds byte-identical copies of proprietary docx/pdf code, so it joins the
+office-proprietary set per §3 License hygiene, NOT Apache-2.0; Web/HTML →
+Markdown for Obsidian clipping + agent workflows; see
+[`docs/office-skills-backlog.md` §2 «html2md»](docs/office-skills-backlog.md)
+and TASK 022) reuses hardened code from **both** docx and pdf. Because the
+HTML-cleaning code physically originates in pdf and the conversion core in
+docx, `html2md` is the **one documented exception** to "docx is always
+master" — it has **two masters**. This rule is forward-looking: when the
+skill is built, follow this topology exactly and do NOT fork.
+
+Replication units (each byte-identical, `diff -q` gated):
+
+1. **HTML→MD core — MASTER = docx.** `html2md_core.js` is lifted verbatim
+   from `skills/docx/scripts/docx2md.js` (`buildTurndown` +
+   `expandTableToGrid`, lines ~258-336). `docx2md.js` imports it; html2md
+   carries a byte-identical copy. Edit only the docx copy.
+2. **HTML-cleaning cluster — MASTER = pdf** (the exception). The five
+   pure-regex/stdlib modules under `skills/pdf/scripts/html2pdf_lib/` —
+   `archives.py`, `reader_mode.py`, `preprocess.py`, `dom_utils.py`,
+   `normalize_css.py` — replicate to `skills/html2md/scripts/web_clean/`.
+   Edit only the pdf copy. **NEVER replicate `render.py`,
+   `chrome_engine.py`, or the package `__init__.py`** — they are the only
+   weasyprint/playwright carriers (weasyprint is a module-level import in
+   `render.py` alone). html2md ships its OWN thin `web_clean/__init__.py`
+   (html2md-authored, NOT under the gate) re-exporting only clean symbols.
+3. **Shared helpers — MASTER = docx, extend 4→5-skill.** `_errors.py` and
+   `_venv_bootstrap.py` add `html2md` to their existing replication loop.
+   `preview.py` / `_soffice.py` are NOT needed (html2md emits Markdown,
+   not renderable office docs).
+
+Guards (non-negotiable):
+
+- An import smoke-test MUST assert `weasyprint` and `playwright` stay out
+  of `sys.modules` after importing `web_clean` (the `__init__.py` trap).
+- Carry the pdf cleaning modules **whole** — do NOT trim weasyprint-
+  specific functions. They are inert regex with no heavy imports; trimming
+  makes `diff -q` impossible and silently forks on the next pdf change.
+- Replication is human-enforced today; add a CI `diff -q`/`diff -qr` gate
+  covering both the docx→html2md core and the pdf→html2md cluster before
+  relying on "no silent fork".
+- **Licensing:** html2md is **Proprietary** (derived work embedding
+  proprietary docx/pdf source) — give it its own per-skill `LICENSE`/`NOTICE`
+  mirroring the office four, re-point `THIRD_PARTY_NOTICES.md`, and never
+  publish it under Apache-2.0 (see §3 License hygiene).
+
 ### Anti-patterns — DO NOT
 
 - ❌ Edit `skills/xlsx/scripts/office/foo.py` directly.
@@ -173,6 +221,9 @@ dependency.
 - ❌ Symlink `skills/xlsx/scripts/office -> ../../docx/scripts/office`.
 - ❌ Forget to clean `__pycache__` before `diff -qr` (false positives).
 - ❌ Replicate without running tests + validator afterwards.
+- ❌ Re-point the future `html2md` `web_clean/` cluster to docx-master —
+  its master is **pdf** (documented exception above). Conversely, do NOT
+  copy `render.py`/`chrome_engine.py`/`__init__.py` into html2md.
 
 Full protocol with rationale:
 [`docs/CONTRIBUTING.md` §3](docs/CONTRIBUTING.md#3-office-skills-modification-protocol-strict).
@@ -219,6 +270,12 @@ This repository uses a **split licensing model** (effective
   files (e.g. [`skills/docx/LICENSE`](skills/docx/LICENSE)). Source
   is available for audit only; any use, execution, copying,
   modification, or distribution requires prior written permission.
+- **Planned (TASK 022):** `skills/html2md/` will **also be Proprietary,
+  All Rights Reserved** — it embeds byte-identical copies of proprietary
+  `docx`/`pdf` code (turndown core, `web_clean/` cluster) and therefore
+  **cannot** be Apache-2.0. When built it needs its own per-skill `LICENSE`/
+  `NOTICE` mirroring the office four; until it exists, the first bullet's
+  "except the four office skills" still holds.
 
 All third-party material (XSD schemas from ECMA-376 / Microsoft OSP
 / W3C, runtime dependencies, external CLI tools) is attributed in

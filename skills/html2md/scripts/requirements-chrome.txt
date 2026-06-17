@@ -1,0 +1,6 @@
+# html2md — soft-optional Chrome engine (for --engine chrome / auto-fallback on
+# JS/SPA pages). Installed only via `bash install.sh --with-chrome`, which also runs
+# `playwright install chromium` (~150 MB). The skill is fully usable WITHOUT this:
+# the lite (httpx+trafilatura) URL path, plus all offline file/archive conversion,
+# need none of it.
+playwright>=1.42,<2.0

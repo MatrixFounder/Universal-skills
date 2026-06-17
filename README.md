@@ -97,7 +97,7 @@ Available plugins (by category):
 
 | Category | Plugins |
 | :--- | :--- |
-| `office` | `docx`, `xlsx`, `pptx`, `pdf`, `marp-slide` |
+| `office` | `docx`, `xlsx`, `pptx`, `pdf`, `html2md`, `marp-slide` |
 | `meta` | `skill-creator`, `skill-validator`, `skill-enhancer`, `skill-auto-improve` |
 | `verification` | `vdd-adversarial`, `vdd-sarcastic` |
 | `content` | `post-writing`, `text-humanizer`, `summarizing-meetings`, `transcript-fetcher` |
@@ -206,6 +206,7 @@ attribution is preserved in
 | **[xlsx](skills/xlsx/SKILL.md)** | CSV → styled `.xlsx` (bold header, frozen row, auto-filter, leading-zero preservation), force formula recalculation via LibreOffice, scan for `#REF!`/`#DIV/0!` errors, attach bar/line/pie **charts** to a range (`xlsx_add_chart.py`). | 2 |
 | **[pptx](skills/pptx/SKILL.md)** | Markdown → PPTX (built-in pptxgenjs renderer with auto-pagination, mermaid diagrams via bundled Cyrillic-capable config, accent stripes — OR `--via-marp` delegation to marp-slide for editorial polish), **`pptx2md.py`** (PPTX → structured Markdown: per-slide sections, GFM tables, sidecar images with sha1-dedup, speaker notes, **opt-in per-image `--ocr`** via system tesseract, plus opt-in **`--ocr-denoise`** to filter noise from decorative images), **`outline2pptx.js`** (heading-only outline → slide skeleton with TODO placeholders), pptx → PDF, slide thumbnail grids, **`pptx_clean.py`** to drop orphan slides/media after manual editing. | 2 |
 | **[pdf](skills/pdf/SKILL.md)** | Markdown → PDF (weasyprint, with optional ```mermaid → PNG via `mmdc` and bundled Cyrillic-capable `mermaid-config.json`), PDF merge / split (by ranges, per-page, fixed chunks), AcroForm form **fill / inspect / flatten** (`pdf_fill_form.py`), TOC bookmarks preserved. | 2 |
+| **[html2md](skills/html2md/SKILL.md)** | **Web/HTML → Markdown** web-clipper + universal agent step. Input: a live **URL**, or a saved `.html`/`.mhtml`/`.webarchive`. Hybrid Python+Node — reuses the docx **turndown** core + pdf **`web_clean`** cleaner (two-master, fork-free), plus html2md-owned **ARIA-table→GFM**, chrome/empty-heading tidy, and link-collapse for doc-site SPAs (GitBook/Mintlify/Fern). YAML frontmatter, sha1-deduped `_attachments/`, **dual-output** (`<slug>.md` + `.reader.md`), `--stdout` + `--json-errors`. Lite (`httpx`+`trafilatura`) fetch with SSRF guard, opt-in Chrome (`--with-chrome`) for JS pages. | 2 |
 
 The three OOXML skills (docx/xlsx/pptx) share an identical
 `scripts/office/` module + `_soffice.py` LibreOffice wrapper. The
@@ -334,8 +335,8 @@ This repository uses a **split licensing model**:
 
 | Scope | License | Source of truth |
 | :--- | :--- | :--- |
-| Repository root and all skills **except** the four office skills | Apache-2.0 | [LICENSE](LICENSE) |
-| `skills/docx/`, `skills/xlsx/`, `skills/pptx/`, `skills/pdf/` (effective **2026-04-25**) | **Proprietary — All Rights Reserved** | [skills/docx/LICENSE](skills/docx/LICENSE), [skills/xlsx/LICENSE](skills/xlsx/LICENSE), [skills/pptx/LICENSE](skills/pptx/LICENSE), [skills/pdf/LICENSE](skills/pdf/LICENSE) |
+| Repository root and all skills **except** the proprietary office skills | Apache-2.0 | [LICENSE](LICENSE) |
+| `skills/docx/`, `skills/xlsx/`, `skills/pptx/`, `skills/pdf/` (effective **2026-04-25**), and `skills/html2md/` (derived work embedding docx/pdf code) | **Proprietary — All Rights Reserved** | [skills/docx/LICENSE](skills/docx/LICENSE), [skills/xlsx/LICENSE](skills/xlsx/LICENSE), [skills/pptx/LICENSE](skills/pptx/LICENSE), [skills/pdf/LICENSE](skills/pdf/LICENSE), [skills/html2md/LICENSE](skills/html2md/LICENSE) |
 | Third-party components used by any skill (XSD schemas, pip/npm runtime deps, external CLI tools) | Their original licenses, unchanged | [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) + per-skill `NOTICE` |
 
 **For the office skills (`docx` / `xlsx` / `pptx` / `pdf`):** the

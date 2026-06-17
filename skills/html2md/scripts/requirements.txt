@@ -1,0 +1,9 @@
+# html2md — Python runtime dependencies.
+#
+# The offline path (file/archive) and the `web_clean` cleaning cluster are
+# stdlib-only; the HTML→Markdown core runs in Node (see package.json). These base
+# deps power the URL-fetch path (bead 022-06):
+httpx>=0.27
+trafilatura>=1.8
+#
+# The Chrome engine (Playwright) is soft-optional — see requirements-chrome.txt.

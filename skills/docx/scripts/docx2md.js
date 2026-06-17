@@ -129,8 +129,10 @@ if (realPathOrSelf(inputAbs) === realPathOrSelf(outputAbs)) {
 
 const SCRIPTS_DIR = __dirname;
 const mammoth = loadDependency("mammoth", SCRIPTS_DIR);
-const TurndownService = loadDependency("turndown", SCRIPTS_DIR);
-const turndownPluginGfm = loadDependency("turndown-plugin-gfm", SCRIPTS_DIR);
+// Turndown HTML→Markdown core lives in the docx-mastered shared module
+// html2md_core.js (buildTurndown + expandTableToGrid), replicated byte-identical
+// to the html2md skill (CLAUDE.md §2). docx2md.js consumes it via buildTurndown().
+const { buildTurndown } = require("./html2md_core");
 loadDependency("jszip", SCRIPTS_DIR); // prewarm for _assets / _shapes
 
 // ---- External tool probes ------------------------------------------------
@@ -247,93 +249,11 @@ const mammothOptions = {
 };
 
 // ---- Turndown (HTML → markdown) with merge-aware table rules ------------
-
-// Walk a <table> node and expand rowspan/colspan into a flat grid.
-// Markdown has no native rowspan support; we represent merged cells by
-// placing the value in the FIRST row/column of the merge and leaving
-// subsequent cells empty (but defined, so column count stays consistent
-// across rows). This preserves the docx semantics: a rowspan=6 numbered
-// "1" is ONE logical entry with 6 sub-events — not 6 entries each
-// numbered "1".
-function expandTableToGrid(tableNode, turndownService) {
-    const trNodes = [];
-    (function collectTrs(node) {
-        for (const child of node.childNodes || []) {
-            if (child.nodeName === "TR") trNodes.push(child);
-            else if (child.childNodes && child.childNodes.length) collectTrs(child);
-        }
-    })(tableNode);
-
-    const grid = trNodes.map(() => []);
-    for (let r = 0; r < trNodes.length; r++) {
-        const cellNodes = (trNodes[r].childNodes || [])
-            .filter((n) => n.nodeName === "TD" || n.nodeName === "TH");
-        let col = 0;
-        for (const cell of cellNodes) {
-            // Skip past columns already filled by previous-row rowspans.
-            while (grid[r][col] !== undefined) col += 1;
-            const rowspan = parseInt((cell.getAttribute && cell.getAttribute("rowspan")) || "1", 10);
-            const colspan = parseInt((cell.getAttribute && cell.getAttribute("colspan")) || "1", 10);
-            // Convert the cell's inner HTML to inline markdown via the same
-            // turndown service so formatting (bold/italic/links) survives.
-            // Heading tags inside a cell would otherwise produce literal
-            // `## ` prefixes in the markdown row (which renders as text,
-            // not a heading) — downgrade <h*> to <strong> first so the
-            // cell shows bold text instead. Newlines collapse to spaces
-            // and pipes get escaped so the resulting row stays on one line.
-            const innerHtml = (cell.innerHTML || "")
-                .trim()
-                .replace(/<h[1-6](\s[^>]*)?>/gi, "<strong>")
-                .replace(/<\/h[1-6]>/gi, "</strong>");
-            let cellMd = innerHtml ? turndownService.turndown(innerHtml) : "";
-            cellMd = cellMd.trim().replace(/\n+/g, " ").replace(/\|/g, "\\|");
-            // Place value in top-left of the merge, leave the rest empty
-            // (but `defined`, so the slot-skip loop above works correctly).
-            for (let dr = 0; dr < rowspan; dr++) {
-                for (let dc = 0; dc < colspan; dc++) {
-                    if (!grid[r + dr]) grid[r + dr] = [];
-                    grid[r + dr][col + dc] = (dr === 0 && dc === 0) ? cellMd : "";
-                }
-            }
-            col += colspan;
-        }
-    }
-
-    const maxCols = Math.max(0, ...grid.map((row) => row.length));
-    if (maxCols === 0) return "";
-    for (const row of grid) {
-        while (row.length < maxCols) row.push("");
-        for (let i = 0; i < row.length; i++) {
-            if (row[i] === undefined) row[i] = "";
-        }
-    }
-    const lines = [];
-    for (let r = 0; r < grid.length; r++) {
-        lines.push("| " + grid[r].join(" | ") + " |");
-        if (r === 0) lines.push("|" + "---|".repeat(maxCols));
-    }
-    return "\n\n" + lines.join("\n") + "\n\n";
-}
-
-function buildTurndown() {
-    const turndownService = new TurndownService({
-        headingStyle: "atx",
-        codeBlockStyle: "fenced",
-    });
-    turndownService.use(turndownPluginGfm.gfm);
-    // Override the table rule to handle rowspan/colspan correctly.
-    // Per-cell and per-row rules become unused, but we keep table-section
-    // pass-through so <thead>/<tbody>/<tfoot> don't add stray content.
-    turndownService.addRule("table", {
-        filter: (node) => node.nodeName === "TABLE",
-        replacement: (_content, node) => expandTableToGrid(node, turndownService),
-    });
-    turndownService.addRule("tableSection", {
-        filter: ["thead", "tbody", "tfoot"],
-        replacement: (content) => content,
-    });
-    return turndownService;
-}
+//
+// buildTurndown() and its rowspan/colspan-aware expandTableToGrid() were lifted
+// VERBATIM into the docx-mastered html2md_core.js module (required near the top of
+// this file) so the html2md skill can reuse the exact same converter. Behaviour is
+// unchanged — the call site below still does buildTurndown().turndown(html).
 
 // ---- Build header/footer prefix block -----------------------------------
 
