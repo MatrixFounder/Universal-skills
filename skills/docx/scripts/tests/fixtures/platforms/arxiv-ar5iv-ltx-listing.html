@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>arXiv ar5iv LaTeXML code listing (slice from 2504.20838 Appendix A)</title>
+<!--
+  Hand-stripped slice from arxiv.org/html/2504.20838 ("Bitcoin, a DAO?"),
+  Appendix A. LaTeXML / ar5iv render a `lstlisting` code block as
+
+      div.ltx_listing
+        div.ltx_listing_data > a[download][href="data:text/plain;base64,…"]  (the ⬇ icon)
+        div.ltx_listingline > span.ltx_tag_listingline (line number gutter)
+                              + span.ltx_font_typewriter  (one per TOKEN)
+                              + span.ltx_lst_space         (one per SPACE)
+
+  There is NO <pre>. Before the ltx_listing handler, the generic container
+  walk treated every inline token span as its own block and exploded each
+  word onto its own paragraph ("PROMPT_TEMPLATE" / "=" / "As" / "an" / …).
+  The handler must instead emit ONE monospace paragraph per ltx_listingline,
+  dropping the line-number gutter and the ⬇ download-data link.
+
+  Spans are kept ADJACENT (no whitespace between </span><span>) exactly as
+  the real ar5iv HTML emits them — real spacing lives in ltx_lst_space spans.
+
+  Sentinels ("PROMPT_TEMPLATE", "Your task is to:") are verbatim from the
+  paper. ⬇ (U+2B07) is the forbidden sentinel: it must NOT leak into the body.
+
+  Line 4 ("general_sentiment_score":) is the soft-wrap sentinel: the token is
+  exactly 26 chars, so the prose-default soft-wrap (CODE_SOFTWRAP_MIN regime)
+  would inject U+200B into it and corrupt copy-paste. The "general_sentiment_
+  score" required-needle is a CONTIGUOUS substring only when the listing
+  threshold (64) leaves the identifier byte-clean — it fails if listing runs
+  are wrapped at the prose threshold (26).
+-->
+</head>
+<body>
+<section class="ltx_appendix" id="A1">
+<h2 class="ltx_title ltx_title_appendix"><span class="ltx_tag ltx_tag_appendix">Appendix A </span>ChatGPT Prompt</h2>
+<div class="ltx_para" id="A1.p1">
+<div class="ltx_listing ltx_lst_numbers_left ltx_lstlisting ltx_framed ltx_framed_rectangle" id="A1.p1.1">
+<div class="ltx_listing_data"><a download="" href="data:text/plain;base64,UFJPTVBUX1RFTVBMQVRF">⬇</a></div>
+<div class="ltx_listingline" id="lstnumberx1"><span class="ltx_tag ltx_tag_listingline">1</span><span class="ltx_text ltx_lst_identifier ltx_font_typewriter">PROMPT_TEMPLATE</span><span class="ltx_text ltx_lst_space ltx_font_typewriter"> </span><span class="ltx_text ltx_font_typewriter">=</span><span class="ltx_text ltx_lst_space ltx_font_typewriter"> </span><span class="ltx_text ltx_font_typewriter">"""</span><span class="ltx_text ltx_lst_identifier ltx_font_typewriter">As</span><span class="ltx_text ltx_lst_space ltx_font_typewriter"> </span><span class="ltx_text ltx_lst_identifier ltx_font_typewriter">an</span><span class="ltx_text ltx_lst_space ltx_font_typewriter"> </span><span class="ltx_text ltx_lst_identifier ltx_font_typewriter">expert</span><span class="ltx_text ltx_lst_space ltx_font_typewriter"> </span><span class="ltx_text ltx_lst_identifier ltx_font_typewriter">in</span><span class="ltx_text ltx_lst_space ltx_font_typewriter"> </span><span class="ltx_text ltx_lst_identifier ltx_font_typewriter">blockchain</span><span class="ltx_text ltx_lst_space ltx_font_typewriter"> </span><span class="ltx_text ltx_lst_identifier ltx_font_typewriter">research</span><span class="ltx_text ltx_font_typewriter">.</span></div>
+<div class="ltx_listingline" id="lstnumberx2"><span class="ltx_tag ltx_tag_listingline">2</span></div>
+<div class="ltx_listingline" id="lstnumberx3"><span class="ltx_tag ltx_tag_listingline">3</span><span class="ltx_text ltx_lst_identifier ltx_font_typewriter">Your</span><span class="ltx_text ltx_lst_space ltx_font_typewriter"> </span><span class="ltx_text ltx_lst_identifier ltx_font_typewriter">task</span><span class="ltx_text ltx_lst_space ltx_font_typewriter"> </span><span class="ltx_text ltx_lst_identifier ltx_font_typewriter">is</span><span class="ltx_text ltx_lst_space ltx_font_typewriter"> </span><span class="ltx_text ltx_font_typewriter">to:</span></div>
+<div class="ltx_listingline" id="lstnumberx4"><span class="ltx_tag ltx_tag_listingline">4</span><span class="ltx_text ltx_font_typewriter">"general_sentiment_score":</span><span class="ltx_text ltx_lst_space ltx_font_typewriter"> </span><span class="ltx_text ltx_lst_identifier ltx_font_typewriter">A</span><span class="ltx_text ltx_lst_space ltx_font_typewriter"> </span><span class="ltx_text ltx_lst_identifier ltx_font_typewriter">float</span></div>
+</div>
+</div>
+</section>
+</body>
+</html>

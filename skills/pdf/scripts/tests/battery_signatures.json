@@ -26,6 +26,33 @@
       "forbidden_needles": []
     }
   },
+  "Bitcoin, a DAO.webarchive": {
+    "platform": "unknown",
+    "regular": {
+      "min_pages": 23,
+      "max_pages": 25,
+      "min_size_kb": 479,
+      "max_size_kb": 585,
+      "required_needles": [
+        "adopt new mechanisms. Nonetheless, introducing voluntary deliberation",
+        "risk to the value of Bitcoin and subsequently its security [4].",
+        "• [10]↑ Choi, C., De Filippi, P., Dudley, R., Elrifai, S.N.,"
+      ],
+      "forbidden_needles": []
+    },
+    "reader": {
+      "min_pages": 21,
+      "max_pages": 23,
+      "min_size_kb": 476,
+      "max_size_kb": 582,
+      "required_needles": [
+        "adopt new mechanisms. Nonetheless, introducing voluntary deliberation",
+        "risk to the value of Bitcoin and subsequently its security [4].",
+        "• [10]↑ Choi, C., De Filippi, P., Dudley, R., Elrifai, S.N.,"
+      ],
+      "forbidden_needles": []
+    }
+  },
   "HubSpot Marketplace.webarchive": {
     "platform": "unknown",
     "regular": {
@@ -508,10 +535,10 @@
       "forbidden_needles": []
     },
     "reader": {
-      "min_pages": 9,
-      "max_pages": 11,
-      "min_size_kb": 106,
-      "max_size_kb": 130,
+      "min_pages": 12,
+      "max_pages": 14,
+      "min_size_kb": 922,
+      "max_size_kb": 1126,
       "required_needles": [
         "Open bad debt provides transparency needed to evaluate protocol",
         "real post-launch traction in minted supply, pool depth, lending",
@@ -765,7 +792,7 @@
       "max_size_kb": 50,
       "required_needles": [
         "replyОтветитьlong_arrow_rightПереслатьenvelope Не прочитано trashУдалитьplusСвязать",
-        "браузера, скачайте приложение для",
+        "скачайте приложение для рабочего стола",
         "Почта Mail info@e.mail.ru"
       ],
       "forbidden_needles": []

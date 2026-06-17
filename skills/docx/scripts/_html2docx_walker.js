@@ -763,9 +763,23 @@ function _transcodeWebpToPng(srcPath) {
 // no whitespace, then break it after `.`/`/`/`_`/`-`/`?`/`=`/`&`/`#`/`:`/`;`,
 // before each capital letter following a lowercase one (CamelCase), and —
 // as a last resort — every 30 characters.
-function insertSoftWraps(text) {
+// Default minimum unbroken-run length before soft-wrap hints fire. 26 is
+// aggressive on purpose for PROSE (and for <pre>/table-flattened code via
+// emitPre + makeRun, whose battery needles depend on these break points):
+// long URLs / class names that would blow out the right margin get U+200B
+// break hints.
+const SOFTWRAP_MIN_DEFAULT = 26;
+// Monospace code LISTINGS (emitLatexmlListing) get a much higher bar. At 26
+// the prose default injects U+200B into ordinary identifiers / JSON keys
+// (e.g. `"general_sentiment_score":` is exactly 26 chars) and corrupts
+// copy-paste-into-an-interpreter. ~64 Courier-New-10pt chars still fit the
+// ~9000-dxa code column (≈120 dxa/char), so only a genuinely overflowing
+// token gets a break hint while all normal code stays byte-clean. (docx-7.x)
+const CODE_SOFTWRAP_MIN = 64;
+
+function insertSoftWraps(text, minRun) {
     if (!text) return text;
-    return text.replace(/\S{26,}/g, run => {
+    return text.replace(new RegExp('\\S{' + (minRun || SOFTWRAP_MIN_DEFAULT) + ',}', 'g'), run => {
         let out = run.replace(/([./\\_?=&#:;,@%])/g, '$1​');
         out = out.replace(/([a-z])([A-Z])/g, '$1​$2');
         out = out.replace(/([^​\s]{30})/g, '$1​');
@@ -1143,6 +1157,47 @@ function buildBody({ $, root, inputDir, extractedImages }) {
         }
     }
 
+    function emitLatexmlListing(lines) {
+        // Render a LaTeXML code listing (arXiv ar5iv) as a monospace block,
+        // one paragraph per source line — mirrors emitPre's styling.
+        //
+        // Each `lines[i]` is a div.ltx_listingline whose children are inline
+        // spans. Two span roles matter:
+        //   * span.ltx_tag_listingline — the line-number gutter. It's
+        //     presentation, not source code, so it is dropped (otherwise it
+        //     glues onto the first token, e.g. "1PROMPT_TEMPLATE").
+        //   * span.ltx_lst_space — carries a literal space. Concatenating
+        //     $(span).text() across the remaining spans rebuilds the line
+        //     verbatim, including leading indentation.
+        // Pure-whitespace text nodes between spans are pretty-print noise
+        // (real spacing lives in ltx_lst_space spans) and are skipped; a
+        // blank line collapses to a single-space paragraph to keep height.
+        for (const line of lines) {
+            let text = '';
+            for (const child of line.children || []) {
+                if (child.type === 'text') {
+                    const d = child.data || '';
+                    if (d.trim() !== '') text += d;
+                    continue;
+                }
+                if (child.type !== 'tag') continue;
+                const childCls = (child.attribs && child.attribs.class) || '';
+                if (/\bltx_tag_listingline\b/.test(childCls)) continue;
+                text += $(child).text();
+            }
+            text = text.replace(/\s+$/, '');
+            // Higher soft-wrap threshold than prose: keep normal code/JSON
+            // identifiers byte-clean for copy-paste (see CODE_SOFTWRAP_MIN).
+            const wrapped = insertSoftWraps(text, CODE_SOFTWRAP_MIN) || ' ';
+            target.push(new Paragraph({
+                children: [new TextRun({ text: wrapped, font: "Courier New", size: 20 })],
+                spacing: { before: 0, after: 0 },
+                shading: { type: ShadingType.CLEAR, fill: "F5F5F5" },
+                indent: { left: 360 }
+            }));
+        }
+    }
+
     function emitHr() {
         target.push(new Paragraph({
             children: [],
@@ -1380,7 +1435,26 @@ function buildBody({ $, root, inputDir, extractedImages }) {
                 return emitHr();
             case 'svg':
                 return emitSvg(node, node.parent || null);
-            case 'div':
+            case 'div': {
+                // LaTeXML (arXiv ar5iv) renders a code listing as
+                // div.ltx_listing wrapping one div.ltx_listingline per
+                // source line, each line a run of inline <span> tokens (no
+                // <pre>). The generic container walk would treat each token
+                // span as its own block and explode every word onto its own
+                // line. Detect the listing and render it as a monospace
+                // code block instead. Normal divs fall through to the
+                // container walk unchanged.
+                const cls = (node.attribs && node.attribs.class) || '';
+                if (/\bltx_listing\b/.test(cls)) {
+                    const lines = (node.children || []).filter(c =>
+                        c.type === 'tag' &&
+                        /\bltx_listingline\b/.test((c.attribs && c.attribs.class) || '')
+                    );
+                    if (lines.length) { emitLatexmlListing(lines); return; }
+                }
+                for (const c of node.children || []) walkBlock(c);
+                return;
+            }
             case 'section':
             case 'article':
             case 'main':

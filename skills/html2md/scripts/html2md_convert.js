@@ -10,11 +10,19 @@
 //     every cell flattens to a stray paragraph. We rebuild a GFM table from the DOM.
 //   • Leaf chrome buttons ("Copy", "Ask AI", "Copy page", …) whose label text otherwise
 //     leaks into the Markdown above code blocks.
+//   • Inline-collapsed links (block-content nav anchors) + dropped icon/zero-width anchors.
+//   • `data:` URI images/links dropped (base64 blobs that otherwise dump KBs into the MD).
+//   • arXiv/LaTeXML (ar5iv) `div.ltx_listing` code listings → fenced code blocks, dropping
+//     the line-number gutter span (mirrors docx `_html2docx_walker.emitLatexmlListing`).
 //
 // Pure stdin → stdout filter, same contract as html2md_core.js. The Python bridge
 // (core_bridge.py) spawns THIS file.
 
 const { buildTurndown } = require("./html2md_core");
+
+const _getAttr = (node, name) =>
+    (typeof node.getAttribute === "function" ? node.getAttribute(name) : null) || "";
+const _hasClass = (node, cls) => new RegExp("\\b" + cls + "\\b").test(_getAttr(node, "class"));
 
 // Convert a cell element's inner HTML to single-line inline Markdown.
 function _cellMd(td, el) {
@@ -103,7 +111,7 @@ function buildConverter() {
                 .replace(/\s+/g, " ")
                 .trim();
             if (!text) return "";                 // icon-only / empty anchor → drop
-            if (!href) return text;               // anchor with no target → plain text
+            if (!href || /^data:/i.test(href)) return text;  // no target / data: blob → plain text
             return `[${text}](${href})`;
         },
     });
@@ -120,6 +128,45 @@ function buildConverter() {
                 // Never abort the whole conversion on one malformed table.
                 return node && node.textContent ? "\n\n" + node.textContent.trim() + "\n\n" : "";
             }
+        },
+    });
+    // Drop `data:` URI images — base64 icon/mascot blobs that otherwise dump kilobytes
+    // of base64 into the Markdown. Keep real images with a resolvable src.
+    td.addRule("html2mdImage", {
+        filter: "img",
+        replacement: (_content, node) => {
+            const src = _getAttr(node, "src");
+            if (!src || /^data:/i.test(src)) return "";
+            const alt = _getAttr(node, "alt");
+            const title = _getAttr(node, "title");
+            return `![${alt}](${src}${title ? ` "${title}"` : ""})`;
+        },
+    });
+    // arXiv / LaTeXML (ar5iv) code listings render as <div class="ltx_listing"> wrapping
+    // one <div class="ltx_listingline"> per source line (inline <span> tokens, NOT <pre>).
+    // turndown would explode every token onto its own paragraph and glue the line-number
+    // gutter onto the first token ("1PROMPT_TEMPLATE"). Rebuild a fenced code block,
+    // dropping the gutter span — mirrors docx's _html2docx_walker.emitLatexmlListing.
+    td.addRule("html2mdLatexmlListing", {
+        filter: (node) => node.nodeName === "DIV" && _hasClass(node, "ltx_listing"),
+        replacement: (content, node) => {
+            const lineEls = Array.from(node.children || []).filter((c) => _hasClass(c, "ltx_listingline"));
+            if (!lineEls.length) return content;
+            const lines = lineEls.map((line) => {
+                let text = "";
+                for (const child of Array.from(line.childNodes || [])) {
+                    if (child.nodeType === 3) {                  // text node
+                        const d = child.nodeValue || "";
+                        if (d.trim() !== "") text += d;          // skip pretty-print whitespace
+                        continue;
+                    }
+                    if (child.nodeType !== 1) continue;          // element only
+                    if (_hasClass(child, "ltx_tag_listingline")) continue;  // drop line-number gutter
+                    text += child.textContent || "";            // ltx_lst_space spaces preserved
+                }
+                return text.replace(/\s+$/, "");
+            });
+            return "\n\n```\n" + lines.join("\n") + "\n```\n\n";
         },
     });
     return td;

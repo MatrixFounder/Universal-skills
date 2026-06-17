@@ -388,6 +388,30 @@ def _resolve_url_image(src: str, opts) -> bytes | None:
         return None
 
 
+_IMG_SRC_RE = re.compile(r'(<img\b[^>]*?\bsrc=["\'])([^"\']+)(["\'])', re.IGNORECASE)
+_BASE_HREF_RE = re.compile(r'<base\b[^>]*\bhref=["\']([^"\']+)["\']', re.IGNORECASE)
+
+
+def _absolutize_img_srcs(html: str, page_url: str) -> str:
+    """Resolve relative ``<img src>`` to absolute URLs so url-mode image download works.
+
+    Honours an in-document ``<base href>`` (arXiv/ar5iv ship
+    ``<base href="https://arxiv.org/html/NNNN/">``); falls back to the fetched page URL.
+    Already-absolute, ``data:`` and protocol-relative srcs are left untouched. Offline
+    archive/file modes don't need this — ``web_clean.archives`` already absolutises them.
+    """
+    m = _BASE_HREF_RE.search(html)
+    base = urljoin(page_url, m.group(1)) if m else page_url
+
+    def _sub(mt: "re.Match[str]") -> str:
+        src = mt.group(2)
+        if re.match(r"^(?:[a-z][a-z0-9+.\-]*:|//)", src, re.IGNORECASE):
+            return mt.group(0)  # scheme: / data: / protocol-relative → already absolute
+        return f"{mt.group(1)}{urljoin(base, src)}{mt.group(3)}"
+
+    return _IMG_SRC_RE.sub(_sub, html)
+
+
 def _acquire_url(input_ref: str, opts) -> AcquireResult:
     """URL fetch: lite (httpx+trafilatura) by default, auto-fallback to Chrome for
     JS/SPA shells, or explicit ``--engine chrome``. Returns RAW page HTML (web_clean
@@ -406,6 +430,7 @@ def _acquire_url(input_ref: str, opts) -> AcquireResult:
         page_html = _fetch_chrome_html(input_ref)
         used = "chrome"
 
+    page_html = _absolutize_img_srcs(page_html, input_ref)
     return AcquireResult(
         html=page_html,
         base_url=input_ref,

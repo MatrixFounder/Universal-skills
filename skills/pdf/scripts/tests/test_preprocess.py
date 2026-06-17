@@ -51,6 +51,10 @@ from html2pdf_lib.preprocess import (  # noqa: E402
     _strip_universal_ads,
     preprocess_html,
 )
+from html2pdf_lib.archives import (  # noqa: E402
+    _strip_base_tags,
+    extract_archive,
+)
 from html2pdf_lib.normalize_css import NORMALIZE_CSS  # noqa: E402
 from html2pdf_lib.reader_mode import reader_mode_html  # noqa: E402
 from html2pdf_lib.render import (  # noqa: E402
@@ -840,14 +844,16 @@ class TestNormalizeCSS(unittest.TestCase):
             "break-word actually wraps")
 
     def test_pre_wrap_in_both_code_blocks(self) -> None:
-        """Both <pre> (§7a) and Prism <code> (§7a-bis) MUST set
-        `white-space: pre-wrap` to preserve indentation while wrapping
-        at the page boundary. `pre-wrap` (not `pre`!) is the load-
-        bearing value."""
-        self.assertEqual(
-            NORMALIZE_CSS.count("white-space: pre-wrap !important"), 2,
-            "white-space: pre-wrap !important must appear twice — "
-            "once in <pre> and once in the Prism <code> rule")
+        """<pre> (§7a), Prism <code> (§7a-bis) and the ar5iv listing
+        line (§7a-ter) MUST set `white-space: pre-wrap` to preserve
+        indentation while wrapping at the page boundary. `pre-wrap`
+        (not `pre`!) is the load-bearing value. Three is the current
+        minimum; further code-block contexts may add more."""
+        self.assertGreaterEqual(
+            NORMALIZE_CSS.count("white-space: pre-wrap !important"), 3,
+            "white-space: pre-wrap !important must appear at least three "
+            "times — <pre>, the Prism <code> rule, and the ar5iv "
+            ".ltx_listingline rule")
 
     @staticmethod
     def _strip_css_comments(css: str) -> str:
@@ -2310,6 +2316,228 @@ class TestChromeE2ENegativeRegression(unittest.TestCase):
             "overlay unfurl regression (expected ≤5 pages for static "
             "marketplace card).",
         )
+
+
+class TestAr5ivListingGutter(unittest.TestCase):
+    """arXiv/LaTeXML (ar5iv) source-code listings must render with the
+    line-number gutter SEPARATED from the code.
+
+    ar5iv marks code blocks as <div class="ltx_listing"> wrapping
+    per-line <div class="ltx_listingline"> with a leading
+    <span class="ltx_tag ltx_tag_listingline">N</span>. The gutter CSS
+    lives in the site's external ar5iv.css, which
+    `_strip_external_stylesheets` removes — gluing the number to the
+    code ("1PROMPT_TEMPLATE", "4"+"1." → "41."). NORMALIZE_CSS §7a-ter
+    restores the gutter. See `normalize_css`.
+    """
+
+    def test_gutter_rule_present(self) -> None:
+        self.assertIn(".ltx_tag_listingline", NORMALIZE_CSS,
+                      "ar5iv line-number gutter rule missing")
+        self.assertIn(".ltx_listingline", NORMALIZE_CSS)
+        # The defining gutter declarations: inline-block + separator rule.
+        seg = NORMALIZE_CSS[NORMALIZE_CSS.index(".ltx_tag_listingline"):]
+        seg = seg[:seg.index("}")]
+        self.assertIn("display: inline-block", seg)
+        self.assertIn("border-right", seg)
+
+    def test_listing_renders_with_separated_line_numbers(self) -> None:
+        """E2E: a stripped-CSS ar5iv listing renders the number apart
+        from the first code token — the glued artifact must be gone."""
+        import pypdf  # type: ignore
+        from html2pdf_lib import convert
+
+        listing = ('<div class="ltx_listing ltx_lstlisting '
+                   'ltx_framed_rectangle" id="A1">' + "".join(
+            f'<div class="ltx_listingline">'
+            f'<span class="ltx_tag ltx_tag_listingline">{n}</span>'
+            f'<span class="ltx_text ltx_font_typewriter">'
+            f'PROMPTTOKEN{n}=value</span></div>'
+            for n in range(1, 4)) + "</div>")
+        html = f"<html><head></head><body>{listing}</body></html>"
+        with tempfile.TemporaryDirectory() as td:
+            out = Path(td) / "listing.pdf"
+            convert(html, out, base_url=td, page_size="a4",
+                    extra_css_path=None, use_default_css=True)
+            txt = " ".join(
+                (p.extract_text() or "")
+                for p in pypdf.PdfReader(str(out)).pages)
+
+        self.assertIn("PROMPTTOKEN1", txt, "listing code dropped entirely")
+        self.assertNotIn(
+            "1PROMPTTOKEN1", txt,
+            "line number glued to code — ar5iv gutter CSS not applied "
+            "(regression of the _strip_external_stylesheets casualty)")
+
+
+class TestStripBaseTags(unittest.TestCase):
+    """`<base href>` must be removed from extracted archive HTML.
+
+    Modern weasyprint (>=60, verified 68.1) honours the in-document
+    `<base>` tag, re-routing relative refs back to the original
+    offline-blocked origin — silently dropping images. See
+    `archives._strip_base_tags`.
+    """
+
+    def test_strips_base_href(self) -> None:
+        html = ('<html><head><base href="https://arxiv.org/html/x/">'
+                '</head><body><img src="x1.png"></body></html>')
+        out = _strip_base_tags(html)
+        self.assertNotIn("<base", out.lower())
+        self.assertIn('src="x1.png"', out)  # relative ref left intact
+
+    def test_strips_multiple_and_self_closing(self) -> None:
+        html = '<base href="https://a/"><base href="https://b/" />text'
+        out = _strip_base_tags(html)
+        self.assertNotIn("<base", out.lower())
+        self.assertIn("text", out)
+
+    def test_noop_without_base(self) -> None:
+        html = "<html><body><p>no base here</p></body></html>"
+        self.assertEqual(_strip_base_tags(html), html)
+
+    def test_webarchive_extract_drops_base_keeps_subresource(self) -> None:
+        """End-to-end: a synthetic webarchive whose HTML uses
+        `<base href>` + a relative `src` must extract with the base
+        tag gone and the image file present in the work dir, so it
+        resolves against base_url (the work dir)."""
+        import plistlib
+
+        png = (b"\x89PNG\r\n\x1a\n" + b"\x00" * 64)  # bytes, content irrelevant
+        archive = {
+            "WebMainResource": {
+                "WebResourceURL": "https://arxiv.org/html/2504.20838",
+                "WebResourceMIMEType": "text/html",
+                "WebResourceTextEncodingName": "utf-8",
+                "WebResourceData": (
+                    b'<html><head>'
+                    b'<base href="/html/2504.20838v1/">'
+                    b'</head><body><img src="x1.png"></body></html>'
+                ),
+            },
+            "WebSubresources": [{
+                "WebResourceURL": "https://arxiv.org/html/2504.20838v1/x1.png",
+                "WebResourceMIMEType": "image/png",
+                "WebResourceData": png,
+            }],
+        }
+        with tempfile.TemporaryDirectory() as td:
+            tdp = Path(td)
+            src = tdp / "paper.webarchive"
+            with open(src, "wb") as fh:
+                plistlib.dump(archive, fh)
+            work = tdp / "work"
+            work.mkdir()
+            html, base_url = extract_archive(src, work, frame_spec="main")
+
+            self.assertNotIn(
+                "<base", html.lower(),
+                "base tag survived extraction — figures would drop")
+            self.assertEqual(base_url, str(work))
+            self.assertTrue(
+                (work / "x1.png").exists(),
+                "subresource not written by basename into work dir")
+
+    def test_bare_ref_with_base_localizes_correct_colliding_file(self) -> None:
+        """VDD-#2: a bare `src="logo.png"` under `<base href="/b/">` must
+        resolve to the `/b/logo.png` subresource, NOT the same-basename
+        `/a/logo.png` captured first (which the dedup writer keeps as
+        `logo.png`; the second becomes `1_logo.png`). Without
+        `_localize_bare_refs` the bare ref falls back to basename
+        resolution and grabs the wrong (first) file."""
+        import plistlib
+
+        a_png = b"\x89PNG\r\n\x1a\n" + b"AAAA" * 16   # distinct bytes
+        b_png = b"\x89PNG\r\n\x1a\n" + b"BBBB" * 16   # distinct bytes
+        archive = {
+            "WebMainResource": {
+                "WebResourceURL": "https://site.test/page",
+                "WebResourceMIMEType": "text/html",
+                "WebResourceTextEncodingName": "utf-8",
+                "WebResourceData": (
+                    b'<html><head><base href="/b/"></head>'
+                    b'<body><img src="logo.png"></body></html>'
+                ),
+            },
+            "WebSubresources": [
+                {"WebResourceURL": "https://site.test/a/logo.png",
+                 "WebResourceMIMEType": "image/png", "WebResourceData": a_png},
+                {"WebResourceURL": "https://site.test/b/logo.png",
+                 "WebResourceMIMEType": "image/png", "WebResourceData": b_png},
+            ],
+        }
+        with tempfile.TemporaryDirectory() as td:
+            tdp = Path(td)
+            src = tdp / "c.webarchive"
+            with open(src, "wb") as fh:
+                plistlib.dump(archive, fh)
+            work = tdp / "work"
+            work.mkdir()
+            html, _ = extract_archive(src, work, frame_spec="main")
+            # The /b/ file is the second written → renamed by the dedup writer.
+            b_local = next(p.name for p in work.iterdir()
+                           if p.is_file() and p.read_bytes() == b_png)
+            self.assertNotEqual(b_local, "logo.png",
+                                "test premise broken: /b/ file not renamed")
+            self.assertIn(f'src="{b_local}"', html,
+                          "bare ref did not localise to the /b/ (correct) file")
+            self.assertNotIn('src="logo.png"', html,
+                             "bare ref still points at the /a/ (wrong) file")
+
+    def test_embedded_image_survives_base_strip_into_pdf(self) -> None:
+        """VDD-#3 (CI guard, no tmp/): a base-href webarchive with a bare
+        `<img src>` must render an actual raster image into the PDF. Guards
+        the figure fix end-to-end in CI, where the tmp/ Bitcoin fixture is
+        skipped. Mirrors the real arXiv failure mode in miniature."""
+        import io
+        import plistlib
+        import pypdf  # type: ignore
+        from PIL import Image  # weasyprint dependency — always present
+        from html2pdf_lib import convert
+
+        # Real, valid PNG (decodable so weasyprint embeds it as an XObject).
+        _buf = io.BytesIO()
+        Image.new("RGB", (120, 80), (200, 50, 50)).save(_buf, format="PNG")
+        png = _buf.getvalue()
+        archive = {
+            "WebMainResource": {
+                "WebResourceURL": "https://arxiv.org/html/9999.00000",
+                "WebResourceMIMEType": "text/html",
+                "WebResourceTextEncodingName": "utf-8",
+                "WebResourceData": (
+                    b'<html><head><base href="/html/9999.00000v1/"></head>'
+                    b'<body><p>fig</p>'
+                    b'<img src="x1.png" width="120" height="80"></body></html>'
+                ),
+            },
+            "WebSubresources": [{
+                "WebResourceURL": "https://arxiv.org/html/9999.00000v1/x1.png",
+                "WebResourceMIMEType": "image/png", "WebResourceData": png,
+            }],
+        }
+        with tempfile.TemporaryDirectory() as td:
+            tdp = Path(td)
+            src = tdp / "p.webarchive"
+            with open(src, "wb") as fh:
+                plistlib.dump(archive, fh)
+            work = tdp / "work"
+            work.mkdir()
+            html, base_url = extract_archive(src, work, frame_spec="main")
+            out = tdp / "out.pdf"
+            convert(html, out, base_url=base_url, page_size="a4",
+                    extra_css_path=None, use_default_css=True)
+
+            images = 0
+            for page in pypdf.PdfReader(str(out)).pages:
+                res = page.get("/Resources")
+                if res and "/XObject" in res:
+                    for obj in res["/XObject"].get_object().values():
+                        if obj.get_object().get("/Subtype") == "/Image":
+                            images += 1
+        self.assertGreaterEqual(
+            images, 1,
+            "no raster image embedded — base-href relative <img> dropped "
+            "(regression of the figure fix)")
 
 
 if __name__ == "__main__":

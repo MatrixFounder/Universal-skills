@@ -107,6 +107,99 @@ def _rewrite_urls(text: str, url_map: dict[str, str]) -> str:
     return text
 
 
+# `<base href="...">` matcher (lax: HTML5 allows `<base>` self-closing or
+# bare). Webarchives saved by Safari/Chrome almost always embed
+# `<base href="https://original-site/dir/">` — that's the page's own URL.
+_BASE_TAG_RE = re.compile(r"<base\b[^>]*>", re.IGNORECASE)
+
+
+def _strip_base_tags(text: str) -> str:
+    """Remove every `<base>` tag from extracted archive HTML.
+
+    Subresources are written to the work directory and the HTML's relative
+    refs (e.g. `src="x1.png"`) are meant to resolve against `base_url` =
+    that work dir. A surviving `<base href>` defeats this: modern weasyprint
+    (>=60, verified 68.1) HONOURS the in-document `<base>` tag — contrary to
+    the older assumption that it only ever used the `base_url` argument — and
+    re-routes every relative ref back to the original (offline-blocked)
+    origin, so figures/images silently drop. The chrome engine strips
+    `<base>` for the same reason (`chrome_engine._strip_base_href`); the
+    weasyprint path needs it too. Discovered on arxiv `.webarchive`
+    (`<base href="https://arxiv.org/html/NNNN/">`, `<img src="x1.png">`):
+    all three figures vanished until the tag was removed.
+
+    Kept local (not imported from `chrome_engine`) so this module stays
+    import-light — it carries no weasyprint/playwright dependency.
+    """
+    if "<base" not in text.lower():
+        return text
+    return _BASE_TAG_RE.sub("", text)
+
+
+# Absolute-URL scheme prefix (http:, https:, data:, mailto:, tel:, blob:,
+# javascript:, …) per RFC 3986 scheme grammar — used to leave already-
+# absolute / pseudo-scheme values untouched.
+_URL_SCHEME_RE = re.compile(r"^[a-zA-Z][a-zA-Z0-9+.\-]*:")
+# `<base href="…">` value extractor (first base tag wins, per HTML spec).
+_BASE_HREF_RE = re.compile(
+    r'<base\b[^>]*\bhref\s*=\s*["\']([^"\']*)["\']', re.IGNORECASE)
+
+
+def _effective_base(html: str, page_url: str) -> str:
+    """The URL that *bare* relative refs resolve against: the document's
+    `<base href>` (resolved against page_url) if present, else page_url."""
+    m = _BASE_HREF_RE.search(html)
+    if m and m.group(1).strip():
+        return urllib.parse.urljoin(page_url, m.group(1).strip())
+    return page_url
+
+
+def _localize_bare_refs(text: str, page_url: str, url_map: dict[str, str]) -> str:
+    """Rewrite *bare* relative attribute URLs straight to their local file.
+
+    `_make_absolute_urls` only upgrades root-relative (`/`) and protocol-
+    relative (`//`) URLs, so a bare ref like `src="x1.png"` never enters
+    `_rewrite_urls`' matching and survives to render-time, where it relies
+    on basename resolution against the work dir. That silently picks the
+    WRONG file when two captured subresources share a basename (the dedup
+    writer renames the second to `1_<name>`, so the bare ref grabs the
+    first). Here we resolve each bare ref against the document's effective
+    base (`<base href>` or page_url) and, **only when the result is a known
+    subresource** (`url_map` hit), replace it with the correct local path.
+
+    Fully backward-compatible: a bare ref whose resolved URL is NOT in
+    `url_map` is left untouched, so the existing basename fallback (after
+    `_strip_base_tags`) still applies — we never turn a working bare ref
+    into a blocked remote one. Absolute / root- / protocol-relative /
+    fragment / data: / scheme'd values are skipped (handled elsewhere or
+    intentionally left alone).
+    """
+    if not url_map:
+        return text
+    base = _effective_base(html=text, page_url=page_url)
+    if not urllib.parse.urlparse(base).scheme:
+        return text
+
+    def _fix(m: "re.Match") -> str:
+        pre, val, post = m.group(1), m.group(2), m.group(3)
+        v = val.strip()
+        if not v or v[0] in "/#" or _URL_SCHEME_RE.match(v):
+            return m.group(0)
+        # HTML attribute values escape `&` as `&amp;`; subresource URLs in
+        # url_map are stored unescaped (see _rewrite_urls). Unescape before
+        # join + lookup so signed URLs with `&` in the query still match.
+        full = urllib.parse.urljoin(base, v.replace("&amp;", "&"))
+        local = url_map.get(full)
+        if local is None:
+            return m.group(0)
+        return pre + local + post
+
+    return re.sub(
+        r'((?:href|src|action|data-src)\s*=\s*["\'])([^"\']*?)(["\'])',
+        _fix, text, flags=re.IGNORECASE,
+    )
+
+
 def _fixup_css_subresources(
     css_parts: list[tuple[Path, bytes]],
     page_url: str,
@@ -434,8 +527,10 @@ def _decode_webarchive_frame(
         if mime == "text/css":
             css_parts.append((writer.root / rel, data))
 
+    html_text = _localize_bare_refs(html_text, page_url, url_map)
     html_text = _make_absolute_urls(html_text, page_url)
     html_text = _rewrite_urls(html_text, url_map)
+    html_text = _strip_base_tags(html_text)
     return html_text, page_url, url_map, css_parts
 
 
@@ -498,8 +593,10 @@ def _decode_mhtml(
         html_text = html_bytes.decode(charset, errors="replace")
     except (LookupError, UnicodeDecodeError):
         html_text = html_bytes.decode("utf-8", errors="replace")
+    html_text = _localize_bare_refs(html_text, page_url, url_map)
     html_text = _make_absolute_urls(html_text, page_url)
     html_text = _rewrite_urls(html_text, url_map)
+    html_text = _strip_base_tags(html_text)
     return html_text, page_url, url_map, css_parts
 
 

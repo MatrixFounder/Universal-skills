@@ -334,6 +334,58 @@ code[class*="language-"],
     overflow-wrap: break-word !important;
 }
 
+/* ── 7a-ter. arXiv / LaTeXML (ar5iv) source-code listings.
+        ar5iv papers render code blocks NOT as <pre> but as
+            <div class="ltx_listing …">
+              <div class="ltx_listingline">
+                <span class="ltx_tag ltx_tag_listingline">1</span>
+                <span class="ltx_text ltx_font_typewriter">code…</span>…
+              </div> …
+            </div>
+        The gutter + monospace styling lives in the site's external
+        ar5iv.css, which §_strip_external_stylesheets removes — leaving the
+        line-number span glued to the first token ("1PROMPT_TEMPLATE",
+        and "4"+"1." → "41." for numbered prose inside the listing). These
+        `ltx_`-namespaced selectors are arXiv/LaTeXML-specific, so
+        re-adding them is inert for every other input. The rules mirror
+        ar5iv's own listing CSS (verified to render correctly in
+        weasyprint) plus a markdown-preview envelope; hanging indent
+        (padding-left + negative text-indent ≈ gutter width) keeps wrapped
+        continuation lines aligned under the code, not under the gutter. */
+.ltx_listing {
+    display: block !important;
+    background: #f6f8fa !important;
+    border: 1px solid #e1e4e8 !important;
+    border-radius: 6px !important;
+    padding: 12px 16px !important;
+    margin: 12px 0 !important;
+    font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace !important;
+}
+.ltx_listingline {
+    display: block !important;
+    min-height: 1em !important;
+    padding-left: 3em !important;
+    text-indent: -3em !important;
+    white-space: pre-wrap !important;
+    overflow-wrap: break-word !important;
+    text-align: left !important;
+}
+.ltx_listingline .ltx_text,
+.ltx_listingline .ltx_font_typewriter {
+    font-family: inherit !important;
+}
+.ltx_tag_listingline {
+    display: inline-block !important;
+    width: 2em !important;
+    margin-right: 0.6em !important;
+    padding-right: 0.4em !important;
+    border-right: 1px solid #c8ccd0 !important;
+    text-align: right !important;
+    text-indent: 0 !important;
+    color: #999 !important;
+    user-select: none;
+}
+
 /* ── 7b. Blockquote styling (markdown-preview parity). GitHub-style left
         border + grey text. */
 blockquote {

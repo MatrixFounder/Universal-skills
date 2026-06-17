@@ -206,13 +206,20 @@ attribution is preserved in
 | **[xlsx](skills/xlsx/SKILL.md)** | CSV → styled `.xlsx` (bold header, frozen row, auto-filter, leading-zero preservation), force formula recalculation via LibreOffice, scan for `#REF!`/`#DIV/0!` errors, attach bar/line/pie **charts** to a range (`xlsx_add_chart.py`). | 2 |
 | **[pptx](skills/pptx/SKILL.md)** | Markdown → PPTX (built-in pptxgenjs renderer with auto-pagination, mermaid diagrams via bundled Cyrillic-capable config, accent stripes — OR `--via-marp` delegation to marp-slide for editorial polish), **`pptx2md.py`** (PPTX → structured Markdown: per-slide sections, GFM tables, sidecar images with sha1-dedup, speaker notes, **opt-in per-image `--ocr`** via system tesseract, plus opt-in **`--ocr-denoise`** to filter noise from decorative images), **`outline2pptx.js`** (heading-only outline → slide skeleton with TODO placeholders), pptx → PDF, slide thumbnail grids, **`pptx_clean.py`** to drop orphan slides/media after manual editing. | 2 |
 | **[pdf](skills/pdf/SKILL.md)** | Markdown → PDF (weasyprint, with optional ```mermaid → PNG via `mmdc` and bundled Cyrillic-capable `mermaid-config.json`), PDF merge / split (by ranges, per-page, fixed chunks), AcroForm form **fill / inspect / flatten** (`pdf_fill_form.py`), TOC bookmarks preserved. | 2 |
-| **[html2md](skills/html2md/SKILL.md)** | **Web/HTML → Markdown** web-clipper + universal agent step. Input: a live **URL**, or a saved `.html`/`.mhtml`/`.webarchive`. Hybrid Python+Node — reuses the docx **turndown** core + pdf **`web_clean`** cleaner (two-master, fork-free), plus html2md-owned **ARIA-table→GFM**, chrome/empty-heading tidy, and link-collapse for doc-site SPAs (GitBook/Mintlify/Fern). YAML frontmatter, sha1-deduped `_attachments/`, **dual-output** (`<slug>.md` + `.reader.md`), `--stdout` + `--json-errors`. Lite (`httpx`+`trafilatura`) fetch with SSRF guard, opt-in Chrome (`--with-chrome`) for JS pages. | 2 |
+| **[html2md](skills/html2md/SKILL.md)** | **Web/HTML → Markdown** web-clipper + universal agent step. Input: a live **URL** or a saved `.html`/`.mhtml`/`.webarchive`. Hybrid Python+Node reusing the docx **turndown** core + pdf **`web_clean`** cleaner (two-master, fork-free). html2md-owned conversion for doc-site SPAs (GitBook/Mintlify/Fern): **ARIA-role → GFM tables**, chrome/empty-heading tidy, multi-line-link collapse, **arXiv/LaTeXML `ltx_listing` → fenced code**, and `data:`-URI blob stripping. YAML frontmatter, **image download** (default on, `<base href>`-aware, sha1-deduped `_attachments/`, `--max-images`), **dual-output** (`<slug>.md` + `.reader.md`), `--stdout` + `--json-errors`. Lite (`httpx`+`trafilatura`) fetch with per-hop **SSRF** guard + **PDF/binary** rejection; opt-in Chrome (`--with-chrome`) for JS pages. Committed regression **battery**. | 2 |
 
 The three OOXML skills (docx/xlsx/pptx) share an identical
 `scripts/office/` module + `_soffice.py` LibreOffice wrapper. The
 `docx` skill is the **MASTER** — modifications must follow the
 strict replication protocol in
 [CONTRIBUTING.md §3](docs/CONTRIBUTING.md#3-office-skills-modification-protocol-strict).
+
+`html2md` is the repo's first **two-master** skill: its turndown core is
+byte-identical to docx's (`html2md_core.js` ← `docx2md.js`) and its
+`web_clean/` HTML-cleaning cluster is byte-identical to pdf's
+`html2pdf_lib/` — both fork-free and `diff -q`-gated in CI. It therefore
+joins the proprietary set (derived work embedding docx/pdf code). Same
+protocol; see [CONTRIBUTING.md §3](docs/CONTRIBUTING.md#3-office-skills-modification-protocol-strict).
 
 **Cross-cutting safeguards** in the shared `office/` module:
 - `office/_encryption.py` — every reader script calls
@@ -386,6 +393,7 @@ Detailed manuals for specific components can be found in `docs/Manuals`:
 - **[Marp Slide Creator Manual](docs/Manuals/marp-slide_manual.md)**: Guide to creating Marp presentations — theme selection, image patterns, CSS customization, and quality checklist.
 - **[Marp CLI Manual](docs/Manuals/marp-cli_manual.md)**: Installation, dependencies, core commands, configuration, and troubleshooting for Marp CLI renderer.
 - **[Office Skills Manual](docs/Manuals/office-skills_manual.md)**: Practical reference for `docx` / `xlsx` / `pptx` / `pdf` — install, common workflows, the redlining validator (`--compare-to`), the LD_PRELOAD AF_UNIX shim for sandboxed deployment, the bundled mermaid config, the test suite (E2E + visual regression + hypothesis fuzz + GHA CI), and a complete **package inventory** (global vs per-skill vs user-cache).
+- **[html2md Manual](docs/Manuals/html2md_manual.md)**: Practical reference for the **Web/HTML → Markdown** web-clipper — setup, full CLI + exit codes, lite vs Chrome engines, dual-output (whole vs reader), what the converter fixes (ARIA tables, doc-site chrome, split headings, arXiv/LaTeXML listings, `data:` stripping, image resolution), the SSRF / image-confinement / PDF-guard security model, honest-scope limits, and the two-master replication topology.
 - **[Office Skills Troubleshooting](docs/Manuals/office-skills_troubleshooting.md)**: `Symptom → Cause → Fix` recipes for the recurring failures — pango/cairo missing, soffice timeout, mmdc fail, AF_UNIX sandbox, encrypted-input rejection, visual-regression drift, ImageMagick v6 vs v7, openpyxl recalc, AcroForm vs XFA.
 
 Project-level guides:

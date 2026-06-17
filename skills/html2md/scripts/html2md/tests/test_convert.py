@@ -116,6 +116,34 @@ class TestAriaTableAndChrome(unittest.TestCase):
         md = core_bridge.html_to_markdown('<p>see <a href="https://x">the docs</a> now</p>')
         self.assertIn("[the docs](https://x)", md)
 
+    def test_ltx_listing_to_code_block(self):
+        """arXiv/LaTeXML ltx_listing → fenced code; line-number gutter dropped."""
+        html = (
+            '<div class="ltx_listing">'
+            '<div class="ltx_listingline"><span class="ltx_tag ltx_tag_listingline">1</span>'
+            '<span class="ltx_text ltx_font_typewriter">PROMPT = "hi"</span></div>'
+            '<div class="ltx_listingline"><span class="ltx_tag ltx_tag_listingline">2</span></div>'
+            '<div class="ltx_listingline"><span class="ltx_tag ltx_tag_listingline">3</span>'
+            '<span class="ltx_text ltx_font_typewriter">end()</span></div>'
+            "</div>")
+        md = core_bridge.html_to_markdown(html)
+        self.assertIn("```", md)
+        self.assertIn('PROMPT = "hi"', md)
+        self.assertIn("end()", md)
+        self.assertNotIn("1PROMPT", md)             # gutter not glued onto first token
+        self.assertNotRegex(md, r"(?m)^\s*[123]\s*$")  # bare gutter numbers dropped
+
+    def test_data_uri_image_and_link_dropped(self):
+        """base64 data: images/links don't dump blobs; real images survive."""
+        md = core_bridge.html_to_markdown(
+            '<p>keep</p>'
+            '<img src="data:image/png;base64,AAAABBBBCCCC">'
+            '<img src="https://x/real.png" alt="r">'
+            '<a href="data:text/plain;base64,ZZZZ">dl</a>')
+        self.assertNotIn("data:", md)
+        self.assertIn("![r](https://x/real.png)", md)
+        self.assertIn("keep", md)
+
     def test_plain_table_still_works(self):
         """A real <table> still converts (core path unaffected by the ARIA rule)."""
         md = core_bridge.html_to_markdown(

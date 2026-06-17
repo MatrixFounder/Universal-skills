@@ -185,6 +185,20 @@ class TestSsrfAndErrors(unittest.TestCase):
                 acquire._fetch_lite_html("https://public.example/x.zip", None)
         self.assertEqual(ctx2.exception.details.get("kind"), "binary")
 
+    def test_absolutize_img_srcs(self):
+        """url-mode: relative <img src> → absolute (honouring <base href>); data:/http left alone."""
+        html = ('<base href="https://arxiv.org/html/2504.20838v1/">'
+                '<img src="x1.png">'
+                '<img src="data:image/png;base64,A">'
+                '<img src="https://cdn/y.png">')
+        out = acquire._absolutize_img_srcs(html, "https://arxiv.org/html/2504.20838")
+        self.assertIn('src="https://arxiv.org/html/2504.20838v1/x1.png"', out)
+        self.assertIn('src="data:image/png;base64,A"', out)   # data: untouched
+        self.assertIn('src="https://cdn/y.png"', out)          # already-absolute untouched
+        # no <base> → resolve against the page URL's directory
+        out2 = acquire._absolutize_img_srcs('<img src="fig.png">', "https://site.test/docs/page")
+        self.assertIn('src="https://site.test/docs/fig.png"', out2)
+
     def test_fetch_failure_exit10(self):
         """TC-06-05: transport error → FetchFailed; redacts query string + userinfo."""
         with _patch_httpx(exc=OSError("conn refused")):

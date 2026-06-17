@@ -1,4 +1,40 @@
 {
+  "arxiv-ar5iv-ltx-listing.html": {
+    "platform": "arxiv-ar5iv",
+    "source": "platform",
+    "regular": {
+      "min_paragraphs": 3,
+      "max_paragraphs": 7,
+      "min_size_kb": 1,
+      "max_size_kb": 20,
+      "min_images": 0,
+      "max_images": 0,
+      "required_needles": [
+        "As an expert in blockchain research",
+        "Your task is to:",
+        "general_sentiment_score"
+      ],
+      "forbidden_needles": [
+        "⬇"
+      ]
+    },
+    "reader": {
+      "min_paragraphs": 3,
+      "max_paragraphs": 7,
+      "min_size_kb": 1,
+      "max_size_kb": 20,
+      "min_images": 0,
+      "max_images": 0,
+      "required_needles": [
+        "As an expert in blockchain research",
+        "Your task is to:",
+        "general_sentiment_score"
+      ],
+      "forbidden_needles": [
+        "⬇"
+      ]
+    }
+  },
   "confluence-version-table.html": {
     "platform": "confluence",
     "source": "platform",
