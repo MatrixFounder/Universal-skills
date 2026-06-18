@@ -435,6 +435,145 @@ class TestRetryUAandEngines(unittest.TestCase):
         self.assertAlmostEqual(sum(slept), 0.5, places=3)
 
 
+class TestProactiveVariants(unittest.TestCase):
+    """R-7 (Wikipedia REST) / R-9 (arXiv /html) proactive URL rewrites + link absolutize."""
+
+    def test_mediawiki_rest_variant(self):
+        self.assertEqual(
+            acquire._mediawiki_rest_variant("https://en.wikipedia.org/wiki/Value_averaging"),
+            "https://en.wikipedia.org/api/rest_v1/page/html/Value_averaging")
+        self.assertEqual(
+            acquire._mediawiki_rest_variant(
+                "https://ru.wikipedia.org/wiki/Long-Term_Capital_Management"),
+            "https://ru.wikipedia.org/api/rest_v1/page/html/Long-Term_Capital_Management")
+        # mobile host normalised to the API host
+        self.assertEqual(
+            acquire._mediawiki_rest_variant("https://en.m.wikipedia.org/wiki/Foo"),
+            "https://en.wikipedia.org/api/rest_v1/page/html/Foo")
+        # virtual namespaces + non-wiki hosts → no rewrite
+        self.assertIsNone(
+            acquire._mediawiki_rest_variant("https://en.wikipedia.org/wiki/Special:Search"))
+        self.assertIsNone(acquire._mediawiki_rest_variant("https://example.com/wiki/Foo"))
+
+    def test_arxiv_html_variant(self):
+        for src in ("https://arxiv.org/abs/2505.12345", "https://arxiv.org/pdf/2505.12345",
+                    "https://arxiv.org/pdf/2505.12345.pdf"):
+            self.assertEqual(acquire._arxiv_html_variant(src),
+                             "https://arxiv.org/html/2505.12345", src)
+        self.assertEqual(acquire._arxiv_html_variant("https://arxiv.org/abs/2505.12345v2"),
+                         "https://arxiv.org/html/2505.12345v2")
+        # adversarial: a ?context= query / #fragment must NOT defeat the rewrite (matched
+        # on the parsed path, not the whole URL).
+        self.assertEqual(
+            acquire._arxiv_html_variant("https://arxiv.org/abs/2505.12345?context=cs.LG"),
+            "https://arxiv.org/html/2505.12345")
+        self.assertEqual(
+            acquire._arxiv_html_variant("https://arxiv.org/abs/2505.12345#S1"),
+            "https://arxiv.org/html/2505.12345")
+        self.assertIsNone(acquire._arxiv_html_variant("https://arxiv.org/html/2505.12345"))
+        self.assertIsNone(acquire._arxiv_html_variant("https://example.com/abs/2505.12345"))
+
+    def test_absolutize_links_only_with_base(self):
+        html = ('<base href="//en.wikipedia.org/wiki/">'
+                '<a href="./Foo#x">f</a><a href="#frag">g</a>'
+                '<a href="https://y/z">h</a><a href="mailto:a@b">m</a>')
+        out = acquire._absolutize_links(html, "https://en.wikipedia.org/wiki/Bar")
+        self.assertIn('href="https://en.wikipedia.org/wiki/Foo#x"', out)
+        self.assertIn('href="#frag"', out)          # in-page anchor preserved
+        self.assertIn('href="https://y/z"', out)     # already-absolute preserved
+        self.assertIn('href="mailto:a@b"', out)      # non-nav scheme preserved
+        # no <base href> → returned untouched (no behaviour change for the common case)
+        nobase = '<a href="./Foo">f</a>'
+        self.assertEqual(acquire._absolutize_links(nobase, "https://x/y"), nobase)
+
+    def test_absolutize_links_ignores_attr_prefixed_href(self):
+        """Adversarial: data-href must NOT be matched (it would hijack the match from the
+        real href on the same <a> and leave THAT one relative)."""
+        html = ('<base href="//en.wikipedia.org/wiki/">'
+                '<a data-href="./LAZY" href="./Real">x</a>')
+        out = acquire._absolutize_links(html, "https://en.wikipedia.org/wiki/Bar")
+        self.assertIn('data-href="./LAZY"', out)                                   # untouched
+        self.assertIn('href="https://en.wikipedia.org/wiki/Real"', out)            # real one fixed
+
+    def test_auto_uses_arxiv_html_variant(self):
+        """R-9: auto fetches /html/<id> (not /abs/), reports engine lite+arxiv-html."""
+        seen: list = []
+        saved_lite, saved_sub = acquire._fetch_lite_html, acquire._looks_substantial
+        acquire._fetch_lite_html = lambda url, mb, retries=2: (
+            seen.append(url), "<html><body><article>full text</article></body></html>")[1]
+        acquire._looks_substantial = lambda h: True
+        try:
+            res = acquire.acquire("https://arxiv.org/abs/2505.12345", _opts(engine="auto"))
+        finally:
+            acquire._fetch_lite_html, acquire._looks_substantial = saved_lite, saved_sub
+        self.assertEqual(res.engine, "lite+arxiv-html")
+        self.assertTrue(any(u.endswith("/html/2505.12345") for u in seen), seen)
+
+    def test_arxiv_404_gives_pdf_hint(self):
+        """R-9: a 404 on the /html/ variant becomes an actionable arxiv_no_html error."""
+        saved_lite = acquire._fetch_lite_html
+
+        def _raise(url, mb, retries=2):
+            raise FetchFailed("nope", details={"url": url, "status": 404, "kind": "not_found"})
+
+        acquire._fetch_lite_html = _raise
+        try:
+            with self.assertRaises(FetchFailed) as ctx:
+                acquire.acquire("https://arxiv.org/abs/2204.00251", _opts(engine="lite"))
+        finally:
+            acquire._fetch_lite_html = saved_lite
+        self.assertEqual(ctx.exception.details.get("kind"), "arxiv_no_html")
+        self.assertIn("pdf skill", str(ctx.exception).lower())
+
+    def test_wikipedia_proactive_rest_fetch(self):
+        """R-7: a Wikipedia article fetches the REST page/html; provenance stays canonical."""
+        seen: list = []
+        saved_lite, saved_sub = acquire._fetch_lite_html, acquire._looks_substantial
+        acquire._fetch_lite_html = lambda url, mb, retries=2: (
+            seen.append(url),
+            '<base href="//en.wikipedia.org/wiki/"><html><body>'
+            '<p>real article body text</p></body></html>')[1]
+        acquire._looks_substantial = lambda h: True
+        try:
+            res = acquire.acquire(
+                "https://en.wikipedia.org/wiki/Value_averaging", _opts(engine="auto"))
+        finally:
+            acquire._fetch_lite_html, acquire._looks_substantial = saved_lite, saved_sub
+        self.assertEqual(res.engine, "lite+restapi")
+        self.assertTrue(
+            any("/api/rest_v1/page/html/Value_averaging" in u for u in seen), seen)
+        self.assertEqual(res.base_url, "https://en.wikipedia.org/wiki/Value_averaging")
+
+
+class TestEmptyExtractionGuard(unittest.TestCase):
+    """R-7a: a substantial source → near-empty body is a typed exit 11, never silent 0."""
+
+    def test_predicate(self):
+        self.assertTrue(cli._extraction_is_empty("\n", "x" * 3000))
+        self.assertTrue(cli._extraction_is_empty("   \n  ", "x" * 3000))
+        self.assertFalse(cli._extraction_is_empty("a real body of content", "x" * 3000))
+        self.assertFalse(cli._extraction_is_empty("\n", "tiny source"))  # small src → ok
+        self.assertFalse(cli._extraction_is_empty("![](http://x/y.png)", "x" * 3000))  # img
+
+    def test_empty_extraction_exit11_envelope(self):
+        """Big source HTML that converts to nothing → exit 11 + EmptyExtraction envelope."""
+        from html2md import acquire as A, core_bridge, model
+        saved_acq, saved_core = A.acquire, core_bridge.html_to_markdown
+        A.acquire = lambda ref, opts: model.AcquireResult(
+            html="<html><body>" + "x" * 5000 + "</body></html>", base_url=ref, mode="url",
+            engine="lite", source_meta=model.SourceMeta(url=ref, title="T"))
+        core_bridge.html_to_markdown = lambda h: ""  # conversion collapses to empty
+        try:
+            err = io.StringIO()
+            with tempfile.TemporaryDirectory() as out, redirect_stderr(err):
+                rc = cli.main(["https://x.example/big", os.path.join(out, "o"),
+                               "--json-errors"])
+        finally:
+            A.acquire, core_bridge.html_to_markdown = saved_acq, saved_core
+        self.assertEqual(rc, 11)
+        self.assertIn('"type": "EmptyExtraction"', err.getvalue())
+
+
 def _playwright_installed() -> bool:
     import importlib.util
     return importlib.util.find_spec("playwright") is not None

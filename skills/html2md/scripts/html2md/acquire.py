@@ -582,6 +582,80 @@ def _nojs_variant(url: str) -> str | None:
     return None
 
 
+_MW_NONCONTENT_NS = {"special", "media"}  # virtual namespaces with no Parsoid REST HTML
+
+
+def _mediawiki_rest_variant(url: str) -> str | None:
+    """Wikipedia ``/wiki/<Title>`` → the Parsoid REST ``page/html`` endpoint (R-7).
+
+    The canonical ``/wiki/`` page is chrome-heavy and our (pdf-mastered) ``preprocess``
+    strips its body to nothing — a silent-empty conversion. The REST endpoint
+    ``/api/rest_v1/page/html/<Title>`` returns just the clean article HTML, which flows
+    through the normal pipeline. Provenance (``base_url`` / ``source``) stays the canonical
+    ``/wiki/`` URL; the REST HTML's ``<base href>`` resolves its relative links/images.
+
+    Scoped to article namespaces — ``Special:`` / ``Media:`` (search, uploads) have no
+    stable REST HTML, so they are left to the normal path."""
+    p = urlparse(url)
+    host = (p.hostname or "").lower()
+    if not (host == "wikipedia.org" or host.endswith(".wikipedia.org")):
+        return None
+    m = re.match(r"/wiki/(.+)$", p.path)
+    if not m:
+        return None
+    title = m.group(1)
+    if title.split(":", 1)[0].lower() in _MW_NONCONTENT_NS:
+        return None
+    host = host.replace(".m.wikipedia.org", ".wikipedia.org")  # mobile host → API host
+    return f"https://{host}/api/rest_v1/page/html/{title}"
+
+
+def _arxiv_html_variant(url: str) -> str | None:
+    """arXiv ``/abs/<id>`` or ``/pdf/<id>`` → the full-text ``/html/<id>`` rendering (R-9).
+
+    ``/abs/`` is only the abstract landing page and ``/pdf/`` is a binary PDF; ``/html/``
+    carries the full article — when it exists. Older PDF-only papers 404 on ``/html/``,
+    which :func:`_acquire_url` turns into an actionable "use the pdf skill" hint.
+
+    Matched on the parsed PATH (not the whole URL) so a ``?context=cs.LG`` query or ``#S1``
+    fragment — both common on real arXiv links — does not defeat the rewrite."""
+    p = urlparse(url)
+    if (p.hostname or "").lower() not in ("arxiv.org", "www.arxiv.org"):
+        return None
+    m = re.match(r"(?i)/(?:abs|pdf)/(\d{4}\.\d{4,5}(?:v\d+)?)(?:\.pdf)?/?$", p.path)
+    if not m:
+        return None
+    return f"https://arxiv.org/html/{m.group(1)}"
+
+
+# The (?<![\w-]) lookbehind keeps this from matching an attribute-PREFIXED href (e.g.
+# data-href / x-href): \b alone treats the `-` as a boundary, so it would otherwise hijack
+# the match from the real href on the same tag and leave that one un-absolutized.
+_A_HREF_RE = re.compile(r'(<a\b[^>]*?(?<![\w-])href=["\'])([^"\']+)(["\'])', re.IGNORECASE)
+
+
+def _absolutize_links(html: str, page_url: str) -> str:
+    """Resolve relative ``<a href>`` against an in-document ``<base href>`` — but ONLY when
+    the page declares one. Parsoid/Wikipedia-REST + arXiv ship ``<base href>`` and emit
+    ``./Title`` relative links that are dead in a clipped note; resolving them per the HTML
+    ``<base>`` spec makes them real URLs. Pages WITHOUT ``<base>`` are returned untouched
+    (no behaviour change for the common case). In-page ``#frag`` anchors and
+    non-navigational schemes (``mailto:`` / ``tel:`` / ``javascript:`` / ``data:`` /
+    protocol-relative) are preserved verbatim."""
+    m = _BASE_HREF_RE.search(html)
+    if not m:
+        return html
+    base = urljoin(page_url, m.group(1))
+
+    def _sub(mt: "re.Match[str]") -> str:
+        href = mt.group(2)
+        if href.startswith("#") or re.match(r"^(?:[a-z][a-z0-9+.\-]*:|//)", href, re.I):
+            return mt.group(0)  # fragment / scheme: / protocol-relative → leave alone
+        return f"{mt.group(1)}{urljoin(base, href)}{mt.group(3)}"
+
+    return _A_HREF_RE.sub(_sub, html)
+
+
 def _resolve_url_image(src: str, opts) -> bytes | None:
     """Fetch a remote image (for emit's url-mode download). None on any failure —
     a broken image must never abort the conversion. Bounded by ``--max-bytes``."""
@@ -633,20 +707,43 @@ def _acquire_url(input_ref: str, opts) -> AcquireResult:
         page_html = _fetch_jina_html(input_ref, max_bytes, retries=retries)
         used = "jina"
     elif engine in ("lite", "auto"):
-        # Known JS-gated hosts (HackerNoon) serve only a chrome shell at the canonical URL
-        # — and that shell is text-heavy enough to pass _looks_substantial, so we can't
-        # rely on auto-escalation. Fetch the no-JS variant PROACTIVELY (R-1). Chrome does
-        # not unlock these bodies; the URL rewrite does.
-        fetch_url = _nojs_variant(input_ref) or input_ref
-        page_html = _fetch_lite_html(fetch_url, max_bytes, retries=retries)
-        used = "lite+nojs" if fetch_url != input_ref else "lite"
+        # Some hosts serve a clean article only at a sibling endpoint, and the canonical
+        # URL is either a JS shell Chrome can't unlock (HackerNoon /lite/, R-1), a
+        # chrome-heavy page our preprocess strips to nothing (Wikipedia REST, R-7), or a
+        # PDF/abstract stub (arXiv /html/, R-9). Rewrite PROACTIVELY — the URL, not the
+        # browser, is the fix. Precedence: arXiv > Wikipedia > HackerNoon (mutually
+        # exclusive hosts in practice; order only matters for determinism).
+        arxiv_v = _arxiv_html_variant(input_ref)
+        mw_v = _mediawiki_rest_variant(input_ref)
+        nojs_v = _nojs_variant(input_ref)
+        fetch_url = arxiv_v or mw_v or nojs_v or input_ref
+        try:
+            page_html = _fetch_lite_html(fetch_url, max_bytes, retries=retries)
+        except FetchFailed as exc:
+            if arxiv_v and exc.details.get("status") == 404:
+                raise FetchFailed(
+                    f"arXiv has no HTML version for {_redact(input_ref)} (older PDF-only "
+                    "paper). Fetch the PDF and convert it with the pdf skill "
+                    "(scripts/pdf_extract.py).",
+                    details={"url": _redact(input_ref), "kind": "arxiv_no_html",
+                             "status": 404},
+                ) from exc
+            raise
+        if arxiv_v:
+            used = "lite+arxiv-html"
+        elif mw_v:
+            used = "lite+restapi"
+        elif nojs_v:
+            used = "lite+nojs"
+        else:
+            used = "lite"
         if engine == "auto" and not _looks_substantial(page_html):
             page_html, used = None, None  # genuine JS shell → escalate to Chrome
     if page_html is None:  # explicit chrome, or auto-fallback
         page_html = _fetch_chrome_html(input_ref)
         used = "chrome"
 
-    page_html = _absolutize_img_srcs(page_html, input_ref)
+    page_html = _absolutize_links(_absolutize_img_srcs(page_html, input_ref), input_ref)
     return AcquireResult(
         html=page_html,
         base_url=input_ref,

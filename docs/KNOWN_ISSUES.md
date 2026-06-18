@@ -462,6 +462,30 @@ after an empty heading into that heading — for the targeted GitBook/Mintlify p
 correct, but a body paragraph directly after an empty heading would be mis-leveled (never
 deleted). **Related:** `docs/office-skills-backlog.md` §2 «html2md».
 
+### HTML2MD-7 — clean-source host variants (Wikipedia REST, arXiv /html)
+**Status:** handled • **Severity:** LOW (residual) • **Location:** `acquire._mediawiki_rest_variant`
+/ `_arxiv_html_variant` / `_acquire_url`.
+**Was (feedback R-7/R-9):** canonical `…/wiki/<Title>` is chrome-heavy and `preprocess` stripped
+its body to nothing (silent empty); arXiv `/abs/` gave only the abstract and `/pdf/` a binary PDF.
+**Now:** `auto`/`lite` proactively fetch Wikipedia's Parsoid REST `page/html` endpoint
+(engine `lite+restapi`) and arXiv's `/html/<id>` full text (engine `lite+arxiv-html`); relative
+links/images resolve against the endpoint's `<base href>`. Provenance (`source:`) stays the
+canonical URL. **Residuals:** (a) PDF-only arXiv papers 404 on `/html/` → typed
+`FetchFailed kind=arxiv_no_html` with a "use the pdf skill" hint (correct, not a bug);
+(b) the **reader variant** on Wikipedia REST HTML is thin (Parsoid is landmark-free → the
+`spa-largest-contentful-subtree` reader heuristic under-extracts) — the **whole-page `.md` is
+the faithful, substantial output**, so prefer it for Wikipedia. **Do-not:** treat `arxiv_no_html`
+as a failure to retry — fetch the PDF instead.
+
+### HTML2MD-8 — empty-extraction guard (no more silent empties)
+**Status:** handled • **Severity:** (was HIGH for Wikipedia) • **Location:** `cli._extraction_is_empty`.
+**Was (feedback R-7a):** a substantial source that converted to an empty body still exited 0 with a
+frontmatter-only note — the worst failure class (looks like success, silently loses content).
+**Now:** if the whole-page Markdown body is < ~16 chars while the source HTML was ≥ ~2 KB, the run
+raises typed **`EmptyExtraction` (exit 11)** so callers can retry with another engine/endpoint.
+**Do-not:** widen the thresholds without re-running the battery — a genuinely image-only or
+one-line page must NOT trip the guard.
+
 ---
 
 ## How to add a new entry

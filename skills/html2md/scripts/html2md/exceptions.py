@@ -10,6 +10,7 @@ Each subclass carries a class-level ``CODE`` (the process exit status) and an
     3  EngineNotInstalled (Chrome requested, Playwright absent)
     6  SelfOverwriteRefused (OUTPUT collides with INPUT, incl. symlink)
     10 FetchFailed (URL unreachable / blocked / over cap)
+    11 EmptyExtraction (substantial source HTML → near-empty Markdown body)
 """
 from __future__ import annotations
 
@@ -56,3 +57,12 @@ class SelfOverwriteRefused(_AppError):
 class FetchFailed(_AppError):
     CODE = 10
     error_type = "FetchFailed"
+
+
+class EmptyExtraction(_AppError):
+    """A substantial source page converted to a near-empty Markdown body (silent content
+    loss). Surfaced as a typed exit 11 — NEVER exit 0 — so a caller can retry with another
+    engine / a site-specific endpoint instead of importing an empty note (feedback R-7)."""
+
+    CODE = 11
+    error_type = "EmptyExtraction"

@@ -101,14 +101,18 @@ it does not pile up duplicates).
 | `3` | EngineNotInstalled — `--engine chrome` requested but Playwright absent (run `install.sh --with-chrome`) |
 | `6` | SelfOverwriteRefused — output path would clobber the input |
 | `10` | FetchFailed — unreachable / blocked (HTTP 4xx/5xx) / over `--max-bytes` / **PDF or binary** payload |
+| `11` | EmptyExtraction — fetch succeeded but a substantial source converted to a near-empty body |
 
 With `--json-errors`, stderr carries `{"v":1,"error":"…","code":10,"type":"FetchFailed","details":{…}}`.
 For a fetch failure, `details` includes **`status`** (the HTTP code) and **`kind`** —
 `bot_blocked` (403 → try `--engine jina`/`chrome`), `auth_required` (login/paywall →
-manual), `rate_limited` (429), `not_found`, `server_error` (retry), or `unreachable`
-(transport) — so a calling agent can branch on manual-vs-retry. `details.url` keeps the
-meaningful query (only secret params are redacted). JS-gated bodies on known hosts
-(HackerNoon) are auto-recovered by `--engine auto` via their no-JS `/lite/` URL.
+manual), `rate_limited` (429), `not_found`, `server_error` (retry), `unreachable`
+(transport), `pdf`/`binary`, or `arxiv_no_html` (PDF-only arXiv paper → use the pdf skill)
+— so a calling agent can branch on manual-vs-retry. `details.url` keeps the meaningful
+query (only secret params are redacted). **Clean-source host variants** are auto-recovered
+by `--engine auto`/`lite`: **Wikipedia** `/wiki/<Title>` → REST `page/html` (`lite+restapi`),
+**arXiv** `/abs`|`/pdf/<id>` → `/html/<id>` (`lite+arxiv-html`), **HackerNoon** → `/lite/`
+(`lite+nojs`). `EmptyExtraction` (exit 11) is the guard against silent empty notes.
 
 ---
 
@@ -282,7 +286,12 @@ See [`docs/KNOWN_ISSUES.md` §HTML2MD](../KNOWN_ISSUES.md) for the full list.
   researchgate) still 403 the lite path → escalate with **`--engine jina`** (recovers
   both) or `--engine chrome`, or save the page and convert the `.webarchive`/`.html`.
 - **PDFs are not converted.** A `*.pdf` URL fails cleanly — use the
-  [`pdf`](../../skills/pdf/) skill (`pdf_extract.py`) instead.
+  [`pdf`](../../skills/pdf/) skill (`pdf_extract.py`) instead. arXiv `/abs`|`/pdf/<id>`
+  auto-tries `/html/<id>`; **PDF-only papers** (no HTML rendering) fail with
+  `kind=arxiv_no_html` → fetch the PDF and use the pdf skill.
+- **Wikipedia.** `/wiki/<Title>` is fetched from the Parsoid REST `page/html` endpoint
+  (the canonical page strips to empty). The **whole-page `.md` is the substantial output**;
+  the `.reader.md` is thin there (Parsoid HTML is landmark-free) — prefer the whole variant.
 - **Data-grid SPAs degrade.** Market-data dashboards / virtualized registries have
   no table semantics (no `<table>`/`role=table`); their widgets flatten to loose
   lines. This is the wrong *kind* of page for Markdown.

@@ -26,6 +26,14 @@ for two consumers: (1) an **Obsidian web-clipper** (self-contained note), and
   **403 → browser-UA escalation** (honest UA by default); auto-fallback to headless
   Chrome for JS/SPA pages; or `--engine jina` (Jina Reader — server-side JS render, no
   local browser; sends the URL to an external service). `--rate-limit` throttles fetches.
+- **Site-specific clean-source endpoints** (proactive, auto/lite): **Wikipedia**
+  `/wiki/<Title>` → the Parsoid REST `page/html` endpoint (the canonical page is
+  chrome-only and strips to empty); **arXiv** `/abs/` or `/pdf/<id>` → the full-text
+  `/html/<id>` rendering (PDF-only papers return an actionable "use the pdf skill" hint);
+  **HackerNoon** `/<slug>` → `/lite/<slug>`.
+- **Empty-extraction guard**: a substantial source page that converts to a near-empty
+  body is a typed **`EmptyExtraction` (exit 11)** — never a silent `exit 0` with an empty
+  note.
 - **Archive → Markdown**: Safari `.webarchive` + Chrome `.mhtml` (subframe-aware) +
   plain `.html`/`.htm`, fully offline.
 - **Obsidian emit**: YAML frontmatter; `--download-images` → `_attachments/`
@@ -56,8 +64,10 @@ for two consumers: (1) an **Obsidian web-clipper** (self-contained note), and
   (deterministic); the human title lives in frontmatter.
 - **Failure semantics / exit codes**: 0 ok · 1 BadInput/ConvertFailed/internal ·
   2 usage · 3 EngineNotInstalled (Chrome requested, Playwright absent) ·
-  6 SelfOverwriteRefused · 10 FetchFailed (unreachable / blocked / over `--max-bytes`).
-  `--json-errors` emits `{v:1, error, code, type?, details?}` on stderr.
+  6 SelfOverwriteRefused · 10 FetchFailed (unreachable / blocked / over `--max-bytes`;
+  `details.kind` ∈ bot_blocked/auth_required/not_found/rate_limited/server_error/
+  unreachable/pdf/binary/arxiv_no_html) · 11 EmptyExtraction (substantial source →
+  near-empty body). `--json-errors` emits `{v:1, error, code, type?, details?}` on stderr.
 - **Idempotency**: same input → same output filenames + deduped attachments. URL
   fetches reflect live content (not idempotent across server changes).
 

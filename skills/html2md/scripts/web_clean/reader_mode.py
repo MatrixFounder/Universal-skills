@@ -616,5 +616,6 @@ def reader_mode_html(html: str) -> str:
     else:
         head = '<head><meta charset="utf-8"></head>'
 
-    print(f"html2pdf: reader-mode root via {selector_used}", file=sys.stderr)
+    if selector_used:  # tool-neutral diagnostic (shared by html2pdf + html2md); never a
+        print(f"reader-mode: root via {selector_used}", file=sys.stderr)  # dangling "via "
     return f"<!DOCTYPE html>\n{head}\n<body>\n{best}\n</body>\n</html>"

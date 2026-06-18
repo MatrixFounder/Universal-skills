@@ -58,17 +58,38 @@ service**; don't use it for sensitive/internal URLs. Keyless (rate-limited) by d
 `JINA_API_KEY` raises the quota. Use it as the escalation when a browser-UA lite fetch is
 still blocked and you'd rather not install Playwright.
 
-**No-JS host variants (JS-gated bodies).** Some hosts gate the article body behind JS on
-the canonical URL but serve full HTML at a sibling path, and **Chrome rendering does not
-unlock it** — the URL rewrite does. `--engine auto` handles the known case automatically:
-**HackerNoon** `…/<slug>` → fetched from `…/lite/<slug>` (engine reported as `lite+nojs`).
-For other such hosts, pass the no-JS / AMP / print URL yourself, or try `--engine jina`.
+**Clean-source host variants (proactive rewrites).** Some hosts serve a clean article only
+at a sibling endpoint while the canonical URL is JS-gated or chrome-heavy, and **Chrome
+rendering does not help** — the URL rewrite does. `--engine auto`/`lite` rewrite these
+automatically (the canonical URL stays the note's `source:` provenance):
+
+| Host | canonical | fetched instead | engine reported |
+|---|---|---|---|
+| Wikipedia | `…/wiki/<Title>` | `…/api/rest_v1/page/html/<Title>` (Parsoid) | `lite+restapi` |
+| arXiv | `…/abs/<id>` or `…/pdf/<id>` | `…/html/<id>` (full text) | `lite+arxiv-html` |
+| HackerNoon | `…/<slug>` | `…/lite/<slug>` | `lite+nojs` |
+
+The canonical Wikipedia `/wiki/` page is chrome-heavy and the (pdf-mastered) `preprocess`
+strips its body to nothing — the REST endpoint returns just the article. arXiv `/abs/` is
+only an abstract and `/pdf/` is a binary PDF; `/html/` carries the full paper **when it
+exists** — older PDF-only papers 404 and surface `details.kind="arxiv_no_html"` with a
+"fetch the PDF and use the pdf skill" hint. Relative `<a href>`/`<img src>` in these
+endpoints' HTML are resolved against the document's `<base href>`. For other JS-gated
+hosts, pass the no-JS / AMP / print URL yourself, or try `--engine jina`.
+
+**Empty-extraction guard.** If a substantial source page (≥ ~2 KB HTML) converts to a
+near-empty whole-page body, the run fails with **`EmptyExtraction` (exit 11)** instead of
+silently writing an empty note — so an agent caller can retry with `--engine chrome`/`jina`
+or a site-specific endpoint rather than importing nothing.
 
 **Failure diagnostics (for agent callers).** A `FetchFailed` (exit 10) envelope carries
 `details.status` (the HTTP code) and `details.kind` — one of `bot_blocked` (403; try
 `--engine jina`/`chrome`), `auth_required` (login/paywall → manual), `rate_limited` (429;
-back off / `--rate-limit`), `not_found`, `server_error` (retry), or `unreachable`
-(transport). `details.url` keeps the meaningful query (only secret params are redacted).
+back off / `--rate-limit`), `not_found`, `server_error` (retry), `unreachable`
+(transport), `pdf`/`binary` (non-HTML payload → use the pdf skill), or `arxiv_no_html`
+(PDF-only arXiv paper → use the pdf skill). `details.url` keeps the meaningful query (only
+secret params are redacted). A separate `EmptyExtraction` (exit 11) means the fetch
+*succeeded* but extraction produced an empty body (retry with another engine/endpoint).
 
 ## Honest scope / limitations
 

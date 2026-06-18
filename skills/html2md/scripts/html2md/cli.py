@@ -7,7 +7,7 @@ end-to-end in bead 022-05; in the stub phase (022-01) ``main`` runs the real pat
 guards then returns ``_STUB_SENTINEL``.
 
 Exit-code map (ARCH §5.1): 0 ok · 1 BadInput/ConvertFailed/internal · 2 usage ·
-3 EngineNotInstalled · 6 SelfOverwriteRefused · 10 FetchFailed.
+3 EngineNotInstalled · 6 SelfOverwriteRefused · 10 FetchFailed · 11 EmptyExtraction.
 """
 from __future__ import annotations
 
@@ -22,14 +22,22 @@ from urllib.parse import urlparse
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import _errors  # noqa: E402
 
-from .exceptions import BadInput, InternalError, SelfOverwriteRefused, _AppError  # noqa: E402
+from .exceptions import (  # noqa: E402
+    BadInput, EmptyExtraction, InternalError, SelfOverwriteRefused, _AppError,
+)
 
 _EXIT_OK = 0
 _EXIT_USAGE = 2
 _EXIT_ENGINE = 3
 _EXIT_SELF_OVERWRITE = 6  # SelfOverwriteRefused.CODE owns the raise
 _EXIT_FETCH = 10
+_EXIT_EMPTY = 11          # EmptyExtraction.CODE owns the raise
 _DEFAULT_ATTACH_DIR = "_attachments"
+
+# Empty-extraction guard (R-7a): a substantial source page that converts to a near-empty
+# Markdown body is silent content loss — treat it as a typed failure, not exit 0.
+_MIN_BODY_CHARS = 16            # stripped whole-page Markdown shorter than this ⇒ "empty"
+_SUBSTANTIAL_SOURCE_CHARS = 2048  # only flag when the SOURCE HTML was non-trivial
 
 
 # --------------------------------------------------------------------------- #
@@ -168,6 +176,17 @@ def _resolve_paths(args: argparse.Namespace) -> tuple[str, str, Path | None, boo
 # --------------------------------------------------------------------------- #
 # Pipeline (wired in 022-05)
 # --------------------------------------------------------------------------- #
+def _extraction_is_empty(md_whole: str, source_html: str) -> bool:
+    """True when a SUBSTANTIAL source page yielded a near-empty whole-page body (R-7a).
+
+    The whole-page Markdown is the faithful fallback (the reader variant may legitimately
+    empty); if even *it* collapses while the source HTML was non-trivial, extraction
+    silently lost the content — a typed failure, not a successful empty note.
+    """
+    return (len(md_whole.strip()) < _MIN_BODY_CHARS
+            and len(source_html or "") >= _SUBSTANTIAL_SOURCE_CHARS)
+
+
 def convert(args: argparse.Namespace) -> int:
     """Run the full pipeline for parsed ``args``: acquire → clean → core → emit.
 
@@ -186,6 +205,15 @@ def convert(args: argparse.Namespace) -> int:
         tidy_markdown(core_bridge.html_to_markdown(cleaned.reader_html))
         if cleaned.reader_html is not None else None
     )
+    if _extraction_is_empty(md_whole, acq.html):
+        raise EmptyExtraction(
+            f"extracted an empty body from a {len(acq.html)}-char source "
+            f"({Path(input_ref).name or input_ref}). The page may render its content "
+            "via JavaScript or a non-standard layout — try --engine chrome / jina, or a "
+            "site-specific endpoint (e.g. Wikipedia's REST page/html).",
+            details={"source_chars": len(acq.html), "body_chars": len(md_whole.strip()),
+                     "engine": acq.engine},
+        )
     emit_mod.emit(
         acq, cleaned, md_whole, md_reader, args,
         output_dir=output_dir, stdout_mode=stdout_mode, input_ref=input_ref,
@@ -197,7 +225,7 @@ def main(argv: list[str] | None = None) -> int:
     """Top-level orchestrator. Routes every failure through ``_errors.report_error``.
 
     Exit map (§5.1): 0 ok · 1 BadInput/ConvertFailed/internal · 2 usage ·
-    3 EngineNotInstalled · 6 SelfOverwriteRefused · 10 FetchFailed.
+    3 EngineNotInstalled · 6 SelfOverwriteRefused · 10 FetchFailed · 11 EmptyExtraction.
     """
     parser = build_parser()
     args = parser.parse_args(argv)
