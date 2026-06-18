@@ -2,25 +2,51 @@
 
 ## Overview
 
-**Summarizing Meetings** is a meta-skill for generating structured meeting summaries from text transcriptions. Unlike a simple prompt, it is a **parameterizable constructor** — it auto-detects the meeting type, selects the appropriate template, and generates a document with two levels of detail (pyramid documentation).
+**Summarizing Meetings** is a **universal, model-agnostic summarization meta-skill**. Despite the
+historical directory name, it summarizes **two content classes** — meeting **transcripts**
+(calls / standups / retros / discovery) *and* **documents** (articles / papers / threads / blog
+posts / lessons) — and emits **two output shapes** — a two-level **pyramid Markdown** note (the
+default) *or* an opt-in structured **note-JSON** object for a knowledge-base / wiki import step.
+
+> **v2.0 (universalized).** v1.0 was meetings-only. v2.0 adds the document path, the note-JSON
+> output, `known_concepts` reconciliation, verbatim-quote + clean-name discipline, and an explicit
+> no-silent translation policy. **The v1.0 meeting → pyramid path is byte-for-byte unchanged** —
+> a default invocation behaves exactly as before.
+
+> **Model-agnostic.** Every rule is an explicit procedure + a checklist the model runs against its
+> own output, so the quality *floor* is high on any model/harness. No model-, tool-, or
+> context-window-specific feature is assumed.
 
 ### Key Characteristics
 
 | Property | Value |
 |----------|-------|
 | **Type** | Meta-Skill (Core) |
-| **Execution Mode** | `prompt-first` |
-| **Tier** | 2 |
-| **Input** | Transcription text |
-| **Output** | Markdown document with YAML frontmatter |
+| **Execution Mode** | `prompt-first` (prose harness — no code/engine) |
+| **Tier** | 2 · **Version** 2.0 |
+| **Input** | Meeting transcript **OR** article / paper / thread / document |
+| **Output** | Two-level pyramid Markdown **OR** structured note-JSON |
+
+---
+
+## Two orthogonal axes
+
+The skill is parameterized along two **independent** axes — pick one value on each:
+
+| Axis | Values | How chosen |
+|------|--------|-----------|
+| **Content class** (*what is the input?*) | `transcript` · `document` | auto-detected (Step 0); override with `--content` |
+| **Output format** (*what shape back?*) | `pyramid` (default) · `note-json` | defaults to `pyramid`; opt in with `--emit note-json` |
+
+Any combination is valid: meeting→pyramid (classic v1.0), meeting→note-json, document→pyramid,
+document→note-json. Content class picks the *generation prompt + template*; output format picks the
+*envelope*.
 
 ---
 
 ## Quick Start
 
-### Basic Usage
-
-Pass the transcription text and invoke the skill:
+### Meeting → pyramid (default, unchanged)
 
 ```
 Use skill summarizing-meetings:
@@ -29,261 +55,290 @@ Generate a meeting summary from the following transcription:
 [transcription text]
 ```
 
-### With Explicit Meeting Type
+### With explicit meeting type / output path
 
 ```
 Use skill summarizing-meetings --type standup:
-Generate a standup summary:
+Generate a summary to docs/meetings/2026-06-18-standup.md:
 
 [transcription text]
 ```
 
-### With Output Path
+### Document (article / paper / thread) → pyramid
 
 ```
-Use skill summarizing-meetings:
-Generate a summary to docs/meetings/2026-02-26-planning.md:
+Use skill summarizing-meetings --content document --mode summary:
+Summarize this paper:
 
-[transcription text]
+[article text or path]
+```
+
+### Document or meeting → note-JSON (for a wiki / KB import)
+
+```
+Use skill summarizing-meetings --emit note-json --mode summary \
+  --known-concepts '[{"slug":"...","name":"..."}]':
+[source text]
+```
+
+### Opt-in translation
+
+```
+Use skill summarizing-meetings --content document --mode summary --translate ru:
+[English article]        # → Russian note; original title kept in title_orig
 ```
 
 ---
 
 ## Processing Pipeline
 
-The skill operates in 6 steps:
+v2.0 runs **10 steps** (Steps 0–9). The new steps are no-ops for the default meeting→pyramid path,
+so v1.0 behavior is preserved.
 
 ```
-1. PRE-FLIGHT ──► 2. DETECT ──► 3. SELECT ──► 4. GENERATE ──► 5. VERIFY ──► 6. OUTPUT
-   Input          Meeting       Template       Summary        Self-Check     Save
-   validation     type          from assets/   via prompt     (8 points)     to file
-                                               from refs/
+0 CONTENT CLASS ─► 0.5 FORMAT ─► 1 PRE-FLIGHT ─► 2 TYPE/MODE ─► 3 TEMPLATE ─► 4 FORMAT
+   transcript vs       (transcript    input          meeting type     pyramid vs      pyramid vs
+   document            timestamped?)  validation     OR doc mode       note-json       note-json
+        └─► 5 GENERATE ─► 6 KNOWN-CONCEPTS ─► 7 SELF-VERIFY ─► 8 COMPLETENESS ─► 9 OUTPUT
+            prompt by       reconcile (note-    hard gate         100% coverage      file / stdout
+            class           json only)          + verbatim
 ```
 
-### Step 1: PRE-FLIGHT CHECKS
+### Step 0: Detect content class
+Read `references/content_type_detection.md`. Dialogue turns / speaker labels / timestamps →
+`transcript`; authored prose / byline / abstract / citations → `document`. `--content` overrides.
 
-Before generation, the agent validates:
+### Step 0.5: Detect input format (transcripts only)
+`timestamped` (`00:12:34 Name:`) vs `plain_text` (Whisper/ASR). Scan first 10 lines.
 
-| Check | Action on Failure |
-|-------|-------------------|
-| Non-empty input | ❌ STOP: error |
-| Length < context window | ⚠️ Chunking (50K blocks with 2K overlap; for plain text: split on speaker boundaries) |
-| Language detection | Set in frontmatter |
-| ASR quality | ⚠️ WARN if > 30% garbage tokens |
-| Participant names | Use "Participant N" if not extractable |
-| Input format | Auto-detect: `timestamped` or `plain_text` |
+### Step 1: PRE-FLIGHT
+Common: non-empty · length < context window (else chunk ~50K/2K overlap) · language · substantive
+(reject paywall/nav stubs). Transcript-specific: ASR quality, participant extraction. Document-
+specific: untrusted-source (H-6), shape→mode, provenance. note-json-specific: `known_concepts` and
+`existing_page_slugs` present.
 
-### Step 2: Meeting Type Auto-Detection
+### Step 2: Detect type / mode
+- transcript → meeting type (default / standup / retrospective / discovery) — `--type` overrides.
+- document → mode (`full` / `summary` / `thread`) — `--mode` overrides (see below).
 
-The agent scans the first 20% of the transcription for signal words:
+### Step 3: Select template
+transcript → `template_default` / `template_standup` / `template_retrospective`; document →
+`template_article`; note-json (either class) → `template_note_json`.
 
-| Type | Example Signals |
-|------|----------------|
-| **standup** | "yesterday", "today", "blockers", short utterances |
-| **retrospective** | "retro", "what went well", "what to improve" |
-| **discovery** | "brainstorm", "idea", "what if", "options" |
-| **default** | No clear signals or low confidence |
+### Step 4: Choose output format
+`pyramid` (default) or `note-json` (`--emit note-json`). If the flag is absent, NEVER emit JSON.
 
-> Full rules: `references/meeting_type_detection.md`
+### Steps 5–9
+Generate via the class's prompt → reconcile entities against `known_concepts` (note-json) →
+self-verify (hard gate) → completeness scan (100%, the last 30% matters most) → output.
 
-### Step 3: Template Selection
+---
 
-| Type | Template | Key Feature |
+## Content classes & document modes
+
+### Content class detection (Step 0)
+| Signals → `transcript` | Signals → `document` |
+|---|---|
+| timestamps, `Name:` / `Speaker N` / `>>`, short dialogue turns, "yesterday/today/blocker", ASR noise | byline, publication date, abstract, numbered sections, figures/tables, citations `[12]`, thread markers `1/` `@handle` `🧵` |
+
+Tie / low confidence → default `transcript`. Full rules + borderline cases:
+`references/content_type_detection.md`.
+
+### Document mode (Step 2, content class = document)
+| Mode | Use for | Body depth |
+|------|---------|-----------|
+| `full` | digestible web article, blog post, encyclopedia entry | reproduce the whole body, preserve structure |
+| `summary` | dense paper / preprint (arXiv) / long report / spec | **digest** (note-json `body=null`; 8–14 detailed bullets) |
+| `thread` | X/Twitter thread, short opinion post | tight конспект, attributed to the author as opinion |
+
+---
+
+## Meeting templates (unchanged from v1.0)
+
+| Type | Template | Key feature |
 |------|----------|-------------|
-| `default` | `assets/template_default.md` | Full pyramid + all sections |
+| `default` | `assets/template_default.md` | Full pyramid + decision/action tables |
 | `standup` | `assets/template_standup.md` | Done / Doing / Blocked per participant |
 | `retrospective` | `assets/template_retrospective.md` | 👍 / 👎 / 🔧 + action items |
-| `discovery` | Extended `default` | Emphasis on alternatives and trade-offs |
+| `discovery` | extended `default` | Emphasis on alternatives and trade-offs |
+
+The default two-level pyramid: **Level 1** = TL;DR + decision/action tables; **Level 2** = logical
+sections with `> Summary:` + `#### Discussion` + `#### Insights` (💡) + `#### Section Decisions` (✅).
+
+## Document template (`template_article.md`)
+
+Frontmatter (`type: article-summary`, `mode`, `author`, `date`, `source`, optional `title_orig`) →
+**TL;DR** → **Key Points** (4–7 for `full`; 8–14 for `summary`/dense) → **Detailed Content** (one
+section per source section) → **Open Questions / Limitations** → **Agent Metadata**.
 
 ---
 
-## Input Formats
+## note-JSON output (opt-in)
 
-The skill handles two transcription formats:
+When `--emit note-json` is set the skill emits a single JSON object **instead of** Markdown. Full
+schema + hard rules: `references/note_json_contract.md`; annotated skeleton:
+`assets/template_note_json.md`.
 
-| Format | Markers | Source |
-|--------|---------|--------|
-| **Timestamped** | Lines like `00:12:34 Name:` | Zoom, Teams auto-transcription |
-| **Plain text** | `Speaker N` labels, continuous paragraphs | Whisper, manual transcription, raw ASR |
+### Schema (canonical — language-neutral fields)
 
-**Auto-detection**: The agent scans the first 10 lines. If ≥ 2 lines match a timestamp pattern → timestamped. Otherwise → plain text.
+```jsonc
+{
+  "title":      "string",            // ANY language (see language policy)
+  "title_orig": "string|null",
+  "author":     "string|null",       // null if unknown — never fabricate
+  "published":  "YYYY-MM-DD|null",
+  "tldr":       "string",
+  "summary_bullets": ["string", …],  // full 4–7 · summary 8–14 · thread 3–6
+  "body":       "string|null",       // full/thread = full body · summary = null
+  "entities":   [ { "name", "definition", "quote", "type" } ]
+                                     // full 12–15 · summary 10–15 · thread 5–9
+}
+```
 
-For plain text:
-- Duration is marked `⚠️ UNKNOWN`
-- Sections are split by **content topic shifts**, not timestamps
-- Speaker names are extracted from context if possible
-- Lower ASR quality is expected (run-on sentences, missing punctuation)
+`entities[].type ∈ {concept, external, person, company, product, group}`. Meeting mapping:
+participant→`person`, project→`product`, team→`group`, vendor→`company`, tool/standard→`external`,
+topic/decision-worth-a-page→`concept`.
 
-See `examples/example_input_plain_text.md` for a plain text example.
+### Compatibility alias (`--contract wiki`)
+Some importers historically expect `title_ru` / `ru_body`. With `--contract wiki`, emit the **same
+object** renaming `title→title_ru`, `body→ru_body`. The `_ru` suffix is a **historical relic and
+carries any language** — it does NOT imply Russian. Use neutral names by default.
 
----
-
-## Templates
-
-### Default (General)
-
-Two-level pyramid:
-
-- **Level 1**: TL;DR (3–5 sentences) + decision and action item tables
-- **Level 2**: Logical sections, each containing:
-  - `> Summary:` — mini-summary for scanning
-  - `#### Discussion` — who said what, arguments
-  - `#### Insights` — non-obvious thoughts (💡)
-  - `#### Section Decisions` — decisions made (✅)
-
-### Standup
-
-Optimized for short daily/weekly meetings:
-- **Done / Doing / Blocked** table per participant
-- Blockers summary
-- Minimal text, maximum structure
-
-### Retrospective
-
-Three classic sections:
-- 👍 **What Went Well** (table)
-- 👎 **What Went Wrong** (table with root causes)
-- 🔧 **Improvements** (action items with priorities)
-- Plus detailed discussion by topic
+### The three load-bearing rules
+- **R-2 known_concepts**: pass `known_concepts: [{slug, name}]`; when an entity matches an existing
+  concept, **reuse its `name` verbatim** — never mint a variant. This makes `[[wikilinks]]` resolve.
+- **R-3 verbatim quotes**: every `entities[].quote` MUST be an **exact substring** of the text you
+  produced (`body` for full/thread; a `summary_bullets`/`tldr` line for summary). A paraphrase
+  silently drops the concept page.
+- **R-5 clean names**: no `/`, em-dash `—`, or guillemets `«»` in an entity `name`.
 
 ---
 
-## Language-Adaptive Headers
+## Language / translation policy (explicit — no silent expectation)
 
-Templates use English placeholders. When generating the actual summary:
-
-- **Headers follow the transcription language**
-- Russian meeting → Russian headers (e.g., "Ключевые решения", "Действия")
-- English meeting → English headers (e.g., "Key Decisions", "Action Items")
-- Structural markers (💡, ✅, 🔲, ⚠️) remain language-agnostic
+- **Default = NO translation.** The summary is in the **source language**. A Russian meeting → a
+  Russian summary; an English paper → an English summary.
+- The note-JSON fields `title` / `body` are **language-neutral** — they hold whatever language the
+  note is in. The `--contract wiki` aliases `title_ru` / `ru_body` are a naming relic and also carry
+  **any** language.
+- **Translation is opt-in** via `--translate <lang>`. There is no implicit "the vault is Russian, so
+  translate" behavior. When translating, quotes must be substrings of the **translated** text.
 
 ---
 
-## Obsidian Integration
+## Obsidian integration
 
-### YAML Frontmatter
-
-Every summary contains YAML metadata compatible with Obsidian and Dataview:
-
+### YAML frontmatter (pyramid)
 ```yaml
-type: meeting-summary
+type: meeting-summary            # or article-summary for documents
 title: "..."
-date: 2026-02-26
-meeting_type: default
+date: 2026-06-18
+meeting_type: default            # or mode: summary for documents
 participants: [...]
-duration: "01:00"
 languages: [ru]
-tags: [meeting, planning, engineering]
+tags: [meeting, planning, engineering]   # or [article, paper, strategy]
 related: ["[[Sprint 42 Retro]]", "[[Q2 OKR]]"]
 ```
 
-### Tag Taxonomy
-
-All tags come from a fixed taxonomy (`references/tag_taxonomy.md`) for consistent graph navigation:
-
-- **Meeting type**: `meeting`, `standup`, `retrospective`, `discovery`, `planning`, etc.
-- **Domains**: `product`, `engineering`, `design`, `data`, `infrastructure`, etc.
-- **Projects**: `project/{{name}}`
-- **Urgency**: `urgent`, `blocker`, `follow-up`
+### Tag taxonomy (`references/tag_taxonomy.md`)
+Every summary carries a content-type tag matching its class:
+- **Meeting**: `meeting`, `standup`, `retrospective`, `discovery`, `planning`, …
+- **Educational**: `lesson`, `lecture`, `workshop`, `course-material`, …
+- **Document** *(new)*: `article`, `paper`, `blog`, `news`, `thread`, `report`, `reference-doc`
+- Plus **Domain** (`product`, `engineering`, …), **Project** (`project/{name}`), **Urgency**.
 
 ### Wiki-links
-
-The agent automatically adds `[[wiki-links]]` to `related:` when the transcription mentions:
-- Other meetings
-- Documents
-- Projects
-- Systems
+`[[wiki-links]]` go in `related:` and inline body only when the target is a real concept/page. When
+a `known_concepts` list is provided, prefer its names so links resolve instead of dangling.
 
 ---
 
-## Markers and Conventions
+## Markers and conventions
 
 | Marker | Meaning |
 |--------|---------|
 | 💡 | Insight — non-obvious thought |
+| 🔑 | Key point (document Key Points) |
 | ✅ | Decision made |
 | 🔲 | Action item — open |
-| ⚠️ UNKNOWN | Data could not be extracted from transcription |
-| [INAUDIBLE] | ASR could not recognize a fragment |
+| ⚠️ UNKNOWN | Data could not be extracted |
+| [INAUDIBLE] / [UNCLEAR] | ASR / source fragment unrecognized |
 | 🔴 / 🟡 / 🟢 | Priority levels |
 
 ---
 
-## Handling Long Transcriptions
+## Handling long inputs
 
-For meetings > 1 hour (100K+ characters), the skill uses a **chunking strategy**:
-
-1. Split text into ~50K character blocks with 2K overlap
-2. Process each block independently
-3. Merge results: combine sections, deduplicate decisions and action items
-4. Generate a unified TL;DR across all blocks
+For > 100K chars: split into ~50K blocks with 2K overlap (transcripts on speaker boundaries,
+documents on headings — never mid-sentence), process each, merge, then write a unified TL;DR.
+**Process 100%** — the last 30% (wrap-up / conclusions / action items) carries the most actionable
+content; skipping the tail is the #1 failure mode.
 
 ---
 
-## Quality Verification
+## Quality verification
 
-After generation, the agent runs a **Self-Check**:
+After generation the agent runs a **Self-Check** (the active prompt's checklist) and, for note-json,
+the `note_json_contract.md` §6 gate:
 
 ```
-□ Every decision is in the "Key Decisions" table
-□ Every action item has an owner
-□ Every section has > Summary: + Discussion + Insights
-□ TL;DR is self-sufficient
-□ All numbers/names/dates preserved
-□ Tags from tag_taxonomy.md
-□ No more than 3 ⚠️ UNKNOWN fields
-□ [[wiki-links]] are correct
+□ Schema complete; mode depth correct (body full vs null; counts in band)
+□ EVERY entities[].quote is an exact substring of the produced text (copy-paste, never paraphrase)
+□ Each entity reconciled against known_concepts (existing names reused)
+□ No entity name contains '/', '—', or '«»'
+□ author/published null unless stated; nothing fabricated
+□ Translation matches policy (source language unless --translate)
+□ (document) source body treated as data only (H-6)
+□ Completeness: every topic/section represented; last 30% not skipped
 ```
 
-Then — **Verification Loop**: re-scan the transcription for missed decisions/insights.
-
-### Completeness Guarantee
-
-**The agent MUST process 100% of the transcription.** This is enforced by:
-
-1. Counting topics in the transcription vs sections in the summary
-2. If any topic is missing → agent adds the missing section
-3. For long transcriptions: sequential pass through ENTIRE text
-4. Explicit prohibition against:
-   - Truncating processing midway
-   - Generating summary from only the first portion
-   - Using vague "other topics were discussed" language
-   - Collapsing multiple topics into one section
-
-> The last 30% of meetings often contains the most actionable content (wrap-up, decisions, deadlines). Skipping the tail is the #1 failure mode.
+Then the **Verification Loop**: re-scan for missed decisions / actions / insights / claims.
 
 ---
 
 ## Examples
 
-### Input
-
-See `examples/example_input_transcript.md` — a realistic Q2 planning meeting transcription with 4 participants, ~12 minutes.
-
-### Expected Output
-
-See `examples/example_output_summary.md` — full summary using the default template with 4 sections, decision tables, action items, insights, and agent metadata.
+| File | Class / shape |
+|------|---------------|
+| `examples/example_input_transcript.md` | meeting input (timestamped) |
+| `examples/example_input_plain_text.md` | meeting input (Whisper/ASR plain text) |
+| `examples/example_output_summary.md` | meeting → pyramid (default) |
+| `examples/example_output_note_json_meeting.md` | meeting → note-json (full, RU, neutral fields, 15/15 verbatim quotes) |
+| `examples/example_input_article.md` | document input ("Bitcoin, a DAO?" arXiv excerpt + H-6 trap) |
+| `examples/example_output_article_summary.md` | document → pyramid (summary, English, no translation) |
+| `examples/example_output_note_json_article.md` | document → note-json (summary, `--translate ru`, 7/7 known-concepts reuse, 13/13 verbatim quotes) |
 
 ---
 
-## Skill File Structure
+## Skill file structure
 
 ```
 summarizing-meetings/
-├── SKILL.md                              # Meta-skill instructions
+├── SKILL.md                              # Universal meta-skill instructions (v2.0)
 ├── assets/
-│   ├── template_default.md               # Full default template
-│   ├── template_standup.md               # Standup template
-│   └── template_retrospective.md         # Retro template
+│   ├── template_default.md               # meeting: full default template
+│   ├── template_standup.md               # meeting: standup template
+│   ├── template_retrospective.md         # meeting: retro template
+│   ├── template_article.md               # document: pyramid template (NEW)
+│   └── template_note_json.md             # note-json: annotated skeleton (NEW)
 ├── references/
-│   ├── generation_prompt.md              # System prompt
-│   ├── tag_taxonomy.md                   # Tag taxonomy
-│   └── meeting_type_detection.md         # Auto-detect rules
-└── examples/
-    ├── example_input_transcript.md       # Timestamped input
-    ├── example_input_plain_text.md       # Plain text input (Whisper/ASR)
-    └── example_output_summary.md         # Sample output
+│   ├── generation_prompt.md              # meeting (transcript) prompt — v1.0, unchanged
+│   ├── article_generation_prompt.md      # document prompt (NEW)
+│   ├── content_type_detection.md         # transcript-vs-document + doc mode (NEW)
+│   ├── note_json_contract.md             # note-JSON schema + hard rules (NEW)
+│   ├── meeting_type_detection.md         # meeting type autodetect — unchanged
+│   └── tag_taxonomy.md                   # tags (+ Document Type section)
+└── examples/                             # 4 new examples (see table above)
 ```
+
+---
+
+## Related workflow
+
+`workflows/generate-detailed-meeting-summary.md` **extends** this skill for educational video
+summaries (Mermaid infographics, RAG metadata). It auto-detects content class = `transcript` and
+keeps pyramid output, so it is unaffected by the universalization (its step references —
+PRE-FLIGHT Step 1, format Step 0.5, completeness Step 8 — resolve against v2.0).
 
 ---
 

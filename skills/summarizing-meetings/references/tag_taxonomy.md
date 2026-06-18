@@ -6,8 +6,11 @@ If a new tag is needed — add it to this file first.
 ## Rules
 
 1. Use **only** tags from the list below
-2. Every summary MUST have a **content type** tag: either `meeting` (for meeting summaries) or `lesson` (for educational content summaries)
-3. Add a type-specific tag from the **Meeting Type** or **Educational Type** section
+2. Every summary MUST have a **content type** tag matching its content class:
+   - `meeting` — for meeting/transcript summaries
+   - `lesson` — for educational content summaries
+   - `article` — for document/article/paper/thread summaries (the universal document path)
+3. Add a type-specific tag from the **Meeting Type**, **Educational Type**, or **Document Type** section
 4. Add 1–3 tags from the **Domain** section based on content
 5. Add a project tag from **Project** if applicable
 6. Tags are all lowercase, hyphen-separated
@@ -34,6 +37,18 @@ If a new tag is needed — add it to this file first.
 - `course-material` — part of a structured course
 - `tutorial` — step-by-step tutorial
 - `case-study` — case study analysis
+
+## Document Type
+
+For the universal document/article path (content class = `document`).
+
+- `article` — base tag for document summaries (MANDATORY for documents)
+- `paper` — academic paper / preprint (arXiv, SSRN, journal)
+- `blog` — blog post / personal essay
+- `news` — news article / press piece
+- `thread` — social thread (X/Twitter, etc.) — one author's argument
+- `report` — long report / whitepaper / spec
+- `reference-doc` — encyclopedia / documentation / reference entry
 
 ## Domain
 

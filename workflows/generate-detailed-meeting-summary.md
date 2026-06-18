@@ -25,7 +25,7 @@ meeting_type_override: discovery
 
 3. Load the `summarizing-meetings` skill as the core logic engine.
 4. Set `meeting_type` to `discovery` (auto or via override).
-5. Execute the skill's PRE-FLIGHT checks (Step 1 of skill), format detection (Step 0.5), and completeness guarantee (Step 6) as normal.
+5. Execute the skill's PRE-FLIGHT checks (Step 1 of skill), format detection (Step 0.5), and completeness guarantee (Step 8) as normal. (Content class auto-detects as `transcript` — Step 0 — which is the path this workflow extends; output stays pyramid Markdown, not note-json.)
 
 ### Step 3: Generate — Apply Educational Overlay
 
