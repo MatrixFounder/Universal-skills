@@ -18,16 +18,78 @@ import re
 import shutil
 import socket
 import tempfile
+import time
 from pathlib import Path
-from urllib.parse import urljoin, urlparse
+from urllib.parse import parse_qsl, urlencode, urljoin, urlparse
 
 from web_clean import extract_archive
 
 from .exceptions import BadInput, EngineNotInstalled, FetchFailed
 from .model import AcquireResult, SourceMeta
 
+# Honest default UA — what is actually fetching. A browser UA is used ONLY as a 403
+# escalation (see _http_get_bytes) and for the Chrome/Jina engines.
 _UA = "Mozilla/5.0 (compatible; html2md/0.1; +https://example.invalid/html2md)"
+_BROWSER_UA = (
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+)
 _LITE_SUBSTANTIAL_CHARS = 200  # auto-fallback: < this much extracted text ⇒ JS shell
+_RETRY_BACKOFF_BASE = 1.0      # seconds; transient-retry delay = base * 2**attempt
+_RETRY_AFTER_CAP = 30.0        # never honour a Retry-After longer than this
+_MAX_429_RETRIES = 2           # separate cap so rate-limited hosts don't burn the budget
+
+_sleep = time.sleep            # indirection so tests patch out real backoff waits
+_monotonic = time.monotonic    # ditto — lets the rate limiter run on a fake clock in tests
+
+
+class _RateLimiter:
+    """Minimal min-interval limiter (the *idea* of last30days' RateLimiter, reimplemented).
+
+    Opt-in via ``--rate-limit`` (requests/sec); default disabled. Single-process,
+    single-invocation — bounds the one real burst on a page: its image downloads.
+    """
+
+    def __init__(self, per_sec: float):
+        self._interval = (1.0 / per_sec) if per_sec and per_sec > 0 else 0.0
+        self._next = 0.0
+
+    def wait(self) -> None:
+        if self._interval <= 0:
+            return
+        now = _monotonic()
+        if now < self._next:
+            _sleep(self._next - now)
+        self._next = max(now, self._next) + self._interval
+
+
+_RATE_LIMITER: "_RateLimiter | None" = None  # set per-invocation from opts.rate_limit
+
+
+def _retry_after_seconds(resp) -> float | None:
+    """Parse a numeric ``Retry-After`` header (seconds), capped. HTTP-date form ignored."""
+    val = resp.headers.get("retry-after") if getattr(resp, "headers", None) else None
+    if val and str(val).strip().isdigit():
+        return min(float(val), _RETRY_AFTER_CAP)
+    return None
+
+
+def _fetch_kind(status: int | None) -> str:
+    """Classify a fetch failure so the calling agent can decide manual-vs-retry (R-2.2).
+    Surfaced as ``details.kind`` alongside ``details.status`` in the FetchFailed envelope."""
+    if status is None:
+        return "unreachable"        # transport / DNS / timeout
+    if status == 403:
+        return "bot_blocked"        # WAF / anti-scraper → try --engine jina / chrome
+    if status in (401, 407):
+        return "auth_required"      # login / paywall → manual
+    if status in (404, 410):
+        return "not_found"
+    if status == 429:
+        return "rate_limited"       # back off / --rate-limit
+    if 500 <= status < 600:
+        return "server_error"       # transient → retry
+    return "http_error"
 
 _ARCHIVE_EXT = {".webarchive", ".mhtml", ".mht"}
 _FILE_EXT = {".html", ".htm"}
@@ -122,6 +184,45 @@ def _meta_content(html: str, attr: str, value: str) -> str | None:
     return None
 
 
+def _jsonld_date(html: str) -> str | None:
+    """First ``"datePublished"`` found INSIDE a JSON-LD ``<script>`` block. Scoped to
+    ld+json (NOT a whole-document grep) so a stray ``datePublished`` in inline JS / body
+    text / a widget config cannot hijack the date (adversarial finding 2026-06-18)."""
+    for m in re.finditer(
+            r'<script[^>]*type\s*=\s*["\']application/ld\+json["\'][^>]*>(.*?)</script>',
+            html, re.I | re.S):
+        dm = re.search(r'"datePublished"\s*:\s*"([^"]+)"', m.group(1))
+        if dm:
+            return dm.group(1)
+    return None
+
+
+def _arxiv_date_from_url(url: str | None) -> str | None:
+    """Derive year-month from an arXiv id (``2504.20838`` → ``2025-04``). arXiv HTML
+    carries no ``article:published_time`` and trafilatura mis-dates it (R-4), but the id
+    itself encodes YYMM under the post-2007 scheme — the most reliable signal we have."""
+    if not url:
+        return None
+    m = re.search(r"arxiv\.org/(?:abs|pdf|html)/(\d{2})(\d{2})\.\d+", url, re.I)
+    if not m:
+        return None
+    yy, mm = int(m.group(1)), int(m.group(2))
+    if 1 <= mm <= 12 and yy >= 7:  # new-id scheme began 2007-04
+        return f"20{yy:02d}-{mm:02d}"
+    return None
+
+
+def _structured_date(html: str) -> str | None:
+    """A trustworthy publication date from explicit page metadata (NOT body heuristics)."""
+    return (
+        _meta_content(html, "property", "article:published_time")
+        or _meta_content(html, "property", "og:published_time")
+        or _meta_content(html, "itemprop", "datePublished")
+        or _jsonld_date(html)
+        or _meta_content(html, "name", "date")
+    )
+
+
 def _meta_from_html(html: str, *, url: str | None = None) -> SourceMeta:
     """Best-effort frontmatter source from `<title>` / OpenGraph / `<meta>` tags."""
     title_tag = re.search(r"<title[^>]*>(.*?)</title>", html, re.I | re.S)
@@ -133,10 +234,7 @@ def _meta_from_html(html: str, *, url: str | None = None) -> SourceMeta:
         _meta_content(html, "name", "author")
         or _meta_content(html, "property", "article:author")
     )
-    date = (
-        _meta_content(html, "property", "article:published_time")
-        or _meta_content(html, "name", "date")
-    )
+    date = _structured_date(html) or _arxiv_date_from_url(url)
     og_url = _meta_content(html, "property", "og:url")
     return SourceMeta(
         url=og_url or url,
@@ -185,13 +283,29 @@ def _acquire_archive(src: Path, opts) -> AcquireResult:
     )
 
 
+_SENSITIVE_QS = re.compile(
+    r"(?i)(token|key|secret|password|passwd|pwd|auth|sig|signature|"
+    r"access[_-]?token|api[_-]?key|session|bearer)")
+
+
 def _redact(url: str) -> str:
-    """Drop query/userinfo from a URL for error messages (no secret/token leak)."""
+    """For error messages: drop userinfo and redact only SENSITIVE query params, while
+    KEEPING the rest of the query — e.g. ``?abstract_id=4200414`` is the only thing that
+    identifies an SSRN page, so losing it makes the error useless (feedback R-2.3)."""
     p = urlparse(url)
     netloc = p.hostname or ""
     if p.port:
         netloc += f":{p.port}"
-    return f"{p.scheme}://{netloc}{p.path}"
+    out = f"{p.scheme}://{netloc}{p.path}"
+    if p.query:
+        # Redact a param when its KEY or its VALUE looks sensitive — the latter catches a
+        # token embedded in an otherwise-innocent value, e.g. ?next=…token=SECRET
+        # (adversarial finding 2026-06-18). ?abstract_id=4200414 stays intact.
+        kept = [(k, "REDACTED" if (_SENSITIVE_QS.search(k) or _SENSITIVE_QS.search(v)) else v)
+                for k, v in parse_qsl(p.query, keep_blank_values=True)]
+        if kept:
+            out += "?" + urlencode(kept)
+    return out
 
 
 def _host_is_public(host: str) -> bool:
@@ -231,35 +345,48 @@ def _assert_public_http(url: str) -> None:
     if parsed.scheme not in ("http", "https"):
         raise FetchFailed(
             f"refused non-http(s) target: {_redact(url)}",
-            details={"url": _redact(url)},
+            details={"url": _redact(url), "kind": "refused"},
         )
     if not _host_is_public(parsed.hostname or ""):
         raise FetchFailed(
             f"refused private/internal/unresolvable target: {_redact(url)}",
-            details={"url": _redact(url)},
+            details={"url": _redact(url), "kind": "refused"},
         )
 
 
 def _http_get_bytes(url: str, *, max_bytes: int | None, timeout: float = 20.0,
-                    max_redirects: int = 5) -> bytes:
-    """Fetch ``url`` over HTTP(S) → bytes. SSRF-safe, streaming, bounded.
+                    max_redirects: int = 5, retries: int = 2, ua: str = _UA,
+                    extra_headers: dict | None = None) -> bytes:
+    """Fetch ``url`` over HTTP(S) → bytes. SSRF-safe, streaming, bounded, retrying.
 
     SSRF/DoS posture (§7): http(s) only; **every** hop (initial + each redirect) is
-    re-checked against :func:`_host_is_public` so a redirect to an internal/metadata
-    host is refused; redirects are followed manually (cap ``max_redirects``); the body
-    is read as a **stream** and aborted the moment it passes ``max_bytes`` (so a
-    malicious server cannot OOM the process); bounded timeout; no credential
-    forwarding (httpx default). Raises :class:`FetchFailed` (exit 10). This is the
-    single network seam — tests monkeypatch it for offline runs.
+    re-checked against :func:`_host_is_public`; redirects are followed manually (cap
+    ``max_redirects``); the body is streamed and aborted the moment it passes
+    ``max_bytes``; bounded timeout; no credential forwarding. Raises
+    :class:`FetchFailed` (exit 10). This is the single network seam — tests monkeypatch
+    it (or inject a fake ``httpx``) for offline runs.
+
+    Robustness (borrowed pattern from last30days, reimplemented): transient failures
+    (transport errors, HTTP 5xx, 429) are retried with exponential backoff (``retries``
+    attempts; 429 honours ``Retry-After`` up to a cap and has its own small budget); a
+    **403** triggers ONE immediate escalation to a browser User-Agent (the honest
+    ``_UA`` is the default; only a refusal swaps it). Other 4xx are terminal.
     """
     import httpx
 
-    current = url
-    with httpx.Client(follow_redirects=False, timeout=timeout,
-                      headers={"User-Agent": _UA}) as client:
-        for _ in range(max_redirects + 1):
-            _assert_public_http(current)  # re-checked on every hop (anti-SSRF)
-            try:
+    if _RATE_LIMITER is not None:
+        _RATE_LIMITER.wait()
+
+    def _one_pass(use_ua: str) -> bytes:
+        """One full request (manual redirects + streaming). Raises httpx errors for the
+        outer loop to classify, or FetchFailed for terminal conditions."""
+        headers = {"User-Agent": use_ua}
+        if extra_headers:
+            headers.update(extra_headers)
+        current = url
+        with httpx.Client(follow_redirects=False, timeout=timeout, headers=headers) as client:
+            for _ in range(max_redirects + 1):
+                _assert_public_http(current)  # re-checked on every hop (anti-SSRF)
                 with client.stream("GET", current) as resp:
                     if resp.is_redirect and "location" in resp.headers:
                         current = urljoin(current, resp.headers["location"])
@@ -277,17 +404,51 @@ def _http_get_bytes(url: str, *, max_bytes: int | None, timeout: float = 20.0,
                             )
                         chunks.append(chunk)
                     return b"".join(chunks)
-            except FetchFailed:
-                raise
-            except Exception as exc:  # noqa: BLE001 — transport/HTTP error → clean error
-                raise FetchFailed(
-                    f"fetch failed for {_redact(current)}: {type(exc).__name__}",
-                    details={"url": _redact(current)},
-                ) from exc
-    raise FetchFailed(
-        f"too many redirects (> {max_redirects}) for {_redact(url)}",
-        details={"url": _redact(url)},
-    )
+        raise FetchFailed(
+            f"too many redirects (> {max_redirects}) for {_redact(url)}",
+            details={"url": _redact(url)},
+        )
+
+    def _fail(exc, status=None) -> FetchFailed:
+        detail = {"url": _redact(url), "kind": _fetch_kind(status)}
+        if status is not None:
+            detail["status"] = status
+        suffix = f"HTTP {status}" if status is not None else type(exc).__name__
+        return FetchFailed(f"fetch failed for {_redact(url)}: {suffix}", details=detail)
+
+    use_ua = ua
+    browser_ua_tried = ua is _BROWSER_UA
+    attempt = 0
+    n_429 = 0
+    while True:
+        try:
+            return _one_pass(use_ua)
+        except FetchFailed:
+            raise  # terminal: SSRF refusal / max_bytes / too many redirects
+        except httpx.HTTPStatusError as exc:
+            code = exc.response.status_code
+            if code == 403 and not browser_ua_tried:
+                browser_ua_tried, use_ua = True, _BROWSER_UA
+                continue  # one immediate UA swap — does NOT consume the retry budget
+            retryable = code == 429 or 500 <= code < 600
+            if not retryable:
+                raise _fail(exc, status=code) from exc          # 404/410/451/403(both UAs)…
+            if code == 429:
+                n_429 += 1
+                if n_429 > _MAX_429_RETRIES:
+                    raise _fail(exc, status=code) from exc
+            if attempt >= retries:
+                raise _fail(exc, status=code) from exc
+            delay = (_retry_after_seconds(exc.response) if code == 429 else None)
+            _sleep(delay if delay is not None else _RETRY_BACKOFF_BASE * (2 ** attempt))
+            attempt += 1
+        except httpx.TransportError as exc:  # connect / read / timeout / DNS
+            if attempt >= retries:
+                raise _fail(exc) from exc
+            _sleep(_RETRY_BACKOFF_BASE * (2 ** attempt))
+            attempt += 1
+        except Exception as exc:  # noqa: BLE001 — anything else → terminal clean error
+            raise _fail(exc) from exc
 
 
 def _looks_substantial(page_html: str) -> bool:
@@ -302,31 +463,32 @@ def _looks_substantial(page_html: str) -> bool:
 
 
 def _trafilatura_meta(page_html: str, url: str) -> SourceMeta:
-    """Frontmatter metadata via trafilatura (title/date/author), OG-parser fallback."""
+    """Frontmatter metadata via trafilatura (title/author), but the DATE prefers explicit
+    structured metadata / arXiv-id over trafilatura's body-text heuristic (R-4: trafilatura
+    mis-dated arXiv 2504.20838 as 2021-08-16 from a citation in the body)."""
+    reliable_date = _clean_text(_structured_date(page_html) or _arxiv_date_from_url(url))
     try:
         import trafilatura
         doc = trafilatura.extract_metadata(page_html)
     except Exception:  # noqa: BLE001
         doc = None
-    if doc is not None:
-        meta = SourceMeta(
+    if doc is not None and _clean_text(getattr(doc, "title", None)):
+        return SourceMeta(
             url=_clean_text(getattr(doc, "url", None)) or url,
             title=_clean_text(getattr(doc, "title", None)),
-            date=_clean_text(getattr(doc, "date", None)),
+            date=reliable_date or _clean_text(getattr(doc, "date", None)),
             author=_clean_text(getattr(doc, "author", None)),
         )
-        if meta.title:
-            return meta
     return _meta_from_html(page_html, url=url)
 
 
-def _fetch_lite_html(url: str, max_bytes: int | None) -> str:
+def _fetch_lite_html(url: str, max_bytes: int | None, retries: int = 2) -> str:
     """httpx GET → decoded raw page HTML (offline cleaning is done later by web_clean).
 
     Guards against non-HTML payloads: a PDF or other binary blob must fail with a clear
     message — NOT be fed to turndown (which blows the Node call stack on binary input).
     """
-    raw = _http_get_bytes(url, max_bytes=max_bytes)
+    raw = _http_get_bytes(url, max_bytes=max_bytes, retries=retries)
     head = raw[:1024]
     if head[:5] == b"%PDF-":
         raise FetchFailed(
@@ -364,7 +526,7 @@ def _fetch_chrome_html(url: str) -> str:
         with sync_playwright() as pw:
             browser = pw.chromium.launch()
             try:
-                page = browser.new_page(user_agent=_UA)
+                page = browser.new_page(user_agent=_BROWSER_UA)
                 page.goto(url, wait_until="load", timeout=30000)
                 html = page.content()
             finally:
@@ -377,13 +539,57 @@ def _fetch_chrome_html(url: str) -> str:
     return html
 
 
+_JINA_READER_PREFIX = "https://r.jina.ai/"
+
+
+def _fetch_jina_html(url: str, max_bytes: int | None, retries: int = 2) -> str:
+    """Fetch via Jina Reader (``r.jina.ai``) → rendered HTML, for JS/SPA / anti-bot pages
+    WITHOUT a local browser. Borrowed (keyless) idea from last30days' web_fetch_keyless.
+
+    We request ``X-Return-Format: html`` so Jina returns rendered HTML (not its default
+    markdown), letting the page flow through the SAME pipeline as every other engine
+    (web_clean → turndown → frontmatter → _attachments). An optional ``JINA_API_KEY``
+    env raises the (otherwise keyless, rate-limited) quota.
+
+    PRIVACY / honest scope: the **target URL leaves the machine** — Jina fetches it
+    server-side. Hence this engine is explicit-only (``--engine jina``), never part of
+    ``auto``. The local connection is to public ``r.jina.ai`` (passes the SSRF gate).
+    """
+    import os
+
+    if urlparse(url).scheme not in ("http", "https"):
+        raise FetchFailed(f"--engine jina needs an http(s) URL, got {_redact(url)}",
+                          details={"url": _redact(url)})
+    headers = {"X-Return-Format": "html"}
+    key = os.environ.get("JINA_API_KEY")
+    if key:
+        headers["Authorization"] = f"Bearer {key}"
+    raw = _http_get_bytes(_JINA_READER_PREFIX + url, max_bytes=max_bytes,
+                          retries=retries, extra_headers=headers)
+    return _decode_bytes(raw)
+
+
+def _nojs_variant(url: str) -> str | None:
+    """A host-specific no-JS URL variant whose canonical page gates the article body
+    behind JavaScript (R-1). HackerNoon serves the full body at ``/lite/<slug>`` while the
+    canonical URL is a JS shell that **Chrome rendering does not unlock** (lazy-load /
+    "Read on Terminal" gate) — so the URL rewrite, not the browser, is the fix."""
+    p = urlparse(url)
+    host = (p.hostname or "").lower()
+    if host == "hackernoon.com" or host.endswith(".hackernoon.com"):
+        if "/lite/" not in p.path and p.path.strip("/"):
+            return f"{p.scheme}://{p.netloc}/lite{p.path}"
+    return None
+
+
 def _resolve_url_image(src: str, opts) -> bytes | None:
     """Fetch a remote image (for emit's url-mode download). None on any failure —
     a broken image must never abort the conversion. Bounded by ``--max-bytes``."""
     if urlparse(src).scheme not in ("http", "https"):
         return None
     try:
-        return _http_get_bytes(src, max_bytes=getattr(opts, "max_bytes", None))
+        return _http_get_bytes(src, max_bytes=getattr(opts, "max_bytes", None),
+                               retries=getattr(opts, "retries", 2))
     except FetchFailed:
         return None
 
@@ -414,18 +620,28 @@ def _absolutize_img_srcs(html: str, page_url: str) -> str:
 
 def _acquire_url(input_ref: str, opts) -> AcquireResult:
     """URL fetch: lite (httpx+trafilatura) by default, auto-fallback to Chrome for
-    JS/SPA shells, or explicit ``--engine chrome``. Returns RAW page HTML (web_clean
-    does the uniform cleaning downstream); trafilatura supplies frontmatter metadata."""
+    JS/SPA shells, explicit ``--engine chrome``, or explicit ``--engine jina`` (Jina
+    Reader, external). Returns RAW page HTML (web_clean does the uniform cleaning
+    downstream); trafilatura supplies frontmatter metadata."""
     engine = (getattr(opts, "engine", "auto") or "auto").lower()
     max_bytes = getattr(opts, "max_bytes", None)
+    retries = getattr(opts, "retries", 2)
 
     page_html: str | None = None
     used: str | None = None
-    if engine in ("lite", "auto"):
-        page_html = _fetch_lite_html(input_ref, max_bytes)
-        used = "lite"
+    if engine == "jina":
+        page_html = _fetch_jina_html(input_ref, max_bytes, retries=retries)
+        used = "jina"
+    elif engine in ("lite", "auto"):
+        # Known JS-gated hosts (HackerNoon) serve only a chrome shell at the canonical URL
+        # — and that shell is text-heavy enough to pass _looks_substantial, so we can't
+        # rely on auto-escalation. Fetch the no-JS variant PROACTIVELY (R-1). Chrome does
+        # not unlock these bodies; the URL rewrite does.
+        fetch_url = _nojs_variant(input_ref) or input_ref
+        page_html = _fetch_lite_html(fetch_url, max_bytes, retries=retries)
+        used = "lite+nojs" if fetch_url != input_ref else "lite"
         if engine == "auto" and not _looks_substantial(page_html):
-            page_html, used = None, None  # JS shell → escalate to Chrome
+            page_html, used = None, None  # genuine JS shell → escalate to Chrome
     if page_html is None:  # explicit chrome, or auto-fallback
         page_html = _fetch_chrome_html(input_ref)
         used = "chrome"
@@ -443,6 +659,12 @@ def _acquire_url(input_ref: str, opts) -> AcquireResult:
 
 def acquire(input_ref: str, opts) -> AcquireResult:
     """Acquire raw HTML + source metadata from a URL / archive / file (FC-1)."""
+    global _RATE_LIMITER
+    rate = getattr(opts, "rate_limit", None)
+    # Configure (or clear) the throttle for the WHOLE run — covers the page fetch AND the
+    # image-download burst, in url-mode and offline-with-remote-images alike; reset every
+    # invocation so a prior in-process call cannot leak a stale limiter.
+    _RATE_LIMITER = _RateLimiter(rate) if rate else None
     scheme = urlparse(input_ref).scheme.lower()
     if scheme in ("http", "https"):
         return _acquire_url(input_ref, opts)

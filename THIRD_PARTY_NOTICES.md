@@ -92,6 +92,12 @@ GPL- and AGPL-licensed tools are invoked as unmodified standalone binaries
 via `subprocess` (Ghostscript indirectly, through `ocrmypdf`); this
 repository does not link against, modify, or redistribute them.
 
+## External Services (opt-in, called over HTTP — no code bundled)
+
+| Service | Terms | Used by |
+|---|---|---|
+| Jina Reader (`r.jina.ai`) | Jina AI Terms of Service (external API; keyless free tier, optional `JINA_API_KEY`) | html2md (`--engine jina` ONLY — server-side render of a JS/anti-bot page). **Opt-in**: it is never called by the default `auto` engine. No Jina code or dependency is bundled; the skill simply makes an HTTPS request, sending the **target URL** to the service. Do not use for sensitive/internal URLs. |
+
 ## Attribution
 
 When redistributing this repository or its skills, retain this file

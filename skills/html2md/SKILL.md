@@ -21,8 +21,11 @@ for two consumers: (1) an **Obsidian web-clipper** (self-contained note), and
   script — it has SSRF protection, dual-output, sha1-deduped attachments.
 
 ## 2. Capabilities
-- **URL → Markdown** (`--engine lite|chrome|auto`): `httpx`+`trafilatura` lite fetch
-  (also yields title/date/author), auto-fallback to headless Chrome for JS/SPA pages.
+- **URL → Markdown** (`--engine lite|chrome|auto|jina`): `httpx`+`trafilatura` lite fetch
+  (also yields title/date/author) with **retry + backoff + 429/`Retry-After`** and a
+  **403 → browser-UA escalation** (honest UA by default); auto-fallback to headless
+  Chrome for JS/SPA pages; or `--engine jina` (Jina Reader — server-side JS render, no
+  local browser; sends the URL to an external service). `--rate-limit` throttles fetches.
 - **Archive → Markdown**: Safari `.webarchive` + Chrome `.mhtml` (subframe-aware) +
   plain `.html`/`.htm`, fully offline.
 - **Obsidian emit**: YAML frontmatter; `--download-images` → `_attachments/`
@@ -38,11 +41,13 @@ for two consumers: (1) an **Obsidian web-clipper** (self-contained note), and
 
 ## 4. Script Contract
 - **Command**:
-  - `python3 scripts/html2md.py INPUT [OUTPUT_DIR] [--engine lite|chrome|auto] [--reader-mode|--no-reader] [--download-images|--no-download-images] [--attachments-dir _attachments] [--archive-frame main|N|all|auto] [--max-bytes N] [--max-images N] [--stdout] [--json-errors]`
+  - `python3 scripts/html2md.py INPUT [OUTPUT_DIR] [--engine lite|chrome|auto|jina] [--reader-mode|--no-reader] [--download-images|--no-download-images] [--attachments-dir _attachments] [--archive-frame main|N|all|auto] [--max-bytes N] [--max-images N] [--retries N] [--rate-limit REQS_PER_SEC] [--stdout] [--json-errors]`
 - **INPUT**: a `http(s)` URL, or a local `.html`/`.htm`/`.mhtml`/`.mht`/`.webarchive`.
 - **OUTPUT_DIR**: directory to write `<slug>.md` (+ `<slug>.reader.md` by default) and
   `_attachments/` into. **Omit → defaults to `./tmp/html2md_out/`** (created on demand,
-  in the working directory). `--stdout` opts into stdout mode (whole-page Markdown only).
+  in the working directory). `--stdout` opts into stdout mode: **YAML frontmatter +
+  whole-page Markdown** (the reader variant and image files are skipped — not the
+  reader-extracted text).
 - **Defaults**: `--engine auto`, dual-output ON (`--no-reader` to suppress),
   `--download-images` ON (`--no-download-images` keeps remote URLs), attachments dir
   `_attachments`, `--archive-frame main`.
@@ -68,7 +73,9 @@ for two consumers: (1) an **Obsidian web-clipper** (self-contained note), and
   fetches; non-`http(s)` top-level INPUT is treated as a local path, never fetched.
 - **Honest-scope residuals**: DNS-rebinding (resolve-then-connect TOCTOU) and the
   opt-in Chrome engine are NOT SSRF-hardened — run untrusted conversions in an
-  egress-restricted sandbox. See `references/html-to-markdown.md`.
+  egress-restricted sandbox. **`--engine jina`** sends the target URL to the external
+  `r.jina.ai` service (it fetches server-side) — opt-in only, never part of `auto`; do
+  not use it for sensitive/internal URLs. See `references/html-to-markdown.md`.
 - **No global installs**: deps live in `scripts/.venv` + `scripts/node_modules`.
 
 ## 6. Validation Evidence

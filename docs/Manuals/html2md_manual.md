@@ -74,11 +74,13 @@ python3 scripts/html2md.py INPUT [OUTPUT_DIR] [flags]
 | `INPUT` | — | `http(s)` URL, or local `.html`/`.htm`/`.mhtml`/`.mht`/`.webarchive` |
 | `OUTPUT_DIR` | `./tmp/html2md_out/` | where `<slug>.md`, `<slug>.reader.md`, `_attachments/` are written (created on demand) |
 | `--stdout` | off | print whole-page Markdown to stdout instead of writing files |
-| `--engine lite\|chrome\|auto` | `auto` | fetch engine for URLs (see [§5](#5-engines-lite-vs-chrome)) |
+| `--engine lite\|chrome\|auto\|jina` | `auto` | fetch engine for URLs (see [§5](#5-engines-lite-vs-chrome)) |
 | `--reader-mode` / `--no-reader` | reader **on** | also emit `<slug>.reader.md` (article-extracted) / suppress it |
 | `--download-images` / `--no-download-images` | download **on** | fetch images into `_attachments/` / keep remote URLs as-is |
 | `--max-images N` | unbounded | cap the number of **remote** image fetches (SSRF amplification bound) |
 | `--max-bytes N` | unbounded | abort a fetch whose body exceeds N bytes (streamed) |
+| `--retries N` | `2` | transient-failure retries per fetch (transport errors / HTTP 5xx / 429 w/ backoff); `0` disables |
+| `--rate-limit REQS_PER_SEC` | unbounded | throttle outbound fetches (page + images) — polite bound for image-heavy pages |
 | `--attachments-dir NAME` | `_attachments` | name of the sidecar image folder |
 | `--archive-frame main\|N\|all\|auto` | `main` | which frame of a multi-frame `.mhtml`/`.webarchive` to convert |
 | `--json-errors` | off | emit failures as `{v, error, code, type, details}` on stderr |
@@ -101,6 +103,12 @@ it does not pile up duplicates).
 | `10` | FetchFailed — unreachable / blocked (HTTP 4xx/5xx) / over `--max-bytes` / **PDF or binary** payload |
 
 With `--json-errors`, stderr carries `{"v":1,"error":"…","code":10,"type":"FetchFailed","details":{…}}`.
+For a fetch failure, `details` includes **`status`** (the HTTP code) and **`kind`** —
+`bot_blocked` (403 → try `--engine jina`/`chrome`), `auth_required` (login/paywall →
+manual), `rate_limited` (429), `not_found`, `server_error` (retry), or `unreachable`
+(transport) — so a calling agent can branch on manual-vs-retry. `details.url` keeps the
+meaningful query (only secret params are redacted). JS-gated bodies on known hosts
+(HackerNoon) are auto-recovered by `--engine auto` via their no-JS `/lite/` URL.
 
 ---
 
@@ -137,17 +145,30 @@ tags: []
 
 ---
 
-## 5. Engines: lite vs chrome
+## 5. Engines: lite vs chrome vs jina
 
 | Engine | How | When |
 |---|---|---|
 | `lite` | `httpx` GET + `trafilatura` (also yields title/date/author) | server-rendered HTML (most docs, blogs, news) |
 | `chrome` | headless Chromium via Playwright (`--with-chrome`) | JS/SPA pages whose content is hydrated client-side |
 | `auto` *(default)* | lite first; if the result looks like a thin JS shell, escalate to chrome | unknown pages — let the skill decide |
+| `jina` | **Jina Reader** (`r.jina.ai`) renders + cleans server-side, returns HTML → our pipeline | JS/anti-bot pages **without** a local browser; Cloudflare-hard sites |
 
 `auto` falls back to Chrome only when Playwright is installed; otherwise it
 returns whatever lite got. Force `--engine chrome` when you *know* the page needs
 JS and you have run `install.sh --with-chrome`.
+
+**Fetch robustness (all engines that use the lite HTTP path):** transient failures
+(transport errors, HTTP 5xx, 429) are **retried with exponential backoff** (`--retries`,
+default 2; 429 honours `Retry-After`); a **403** triggers one automatic escalation to a
+real-browser User-Agent (the default UA is the honest `html2md/…` — only a refusal swaps
+it). This recovers most anti-scraper 403s (e.g. UA-checking sites) with no flags.
+
+**`--engine jina` caveats:** it sends the **target URL to the external `r.jina.ai`
+service** (which fetches it server-side) — so it's **explicit-only**, never part of `auto`;
+don't use it for sensitive/internal URLs. Keyless by default (rate-limited); set
+`JINA_API_KEY` for higher quota. Use it as the escalation when even a browser-UA lite fetch
+is blocked (Cloudflare/captcha) and you'd rather not install Playwright.
 
 ---
 
@@ -224,9 +245,10 @@ done < urls.txt
 ```
 
 `--no-reader` keeps one `.md` per link; `--max-images` / `--max-bytes` bound each
-fetch; the shared `./out/_attachments/` dedupes images across the whole batch.
-Blocked sites (HTTP 403) and PDF links fail cleanly with exit 10 — the loop skips
-them rather than crashing.
+fetch; the shared `./out/_attachments/` dedupes images across the whole batch. Transient
+failures retry automatically and UA-checking 403s self-recover; persistently blocked
+sites (Cloudflare) and PDF links fail cleanly with exit 10 — the loop skips them rather
+than crashing (add `--rate-limit 2` to be a polite citizen on a long list).
 
 ---
 
@@ -255,9 +277,10 @@ them rather than crashing.
 
 See [`docs/KNOWN_ISSUES.md` §HTML2MD](../KNOWN_ISSUES.md) for the full list.
 
-- **Anti-scraper sites (HTTP 403).** researchgate, ssrn and some publishers reject
-  the lite User-Agent → clean exit 10. Try `--engine chrome`, or save the page and
-  convert the `.webarchive`/`.html`.
+- **Anti-scraper sites (HTTP 403).** Simple UA-checking 403s now recover automatically
+  (one browser-UA retry — e.g. uncommoncore). Cloudflare/captcha-hard sites (ssrn,
+  researchgate) still 403 the lite path → escalate with **`--engine jina`** (recovers
+  both) or `--engine chrome`, or save the page and convert the `.webarchive`/`.html`.
 - **PDFs are not converted.** A `*.pdf` URL fails cleanly — use the
   [`pdf`](../../skills/pdf/) skill (`pdf_extract.py`) instead.
 - **Data-grid SPAs degrade.** Market-data dashboards / virtualized registries have

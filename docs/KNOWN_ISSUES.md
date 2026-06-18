@@ -414,12 +414,24 @@ All deferred-by-design; the backlog row `docs/office-skills-backlog.md` §2 «ht
 owns the decisions. Cross-skill replication (G-1/G-3) and security guards are tested,
 not listed here.
 
-### HTML2MD-1 — anti-scraper sites (HTTP 403) are not fetchable
-**Status:** open (honest-scope) • **Severity:** LOW • **Location:** `acquire._http_get_bytes`.
-**Symptom:** researchgate / papers.ssrn / some publishers reject the lite User-Agent →
-clean `FetchFailed` (exit 10). **Workaround:** `--engine chrome` (after
-`install.sh --with-chrome`) with a browser UA, or save the page manually and convert the
-`.webarchive`/`.html`. **Do-not:** treat exit 10 as a bug — it is a remote 403/timeout.
+### HTML2MD-1 — Cloudflare/captcha-hard sites still need an escalation engine
+**Status:** open (honest-scope, narrowed) • **Severity:** LOW • **Location:** `acquire._http_get_bytes`.
+**Symptom:** simple UA-checking 403s now self-recover (one automatic **browser-UA retry** —
+e.g. uncommoncore.co), and transient blips retry with backoff. But Cloudflare/captcha sites
+(papers.ssrn, researchgate) still 403 the lite path → clean `FetchFailed` (exit 10).
+**Workaround:** **`--engine jina`** (Jina Reader server-side render — recovered both ssrn +
+researchgate in testing) or `--engine chrome` (after `install.sh --with-chrome`), or save the
+page manually and convert the `.webarchive`/`.html`. **Do-not:** treat exit 10 as a bug — it
+is a remote block; and do not use `--engine jina` for sensitive/internal URLs (see HTML2MD-6).
+
+### HTML2MD-6 — `--engine jina` sends the target URL to an external service
+**Status:** open (by design) • **Severity:** LOW • **Location:** `acquire._fetch_jina_html`.
+**Symptom:** `--engine jina` fetches via `r.jina.ai`, which retrieves the page **server-side**
+— the target URL leaves the machine. **Mitigation:** it is **explicit-only** (never part of
+`auto`), validates the target is `http(s)`, and the local hop is to public `r.jina.ai` (passes
+the SSRF gate). **Do-not:** point `--engine jina` at internal/sensitive URLs; use lite/chrome
+in an egress-restricted sandbox instead. Keyless by default (rate-limited); `JINA_API_KEY`
+raises quota.
 
 ### HTML2MD-2 — PDFs / binary URLs are not converted
 **Status:** open (by design) • **Severity:** LOW • **Location:** `acquire._fetch_lite_html`.

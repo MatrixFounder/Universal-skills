@@ -38,32 +38,25 @@ def _opts(**over):
     return args
 
 
-class _FakeStream:
-    """Mimics httpx's streaming response context manager."""
+import httpx as _real_httpx  # real exception classes for the fake to re-export  # noqa: E402
 
-    def __init__(self, content: bytes):
-        self._content = content
-        self.is_redirect = False
-        self.headers: dict = {}
-        self.status_code = 200
+
+class _CtxResp:
+    """Wrap a real httpx.Response as a context manager (so `with client.stream():` works)."""
+
+    def __init__(self, resp):
+        self._resp = resp
 
     def __enter__(self):
-        return self
+        return self._resp
 
     def __exit__(self, *a):
         return False
 
-    def raise_for_status(self):
-        pass
-
-    def iter_bytes(self, chunk_size: int = 65536):
-        for i in range(0, len(self._content), 4096):
-            yield self._content[i:i + 4096]
-
 
 class _FakeClient:
-    def __init__(self, content: bytes, exc: Exception | None):
-        self._content, self._exc = content, exc
+    def __init__(self, fake):
+        self._fake = fake
 
     def __enter__(self):
         return self
@@ -72,24 +65,65 @@ class _FakeClient:
         return False
 
     def stream(self, method, url):  # noqa: D401 — mimic httpx.Client.stream
-        if self._exc:
-            raise self._exc
-        return _FakeStream(self._content)
+        self._fake.seen_urls.append(url)
+        step = self._fake.next_step()
+        if isinstance(step, BaseException):
+            raise step
+        status, content, headers = step
+        resp = _real_httpx.Response(status, headers=headers or {}, content=content,
+                                    request=_real_httpx.Request(method, url))
+        return _CtxResp(resp)
 
 
 class _FakeHttpx:
-    def __init__(self, content: bytes = b"", exc: Exception | None = None):
-        self._content, self._exc = content, exc
+    """Drop-in httpx replacement. Re-exports the REAL exception classes (so the code's
+    ``except httpx.HTTPStatusError`` / ``TransportError`` resolve to the same class the
+    fake raises) and replays a scripted sequence of responses across retry attempts +
+    redirect hops. Records the User-Agents / URLs / headers it was asked for."""
+
+    HTTPStatusError = _real_httpx.HTTPStatusError
+    TransportError = _real_httpx.TransportError
+    RequestError = _real_httpx.RequestError
+    ConnectError = _real_httpx.ConnectError
+    TimeoutException = _real_httpx.TimeoutException
+
+    def __init__(self, script):
+        self._script = list(script)
+        self._i = 0
+        self.seen_uas: list = []
+        self.seen_urls: list = []
+        self.seen_headers: list = []
+
+    def next_step(self):
+        step = self._script[min(self._i, len(self._script) - 1)]
+        self._i += 1
+        return step
 
     def Client(self, **kw):  # noqa: N802 — mimic httpx.Client
-        return _FakeClient(self._content, self._exc)
+        hdrs = kw.get("headers") or {}
+        self.seen_headers.append(dict(hdrs))
+        self.seen_uas.append(hdrs.get("User-Agent"))
+        return _FakeClient(self)
+
+
+def _script_from(content, exc, responses):
+    if responses is not None:
+        return responses
+    if exc is not None:
+        return [exc]
+    return [(200, content if content is not None else b"", {})]
 
 
 class _patch_httpx:
-    """Inject a fake httpx + bypass the public-IP gate so the fetch logic is exercised."""
+    """Inject a fake httpx + bypass the public-IP gate so the fetch logic is exercised.
 
-    def __init__(self, *, public: bool = True, **kw):
-        self._fake = _FakeHttpx(**kw)
+    Modes: ``content=bytes`` (single 200) | ``exc=Exception`` (raised) |
+    ``responses=[step,…]`` where each step is an Exception (raised) or a
+    ``(status, content_bytes, headers)`` tuple, replayed across retry attempts + hops.
+    """
+
+    def __init__(self, *, public: bool = True, content=None, exc=None, responses=None):
+        self._fake = _FakeHttpx(_script_from(content, exc, responses))
         self._public = public
 
     def __enter__(self):
@@ -106,6 +140,20 @@ class _patch_httpx:
         else:
             sys.modules.pop("httpx", None)
         acquire._host_is_public = self._saved_pub
+        return False
+
+
+class _no_backoff:
+    """Patch acquire._sleep to a no-op recorder (no real retry/backoff waiting)."""
+
+    def __enter__(self):
+        self.slept: list = []
+        self._saved = acquire._sleep
+        acquire._sleep = lambda d=0: self.slept.append(d)
+        return self
+
+    def __exit__(self, *a):
+        acquire._sleep = self._saved
         return False
 
 
@@ -128,7 +176,7 @@ class TestLite(unittest.TestCase):
         """TC-06-02: auto + JS shell (thin) → Chrome path invoked."""
         saved_lite = acquire._fetch_lite_html
         saved_chrome = acquire._fetch_chrome_html
-        acquire._fetch_lite_html = lambda url, mb: "<html><body><div id='app'></div></body></html>"
+        acquire._fetch_lite_html = lambda url, mb, retries=2: "<html><body><div id='app'></div></body></html>"
         acquire._fetch_chrome_html = lambda url: "<html><body><article><p>HYDRATED CONTENT</p></article></body></html>"
         try:
             res = acquire.acquire("https://spa.example/app", _opts(engine="auto"))
@@ -137,6 +185,27 @@ class TestLite(unittest.TestCase):
             acquire._fetch_chrome_html = saved_chrome
         self.assertEqual(res.engine, "chrome")
         self.assertIn("HYDRATED CONTENT", res.html)
+
+
+    def test_nojs_variant_hackernoon(self):
+        """R-1: HackerNoon canonical → /lite/ variant; already-/lite/ and other hosts → None."""
+        self.assertEqual(acquire._nojs_variant("https://hackernoon.com/some-slug"),
+                         "https://hackernoon.com/lite/some-slug")
+        self.assertIsNone(acquire._nojs_variant("https://hackernoon.com/lite/some-slug"))
+        self.assertIsNone(acquire._nojs_variant("https://example.com/post"))
+
+    def test_auto_uses_nojs_variant_proactively(self):
+        """R-1: auto fetches the /lite/ variant for a known JS-gated host (not the canonical)."""
+        seen: list = []
+        saved_lite, saved_sub = acquire._fetch_lite_html, acquire._looks_substantial
+        acquire._fetch_lite_html = lambda url, mb, retries=2: (seen.append(url), "<html><body><article>body</article></body></html>")[1]
+        acquire._looks_substantial = lambda h: True
+        try:
+            res = acquire.acquire("https://hackernoon.com/some-slug", _opts(engine="auto"))
+        finally:
+            acquire._fetch_lite_html, acquire._looks_substantial = saved_lite, saved_sub
+        self.assertEqual(res.engine, "lite+nojs")
+        self.assertTrue(any(u.endswith("/lite/some-slug") for u in seen), seen)
 
 
 class TestChrome(unittest.TestCase):
@@ -209,6 +278,53 @@ class TestSsrfAndErrors(unittest.TestCase):
         self.assertNotIn("SECRET", msg)
         self.assertNotIn("s3cr3t", msg)
 
+    def test_redact_keeps_query_redacts_secrets(self):
+        """R-2.3: meaningful query survives error messages; only secrets + userinfo go."""
+        self.assertEqual(
+            acquire._redact("https://papers.ssrn.com/sol3/papers.cfm?abstract_id=4200414"),
+            "https://papers.ssrn.com/sol3/papers.cfm?abstract_id=4200414")
+        red = acquire._redact("https://user:pw@x.com/a?token=SECRET&id=9")
+        self.assertNotIn("SECRET", red)
+        self.assertNotIn("pw@", red)
+        self.assertIn("token=REDACTED", red)
+        self.assertIn("id=9", red)
+
+    def test_fetch_failure_has_status_and_kind(self):
+        """R-2.1/2.2: FetchFailed carries details.status + details.kind so a caller can
+        decide manual-vs-retry; the meaningful query survives into details.url."""
+        with _patch_httpx(responses=[(403, b"", {}), (403, b"", {})]):
+            with self.assertRaises(FetchFailed) as ctx:
+                acquire._http_get_bytes("https://public.example/p", max_bytes=None)
+        self.assertEqual(ctx.exception.details.get("status"), 403)
+        self.assertEqual(ctx.exception.details.get("kind"), "bot_blocked")
+        with _patch_httpx(responses=[(404, b"", {})]):
+            with self.assertRaises(FetchFailed) as ctx2:
+                acquire._http_get_bytes("https://public.example/p?abstract_id=7", max_bytes=None)
+        self.assertIn("abstract_id=7", ctx2.exception.details.get("url", ""))
+        self.assertEqual(ctx2.exception.details.get("kind"), "not_found")
+
+    def test_redact_value_embedded_secret(self):
+        """Adversarial: a token in a NON-sensitive param's value must still be redacted."""
+        red = acquire._redact("https://x.com/p?next=https%3A%2F%2Fy%2Fcb%3Ftoken%3DSECRET123&id=9")
+        self.assertNotIn("SECRET123", red)
+        self.assertIn("id=9", red)
+
+    def test_jsonld_date_scoped_to_ldjson(self):
+        """Adversarial: a stray datePublished in plain <script>/body must NOT be picked;
+        only a real JSON-LD block counts."""
+        stray = '<script>var m={"datePublished":"1999-01-01"};</script><p>body</p>'
+        self.assertIsNone(acquire._jsonld_date(stray))
+        self.assertIsNone(acquire._structured_date(stray))
+        real = ('<script type="application/ld+json">{"@type":"Article",'
+                '"datePublished":"2025-04-30"}</script>')
+        self.assertEqual(acquire._jsonld_date(real), "2025-04-30")
+
+    def test_arxiv_date_from_id(self):
+        """R-4: arXiv id encodes YYMM — derive a correct date, ignore trafilatura's heuristic."""
+        self.assertEqual(acquire._arxiv_date_from_url("https://arxiv.org/html/2504.20838"), "2025-04")
+        self.assertEqual(acquire._arxiv_date_from_url("https://arxiv.org/abs/2204.00251"), "2022-04")
+        self.assertIsNone(acquire._arxiv_date_from_url("https://example.com/post"))
+
     def test_non_http_scheme_refused(self):
         """TC-06-04b: non-http(s) top-level INPUT is not fetched (routed local→BadInput)."""
         err = io.StringIO()
@@ -248,6 +364,75 @@ class TestSsrfAndErrors(unittest.TestCase):
             [md], acq, attach_dir=_P(d) / "_attachments", attach_name="_attachments",
             max_images=2, remote_resolver=_resolver)
         self.assertLessEqual(len(calls), 2, f"max-images did not bound fetches: {calls}")
+
+
+class TestRetryUAandEngines(unittest.TestCase):
+    """Borrowed-from-last30days robustness: retry/backoff/429, 403→browser-UA, Jina, rate-limit."""
+
+    def test_retry_then_success(self):
+        with _no_backoff() as nb, _patch_httpx(responses=[
+                _real_httpx.ConnectError("boom"), (200, b"<html>ok</html>", {})]):
+            out = acquire._http_get_bytes("https://public.example/p", max_bytes=None)
+        self.assertEqual(out, b"<html>ok</html>")
+        self.assertEqual(len(nb.slept), 1)  # one backoff before the single retry
+
+    def test_retry_exhausted_is_fetchfailed(self):
+        with _no_backoff(), _patch_httpx(responses=[_real_httpx.ConnectError("x")]):
+            with self.assertRaises(FetchFailed):
+                acquire._http_get_bytes("https://public.example/p", max_bytes=None, retries=2)
+
+    def test_403_escalates_to_browser_ua(self):
+        with _patch_httpx(responses=[(403, b"", {}), (200, b"<html>ok</html>", {})]) as px:
+            out = acquire._http_get_bytes("https://public.example/p", max_bytes=None)
+        self.assertEqual(out, b"<html>ok</html>")
+        self.assertEqual(px._fake.seen_uas, [acquire._UA, acquire._BROWSER_UA])
+
+    def test_403_both_uas_terminal(self):
+        with _patch_httpx(responses=[(403, b"", {}), (403, b"", {})]) as px:
+            with self.assertRaises(FetchFailed):
+                acquire._http_get_bytes("https://public.example/p", max_bytes=None)
+        self.assertEqual(px._fake.seen_uas, [acquire._UA, acquire._BROWSER_UA])  # escalated once
+
+    def test_429_honours_retry_after(self):
+        with _no_backoff() as nb, _patch_httpx(responses=[
+                (429, b"", {"retry-after": "0"}), (200, b"<html>ok</html>", {})]):
+            out = acquire._http_get_bytes("https://public.example/p", max_bytes=None)
+        self.assertEqual(out, b"<html>ok</html>")
+        self.assertEqual(nb.slept, [0.0])  # honoured Retry-After: 0
+
+    def test_5xx_retried(self):
+        with _no_backoff(), _patch_httpx(responses=[(503, b"", {}), (200, b"<html>ok</html>", {})]):
+            out = acquire._http_get_bytes("https://public.example/p", max_bytes=None)
+        self.assertEqual(out, b"<html>ok</html>")
+
+    def test_4xx_terminal_no_retry(self):
+        with _no_backoff() as nb, _patch_httpx(responses=[(404, b"", {})]) as px:
+            with self.assertRaises(FetchFailed):
+                acquire._http_get_bytes("https://public.example/p", max_bytes=None, retries=2)
+        self.assertEqual(px._fake._i, 1)   # exactly ONE attempt — 4xx is terminal
+        self.assertEqual(nb.slept, [])
+
+    def test_jina_engine_endpoint_and_format(self):
+        with _patch_httpx(content=b"<html>jina rendered</html>") as px:
+            html = acquire._fetch_jina_html("https://example.com/article", None)
+        self.assertIn("jina rendered", html)
+        self.assertTrue(px._fake.seen_urls[0].startswith(
+            "https://r.jina.ai/https://example.com/article"))
+        self.assertEqual(px._fake.seen_headers[0].get("X-Return-Format"), "html")
+
+    def test_rate_limiter_sleeps_between_requests(self):
+        clock = [100.0]
+        saved_m, saved_s = acquire._monotonic, acquire._sleep
+        slept: list = []
+        acquire._monotonic = lambda: clock[0]
+        acquire._sleep = lambda d: (slept.append(d), clock.__setitem__(0, clock[0] + d))
+        try:
+            rl = acquire._RateLimiter(2.0)  # 0.5s min interval
+            rl.wait()   # first: now(100) >= next(0) → no sleep
+            rl.wait()   # second: now(100) < next(100.5) → sleep 0.5
+        finally:
+            acquire._monotonic, acquire._sleep = saved_m, saved_s
+        self.assertAlmostEqual(sum(slept), 0.5, places=3)
 
 
 def _playwright_installed() -> bool:

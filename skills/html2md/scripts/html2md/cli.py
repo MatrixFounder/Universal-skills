@@ -57,9 +57,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="Directory to write Markdown + _attachments into (default: stdout mode).",
     )
     p.add_argument(
-        "--engine", choices=("lite", "chrome", "auto"), default="auto",
-        help="URL fetch engine: lite (httpx+trafilatura), chrome (Playwright), or "
-             "auto (lite then chrome fallback). Default: auto.",
+        "--engine", choices=("lite", "chrome", "auto", "jina"), default="auto",
+        help="URL fetch engine: lite (httpx+trafilatura), chrome (Playwright), "
+             "auto (lite then chrome fallback), or jina (Jina Reader r.jina.ai — "
+             "server-side JS render, NO local browser; sends the URL to an external "
+             "service). Default: auto.",
     )
     reader = p.add_mutually_exclusive_group()
     reader.add_argument(
@@ -96,8 +98,19 @@ def build_parser() -> argparse.ArgumentParser:
         help="Cap the number of images downloaded (default: unbounded).",
     )
     p.add_argument(
+        "--retries", metavar="N", type=int, default=2,
+        help="Transient-failure retries per fetch (transport errors / HTTP 5xx / 429 "
+             "with exponential backoff). Default: 2. Use 0 to disable.",
+    )
+    p.add_argument(
+        "--rate-limit", metavar="REQS_PER_SEC", type=float, default=None,
+        help="Throttle outbound fetches (page + images) to N requests/sec "
+             "(default: unbounded). Polite-crawl bound for image-heavy pages.",
+    )
+    p.add_argument(
         "--stdout", action="store_true", default=False,
-        help="Emit whole-page Markdown to stdout (agent-step mode).",
+        help="Emit frontmatter + whole-page Markdown to stdout (agent-step mode; "
+             "no files, reader variant + image download skipped).",
     )
     _errors.add_json_errors_argument(p)
     return p
