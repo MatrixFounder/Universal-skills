@@ -74,7 +74,8 @@ that table and write inline `pdfplumber` code with tuned `table_settings`.
 interleaves the columns into nonsense. Mitigation: `extract_text(layout=True)`
 (or `pdf_extract.py --layout`) preserves column separation as whitespace so you
 can *see* the columns and reorder them yourself. The tool does **not** reflow
-columns into logical order — that is your step 3.
+columns into logical order — that is your step 3. (Word-gluing on these layouts
+— `ASurveyonBlockchain` — is a *separate* problem, handled by default; see §3.8.)
 
 ### 3.2 Tables without ruling lines
 `extract_tables()` defaults to the `lines` strategy — it finds tables drawn
@@ -124,6 +125,29 @@ pass `--password PW` if you have it. See
 Default to **GFM pipe tables** in the composed Markdown. Use an HTML `<table>`
 only when a table genuinely needs `colspan` / `rowspan` that GFM cannot express.
 The choice is yours per table.
+
+### 3.8 Glued words (LaTeX / academic PDFs with no space glyphs)
+Many born-digital PDFs — LaTeX two-column papers especially — encode inter-word
+spacing as *positional gaps*, not space characters. pdfplumber's default
+*absolute* `x_tolerance` (3 pt) is larger than those sub-3-pt gaps, so it glues
+the whole line: `ASurveyonBlockchainInteroperability`. `pdf_extract.py` fixes
+this **by default** with a *font-relative* threshold (pdfplumber's
+`x_tolerance_ratio`, default `0.15` → the split gap scales with font size). This
+is byte-identical to the old behaviour on PDFs that use real spaces (a space
+glyph always splits a word), so normal documents are unaffected; the dump echoes
+the effective ratio in its top-level `x_tolerance_ratio` field.
+
+If a specific PDF still glues (rare — gaps tighter than `0.15 × font_size`) or
+*over*-splits (loose tracking with no spaces), tune `--x-tolerance-ratio R`:
+lower R splits more aggressively, higher R glues more; `--x-tolerance-ratio 0`
+disables it entirely (restores pdfplumber's absolute tolerance). Empirically
+`0.10–0.20` is the safe band for academic layouts; `≥0.25` starts re-gluing.
+
+```bash
+python3 scripts/pdf_extract.py paper.pdf -o dump.json            # fix on (0.15)
+python3 scripts/pdf_extract.py paper.pdf --x-tolerance-ratio 0.1 # split harder
+python3 scripts/pdf_extract.py paper.pdf --x-tolerance-ratio 0   # legacy/off
+```
 
 ---
 

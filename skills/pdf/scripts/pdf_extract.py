@@ -39,9 +39,22 @@ Honest scope (v1):
     readable without a password — it opens normally and is treated as a digital
     PDF (no encryption signal); the content was genuinely extractable.
 
+Word-gap handling (v1.1): pdfplumber's default word splitter uses an *absolute*
+``x_tolerance`` (3 pt). Many born-digital PDFs — LaTeX/academic two-column
+papers in particular — encode inter-word spacing as **positional gaps rather
+than space glyphs**, and those gaps are often smaller than 3 pt, so every word
+on the page glues together (``ASurveyonBlockchainInteroperability``). This tool
+therefore defaults to a *font-relative* threshold via pdfplumber's
+``x_tolerance_ratio`` (``_DEFAULT_X_TOLERANCE_RATIO`` = 0.15 → the split gap
+scales with each character's font size). This is byte-identical to the legacy
+behaviour on PDFs that use real space glyphs (a space character always splits a
+word regardless of tolerance), so it does not regress normal documents. Pass
+``--x-tolerance-ratio 0`` to disable it and fall back to the absolute tolerance.
+
 Usage:
     python3 pdf_extract.py INPUT.pdf [-o OUT.json] [--layout]
-                           [--password PW] [--json-errors]
+                           [--password PW] [--x-tolerance-ratio R]
+                           [--json-errors]
 
 Exit codes:
     0  — success: structured dump emitted (digital, mixed, or all-blank PDF)
@@ -70,6 +83,14 @@ for _noisy_logger in ("pdfminer", "pypdf"):
     logging.getLogger(_noisy_logger).setLevel(logging.ERROR)
 
 _SCANNED_CHAR_THRESHOLD = 10
+# Default word-gap threshold as a fraction of font size (pdfplumber's
+# `x_tolerance_ratio`). 0.15 sits comfortably between intra-word letter gaps
+# (≈0 em — glyphs abut) and the positional inter-word gap of a no-space-glyph
+# PDF (≈0.2–0.3 em), so it separates words that pdfplumber's absolute 3 pt
+# tolerance otherwise glues, while leaving real-space PDFs untouched. Empirically
+# the sweet spot on academic two-column layouts: 0.10–0.20 split cleanly, ≥0.25
+# starts re-gluing. The ONLY site that reads this constant is `extract_pdf`.
+_DEFAULT_X_TOLERANCE_RATIO = 0.15
 _EXIT_OK = 0
 _EXIT_FAIL = 1
 _EXIT_USAGE = 2
@@ -119,6 +140,17 @@ def _build_parser() -> argparse.ArgumentParser:
         "--password", default=None, metavar="PW",
         help="Password for an encrypted PDF. NOTE: argv is visible in process "
              "listings (ps) — intended for local-CLI use.",
+    )
+    parser.add_argument(
+        "--x-tolerance-ratio", type=float,
+        default=_DEFAULT_X_TOLERANCE_RATIO, metavar="R",
+        help="Word-split gap as a fraction of font size (default %(default)s). "
+             "pdfplumber's absolute tolerance glues words on PDFs that position "
+             "inter-word spacing instead of emitting space glyphs (LaTeX / "
+             "academic two-column papers, e.g. 'ASurveyonBlockchain'); a "
+             "font-relative ratio fixes that without regressing real-space "
+             "PDFs. Pass 0 (or a negative value) to disable and fall back to "
+             "pdfplumber's absolute x_tolerance.",
     )
     add_json_errors_argument(parser)
     return parser
@@ -188,15 +220,29 @@ def _open_pdf(pdf_path: Path, password: str | None):
         ) from exc
 
 
-def _extract_page(page, *, layout: bool) -> dict:
+def _extract_page(
+    page, *, layout: bool,
+    x_tolerance_ratio: float | None = _DEFAULT_X_TOLERANCE_RATIO,
+) -> dict:
     """Build one PageRecord (ARCH §4.2) from a pdfplumber page.
 
     `n` is filled by the caller. `char_count` is the *stripped* length of the
     extracted text (whitespace-only page → 0). `tables` is the raw
     `extract_tables()` form (list of row-lists of `str | None`). `scanned` is
-    delegated to `_classify_page`."""
-    text = page.extract_text(layout=layout) or ""
-    tables = page.extract_tables()
+    delegated to `_classify_page`.
+
+    `x_tolerance_ratio` (font-relative word-split threshold) is applied to BOTH
+    the page text and the table-cell text so glued words are fixed consistently
+    across the dump; `None` restores pdfplumber's absolute-tolerance default
+    (table *detection* — the line strategy — is unaffected either way; only how
+    cell characters are grouped into words changes)."""
+    text = page.extract_text(
+        layout=layout, x_tolerance_ratio=x_tolerance_ratio) or ""
+    if x_tolerance_ratio is None:
+        tables = page.extract_tables()
+    else:
+        tables = page.extract_tables(
+            table_settings={"text_x_tolerance_ratio": x_tolerance_ratio})
     char_count = len(text.strip())
     has_images = bool(page.images)
     return {
@@ -209,18 +255,29 @@ def _extract_page(page, *, layout: bool) -> dict:
     }
 
 
-def extract_pdf(pdf_path: Path, *, password: str | None, layout: bool) -> dict:
+def extract_pdf(
+    pdf_path: Path, *, password: str | None, layout: bool,
+    x_tolerance_ratio: float | None = _DEFAULT_X_TOLERANCE_RATIO,
+) -> dict:
     """Open the PDF, extract every page, classify, return the dump dict
     (ARCH §4.1 `DumpDocument`).
 
     Owns the pdfplumber handle: once `_open_pdf` returns a handle, the `with`
     block releases the file descriptor on every path, including a page raising
     mid-extraction. (A failure *inside* `_open_pdf`, before a handle exists,
-    raises `_ExtractError` directly — no handle to leak here.)"""
+    raises `_ExtractError` directly — no handle to leak here.)
+
+    `x_tolerance_ratio` ≤ 0 (or `None`) is normalised to `None` (legacy
+    absolute-tolerance word splitting); the *effective* value is echoed back in
+    the dump's top-level `x_tolerance_ratio` so the dump is self-describing
+    about how words were split."""
+    ratio = x_tolerance_ratio if (
+        x_tolerance_ratio and x_tolerance_ratio > 0) else None
     with _open_pdf(pdf_path, password) as pdf:
         pages: list[dict] = []
         for index, page in enumerate(pdf.pages, start=1):
-            record = _extract_page(page, layout=layout)
+            record = _extract_page(
+                page, layout=layout, x_tolerance_ratio=ratio)
             record["n"] = index
             pages.append(record)
     doc_scanned, scanned_pages = _classify_document(pages)
@@ -228,6 +285,7 @@ def extract_pdf(pdf_path: Path, *, password: str | None, layout: bool) -> dict:
         "page_count": len(pages),
         "doc_scanned": doc_scanned,
         "scanned_pages": scanned_pages,
+        "x_tolerance_ratio": ratio,
         "pages": pages,
     }
 
@@ -289,7 +347,8 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         dump = extract_pdf(
-            input_path, password=args.password, layout=args.layout)
+            input_path, password=args.password, layout=args.layout,
+            x_tolerance_ratio=args.x_tolerance_ratio)
     except _ExtractError as exc:
         return report_error(
             exc.message, code=_EXIT_FAIL, error_type=exc.error_type,

@@ -35,7 +35,7 @@ SCRIPT = SCRIPTS_DIR / "pdf_extract.py"
 
 def _ensure_fixtures() -> None:
     """Build the 3 fixtures if any is missing (they are normally committed)."""
-    needed = ["digital.pdf", "scanlike.pdf", "encrypted.pdf"]
+    needed = ["digital.pdf", "scanlike.pdf", "encrypted.pdf", "glued.pdf"]
     if not all((FIXTURES_DIR / n).is_file() for n in needed):
         fixtures.build_all(FIXTURES_DIR)
 
@@ -77,7 +77,7 @@ class TestStubSmoke(unittest.TestCase):
         self.assertEqual(r.returncode, 0, r.stderr)
         out = r.stdout
         for flag in ("INPUT", "-o", "--output", "--layout", "--password",
-                     "--json-errors"):
+                     "--x-tolerance-ratio", "--json-errors"):
             self.assertIn(flag, out)
         # Collapse argparse line-wrapping before phrase checks.
         norm = " ".join(out.split())
@@ -118,7 +118,9 @@ class TestStubUnits(unittest.TestCase):
         dump = pdf_extract.extract_pdf(
             FIXTURES_DIR / "digital.pdf", password=None, layout=False)
         self.assertEqual(
-            set(dump), {"page_count", "doc_scanned", "scanned_pages", "pages"})
+            set(dump),
+            {"page_count", "doc_scanned", "scanned_pages", "x_tolerance_ratio",
+             "pages"})
 
     def test_fixtures_exist_and_valid(self):
         """TC-UNIT-06 — the 3 committed fixtures are present and well-formed."""
@@ -229,7 +231,7 @@ class TestExtractionCore(unittest.TestCase):
             def extract_text(self, **kwargs):
                 return None
 
-            def extract_tables(self):
+            def extract_tables(self, **kwargs):
                 return []
 
         rec = pdf_extract._extract_page(_FakePage(), layout=False)
@@ -530,6 +532,94 @@ class TestCliAndEmit(unittest.TestCase):
         self.assertEqual(r.returncode, 1)
         self.assertEqual(
             json.loads(r.stderr.strip())["type"], "OutputWriteFailed")
+
+
+class TestWordGapSplitting(unittest.TestCase):
+    """Word-gap splitting (v1.1) — `x_tolerance_ratio` fixes the LaTeX/academic
+    no-space-glyph gluing bug (`ASurveyonBlockchain…`) without regressing
+    real-space PDFs. Exercised against the deterministic `glued.pdf` fixture."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        _ensure_fixtures()
+        cls.glued = FIXTURES_DIR / "glued.pdf"
+        cls.spaced = " ".join(fixtures.GLUED_WORDS)        # "A Survey on …"
+        cls.concat = "".join(fixtures.GLUED_WORDS)         # "ASurveyon…"
+        cls.control = fixtures.GLUED_CONTROL_LINE
+
+    def _page1(self, **kw) -> str:
+        dump = pdf_extract.extract_pdf(
+            self.glued, password=None, layout=False, **kw)
+        return dump["pages"][0]["text"]
+
+    def test_default_splits_glued_words(self):
+        """TC-WG-01 — the default (ratio on) recovers spaced words, NOT the
+        glued concatenation — this is the reported-bug fix."""
+        text = self._page1()
+        self.assertIn(self.spaced, text)
+        self.assertNotIn(self.concat, text)
+
+    def test_disabled_reproduces_glue(self):
+        """TC-WG-02 — `--x-tolerance-ratio 0` disables the fix and reproduces
+        the legacy glue, locking in that the knob actually controls behaviour
+        (and documenting the bug it cures)."""
+        text = self._page1(x_tolerance_ratio=0)
+        self.assertIn(self.concat, text)
+        self.assertNotIn(self.spaced, text)
+
+    def test_negative_ratio_disables(self):
+        """TC-WG-03 — a negative ratio normalises to disabled (legacy glue)."""
+        self.assertIn(self.concat, self._page1(x_tolerance_ratio=-1.0))
+
+    def test_real_space_line_unaffected(self):
+        """TC-WG-04 — the real-space control line extracts identically whether
+        the ratio is on or off (a space glyph always splits a word)."""
+        self.assertIn(self.control, self._page1())
+        self.assertIn(self.control, self._page1(x_tolerance_ratio=0))
+
+    def test_dump_echoes_effective_ratio(self):
+        """TC-WG-05 — the dump is self-describing: top-level `x_tolerance_ratio`
+        is the *effective* value (the default float when on, `None` when
+        disabled or normalised away)."""
+        on = pdf_extract.extract_pdf(self.glued, password=None, layout=False)
+        self.assertEqual(
+            on["x_tolerance_ratio"], pdf_extract._DEFAULT_X_TOLERANCE_RATIO)
+        off = pdf_extract.extract_pdf(
+            self.glued, password=None, layout=False, x_tolerance_ratio=0)
+        self.assertIsNone(off["x_tolerance_ratio"])
+
+    def test_layout_mode_also_splits(self):
+        """TC-WG-06 — the fix also applies under `--layout` (column-preserving
+        mode shares the same word splitter)."""
+        dump = pdf_extract.extract_pdf(
+            self.glued, password=None, layout=True)
+        # collapse layout whitespace before the phrase check
+        flat = " ".join(dump["pages"][0]["text"].split())
+        self.assertIn(self.spaced, flat)
+        self.assertNotIn(self.concat, flat)
+
+    def test_default_constant_value(self):
+        """TC-WG-07 — the documented default ratio is 0.15 (frozen)."""
+        self.assertEqual(pdf_extract._DEFAULT_X_TOLERANCE_RATIO, 0.15)
+
+    # --- E2E (subprocess) -------------------------------------------------
+
+    def test_cli_default_splits(self):
+        """TC-E2E-17 — the CLI default emits spaced words on stdout."""
+        r = _run_cli([str(self.glued)])
+        self.assertEqual(r.returncode, 0, r.stderr)
+        dump = json.loads(r.stdout)
+        self.assertEqual(dump["x_tolerance_ratio"], 0.15)
+        self.assertIn(self.spaced, dump["pages"][0]["text"])
+
+    def test_cli_disable_flag_glues(self):
+        """TC-E2E-18 — `--x-tolerance-ratio 0` on the CLI reproduces the glue
+        and reports a null effective ratio in the dump."""
+        r = _run_cli([str(self.glued), "--x-tolerance-ratio", "0"])
+        self.assertEqual(r.returncode, 0, r.stderr)
+        dump = json.loads(r.stdout)
+        self.assertIsNone(dump["x_tolerance_ratio"])
+        self.assertIn(self.concat, dump["pages"][0]["text"])
 
 
 if __name__ == "__main__":

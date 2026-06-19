@@ -7,6 +7,12 @@ this builder IS the provenance, per TASK 013 R11.3):
   scanlike.pdf   — 1 page that is a single full-page raster image with NO text
                    layer (zero extractable characters; `page.images` non-empty).
   encrypted.pdf  — the digital PDF, encrypted with the password ``test-pw``.
+  glued.pdf      — 1 page reproducing the LaTeX/academic word-gluing bug: words
+                   are positioned with a sub-3pt gap and NO space glyphs, so
+                   pdfplumber's absolute tolerance glues them
+                   (``ASurveyonBlockchain``) while the font-relative
+                   ``x_tolerance_ratio`` splits them correctly. A second line of
+                   real-space text is the no-regression control.
 
 The fixtures are committed under ``tests/fixtures/`` for test speed; re-run this
 module (``python3 _pdf_extract_fixtures.py``) to regenerate them in place.
@@ -23,6 +29,7 @@ from pypdf import PdfReader, PdfWriter  # type: ignore
 from reportlab.lib import colors  # type: ignore
 from reportlab.lib.pagesizes import letter  # type: ignore
 from reportlab.lib.styles import getSampleStyleSheet  # type: ignore
+from reportlab.pdfbase.pdfmetrics import stringWidth  # type: ignore
 from reportlab.pdfgen import canvas  # type: ignore
 from reportlab.platypus import (  # type: ignore
     PageBreak,
@@ -34,6 +41,18 @@ from reportlab.platypus import (  # type: ignore
 )
 
 ENCRYPTED_PASSWORD = "test-pw"
+
+# The no-space-glyph title baked into glued.pdf, and the real-space control line.
+# Tests assert that the default (ratio-on) extraction recovers GLUED_WORDS joined
+# by single spaces, while the disabled mode reproduces the glued concatenation.
+GLUED_WORDS = ["A", "Survey", "on", "Blockchain", "Interoperability"]
+GLUED_CONTROL_LINE = "This line uses real spaces between words"
+GLUED_FONT = "Helvetica"
+GLUED_SIZE = 10
+# Inter-word gap in points: below pdfplumber's absolute default (3) so legacy
+# extraction glues, above the ratio threshold (0.15 * 10 = 1.5) so the default
+# splits. Intra-word letters abut (gap ≈ 0) and stay together under both.
+GLUED_GAP = 2.0
 
 # The 3x3 table baked into digital.pdf page 1 — tests assert against this.
 DIGITAL_TABLE = [
@@ -107,6 +126,30 @@ def build_scanlike_pdf(path: Path) -> None:
         os.unlink(png_path)
 
 
+def build_glued_pdf(path: Path) -> None:
+    """A 1-page PDF reproducing the LaTeX/academic word-gluing bug.
+
+    Each word in ``GLUED_WORDS`` is drawn at an explicit x-position with a
+    ``GLUED_GAP`` (< 3 pt) positional gap and NO space glyph between words —
+    exactly how LaTeX/academic exporters encode inter-word spacing. pdfplumber's
+    absolute 3 pt ``x_tolerance`` therefore glues the whole line
+    (``ASurveyonBlockchainInteroperability``), while the font-relative
+    ``x_tolerance_ratio`` (default 0.15 → 1.5 pt threshold at 10 pt) splits the
+    words back apart. A second line of ordinary real-space text is the control:
+    it must extract identically in both modes (a space glyph always splits)."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    c = canvas.Canvas(str(path), pagesize=letter)
+    c.setFont(GLUED_FONT, GLUED_SIZE)
+    x, y = 72, 720
+    for word in GLUED_WORDS:
+        c.drawString(x, y, word)
+        x += stringWidth(word, GLUED_FONT, GLUED_SIZE) + GLUED_GAP
+    c.setFont(GLUED_FONT, GLUED_SIZE)
+    c.drawString(72, 700, GLUED_CONTROL_LINE)
+    c.showPage()
+    c.save()
+
+
 def build_encrypted_pdf(path: Path, password: str = ENCRYPTED_PASSWORD) -> None:
     """The digital PDF, encrypted with `password`."""
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -132,10 +175,12 @@ def build_all(fixtures_dir: Path) -> dict[str, Path]:
         "digital": fixtures_dir / "digital.pdf",
         "scanlike": fixtures_dir / "scanlike.pdf",
         "encrypted": fixtures_dir / "encrypted.pdf",
+        "glued": fixtures_dir / "glued.pdf",
     }
     build_digital_pdf(paths["digital"])
     build_scanlike_pdf(paths["scanlike"])
     build_encrypted_pdf(paths["encrypted"])
+    build_glued_pdf(paths["glued"])
     return paths
 
 
