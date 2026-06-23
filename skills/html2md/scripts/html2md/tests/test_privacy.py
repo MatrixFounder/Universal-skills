@@ -48,7 +48,7 @@ class _Base(unittest.TestCase):
             (os.environ.__setitem__(k, v) if v is not None else os.environ.pop(k, None))
 
     @staticmethod
-    def _chrome_absent(url):
+    def _chrome_absent(url, opts=None):
         raise EngineNotInstalled("no chrome")
 
     def _route(self, fn):

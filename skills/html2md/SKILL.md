@@ -42,6 +42,16 @@ for two consumers: (1) an **Obsidian web-clipper** (self-contained note), and
   through the same fallback ladder** (so every result inherits per-result fallback) and
   written as one note (frontmatter `query:` + `source:`). A failed result is skipped, not
   fatal; a healthy zero-result search exits 0.
+- **Authenticated (login-gated) Chrome** (`--engine chrome` + auth): read pages behind a login
+  (X Articles/threads, paywalled/members, private docs) by replaying a **human-minted** session.
+  Mint once: `html2md.py login URL --save-state state.json` (headful; 2FA ok). Then convert with
+  `--chrome-storage-state state.json` (portable, **server/Hermes-deployable**, read-only →
+  concurrency-safe), `--chrome-cookies-file cookies.txt` (cookie-only), or
+  `--chrome-user-data-dir DIR` (local persistent profile). `--chrome-scroll [--chrome-scroll-passes N]`
+  pulls lazy content (replies). The Chrome tier is **SSRF-gated** (private / off-target-public
+  redirects refused; non-public sub-resources aborted); a stale session → `auth_required`. Auth
+  is strictly **opt-in** — with none configured, behaviour is unchanged (no crash). The target
+  URL + session stay **local** (no third party). See `references/html-to-markdown.md` (Hermes deploy).
 - **Site-specific clean-source endpoints** (proactive, auto/lite): **Wikipedia**
   `/wiki/<Title>` → the Parsoid REST `page/html` endpoint (the canonical page is
   chrome-only and strips to empty); **arXiv** `/abs/` or `/pdf/<id>` → the full-text
@@ -65,9 +75,10 @@ for two consumers: (1) an **Obsidian web-clipper** (self-contained note), and
 
 ## 4. Script Contract
 - **Command**:
-  - `python3 scripts/html2md.py INPUT [OUTPUT_DIR] [--engine lite|chrome|auto|jina|remote] [--no-remote] [--remote-format html|markdown] [--target-selector SEL] [--reader-mode|--no-reader] [--download-images|--no-download-images] [--attachments-dir _attachments] [--archive-frame main|N|all|auto] [--max-bytes N] [--max-images N] [--retries N] [--rate-limit REQS_PER_SEC] [--stdout] [--json-errors]`
+  - `python3 scripts/html2md.py INPUT [OUTPUT_DIR] [--engine lite|chrome|auto|jina|remote] [--no-remote] [--remote-format html|markdown] [--target-selector SEL] [--chrome-storage-state PATH | --chrome-cookies-file PATH | --chrome-user-data-dir DIR] [--chrome-scroll] [--chrome-scroll-passes N] [--reader-mode|--no-reader] [--download-images|--no-download-images] [--attachments-dir _attachments] [--archive-frame main|N|all|auto] [--max-bytes N] [--max-images N] [--retries N] [--rate-limit REQS_PER_SEC] [--stdout] [--json-errors]`
   - Search: `python3 scripts/html2md.py --search "QUERY" [OUTPUT_DIR] [--max-results N] [...]` (mutually exclusive with INPUT).
-- **Environment (optional):** `HTML2MD_READER_URL` / `HTML2MD_READER_PROVIDERS` (remote reader base(s)), `HTML2MD_READER_TOKEN` (generic reader auth), `JINA_API_KEY` (jina quota), `HTML2MD_SEARCH_URL` / `HTML2MD_SEARCH_PROVIDERS` (search provider base(s)).
+  - Login (mint a session, headful): `python3 scripts/html2md.py login URL [--save-state state.json]`.
+- **Environment (optional):** `HTML2MD_READER_URL` / `HTML2MD_READER_PROVIDERS` (remote reader base(s)), `HTML2MD_READER_TOKEN` (generic reader auth), `JINA_API_KEY` (jina quota), `HTML2MD_SEARCH_URL` / `HTML2MD_SEARCH_PROVIDERS` (search provider base(s)), `HTML2MD_CHROME_STORAGE_STATE` / `HTML2MD_CHROME_COOKIES_FILE` / `HTML2MD_CHROME_USER_DATA_DIR` (Chrome auth — server-deployable secrets). All optional; see [`.env.example`](.env.example) for a documented template (read from the process env; not auto-loaded).
 - **INPUT**: a `http(s)` URL, or a local `.html`/`.htm`/`.mhtml`/`.mht`/`.webarchive`.
 - **OUTPUT_DIR**: directory to write `<slug>.md` (+ `<slug>.reader.md` by default) and
   `_attachments/` into. **Omit → defaults to `./tmp/html2md_out/`** (created on demand,
@@ -86,7 +97,8 @@ for two consumers: (1) an **Obsidian web-clipper** (self-contained note), and
   remote-first this is a silent fall-through, not exit 3) · 6 SelfOverwriteRefused ·
   10 FetchFailed (unreachable / blocked / over `--max-bytes`; `details.kind` ∈ bot_blocked/
   auth_required/not_found/rate_limited/server_error/unreachable/pdf/binary/arxiv_no_html/
-  refused/**all_engines_failed**) · 11 EmptyExtraction (substantial source → near-empty body).
+  refused/offsite_redirect/**all_engines_failed**) · 11 EmptyExtraction (substantial source →
+  near-empty body). `auth_required` from the chrome path = a stale/expired session (re-mint).
   On a total-ladder failure, `details.tried` lists each tier attempted + its failure kind
   (URL-free). `--json-errors` emits `{v:1, error, code, type?, details?}` on stderr.
 - **Idempotency**: same input → same output filenames + deduped attachments. URL
@@ -112,10 +124,19 @@ for two consumers: (1) an **Obsidian web-clipper** (self-contained note), and
   refused (request-splitting guard). Do not point `--engine jina|remote`, or `auto` against
   sensitive URLs, at internal hosts you don't want proxied; use `--no-remote` for fully
   local conversion. The local hop to the reader passes the SSRF gate.
-- **Honest-scope residuals**: DNS-rebinding (resolve-then-connect TOCTOU) and the opt-in
-  Chrome engine are NOT SSRF-hardened; a reader follows its own server-side redirects beyond
-  our control. Run untrusted conversions in an egress-restricted sandbox. See
-  `references/html-to-markdown.md`.
+- **Authenticated Chrome (TASK 024)**: auth replays a **human-minted** session (no password/2FA
+  automation). The Chrome tier is now **SSRF-gated** — `_assert_public_http` before navigation,
+  context-level route guard aborting non-public sub-resources/`fetch`/`beacon`, and an
+  **off-target public-redirect** refusal (final origin must equal the target's eTLD+1) so a
+  session is never carried to another site. Session files (`storage_state`/`cookies.txt`) are
+  **bearer credentials**: passed by **path only** (never argv), required mode **0600** (group+world
+  rejected), symlinks refused, values never logged/redacted. The target + session stay **local**.
+- **Honest-scope residuals**: DNS-rebinding (resolve-then-connect TOCTOU) is inherited (lite +
+  chrome); `storage_state` localStorage is origin-restored (readable by same-origin scripts the
+  page loads); the login-wall heuristic is best-effort/per-site; `_registrable` is last-2-labels
+  (multi-level suffixes like `co.uk` over-match); a reader follows its own server-side redirects.
+  Run untrusted conversions in an egress-restricted sandbox. See `references/html-to-markdown.md`
+  and `docs/KNOWN_ISSUES.md` (HTML2MD-10).
 - **No global installs**: deps live in `scripts/.venv` + `scripts/node_modules`.
 
 ## 6. Validation Evidence

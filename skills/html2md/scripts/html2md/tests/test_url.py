@@ -177,7 +177,7 @@ class TestLite(unittest.TestCase):
         saved_lite = acquire._fetch_lite_html
         saved_chrome = acquire._fetch_chrome_html
         acquire._fetch_lite_html = lambda url, mb, retries=2: "<html><body><div id='app'></div></body></html>"
-        acquire._fetch_chrome_html = lambda url: "<html><body><article><p>HYDRATED CONTENT</p></article></body></html>"
+        acquire._fetch_chrome_html = lambda url, opts=None: "<html><body><article><p>HYDRATED CONTENT</p></article></body></html>"
         try:
             res = acquire.acquire("https://spa.example/app", _opts(engine="auto"))
         finally:

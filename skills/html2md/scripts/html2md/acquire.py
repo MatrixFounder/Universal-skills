@@ -19,6 +19,7 @@ import os
 import re
 import shutil
 import socket
+import sys
 import tempfile
 import time
 from pathlib import Path
@@ -507,16 +508,45 @@ def _fetch_lite_html(url: str, max_bytes: int | None, retries: int = 2) -> str:
     return _decode_bytes(raw)
 
 
-def _fetch_chrome_html(url: str) -> str:
-    """Render ``url`` via headless Chromium (Playwright) → hydrated DOM HTML.
+_CHROME_SCROLL_BUDGET_S = 60.0  # wall-clock cap for --chrome-scroll (TASK 024 R4; internal, not a flag)
 
-    Soft-optional: missing Playwright → :class:`EngineNotInstalled` (exit 3) with
-    remediation. Honest scope (ARCH §10): this is a **basic** ``launch + goto`` render
-    — it does NOT yet block beacons / route remote sub-resources, and Chromium follows
-    redirects (incl. to internal hosts) without the public-IP gate the lite path
-    enforces. Run untrusted ``--engine chrome`` conversions in an egress-restricted
-    sandbox. Full network hardening is deferred (a future bead).
-    """
+
+def _login_render(url: str, save_state_path: str, opts) -> None:
+    """`login` mint helper (TASK 024 R3): open ``url`` in a HEADFUL browser, block for a manual
+    login (2FA ok), then write the Playwright ``storage_state`` JSON and ``chmod 0600``. This is
+    the ONE interactive/headful path — runtime fetches stay headless. The target must be public."""
+    _assert_public_http(url)
+    sync_playwright = _import_sync_playwright()
+    try:
+        with sync_playwright() as pw:
+            browser = pw.chromium.launch(headless=False)
+            try:
+                context = browser.new_context(user_agent=_BROWSER_UA)
+                page = context.new_page()
+                page.goto(url, wait_until="load", timeout=120000)
+                sys.stderr.write(
+                    "html2md: a browser window opened — log in there, then press Enter "
+                    "here to save the session...\n")
+                sys.stderr.flush()
+                input()  # block for the manual login
+                _old_umask = os.umask(0o077)  # create the session 0600 from the start (no race)
+                try:
+                    context.storage_state(path=save_state_path)
+                finally:
+                    os.umask(_old_umask)
+            finally:
+                browser.close()
+    except (FetchFailed, EngineNotInstalled):
+        raise
+    except Exception as exc:  # noqa: BLE001
+        raise FetchFailed(f"login render failed: {type(exc).__name__}",
+                          details={"url": _redact(url)}) from exc
+    os.chmod(save_state_path, 0o600)  # the saved session is a bearer credential
+
+
+def _import_sync_playwright():
+    """Return Playwright's ``sync_playwright`` (soft-optional) or raise EngineNotInstalled.
+    A module-level seam so tests inject a fake without a real browser."""
     try:
         from playwright.sync_api import sync_playwright
     except ImportError as exc:
@@ -525,20 +555,138 @@ def _fetch_chrome_html(url: str) -> str:
             "bash scripts/install.sh --with-chrome",
             details={"remediation": "install.sh --with-chrome"},
         ) from exc
+    return sync_playwright
+
+
+def _registrable(host: str | None) -> str:
+    """Approx eTLD+1 = last two labels — allows ``www.``↔apex same-site redirects while refusing
+    off-target hosts. Honest-scope (TASK 024 §16.1): multi-level public suffixes (e.g. ``co.uk``)
+    over-match (no public-suffix-list dependency); acceptable for the auth-replay use case."""
+    host = (host or "").lower().strip(".")
+    parts = host.split(".")
+    return ".".join(parts[-2:]) if len(parts) >= 2 else host
+
+
+def _install_chrome_guards(context) -> None:
+    """Install BEFORE ``goto`` (TASK 024 R1): abort ANY request — navigation, sub-resource, JS
+    ``fetch``/``sendBeacon`` — whose host is NOT public, so a credentialed render cannot exfil to
+    an internal/metadata host or follow a redirect to one. Public-IP results are cached per host
+    to bound the ``getaddrinfo`` cost inside the route callback. Fails CLOSED (abort) on any
+    guard error — never lets a request through on an exception. (Same-site / off-target-public
+    enforcement is post-snapshot in :func:`_fetch_chrome_html`, not here.)"""
+    cache: dict[str, bool] = {}
+
+    def _ok(host: str) -> bool:
+        if host not in cache:
+            cache[host] = _host_is_public(host)
+        return cache[host]
+
+    def _route(route, request):
+        try:
+            host = (urlparse(getattr(request, "url", "")).hostname or "").lower()
+            if host and _ok(host):
+                route.continue_()
+            else:
+                route.abort()
+        except Exception:  # noqa: BLE001 — fail closed
+            try:
+                route.abort()
+            except Exception:  # noqa: BLE001
+                pass
+
+    context.route("**/*", _route)
+
+
+def _chrome_scroll(page, passes: int) -> None:
+    """Scroll to the bottom up to ``passes`` times to trigger lazy content (e.g. replies),
+    bounded by ``_CHROME_SCROLL_BUDGET_S`` wall-clock — never hangs (TASK 024 R4). Best-effort:
+    any scroll/wait error stops the loop, never aborts the fetch."""
+    deadline = _monotonic() + _CHROME_SCROLL_BUDGET_S
+    for _ in range(max(0, int(passes))):
+        if _monotonic() >= deadline:
+            break
+        try:
+            page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+            page.wait_for_load_state("networkidle", timeout=3000)
+        except Exception:  # noqa: BLE001 — best-effort
+            break
+
+
+def _fetch_chrome_html(url: str, opts=None) -> str:
+    """Render ``url`` via headless Chromium (Playwright) → hydrated DOM HTML.
+
+    Soft-optional: missing Playwright → :class:`EngineNotInstalled` (exit 3) with
+    remediation. ``opts`` (TASK 024) carries the authenticated-context source + scroll
+    settings; the SSRF gate (024-02), auth context (024-03), and scroll/staleness (024-05)
+    consume it. With ``opts`` carrying no auth, behaviour is the prior bare render (R10).
+
+    SSRF-gated (024-02): the target is public-IP-checked before navigation; a context-level
+    route guard aborts any request (sub-resource / ``fetch`` / ``beacon`` / redirect) to a
+    non-public host; an off-target public redirect (final origin ≠ target eTLD+1) is refused;
+    a stale-session login wall → ``auth_required``. Honest-scope residuals (ARCH §16.1):
+    DNS-rebind TOCTOU is inherited (resolve-then-connect); ``storage_state`` localStorage is
+    origin-restored; ``page.content()`` is bounded by ``--max-bytes`` only POST-render (Chromium's
+    own DOM memory is uncapped). Run fully-untrusted conversions in an egress-restricted sandbox.
+    """
+    _assert_public_http(url)  # gate the TARGET before any browser work (TASK 024 R1)
+    from . import _chrome_auth
+    spec = _chrome_auth.resolve_context_kwargs(opts) if opts is not None else None  # R2 (None ⇒ R10 anon)
+    sync_playwright = _import_sync_playwright()
+    target_reg = _registrable(urlparse(url).hostname)
+    final_url = url
     try:
         with sync_playwright() as pw:
-            browser = pw.chromium.launch()
+            # Context (not new_page) so the SSRF route-guard + auth state attach to ALL
+            # pages/popups/workers; guards installed BEFORE goto (no first-request TOCTOU).
+            if spec and spec["mode"] == "persistent":
+                context = pw.chromium.launch_persistent_context(
+                    user_agent=_BROWSER_UA, headless=True, **spec["kwargs"])
+                browser = None
+            else:
+                browser = pw.chromium.launch()
+                context = browser.new_context(
+                    user_agent=_BROWSER_UA, **(spec["kwargs"] if spec else {}))
+                if spec and spec.get("cookies"):
+                    context.add_cookies(spec["cookies"])
             try:
-                page = browser.new_page(user_agent=_BROWSER_UA)
+                _install_chrome_guards(context)
+                page = context.new_page()
                 page.goto(url, wait_until="load", timeout=30000)
+                if opts is not None and getattr(opts, "chrome_scroll", False):
+                    _chrome_scroll(page, getattr(opts, "chrome_scroll_passes", 8) or 8)  # R4
+                final_url = page.url or url
                 html = page.content()
             finally:
-                browser.close()
+                browser.close() if browser is not None else context.close()
+    except (FetchFailed, EngineNotInstalled):
+        raise
     except Exception as exc:  # noqa: BLE001
         raise FetchFailed(
             f"chrome fetch failed for {_redact(url)}: {type(exc).__name__}",
             details={"url": _redact(url)},
         ) from exc
+    # Off-target PUBLIC redirect guard (R1): a public→public off-target landing is refused so a
+    # credentialed session is never carried to a different site.
+    if _registrable(urlparse(final_url).hostname) != target_reg:
+        raise FetchFailed(
+            f"chrome landed off-target for {_redact(url)} (→ {_redact(final_url)})",
+            details={"url": _redact(url), "kind": "offsite_redirect"},
+        )
+    # --max-bytes parity with the lite tier (perf P-1): bound the rendered body we pass
+    # downstream (turndown / absolutize). NB: this is POST-render — Chromium's own DOM memory
+    # is not capped by it; it prevents a giant scrolled SPA from overflowing downstream work.
+    max_bytes = getattr(opts, "max_bytes", None) if opts is not None else None
+    if max_bytes is not None and len(html.encode("utf-8", "replace")) > max_bytes:
+        raise FetchFailed(
+            f"chrome render exceeds --max-bytes ({max_bytes}) for {_redact(url)}",
+            details={"url": _redact(url), "max_bytes": max_bytes, "kind": "max_bytes"},
+        )
+    # Stale-session detection (R5c): a logged-out login wall is NOT returned as content.
+    if opts is not None and _chrome_auth.is_login_wall(html, final_url):
+        raise FetchFailed(
+            f"chrome landed on a login wall for {_redact(url)} (stale/expired session — re-mint)",
+            details={"url": _redact(url), "kind": "auth_required"},
+        )
     return html
 
 
@@ -1068,7 +1216,7 @@ def _tier_chrome(target: str, opts) -> "tuple[str, str]":
     explicit ``--engine chrome``, fall-through otherwise); a render error becomes
     _TierUnavailable."""
     try:
-        page_html = _fetch_chrome_html(target)
+        page_html = _fetch_chrome_html(target, opts)
     except FetchFailed as exc:
         raise _TierUnavailable(exc.details.get("kind") or "chrome_failed",
                                exc.details.get("status")) from exc

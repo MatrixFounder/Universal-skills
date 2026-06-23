@@ -80,6 +80,11 @@ python3 scripts/html2md.py INPUT [OUTPUT_DIR] [flags]
 | `--target-selector SEL` | `article, main, [role=main]` | `X-Target-Selector` sent to the remote reader (article block) |
 | `--search "QUERY"` | — | web-search mode: top results → Markdown notes (mutually exclusive with INPUT; the positional is then OUTPUT_DIR) |
 | `--max-results N` | `5` | for `--search`: max results to fetch + convert |
+| `--chrome-storage-state PATH` | — | authed Chrome: Playwright `storage_state` JSON (mint via `login`); server-deployable. See [§5b](#5b-authenticated-login-gated-chrome) |
+| `--chrome-cookies-file PATH` | — | authed Chrome: Netscape `cookies.txt` (cookie-only session) |
+| `--chrome-user-data-dir DIR` | — | authed Chrome: persistent profile (local only) — the three `--chrome-*` auth sources are mutually exclusive + force `--engine chrome` |
+| `--chrome-scroll` / `--chrome-scroll-passes N` | off / `8` | scroll to pull lazy content (replies); bounded by passes + a 60 s cap |
+| `login URL [--save-state PATH]` | `./html2md-state.json` | **subcommand** — open a headful browser, log in by hand, save the session |
 | `--reader-mode` / `--no-reader` | reader **on** | also emit `<slug>.reader.md` (article-extracted) / suppress it |
 | `--download-images` / `--no-download-images` | download **on** | fetch images into `_attachments/` / keep remote URLs as-is |
 | `--max-images N` | unbounded | cap the number of **remote** image fetches (SSRF amplification bound) |
@@ -209,7 +214,43 @@ every result inherits per-result Jina/local fallback), writing **one note per re
 (frontmatter `query:` + `source:`), sharing one `_attachments/`. A result whose own fetch
 fails is skipped (not fatal); a healthy zero-result search exits 0; if every search provider
 is down the run fails with `all_engines_failed`. For safety, search-result URLs do **not**
-escalate to the (un-network-hardened) Chrome tier unless you explicitly pass `--engine chrome`.
+escalate to the Chrome tier unless you explicitly pass `--engine chrome`. (`--search` cannot be
+combined with `--chrome-*` auth — a session must not fan out across search results.)
+
+---
+
+## 5b. Authenticated (login-gated) Chrome
+
+Read pages behind a login (X **Articles**/threads, paywalled/members, private docs) by replaying
+a **human-minted** session — html2md never automates login/passwords/2FA.
+
+**Mint once** (interactive, where a browser exists):
+```bash
+python3 scripts/html2md.py login https://x.com --save-state ~/.html2md/x.json
+```
+A headful Chromium opens → log in by hand (2FA ok) → press Enter → a `0600` `storage_state.json`
+(cookies + localStorage) is written.
+
+**Then convert headless** (one auth source, mutually exclusive; any of them forces `--engine chrome`):
+```bash
+python3 scripts/html2md.py "https://x.com/i/article/<id>" out/ --engine chrome \
+    --chrome-storage-state ~/.html2md/x.json --chrome-scroll
+```
+| Flag / env | Carries | Notes |
+|---|---|---|
+| `--chrome-storage-state` / `HTML2MD_CHROME_STORAGE_STATE` | cookies + localStorage | **primary**; portable, read-only → **server-deployable + concurrency-safe** |
+| `--chrome-cookies-file` / `HTML2MD_CHROME_COOKIES_FILE` | cookies only (Netscape `cookies.txt`) | cookie-only sessions |
+| `--chrome-user-data-dir` / `HTML2MD_CHROME_USER_DATA_DIR` | full persistent profile | local only (mutable, single-concurrency; survives 2FA) |
+
+`--chrome-scroll [--chrome-scroll-passes N]` scrolls to pull lazy replies (bounded by passes + a
+60 s wall-clock — never hangs). A stale/expired session → `FetchFailed kind=auth_required` (re-mint).
+**Security:** the Chrome tier is **SSRF-gated** (private + off-target-public redirects refused;
+non-public sub-resources aborted); session files are bearer credentials — path/env only (never
+argv), `0600` enforced (group+world refused). Auth is **opt-in / additive**: with none set,
+behaviour is byte-for-byte the default ladder (no crash). **Server deploy** (e.g. an *example*
+Hermes box): mint on a workstation → ship the `storage_state.json` as a 0600 secret
+(`HTML2MD_CHROME_STORAGE_STATE`) → render headless; rotate = re-mint + redeploy. See
+`skills/html2md/.env.example` and `references/html-to-markdown.md` (full deploy + Jina-key matrix).
 
 ---
 
@@ -311,15 +352,23 @@ than crashing (add `--rate-limit 2` to be a polite citizen on a long list).
   CR/LF/control chars in the target/query are refused. In `auto`, the remote tier is an
   automatic last-resort escalation for **public** targets — so a public URL can leave the
   machine on escalation; use `--no-remote` for sensitive conversions. A `--search` result
-  URL never escalates to the un-hardened Chrome tier unless you pass `--engine chrome`.
+  URL never escalates to the Chrome tier unless you pass `--engine chrome`.
+- **Authenticated Chrome (TASK 024).** Auth replays a **human-minted** session (no
+  password/2FA automation). The Chrome tier is now **SSRF-gated**: `_assert_public_http`
+  before navigation; a context-level route guard aborts non-public sub-resources/`fetch`/
+  `beacon`; an **off-target public redirect** (final origin ≠ target eTLD+1) is refused;
+  the rendered body is bounded by `--max-bytes`. Session files are **bearer credentials** —
+  path/env only (never argv), **0600** enforced (group+world refused), symlinks rejected,
+  values never logged. `--chrome-*` cannot be combined with `--search`. Target + session stay local.
 - **PDF / binary guard.** A URL that returns a PDF (`%PDF` magic) or binary
   payload fails with a clear `FetchFailed` (exit 10) instead of feeding garbage to
   turndown — html2md is HTML→Markdown only.
-- **Honest-scope residuals.** DNS-rebinding (resolve-then-connect TOCTOU) and the
-  opt-in Chrome engine are **not** SSRF-hardened; a remote reader follows its own
-  server-side redirects beyond our control; the ladder has no aggregate `--deadline` and
-  `--max-bytes` defaults unbounded (KNOWN_ISSUES HTML2MD-9). Run untrusted conversions in
-  an egress-restricted sandbox.
+- **Honest-scope residuals.** DNS-rebinding (resolve-then-connect TOCTOU) is inherited by
+  both the lite and chrome tiers; `storage_state` localStorage is origin-restored; Chromium's
+  in-render DOM memory is uncapped (the `--max-bytes` cap is post-render); the login-wall
+  heuristic is best-effort/per-site; the ladder has no aggregate `--deadline` and `--max-bytes`
+  defaults unbounded (KNOWN_ISSUES HTML2MD-9, HTML2MD-10). Run untrusted conversions in an
+  egress-restricted sandbox.
 
 ---
 

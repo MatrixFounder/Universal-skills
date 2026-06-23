@@ -98,6 +98,33 @@ def build_parser() -> argparse.ArgumentParser:
         "--max-results", dest="max_results", metavar="N", type=int, default=5,
         help="For --search: max number of top results to fetch + convert (default: 5).",
     )
+    # Authenticated Chrome (TASK 024). The three auth sources are mutually exclusive; any of
+    # them forces the chrome engine (the credential is never silently dropped to lite). Auth is
+    # strictly opt-in — with none set, behaviour is byte-for-byte the prior render (R10).
+    chrome_auth = p.add_mutually_exclusive_group()
+    chrome_auth.add_argument(
+        "--chrome-storage-state", dest="chrome_storage_state", metavar="PATH", default=None,
+        help="Playwright storage_state JSON (cookies + localStorage) from a prior login — the "
+             "portable, server-deployable auth primitive. Mint with the `login` subcommand.",
+    )
+    chrome_auth.add_argument(
+        "--chrome-cookies-file", dest="chrome_cookies_file", metavar="PATH", default=None,
+        help="Netscape cookies.txt (cookie-only session) injected into the Chrome context.",
+    )
+    chrome_auth.add_argument(
+        "--chrome-user-data-dir", dest="chrome_user_data_dir", metavar="DIR", default=None,
+        help="Persistent Chrome profile dir (local convenience; self-refreshes, survives 2FA; "
+             "NOT for concurrent/server use).",
+    )
+    p.add_argument(
+        "--chrome-scroll", dest="chrome_scroll", action="store_true", default=False,
+        help="After load, scroll to pull lazy content (e.g. replies). Bounded by "
+             "--chrome-scroll-passes + an internal wall-clock cap; never hangs.",
+    )
+    p.add_argument(
+        "--chrome-scroll-passes", dest="chrome_scroll_passes", metavar="N", type=int, default=8,
+        help="Max scroll passes for --chrome-scroll (default: 8).",
+    )
     reader = p.add_mutually_exclusive_group()
     reader.add_argument(
         "--reader-mode", dest="reader", action="store_true", default=True,
@@ -234,6 +261,31 @@ def _validate_usage(args: argparse.Namespace) -> None:
     if args.max_results is not None and args.max_results < 1:
         raise Usage("--max-results must be >= 1.")
 
+    # Chrome auth (TASK 024 R2/R10): env fallbacks; sources mutually exclusive; any source forces
+    # the chrome engine (never silently drop the credential to lite); a missing/unreadable
+    # storage_state/cookies file → typed BadInput (graceful, not a traceback).
+    args.chrome_storage_state = (getattr(args, "chrome_storage_state", None)
+                                 or os.environ.get("HTML2MD_CHROME_STORAGE_STATE"))
+    args.chrome_cookies_file = (getattr(args, "chrome_cookies_file", None)
+                                or os.environ.get("HTML2MD_CHROME_COOKIES_FILE"))
+    args.chrome_user_data_dir = (getattr(args, "chrome_user_data_dir", None)
+                                 or os.environ.get("HTML2MD_CHROME_USER_DATA_DIR"))
+    _auth = [s for s in (args.chrome_storage_state, args.chrome_cookies_file,
+                         args.chrome_user_data_dir) if s]
+    if len(_auth) > 1:
+        raise Usage("--chrome-storage-state / --chrome-cookies-file / --chrome-user-data-dir "
+                    "are mutually exclusive.")
+    if _auth and args.search is not None:
+        # Security (vdd-multi L-1): a login session must NOT be fanned out across
+        # attacker-influenceable search-result URLs (would defeat the S-1 chrome-escalation guard).
+        raise Usage("--chrome-* auth cannot be combined with --search.")
+    if _auth:
+        args.engine = "chrome"  # auth ⇒ chrome (credential never dropped to lite)
+        for f in (args.chrome_storage_state, args.chrome_cookies_file):
+            if f and not Path(f).is_file():
+                raise BadInput(f"chrome auth file not found: {Path(f).name}",
+                               details={"path": Path(f).name})
+
 
 def _resolve_search_paths(args: argparse.Namespace) -> tuple[Path | None, bool]:
     """Resolve OUTPUT_DIR for ``--search`` (no INPUT — the positional is the OUTPUT_DIR).
@@ -331,12 +383,45 @@ def convert(args: argparse.Namespace) -> int:
     return _convert_one(acq, args, output_dir, stdout_mode=stdout_mode, input_ref=input_ref)
 
 
+def _login_main(argv: list[str]) -> int:
+    """``html2md.py login URL [--save-state PATH]`` — mint a Playwright ``storage_state`` via a
+    HEADFUL browser (TASK 024 R3): the one interactive step; runtime is always headless. The
+    surface is frozen here (024-01); the actual render lands in 024-04."""
+    p = argparse.ArgumentParser(
+        prog="html2md.py login",
+        description="Open URL in a headful browser, log in by hand (2FA ok), then save the "
+                    "session as a storage_state JSON (chmod 0600) for --chrome-storage-state.")
+    p.add_argument("URL", help="page to open for login (e.g. https://x.com)")
+    p.add_argument("--save-state", dest="save_state", metavar="PATH",
+                   default="html2md-state.json",
+                   help="where to write the storage_state JSON (default: ./html2md-state.json)")
+    _errors.add_json_errors_argument(p)
+    args = p.parse_args(argv)
+    json_mode = bool(args.json_errors)
+    try:
+        from . import acquire as acquire_mod
+        acquire_mod._login_render(args.URL, args.save_state, args)
+        return _EXIT_OK
+    except _AppError as exc:
+        return _errors.report_error(str(exc), code=exc.CODE, error_type=exc.error_type,
+                                    details=exc.details, json_mode=json_mode, stream=sys.stderr)
+    except Exception as exc:  # noqa: BLE001 — graceful: any login error → typed envelope, no traceback
+        return _errors.report_error(f"login failed: {type(exc).__name__}",
+                                    code=InternalError.CODE, error_type="InternalError",
+                                    json_mode=json_mode, stream=sys.stderr)
+
+
 def main(argv: list[str] | None = None) -> int:
     """Top-level orchestrator. Routes every failure through ``_errors.report_error``.
 
     Exit map (§5.1): 0 ok · 1 BadInput/ConvertFailed/internal · 2 usage ·
     3 EngineNotInstalled · 6 SelfOverwriteRefused · 10 FetchFailed · 11 EmptyExtraction.
-    """
+    A leading ``login`` verb is intercepted BEFORE the flat parser (the positional INPUT is
+    ``nargs="?"``, so ``login URL`` would otherwise mis-parse as INPUT="login")."""
+    if argv is None:
+        argv = sys.argv[1:]
+    if argv and argv[0] == "login":
+        return _login_main(argv[1:])
     parser = build_parser()
     args = parser.parse_args(argv)
     json_mode = bool(args.json_errors)

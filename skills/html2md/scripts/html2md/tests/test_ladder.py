@@ -48,11 +48,15 @@ class _Ladder(unittest.TestCase):
             "_fetch_chrome_html": acquire._fetch_chrome_html,
             "_looks_substantial": acquire._looks_substantial,
             "_trafilatura_meta": acquire._trafilatura_meta,
+            "_host_is_public": acquire._host_is_public,
         }
         self._env = {k: os.environ.pop(k, None) for k in _ENV_KEYS}
-        # deterministic: extraction is "substantial" + metadata is trivial (no trafilatura)
+        # deterministic + HERMETIC: extraction is "substantial", metadata trivial (no trafilatura),
+        # and _host_is_public is stubbed so the remote tier makes NO real DNS lookup for the
+        # test targets (no external network in unit tests).
         acquire._looks_substantial = lambda h: True
         acquire._trafilatura_meta = lambda h, u: SourceMeta(url=u)
+        acquire._host_is_public = lambda h: True
         self.requested: list[str] = []
 
     def tearDown(self):
@@ -72,7 +76,7 @@ class _Ladder(unittest.TestCase):
         acquire._http_get_bytes = fake
 
     def _chrome(self, action):
-        def fake(url):
+        def fake(url, opts=None):
             if isinstance(action, Exception):
                 raise action
             return action

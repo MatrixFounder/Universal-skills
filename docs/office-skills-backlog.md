@@ -296,6 +296,21 @@ Privacy: target public-IP gate до remote, `--no-remote` kill-switch, CR/LF-inj
 passthrough (`x-set-cookie`), screenshots/`pageshot`, `X-With-Links-Summary`. Артефакты:
 `docs/tasks/task-023-*.md` + `docs/ARCHITECTURE.md` §15 + `docs/reviews/{task,arch,plan}-023-review.md`.
 
+**TASK 024 ✅ (authenticated login-gated Chrome, server-deployable).** Чтение контента
+**за логином** (X Articles/треды, paywalled, приватное) повтором **вручную-снятой** сессии
+(никакого автологина/2FA). `html2md.py login URL --save-state s.json` (headful) → headless
+рендер с `--chrome-storage-state` (портативно, read-only → concurrency-safe; деплоится как
+секрет, *пример* — Hermes) / `--chrome-cookies-file` / `--chrome-user-data-dir`; `--chrome-scroll`
+тянет lazy-реплаи. Chrome-движок теперь **SSRF-gated** (приватные + off-target-public редиректы
+отклоняются, non-public sub-resources рубятся — снимает старый honest-scope HTML2MD-4). Auth
+**строго opt-in** (R10: без ключей/сессии — поведение TASK 023, без падения). Секреты: только
+файл/env (не argv), 0600 (group+world отказ). Jina-ключ: env-only, матрица «локальный chrome для
+auth vs keyed-jina для anti-bot не-auth»; `x-set-cookie` НЕ реализован (3rd-party). Всё в
+html2md-owned (`acquire.py`/`cli.py`/`_chrome_auth.py`/`_cookies.py`) — gated-мастера не тронуты,
+новых base-зависимостей нет (Chrome — существующий soft-optional extra). **Отложено (R9):**
+`x-set-cookie`, programmatic login, auto-refresh, cookies→lite. Артефакты:
+`docs/tasks/task-024-*.md` + `docs/ARCHITECTURE.md` §16 + `docs/reviews/{task,arch,plan}-024-review.md`.
+
 ---
 
 ## 3. Cross-cutting (затрагивают все 4 скилла)

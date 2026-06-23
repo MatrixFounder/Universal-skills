@@ -111,18 +111,73 @@ back off / `--rate-limit`), `not_found`, `server_error` (retry), `unreachable`
 secret params are redacted). A separate `EmptyExtraction` (exit 11) means the fetch
 *succeeded* but extraction produced an empty body (retry with another engine/endpoint).
 
+## Authenticated (login-gated) Chrome — and server / Hermes deploy
+
+Some content (X long-form **Articles**, reply threads, paywalled/members articles, private
+docs) needs a **real, authenticated, JS-rendering browser**. html2md replays a **human-minted**
+session (it never automates login/passwords/2FA).
+
+**Mint once (interactive, where a browser exists):**
+```
+python3 scripts/html2md.py login https://x.com --save-state ~/.html2md/x.json
+```
+A headful Chromium opens; log in by hand (2FA ok); press Enter; the session is saved to a
+`0600` `storage_state.json` (cookies + localStorage).
+
+**Then convert headless** (one of three sources, mutually exclusive):
+```
+python3 scripts/html2md.py "https://x.com/i/article/<id>" out/ --engine chrome \
+    --chrome-storage-state ~/.html2md/x.json --chrome-scroll
+```
+| Source | Carries | Use |
+|---|---|---|
+| `--chrome-storage-state PATH` | cookies + localStorage | **primary**; portable, read-only → server/concurrency-safe |
+| `--chrome-cookies-file PATH` | cookies only (Netscape `cookies.txt`) | cookie-only sessions |
+| `--chrome-user-data-dir DIR` | full persistent profile | local only (mutable, single-concurrency; self-refreshes, survives 2FA) |
+
+Any auth source forces `--engine chrome`. `--chrome-scroll [--chrome-scroll-passes N]` scrolls
+to pull lazy replies (bounded, never hangs). A stale/expired session → `FetchFailed
+kind=auth_required` (re-mint), never a logged-out wall returned as content.
+
+**Server / Hermes deployment.** `storage_state.json` is the unit of auth deployment:
+mint on a workstation → ship the file to the server as a **0600 secret** (e.g.
+`HTML2MD_CHROME_STORAGE_STATE=/secrets/x.json`) → render **headless**. Because the state is
+**read-only at runtime**, N concurrent runs share one file safely (a persistent profile is
+mutable → single-concurrency, not server-recommended). Rotate = re-mint + redeploy (no
+auto-refresh). The skill's contract ends at "read a 0600 file at that path"; the secret store
+is the deployer's concern. **In-network option:** run a **self-hosted Jina** and point the
+remote tier at it (`HTML2MD_READER_URL=http://reader.internal/`) to keep anti-bot fetches
+inside the perimeter. **Security:** the Chrome tier is SSRF-gated (private + off-target-public
+redirects refused; non-public sub-resources aborted); the target + session stay local.
+
+## Jina API key — keyless vs keyed, and when to use what
+
+`JINA_API_KEY` (env/secret only) raises the otherwise rate-limited keyless quota and improves
+reliability — recommended for server/volume use of the remote tier. Decision matrix:
+
+| Content | Use |
+|---|---|
+| **Login-gated** (your own session) | **local `--engine chrome` + storage_state** — never ship a live session to a third party |
+| **Anti-bot but public** (Cloudflare, no login) | `--engine jina` (keyed for quota) **or** a self-hosted reader |
+| **Internal/sensitive** | `--no-remote` (fully local) |
+
+Forwarding a live session **to** Jina (`x-set-cookie`) is intentionally **not** implemented
+(unverified against Jina's API + it would hand your session to a third party).
+
 ## Honest scope / limitations
 
 - **Markdown fidelity** inherits the turndown core: rowspan/colspan collapse to a flat
   grid (anchor value + blanks); inline CSS / classes are ignored.
-- **Fetch coverage**: paywalled / auth-gated pages are out of scope; JS/SPA pages only
-  convert via the Chrome engine. `robots.txt` / rate-limiting / ToS compliance is the
-  **caller's** responsibility.
-- **SSRF**: the lite path blocks private/loopback/link-local/metadata targets on every
-  redirect hop and streams with a `--max-bytes` cap. **NOT** covered: (a) DNS rebinding
-  (resolve-then-connect TOCTOU); (b) the Chrome engine (basic `launch + goto`, follows
-  internal redirects, no beacon blocking). **Run untrusted conversions in a
-  network-egress-restricted sandbox.**
+- **Fetch coverage**: auth-gated pages now convert via **authenticated Chrome** (a human-minted
+  session — see above); JS/SPA pages convert via the Chrome engine. `robots.txt` / rate-limiting
+  / ToS compliance is the **caller's** responsibility.
+- **SSRF**: the lite path AND the Chrome tier block private/loopback/link-local/metadata targets
+  before any request and on every redirect hop (Chrome via a context-level route guard that
+  aborts non-public navigation/sub-resource/`fetch`/`beacon`, plus an off-target-public-redirect
+  refusal); the lite path streams with a `--max-bytes` cap (Chrome bounds the rendered body
+  post-render). **NOT** fully covered: (a) DNS rebinding (resolve-then-connect TOCTOU, both
+  tiers); (b) `storage_state` localStorage is origin-restored; (c) Chromium's own in-render DOM
+  memory is uncapped. **Run fully-untrusted conversions in a network-egress-restricted sandbox.**
 - **Local image reads** are confined to the input's base directory — a crafted
   `<img src="../../secret">` cannot exfiltrate off-disk files into the vault.
 - **Reader extraction** is best-effort; the whole-page `.md` is the fallback. For a clean

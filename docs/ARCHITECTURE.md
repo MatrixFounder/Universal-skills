@@ -879,3 +879,34 @@ soft-optional extra ⇒ no base-dep change.
 
 **MVP gate = 024-01…04** (hardened authenticated render). 05 + 06 complete it. Security beads
 (02, 04) under `tdd-strict`; **no auto-commit**.
+
+### 16.11. As-built deltas (TASK 024, 2026-06-23)
+
+Shipped (6 beads + `/vdd-multi`), additive to §16.1–10. 177 tests green & **proven hermetic**
+(suite passes with external DNS+TCP blocked); G-1/G-2/G-3 replication gate PASS; `validate_skill`
+exit 0; no new base dependency. RTM R1–R10 all realized.
+
+- **`login` verb-intercept** — dispatched in `main` *before* the flat argparser (a `login` first
+  arg routes to `_login_main`), not `add_subparsers` (keeps the single-positional convert surface
+  unchanged). `_login_render` mints `storage_state` under `umask(0o077)` so the file is **0600 from
+  creation** — no post-write `chmod` race (INFO-1).
+- **`_install_chrome_guards(context)`** — context-level `route` guard, installed **before** `goto`;
+  the unused `target_reg` param was dropped (L-4). Fail-closed: a request whose host fails the
+  public-IP gate is **aborted**, with a per-host `getaddrinfo` cache to avoid re-resolving.
+- **Off-target public-redirect refusal** — after render, `_registrable(final_url)` ≠ target eTLD+1
+  ⇒ `FetchFailed(kind=offsite_redirect)`. `www`↔apex is same-site (allowed); `_login_render`
+  intentionally skips this (manual SSO to a different eTLD+1 is legitimate).
+- **`--max-bytes` parity on the rendered body** — chrome `page.content()` is now length-checked
+  (`FetchFailed kind=max_bytes`), closing the downstream-memory lever the lite tier already had
+  (P-1). The cap is **post-render** — Chromium's in-render DOM memory stays uncapped (honest-scope).
+- **`is_login_wall(html, final_url)`** — `opts` param dropped (was dead, L-2); 2 signals shipped
+  (login-path final URL + `_WALL_MARKERS`/`_WALL_PAIRS` body markers). The R5c 3rd signal
+  (target-selector-absent) is **deferred** — needs a DOM parse and a weak heuristic risks false
+  positives (KNOWN_ISSUES HTML2MD-10).
+- **`--chrome-* ⊥ --search`** — `_validate_usage` rejects the combo (Usage/exit 2): auth must not
+  fan a human session over attacker-influenceable search-result URLs (L-1, defends S-1).
+- **R10 graceful degradation** — with no keys / no session the ladder is byte-for-byte TASK-023
+  behaviour; a `--chrome-*` flag pointing at a missing file fails fast as typed `BadInput` (not a
+  late crash). `_fetch_chrome_html(url)` → `(url, opts)` signature change; 5 test fakes updated.
+- **Test hermeticity** — the Playwright `_import_sync_playwright` seam + `_host_is_public` stub make
+  the chrome/auth suite fully offline; verified under a blocked-egress firewall run.

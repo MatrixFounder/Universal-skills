@@ -46,7 +46,7 @@ class _Base(unittest.TestCase):
         acquire._looks_substantial = lambda h: True
         acquire._trafilatura_meta = lambda h, u: SourceMeta(url=u)
         acquire._host_is_public = lambda h: True
-        acquire._fetch_chrome_html = lambda u: (_ for _ in ()).throw(EngineNotInstalled("x"))
+        acquire._fetch_chrome_html = lambda u, opts=None: (_ for _ in ()).throw(EngineNotInstalled("x"))
         acquire._RATE_LIMITER = None
         self.requested: list[str] = []
 
@@ -145,7 +145,7 @@ class TestSearch(_Base):
         acquire._looks_substantial = lambda h: False  # lite body is a JS shell → would escalate
         called = {"chrome": False}
 
-        def chrome_spy(u):
+        def chrome_spy(u, opts=None):
             called["chrome"] = True
             raise EngineNotInstalled("x")
         acquire._fetch_chrome_html = chrome_spy

@@ -208,3 +208,33 @@ dependency** (Chrome stays the existing soft-optional extra).
   (R7), concurrency note (read-only state).
 - `bash scripts/tests/test_e2e.sh` (suite + G-1/G-2 gate) PASS; `validate_skill.py` exit 0.
 - **No auto-commit** (per `/vdd-*`); security beads (R1 gate, R7) under `tdd-strict`.
+
+## 8. As-built (2026-06-23, post-`/vdd-multi`)
+
+Delivered across 6 beads; all 10 RTM rows realized. Gates: **177 tests green & proven hermetic**
+(suite passes with external DNS+TCP blocked), G-1/G-2/G-3 replication gate PASS, `validate_skill`
+exit 0, **no new base dependency** (Playwright already optional/lazy from TASK 023).
+
+**New files (all html2md-OWNED, NOT `diff -q`-gated):**
+- `html2md/_chrome_auth.py` — `resolve_context_kwargs(opts)` (one auth source → Playwright context
+  spec: storage_state / cookies / persistent profile) + `is_login_wall(html, final_url)`
+  (conservative stale-session heuristic).
+- `html2md/_cookies.py` — `load_cookie_jar` (symlink + `0o077` reject + sanitized errors) +
+  `to_playwright_cookies` (lifted+tightened from transcript-fetcher; do-not-fork note in code).
+- `skills/html2md/.env.example` — documents every optional env var (read from process env; **not**
+  auto-loaded).
+
+**Changed:** `acquire._fetch_chrome_html(url, opts)` is SSRF-gated (pre-`goto`
+`_assert_public_http`, context `route` guard, off-target public-redirect refusal, `--max-bytes`
+parity, stale→`auth_required`); `cli.py` chrome flags + `login` verb-intercept + `_validate_usage`
+(env fallback, auth⇒engine chrome, missing-file→`BadInput`, `--chrome-* ⊥ --search`).
+
+**`/vdd-multi` (PASS, no 🔴/🔥):** folded L-1 (auth+search reject), P-1 (chrome `--max-bytes`),
+INFO-1 (umask-0600 mint), L-2 (dead `is_login_wall` param dropped; R5c 3rd signal deferred),
+L-3/INFO-3 (stale docstrings/refs), L-4 (unused guard param). Scanner's 2 "Bearer Token CWE-798"
+CRITICALs confirmed **false positives** (env-sourced header + dummy test fixture).
+
+**Honest-scope (KNOWN_ISSUES HTML2MD-10):** auth replays a **human-minted** session (no
+password/2FA automation); `--max-bytes` cap is post-render (Chromium in-render DOM uncapped);
+login-wall heuristic is best-effort/per-site; R5c selector-absent signal deferred. R5 (Hermes
+deploy) documented & headless-ready but **not live-tested** per the user's instruction.

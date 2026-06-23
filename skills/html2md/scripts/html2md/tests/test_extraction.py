@@ -38,7 +38,7 @@ class _Base(unittest.TestCase):
                        ("_http_get_bytes", "_fetch_chrome_html", "_host_is_public")}
         self._env = {k: os.environ.pop(k, None) for k in _ENV}
         acquire._host_is_public = lambda h: not h.startswith("10.")  # 10.* = internal
-        acquire._fetch_chrome_html = lambda u: (_ for _ in ()).throw(EngineNotInstalled("x"))
+        acquire._fetch_chrome_html = lambda u, opts=None: (_ for _ in ()).throw(EngineNotInstalled("x"))
 
     def tearDown(self):
         for k, v in self._saved.items():
