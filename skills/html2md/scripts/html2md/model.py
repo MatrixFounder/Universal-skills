@@ -22,8 +22,13 @@ class AcquireResult:
     """FC-1 output (ARCH §4.1).
 
     ``mode``   — "file" | "archive" | "url"
-    ``engine`` — "lite" | "chrome" | None   (only meaningful for url)
+    ``engine`` — the real fetch tier: "lite" | "lite+arxiv-html" | "lite+restapi" |
+                 "lite+nojs" | "jina" | "remote:<host>" | "chrome" | None (offline)
     ``images`` — {original_url: local_path}  (archive/file; url fills lazily at emit)
+    ``content_kind`` — "html" (default; flows through clean→turndown) | "markdown"
+                 (trust-mode: ``markdown`` carries the reader's own clean Markdown and
+                 the clean/turndown passes are bypassed — TASK 023 R4)
+    ``markdown`` — populated only when ``content_kind == "markdown"``
     """
 
     html: str
@@ -32,6 +37,8 @@ class AcquireResult:
     engine: str | None = None
     source_meta: SourceMeta = field(default_factory=SourceMeta)
     images: dict = field(default_factory=dict)
+    content_kind: str = "html"
+    markdown: str | None = None
 
 
 @dataclass(frozen=True)

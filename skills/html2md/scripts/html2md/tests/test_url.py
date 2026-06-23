@@ -413,9 +413,19 @@ class TestRetryUAandEngines(unittest.TestCase):
         self.assertEqual(nb.slept, [])
 
     def test_jina_engine_endpoint_and_format(self):
-        with _patch_httpx(content=b"<html>jina rendered</html>") as px:
-            html = acquire._fetch_jina_html("https://example.com/article", None)
+        """The jina engine now flows through the generic remote-reader tier (TASK 023):
+        provider 'jina' → r.jina.ai/<target> with X-Return-Format html."""
+        body = b"<html><body>jina rendered a substantial article body here</body></html>"
+        saved = acquire._host_is_public
+        acquire._host_is_public = lambda h: True  # deterministic (skip real DNS for r.jina.ai)
+        try:
+            with _patch_httpx(content=body) as px:
+                html, label = acquire._fetch_remote_html(
+                    "https://example.com/article", _opts(engine="jina"))
+        finally:
+            acquire._host_is_public = saved
         self.assertIn("jina rendered", html)
+        self.assertEqual(label, "jina")
         self.assertTrue(px._fake.seen_urls[0].startswith(
             "https://r.jina.ai/https://example.com/article"))
         self.assertEqual(px._fake.seen_headers[0].get("X-Return-Format"), "html")

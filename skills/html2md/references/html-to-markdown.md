@@ -38,10 +38,28 @@ keeps the original (remote) URLs verbatim — the right choice for a quick agent
 
 | Engine | When | Cost |
 |---|---|---|
-| `lite` (default) | static articles, blogs, docs | sub-second, no browser |
+| `lite` | static articles, blogs, docs | sub-second, no browser |
 | `chrome` | JS-hydrated SPAs (CRM/portal), `<canvas>` | ~1–3 s + ~150 MB Chromium (opt-in) |
-| `auto` | unknown — lite, fall back to chrome if the body is a JS shell | best of both |
-| `jina` | JS/anti-bot/Cloudflare pages **without** a local browser | external HTTPS round-trip; rate-limited keyless |
+| `auto` (default) | unknown — **local-first ladder**: `lite → chrome → remote` last-resort | best of both; remote only if local fails (public targets) |
+| `jina` | JS/anti-bot/Cloudflare **without** a local browser | remote-first via `r.jina.ai`, **auto-falls back** to lite/chrome; rate-limited keyless |
+| `remote` | a self-hosted / non-jina reader | remote-first via `HTML2MD_READER_URL`/`_PROVIDERS`; **requires** a configured provider |
+
+**The fallback ladder (no single point of failure).** `auto` tries local engines first and
+escalates to the remote reader only as a last resort; `jina`/`remote` try the reader first and
+fall back to local. If a remote reader is down / 429 / 402 / 5xx, the ladder moves to the next
+configured provider, then to `lite`/`chrome`. Only when **every** viable tier is exhausted does
+the run fail — `FetchFailed (kind=all_engines_failed)` with a `details.tried` trace. So a Jina
+outage never kills a conversion.
+
+**Vendor-agnostic remote tier + privacy.** The remote reader is pluggable: `jina` (`r.jina.ai`)
+is the built-in default; set `HTML2MD_READER_URL=https://reader.internal/` (or an ordered
+`HTML2MD_READER_PROVIDERS` list) to use a **self-hosted Jina** or any compatible reader — then a
+jina.ai outage is irrelevant. Auth is per-provider (`JINA_API_KEY` for jina;
+`HTML2MD_READER_TOKEN` for a generic reader). The remote tier **sends the target URL to an
+external service**, so: a private/internal/loopback target is **never** forwarded (public-IP
+gate); `--no-remote` disables the tier outright (fully local); CR/LF in the target is refused.
+`--remote-format markdown` trusts the reader's own clean Markdown (bypasses local cleaning);
+`--target-selector SEL` (default `article, main, [role=main]`) extracts just the article block.
 
 Chrome is **soft-optional**: `bash scripts/install.sh --with-chrome`. Without it,
 `--engine chrome` exits 3 (`EngineNotInstalled`) with remediation.
@@ -51,12 +69,14 @@ retries transport errors / HTTP 5xx / 429 with exponential backoff (429 honours
 `Retry-After`); a **403 auto-escalates once to a browser User-Agent** (default UA stays
 the honest `html2md/…`). `--rate-limit REQS_PER_SEC` throttles outbound fetches.
 
-**`--engine jina`** routes through Jina Reader (`r.jina.ai`), which renders + cleans the
-page **server-side** and returns HTML to our pipeline — no local Chromium. It is
-**explicit-only** (never part of `auto`) because the **target URL is sent to an external
-service**; don't use it for sensitive/internal URLs. Keyless (rate-limited) by default;
-`JINA_API_KEY` raises the quota. Use it as the escalation when a browser-UA lite fetch is
-still blocked and you'd rather not install Playwright.
+**Web search (`--search "QUERY"`).** A vendor-agnostic search provider (`s.jina.ai` default;
+override with `HTML2MD_SEARCH_URL` / `HTML2MD_SEARCH_PROVIDERS`) returns the top result URLs;
+**each URL is fetched through the same fallback ladder** (so every result inherits per-result
+fallback) and written as one note (frontmatter `query:` + `source:`), sharing one
+`_attachments/`. `--max-results N` bounds the count (default 5). A result whose own fetch fails
+is skipped (not fatal); a healthy zero-result search exits 0; if every search provider is down
+the run fails with `FetchFailed (kind=all_engines_failed)`. `--search` is mutually exclusive
+with a URL/file INPUT (the first positional is the OUTPUT_DIR).
 
 **Clean-source host variants (proactive rewrites).** Some hosts serve a clean article only
 at a sibling endpoint while the canonical URL is JS-gated or chrome-heavy, and **Chrome

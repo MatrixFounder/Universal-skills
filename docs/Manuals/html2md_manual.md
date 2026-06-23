@@ -74,7 +74,12 @@ python3 scripts/html2md.py INPUT [OUTPUT_DIR] [flags]
 | `INPUT` | — | `http(s)` URL, or local `.html`/`.htm`/`.mhtml`/`.mht`/`.webarchive` |
 | `OUTPUT_DIR` | `./tmp/html2md_out/` | where `<slug>.md`, `<slug>.reader.md`, `_attachments/` are written (created on demand) |
 | `--stdout` | off | print whole-page Markdown to stdout instead of writing files |
-| `--engine lite\|chrome\|auto\|jina` | `auto` | fetch engine for URLs (see [§5](#5-engines-lite-vs-chrome)) |
+| `--engine lite\|chrome\|auto\|jina\|remote` | `auto` | fetch engine for URLs — resilient ladder (see [§5](#5-engines--the-resilient-fallback-ladder)) |
+| `--no-remote` | off | disable the remote-reader tier entirely (no URL ever sent to an external reader) |
+| `--remote-format html\|markdown` | `html` | what a remote reader returns: HTML through the local pipeline, or trust the reader's own Markdown |
+| `--target-selector SEL` | `article, main, [role=main]` | `X-Target-Selector` sent to the remote reader (article block) |
+| `--search "QUERY"` | — | web-search mode: top results → Markdown notes (mutually exclusive with INPUT; the positional is then OUTPUT_DIR) |
+| `--max-results N` | `5` | for `--search`: max results to fetch + convert |
 | `--reader-mode` / `--no-reader` | reader **on** | also emit `<slug>.reader.md` (article-extracted) / suppress it |
 | `--download-images` / `--no-download-images` | download **on** | fetch images into `_attachments/` / keep remote URLs as-is |
 | `--max-images N` | unbounded | cap the number of **remote** image fetches (SSRF amplification bound) |
@@ -97,8 +102,8 @@ it does not pile up duplicates).
 |---|---|
 | `0` | success |
 | `1` | BadInput / ConvertFailed / internal error |
-| `2` | usage error (bad arguments) |
-| `3` | EngineNotInstalled — `--engine chrome` requested but Playwright absent (run `install.sh --with-chrome`) |
+| `2` | usage error (bad arguments; also `--search` + a URL, `--engine remote` with no provider configured, `--max-results` ≤ 0) |
+| `3` | EngineNotInstalled — **explicit** `--engine chrome` but Playwright absent (run `install.sh --with-chrome`). In `auto`/remote-first this is a silent fall-through, not exit 3 |
 | `6` | SelfOverwriteRefused — output path would clobber the input |
 | `10` | FetchFailed — unreachable / blocked (HTTP 4xx/5xx) / over `--max-bytes` / **PDF or binary** payload |
 | `11` | EmptyExtraction — fetch succeeded but a substantial source converted to a near-empty body |
@@ -107,8 +112,10 @@ With `--json-errors`, stderr carries `{"v":1,"error":"…","code":10,"type":"Fet
 For a fetch failure, `details` includes **`status`** (the HTTP code) and **`kind`** —
 `bot_blocked` (403 → try `--engine jina`/`chrome`), `auth_required` (login/paywall →
 manual), `rate_limited` (429), `not_found`, `server_error` (retry), `unreachable`
-(transport), `pdf`/`binary`, or `arxiv_no_html` (PDF-only arXiv paper → use the pdf skill)
-— so a calling agent can branch on manual-vs-retry. `details.url` keeps the meaningful
+(transport), `pdf`/`binary`, `arxiv_no_html` (PDF-only arXiv paper → use the pdf skill),
+`refused` (non-public target / CR/LF in target), or **`all_engines_failed`** (every tier
+of the fallback ladder was exhausted — `details.tried` lists each tier + its failure kind,
+URL-free) — so a calling agent can branch on manual-vs-retry. `details.url` keeps the meaningful
 query (only secret params are redacted). **Clean-source host variants** are auto-recovered
 by `--engine auto`/`lite`: **Wikipedia** `/wiki/<Title>` → REST `page/html` (`lite+restapi`),
 **arXiv** `/abs`|`/pdf/<id>` → `/html/<id>` (`lite+arxiv-html`), **HackerNoon** → `/lite/`
@@ -149,30 +156,60 @@ tags: []
 
 ---
 
-## 5. Engines: lite vs chrome vs jina
+## 5. Engines & the resilient fallback ladder
 
 | Engine | How | When |
 |---|---|---|
 | `lite` | `httpx` GET + `trafilatura` (also yields title/date/author) | server-rendered HTML (most docs, blogs, news) |
 | `chrome` | headless Chromium via Playwright (`--with-chrome`) | JS/SPA pages whose content is hydrated client-side |
-| `auto` *(default)* | lite first; if the result looks like a thin JS shell, escalate to chrome | unknown pages — let the skill decide |
-| `jina` | **Jina Reader** (`r.jina.ai`) renders + cleans server-side, returns HTML → our pipeline | JS/anti-bot pages **without** a local browser; Cloudflare-hard sites |
+| `auto` *(default)* | **local-first ladder**: `lite → chrome → remote` last-resort | unknown pages — let the skill decide |
+| `jina` | **Jina Reader** (`r.jina.ai`), remote-first **+ automatic local fallback** | JS/anti-bot/Cloudflare without a local browser |
+| `remote` | a **configured** vendor-agnostic reader, remote-first + local fallback | self-hosted Jina / another reader; requires a provider |
 
-`auto` falls back to Chrome only when Playwright is installed; otherwise it
-returns whatever lite got. Force `--engine chrome` when you *know* the page needs
-JS and you have run `install.sh --with-chrome`.
+**The ladder never has a single point of failure.** Each engine defines a tier order;
+a tier that is down/blocked/rate-limited **falls through** to the next, and the run fails
+(once, with `kind=all_engines_failed` + a `details.tried` trace) only when *every* viable
+tier is exhausted. So a Jina outage, a 429, or a quota error no longer kills a conversion —
+it falls back to the local engines (and vice-versa). `auto` stays local-first (privacy);
+`jina`/`remote` are remote-first with local fallback. `EngineNotInstalled` from chrome
+reached as an *auto* fallback is a silent fall-through; an **explicit** `--engine chrome`
+without Playwright still exits 3.
 
-**Fetch robustness (all engines that use the lite HTTP path):** transient failures
-(transport errors, HTTP 5xx, 429) are **retried with exponential backoff** (`--retries`,
-default 2; 429 honours `Retry-After`); a **403** triggers one automatic escalation to a
-real-browser User-Agent (the default UA is the honest `html2md/…` — only a refusal swaps
-it). This recovers most anti-scraper 403s (e.g. UA-checking sites) with no flags.
+**Vendor-agnostic remote tier.** `jina` (`r.jina.ai`) is the built-in default, but point
+the remote tier at a **self-hosted Jina** or any compatible reader with
+`HTML2MD_READER_URL=https://reader.internal/` (or an ordered `HTML2MD_READER_PROVIDERS`
+list) — then a jina.ai outage is irrelevant. Auth is per-provider: `JINA_API_KEY` for jina,
+`HTML2MD_READER_TOKEN` for a generic reader. `--remote-format markdown` trusts the reader's
+own clean Markdown (skips the local clean/turndown); `--target-selector` extracts just the
+article block.
 
-**`--engine jina` caveats:** it sends the **target URL to the external `r.jina.ai`
-service** (which fetches it server-side) — so it's **explicit-only**, never part of `auto`;
-don't use it for sensitive/internal URLs. Keyless by default (rate-limited); set
-`JINA_API_KEY` for higher quota. Use it as the escalation when even a browser-UA lite fetch
-is blocked (Cloudflare/captcha) and you'd rather not install Playwright.
+**Privacy.** The remote tier **sends the target URL to an external service** — in `auto`
+this is an automatic last-resort escalation for **public** targets (so a Cloudflare page
+recovers with no flags), meaning a public URL may leave the machine on escalation. Guards:
+a private/internal/loopback/metadata target is **never** forwarded to a reader; `--no-remote`
+disables the remote tier entirely (fully local); CR/LF in the target/query is refused. Use
+`--no-remote` for sensitive/internal conversions.
+
+**Fetch robustness (lite HTTP path):** transient failures (transport, HTTP 5xx, 429) are
+**retried with exponential backoff** (`--retries`, default 2; 429 honours `Retry-After`);
+a **403** triggers one automatic escalation to a real-browser User-Agent (the default UA is
+the honest `html2md/…`). This recovers most anti-scraper 403s with no flags.
+
+> **Latency note:** tiers run sequentially and each has its own retry budget, so a target
+> that times out on every tier can take minutes (no aggregate deadline yet — see
+> `KNOWN_ISSUES` HTML2MD-9). For bulk/untrusted runs pass `--retries 0`, `--rate-limit`, and
+> an explicit `--max-bytes`.
+
+## 5a. Web search (`--search`)
+
+`html2md.py --search "QUERY" [OUTPUT_DIR] [--max-results N]` runs a vendor-agnostic web
+search (`s.jina.ai` default; `HTML2MD_SEARCH_URL`/`HTML2MD_SEARCH_PROVIDERS` to override),
+takes the top results, and fetches **each result URL through the same fallback ladder** (so
+every result inherits per-result Jina/local fallback), writing **one note per result**
+(frontmatter `query:` + `source:`), sharing one `_attachments/`. A result whose own fetch
+fails is skipped (not fatal); a healthy zero-result search exits 0; if every search provider
+is down the run fails with `all_engines_failed`. For safety, search-result URLs do **not**
+escalate to the (un-network-hardened) Chrome tier unless you explicitly pass `--engine chrome`.
 
 ---
 
@@ -268,12 +305,21 @@ than crashing (add `--rate-limit 2` to be a polite citizen on a long list).
   cloud-metadata (`169.254.169.254`) address; the body is streamed with a
   `--max-bytes` abort; `--max-images` bounds remote image fetches; a non-`http(s)`
   top-level INPUT is treated as a local path, never fetched.
+- **Remote-tier privacy (TASK 023).** The remote reader sends the **target URL** to an
+  external service; a private/internal/loopback/metadata target is **never** forwarded
+  (a public-IP gate runs before any remote request), `--no-remote` disables the tier, and
+  CR/LF/control chars in the target/query are refused. In `auto`, the remote tier is an
+  automatic last-resort escalation for **public** targets — so a public URL can leave the
+  machine on escalation; use `--no-remote` for sensitive conversions. A `--search` result
+  URL never escalates to the un-hardened Chrome tier unless you pass `--engine chrome`.
 - **PDF / binary guard.** A URL that returns a PDF (`%PDF` magic) or binary
   payload fails with a clear `FetchFailed` (exit 10) instead of feeding garbage to
   turndown — html2md is HTML→Markdown only.
 - **Honest-scope residuals.** DNS-rebinding (resolve-then-connect TOCTOU) and the
-  opt-in Chrome engine are **not** SSRF-hardened — run untrusted conversions in an
-  egress-restricted sandbox.
+  opt-in Chrome engine are **not** SSRF-hardened; a remote reader follows its own
+  server-side redirects beyond our control; the ladder has no aggregate `--deadline` and
+  `--max-bytes` defaults unbounded (KNOWN_ISSUES HTML2MD-9). Run untrusted conversions in
+  an egress-restricted sandbox.
 
 ---
 

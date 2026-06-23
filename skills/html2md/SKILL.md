@@ -21,11 +21,27 @@ for two consumers: (1) an **Obsidian web-clipper** (self-contained note), and
   script — it has SSRF protection, dual-output, sha1-deduped attachments.
 
 ## 2. Capabilities
-- **URL → Markdown** (`--engine lite|chrome|auto|jina`): `httpx`+`trafilatura` lite fetch
-  (also yields title/date/author) with **retry + backoff + 429/`Retry-After`** and a
-  **403 → browser-UA escalation** (honest UA by default); auto-fallback to headless
-  Chrome for JS/SPA pages; or `--engine jina` (Jina Reader — server-side JS render, no
-  local browser; sends the URL to an external service). `--rate-limit` throttles fetches.
+- **URL → Markdown via a resilient fallback ladder** (`--engine lite|chrome|auto|jina|remote`):
+  `httpx`+`trafilatura` lite fetch (also yields title/date/author) with **retry + backoff +
+  429/`Retry-After`** and a **403 → browser-UA escalation**. `--engine auto` (default) is
+  **local-first** (`lite → chrome → remote` last-resort); `--engine jina|remote` is
+  **remote-first** with automatic local fallback. **No single tier is a point of failure:**
+  if a remote reader is down / rate-limited / quota-exhausted, the run falls back to the next
+  provider then to the local engines; only when *every* viable tier is exhausted does it fail
+  with one typed `FetchFailed (kind=all_engines_failed)` carrying a `details.tried` trace.
+- **Vendor-agnostic remote reader** (`--engine jina|remote`): the remote tier is a pluggable
+  provider layer — `jina` (`r.jina.ai`) is the built-in default, but `HTML2MD_READER_URL` /
+  `HTML2MD_READER_PROVIDERS` point it at a **self-hosted Jina** or any compatible reader, so
+  resilience does not depend on any single vendor. `--engine remote` REQUIRES a configured
+  provider (never a silent fall-back to jina.ai). `--no-remote` disables the remote tier
+  entirely. `--remote-format markdown` trusts the reader's own clean Markdown; `--target-selector`
+  extracts just the article block. `--rate-limit` throttles fetches.
+- **Web search → Markdown** (`--search "QUERY" [OUTPUT_DIR] [--max-results N]`): a
+  vendor-agnostic search provider (`s.jina.ai` default; `HTML2MD_SEARCH_URL` /
+  `HTML2MD_SEARCH_PROVIDERS` override) returns the top results; **each result URL is fetched
+  through the same fallback ladder** (so every result inherits per-result fallback) and
+  written as one note (frontmatter `query:` + `source:`). A failed result is skipped, not
+  fatal; a healthy zero-result search exits 0.
 - **Site-specific clean-source endpoints** (proactive, auto/lite): **Wikipedia**
   `/wiki/<Title>` → the Parsoid REST `page/html` endpoint (the canonical page is
   chrome-only and strips to empty); **arXiv** `/abs/` or `/pdf/<id>` → the full-text
@@ -49,7 +65,9 @@ for two consumers: (1) an **Obsidian web-clipper** (self-contained note), and
 
 ## 4. Script Contract
 - **Command**:
-  - `python3 scripts/html2md.py INPUT [OUTPUT_DIR] [--engine lite|chrome|auto|jina] [--reader-mode|--no-reader] [--download-images|--no-download-images] [--attachments-dir _attachments] [--archive-frame main|N|all|auto] [--max-bytes N] [--max-images N] [--retries N] [--rate-limit REQS_PER_SEC] [--stdout] [--json-errors]`
+  - `python3 scripts/html2md.py INPUT [OUTPUT_DIR] [--engine lite|chrome|auto|jina|remote] [--no-remote] [--remote-format html|markdown] [--target-selector SEL] [--reader-mode|--no-reader] [--download-images|--no-download-images] [--attachments-dir _attachments] [--archive-frame main|N|all|auto] [--max-bytes N] [--max-images N] [--retries N] [--rate-limit REQS_PER_SEC] [--stdout] [--json-errors]`
+  - Search: `python3 scripts/html2md.py --search "QUERY" [OUTPUT_DIR] [--max-results N] [...]` (mutually exclusive with INPUT).
+- **Environment (optional):** `HTML2MD_READER_URL` / `HTML2MD_READER_PROVIDERS` (remote reader base(s)), `HTML2MD_READER_TOKEN` (generic reader auth), `JINA_API_KEY` (jina quota), `HTML2MD_SEARCH_URL` / `HTML2MD_SEARCH_PROVIDERS` (search provider base(s)).
 - **INPUT**: a `http(s)` URL, or a local `.html`/`.htm`/`.mhtml`/`.mht`/`.webarchive`.
 - **OUTPUT_DIR**: directory to write `<slug>.md` (+ `<slug>.reader.md` by default) and
   `_attachments/` into. **Omit → defaults to `./tmp/html2md_out/`** (created on demand,
@@ -63,11 +81,14 @@ for two consumers: (1) an **Obsidian web-clipper** (self-contained note), and
   Markdown on stdout. `<slug>` is derived from the input filename / URL path
   (deterministic); the human title lives in frontmatter.
 - **Failure semantics / exit codes**: 0 ok · 1 BadInput/ConvertFailed/internal ·
-  2 usage · 3 EngineNotInstalled (Chrome requested, Playwright absent) ·
-  6 SelfOverwriteRefused · 10 FetchFailed (unreachable / blocked / over `--max-bytes`;
-  `details.kind` ∈ bot_blocked/auth_required/not_found/rate_limited/server_error/
-  unreachable/pdf/binary/arxiv_no_html) · 11 EmptyExtraction (substantial source →
-  near-empty body). `--json-errors` emits `{v:1, error, code, type?, details?}` on stderr.
+  2 usage (incl. `--search`+URL, `--engine remote` with no provider, `--max-results`≤0) ·
+  3 EngineNotInstalled (Chrome **explicitly** requested, Playwright absent — in `auto`/
+  remote-first this is a silent fall-through, not exit 3) · 6 SelfOverwriteRefused ·
+  10 FetchFailed (unreachable / blocked / over `--max-bytes`; `details.kind` ∈ bot_blocked/
+  auth_required/not_found/rate_limited/server_error/unreachable/pdf/binary/arxiv_no_html/
+  refused/**all_engines_failed**) · 11 EmptyExtraction (substantial source → near-empty body).
+  On a total-ladder failure, `details.tried` lists each tier attempted + its failure kind
+  (URL-free). `--json-errors` emits `{v:1, error, code, type?, details?}` on stderr.
 - **Idempotency**: same input → same output filenames + deduped attachments. URL
   fetches reflect live content (not idempotent across server changes).
 
@@ -81,11 +102,20 @@ for two consumers: (1) an **Obsidian web-clipper** (self-contained note), and
   it resolves to a loopback / private / link-local / cloud-metadata (169.254.169.254)
   address; body is streamed with a `--max-bytes` abort; `--max-images` bounds remote
   fetches; non-`http(s)` top-level INPUT is treated as a local path, never fetched.
-- **Honest-scope residuals**: DNS-rebinding (resolve-then-connect TOCTOU) and the
-  opt-in Chrome engine are NOT SSRF-hardened — run untrusted conversions in an
-  egress-restricted sandbox. **`--engine jina`** sends the target URL to the external
-  `r.jina.ai` service (it fetches server-side) — opt-in only, never part of `auto`; do
-  not use it for sensitive/internal URLs. See `references/html-to-markdown.md`.
+- **Remote-reader tier sends the target URL to an external service** (`r.jina.ai` or a
+  configured reader fetches it server-side). In `--engine auto` the remote tier is an
+  **automatic last-resort escalation** for **public** targets (so a Cloudflare/anti-bot page
+  recovers without manual intervention) — meaning a public URL may leave the machine on
+  escalation. Guards: a **private/internal/loopback/metadata target is NEVER forwarded to a
+  reader** (a public-IP gate runs before any remote request); **`--no-remote`** disables the
+  remote tier entirely (no external egress); CR/LF/control chars in the target/query are
+  refused (request-splitting guard). Do not point `--engine jina|remote`, or `auto` against
+  sensitive URLs, at internal hosts you don't want proxied; use `--no-remote` for fully
+  local conversion. The local hop to the reader passes the SSRF gate.
+- **Honest-scope residuals**: DNS-rebinding (resolve-then-connect TOCTOU) and the opt-in
+  Chrome engine are NOT SSRF-hardened; a reader follows its own server-side redirects beyond
+  our control. Run untrusted conversions in an egress-restricted sandbox. See
+  `references/html-to-markdown.md`.
 - **No global installs**: deps live in `scripts/.venv` + `scripts/node_modules`.
 
 ## 6. Validation Evidence

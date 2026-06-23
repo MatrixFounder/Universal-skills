@@ -466,3 +466,281 @@ Living-document delta over §1–13 (which describe the planned design). Shipped
   test_battery.py}` + committed `examples/regression/gitbook-style-doc.html`. Asserts
   `empty_headings==0`, `stray_chrome==0`, required needles, metric tolerance bands.
   Wired into `tests/test_e2e.sh` (alongside the G-1/G-2 `diff -q` gate).
+
+---
+
+## 15. TASK 023 — resilient vendor-agnostic remote-reader tier & fallback ladder
+
+Living-document delta for **TASK 023** (`docs/TASK.md`). §1–14 describe the TASK 022
+base; this section specifies the enhancement and **supersedes** the named earlier
+clauses where it conflicts (§2.1 FC-1, §4.1 `engine` enum, §5.1 CLI, §7 security).
+Scope guard: **all changes are html2md-owned** (`acquire.py`, `cli.py`, html2md tests,
+`SKILL.md`, `references/`); **no `diff -q`-gated master is touched**, so §9 G-1/G-2/G-3
+hold by construction.
+
+### 15.1. What changes (no new file, no new dependency)
+
+The enhancement lives entirely inside **FC-1 `acquire.py`** (+ `cli.py` surface). Two
+new internal concerns are added; the FC inventory (§2.1) and the pipeline (§2.2) are
+otherwise unchanged:
+
+- a **`RemoteReader` provider abstraction** (vendor-agnostic remote URL→content tier), and
+- a **fetch-ladder orchestrator** that sequences `lite` / `chrome` / remote tiers with
+  bidirectional fallback.
+
+`httpx` (already a base dep) is reused through the single existing network seam
+`_http_get_bytes`; **nothing is added to `requirements.txt`**.
+
+### 15.2. The fallback ladder (state machine — R1)
+
+```
+--engine auto (default, LOCAL-FIRST / privacy-first)
+    lite ──ok──▶ done
+     │ JS-shell                │ blocked (403 after browser-UA) / EmptyExtraction
+     ▼                          ▼
+    chrome (if installed) ──ok──▶ done
+     │ unavailable / fail       │
+     ▼                          ▼
+    remote-reader tier ──ok──▶ done        (skipped if target not public, or --no-remote)
+     │ all providers down
+     ▼
+    FetchFailed(kind=all_engines_failed, details.tried=[…])   ← exactly one typed error
+
+--engine jina | remote (REMOTE-FIRST, on demand)
+    remote-reader tier ──ok──▶ done
+     │ provider down/429/402/5xx/timeout
+     ▼
+    lite ──ok──▶ done ──▶ (JS-shell) chrome ──ok──▶ done
+     │ all fail
+     ▼
+    FetchFailed(kind=all_engines_failed, details.tried=[…])
+```
+
+Rules: (a) a tier is *attempted* only if applicable (remote needs a public target +
+`--no-remote` off; chrome needs Playwright); (b) **fall-through** happens on
+provider-down/transient classes (§15.4) — a terminal **target** error short-circuits the
+ladder (§15.4); (c) the ladder raises **one** typed `FetchFailed` only when every viable
+tier is exhausted (AC-R1, never a bare traceback); (d) each tier is bounded by the
+existing per-request timeout, so worst-case ladder latency = Σ attempted tiers (serial
+v1 — no unbounded stall).
+
+**Tier-failure taxonomy (load-bearing):** distinguish three failure scopes — a
+**provider** failure (this reader is down → try the next *provider*), a **target**
+failure (the page itself is 403/404 as reported by a reader → stop trying more *remote
+providers*, but `auto` may still try a different *tier* such as `chrome`), and a **local
+tier** block (a `lite`/`chrome` 403 surviving the browser-UA retry → **escalate to the
+remote tier**, the ssrn/researchgate recovery case). `EngineNotInstalled` from `chrome`
+reached as an *auto fallback* is a fall-through (not exit 3); an **explicit**
+`--engine chrome` without Playwright stays exit 3. See §15.4.
+
+### 15.3. `RemoteReader` provider abstraction (R2 — vendor-agnostic)
+
+A tiny provider record (no class hierarchy needed): given a target URL + opts, it yields
+the **reader request URL** + **headers**, and knows how to classify its own response.
+
+| Provider | Reader base | Selected by | Auth env |
+|---|---|---|---|
+| `jina` (built-in default) | `https://r.jina.ai/<url>` | default; `--engine jina` | `JINA_API_KEY` → `Authorization: Bearer` |
+| generic (configured) | `${HTML2MD_READER_URL}<url>` | `HTML2MD_READER_URL` set | optional `HTML2MD_READER_TOKEN` |
+| ordered list | each `<base><url>` | `HTML2MD_READER_PROVIDERS` (comma/space list) | per-entry |
+
+- **Ordering:** if `HTML2MD_READER_PROVIDERS` is set it is the order; else `HTML2MD_READER_URL`
+  (if set) then `jina`. Providers are tried in order, falling through on provider-down.
+- **Self-hosted Jina** (open-source `jina-ai/reader`) is just `HTML2MD_READER_URL` pointing
+  at the local instance — the key vendor-agnostic story (resilience independent of jina.ai
+  uptime).
+- **`--engine remote` requires configuration (privacy guard).** `--engine remote` selects
+  the *configured generic* provider(s); with **no** `HTML2MD_READER_URL`/
+  `HTML2MD_READER_PROVIDERS` set it is a **usage error (exit 2)** ("use `--engine jina` for
+  the built-in") — it MUST NOT silently fall back to `jina.ai` (that would betray a user who
+  picked `remote` precisely to avoid jina). `--engine jina` = the built-in; `auto` = jina is
+  the last-resort built-in. Decision frozen at bead 023-01 (CLI-surface freeze).
+- **Auth is per-provider, not interchangeable:** built-in `jina` → `JINA_API_KEY`;
+  generic/configured → `HTML2MD_READER_TOKEN`. A self-hosted "jina-shaped" reader configured
+  via `HTML2MD_READER_URL` uses `HTML2MD_READER_TOKEN`, NOT `JINA_API_KEY`.
+- **Request shape:** `GET <base><target>` with headers `X-Return-Format: html|markdown`
+  (§15.5 R4), `X-Target-Selector: <sel>` (R4), `Authorization` (if keyed). The base+target
+  join is literal-concatenation (Jina's `r.jina.ai/https://…` convention), not `urljoin`.
+
+### 15.3a. Search provider (R9 — vendor-agnostic web search)
+
+A sibling of the reader abstraction for the **query → top-N pages → Markdown** entrypoint
+(`--search "QUERY"`). Same fall-through discipline; same `_http_get_bytes` seam.
+
+| Provider | Shape | Reader URL | Result handling |
+|---|---|---|---|
+| `s.jina.ai` (built-in default) | **combined** | `https://s.jina.ai/<query>` | server-side search+fetch returns **merged Markdown** of top results → split/wrap with frontmatter |
+| generic (configured) | **links** | `${HTML2MD_SEARCH_URL}<query>` | returns a list of **result URLs/JSON** → each URL fetched via the **R1 FETCH ladder** (so every result inherits Jina/local fallback) |
+
+- **Selection/order:** `HTML2MD_SEARCH_PROVIDERS` (ordered list) else `HTML2MD_SEARCH_URL`
+  (if set) then `s.jina.ai`. Providers tried in order, falling through on provider-down
+  (§15.4) — a search provider has **no local equivalent**, so once all are exhausted the
+  ladder raises one typed `FetchFailed` (honest: there is no offline web search).
+- **Two shapes, one resilience story:** the *links* shape is the truly vendor-agnostic
+  path — search only ranks/selects URLs, and the proven FETCH ladder (with its own
+  per-URL fallback) does the conversion, so a per-result Jina failure still degrades to
+  local. The *combined* shape (s.jina.ai) is the convenience path.
+- **Emit:** one note per result into OUTPUT_DIR (shared `_attachments/`), frontmatter
+  carries `query:` + the result `source:` URL; an individual failed result is **skipped,
+  not fatal**; `--stdout` concatenates. `--max-results N` bounds the count (default 5).
+- **Mutual exclusion:** `--search` and a positional URL/file INPUT are mutually exclusive
+  (cli usage error, exit 2, if both given).
+
+### 15.4. Failure classification (R3 — provider-down vs target-blocked)
+
+| Observed | Class | Ladder action |
+|---|---|---|
+| DNS / connect / read **timeout**, transport error | provider transient | retry+backoff (existing), then **fall through** |
+| HTTP **5xx**, **503**, **502** | provider down | retry (existing), then **fall through** |
+| HTTP **429** + `Retry-After` | provider rate-limited | bounded 429 retry (existing), then **fall through** |
+| HTTP **402** (quota/payment) | provider quota | **fall through** (no retry) |
+| **empty / < N-char** reader body | provider miss | **fall through** |
+| reader maps the **target's** 403 / 401 / 404 | **target** block/absence | **terminal** — surface `kind∈{bot_blocked,auth_required,not_found}`, do **not** retry other providers |
+
+This split (a) survives any single provider's outage and (b) avoids pointless
+cross-provider retries of a genuinely-404/blocked target. Classification reuses
+`_fetch_kind` + the existing `_http_get_bytes` retry loop; the *new* logic is the
+"fall through to next tier" wrapper, not new transport code.
+
+### 15.5. Data-model & interface deltas
+
+**`AcquireResult.engine`** (supersedes §4.1) now ranges over:
+`lite | lite+arxiv-html | lite+restapi | lite+nojs | jina | remote:<host> | chrome`.
+
+**`FetchFailed.details`** gains `tried: [{engine, kind, status?}]` (R6) on
+total-ladder failure, plus `kind="all_engines_failed"`.
+
+**CLI surface deltas (supersede §5.1):**
+```
+--engine lite|chrome|auto|jina|remote   (adds 'remote' = remote-first, generic provider)
+--no-remote                             (disable the remote-reader tier entirely; auto+on-demand)
+--remote-format html|markdown           (default html → local pipeline; markdown → trust reader's MD)
+--target-selector SEL                   (X-Target-Selector; default 'article, main, [role=main]')
+--search "QUERY"                        (R9 search entrypoint; mutually exclusive with a URL/file INPUT)
+--max-results N                         (top-N results to fetch+convert for --search; default 5)
+```
+**Environment (new, optional):** `HTML2MD_READER_URL`, `HTML2MD_READER_PROVIDERS`,
+`HTML2MD_READER_TOKEN`, `HTML2MD_SEARCH_URL`, `HTML2MD_SEARCH_PROVIDERS`, plus the
+existing `JINA_API_KEY`.
+
+**Frontmatter:** `engine:` reflects the real tier; **`source:` stays the canonical
+target URL** (never the reader URL) — provenance correctness (R6b).
+
+**Search multi-result IR (R9 — supersedes §4.1 for the `--search` path):** `--search`
+yields a **list** of per-result `AcquireResult`s, not a single one. `cli.convert` loops
+the existing single-result emit over them — one note per result into OUTPUT_DIR, sharing
+one `_attachments/`; an individual result that fails is **skipped** (logged in the trace),
+not fatal. `--stdout` concatenates.
+
+**Trust-markdown data path (R4 `--remote-format markdown` — supersedes §4.1's HTML
+assumption):** `AcquireResult` gains `content_kind ∈ {html, markdown}` (+ a `markdown`
+payload when `markdown`). For `content_kind == markdown`, `cli.convert` **bypasses FC-2
+(`web_clean`) and FC-3 (`core_bridge`/turndown)** entirely and applies only frontmatter
+wrapping + (if `--download-images`) image localization. Default `html` threads through the
+unchanged pipeline. The reader variant (`<slug>.reader.md`) is **not** produced in
+trust-markdown mode (there is no second extraction to derive it from).
+
+### 15.6. Security / privacy (supersedes/extends §7, R5)
+
+- **Target public-IP gate before remote escalation.** Before sending a target to *any*
+  remote reader, `_host_is_public(target_host)` must pass — a private/loopback/link-local/
+  metadata/unresolvable target is **never** forwarded to an external service (auto AND
+  on-demand). This closes the gap where today `_fetch_jina_html` only checks scheme.
+- **`--no-remote`** is a hard kill-switch (no external egress via the reader tier).
+- **URL-leaves-machine** posture documented in `SKILL.md` §5 + `references/` + KNOWN_ISSUES
+  HTML2MD-6; auto-escalation makes this reachable without `--engine jina`, so the docs must
+  state it prominently. The local hop to the reader still passes the SSRF gate.
+- **Request-URL construction (injection guard).** The operator-set reader/search **base**
+  is trusted, but the **target URL / search query is not**: URL-encode the target/query
+  when concatenating onto a base, and **reject CRLF / control chars** in the target before
+  building the request (prevents request-splitting, header injection, and SSRF-via-
+  injection through a configurable base). The target is already validated `http(s)` +
+  public (above) before it reaches this step.
+- **Image localization stays SSRF-gated (hard invariant).** Image localization — incl.
+  images found in a reader's returned Markdown (trust-markdown) or HTML — **MUST go through
+  `_http_get_bytes`** (never a direct `httpx` call / bulk fetch), because the per-hop
+  `_assert_public_http` inside it is the SSRF boundary. A gated-out (internal/metadata) image
+  URL makes `_resolve_url_image` return `None` → the image is **dropped, never fatal** (that
+  honest-degradation is the actual guarantee, not "passes the gate"). Bounded by
+  `--max-images`/`--max-bytes`. Bead 023-05 acceptance includes a test that an internal-IP
+  image URL in reader Markdown is NOT fetched.
+- **`tried` trace carries no URL.** `FetchFailed.details.tried` entries are
+  `{engine, kind, status?}` ONLY — no target/reader URL — so the observability trace cannot
+  leak a configured internal reader base or a token (the `_redact` discipline of §7 stays
+  the sole URL-in-envelope path).
+- **Honest-scope residuals unchanged:** DNS-rebinding TOCTOU and the un-hardened Chrome
+  engine (§10) are not regressed or newly mitigated here.
+
+### 15.7. Fork-free integrity (R8 — confirmed)
+
+`acquire.py` and `cli.py` are **html2md-owned, NOT** in the G-1/G-2 gate (the gate covers
+only `web_clean/*.py`, `html2md_core.js`, `_errors.py`, `_venv_bootstrap.py` — see
+`scripts/tests/test_e2e.sh`). No master byte-changes ⇒ G-1/G-2 stay silent and docx G-3
+stays byte-identical. No new dependency ⇒ isolation preserved.
+
+### 15.8. Decision records (TASK 023)
+
+- **D-23-A (ladder).** `auto` = local-first with remote last-resort escalation
+  (privacy default, `--no-remote` opt-out); `--engine jina|remote` = remote-first with
+  local fallback. User-confirmed "best option".
+- **D-23-B (vendor-agnostic providers).** Pluggable/configurable remote readers, `jina`
+  default, self-hosted via env. Resilience independent of any single vendor (user-asked).
+- **D-23-C (provider-down vs target-blocked).** Fall through only on provider/transient
+  classes; report a blocked/absent target honestly (§15.4).
+- **D-23-D (smarter extraction).** `X-Target-Selector` always; `--remote-format markdown`
+  opt-in trust-mode; default html-through-local-pipeline for output consistency.
+- **D-23-E (owned files only).** No gated master edited; gate green by construction.
+- **D-23-F (no new dep).** Provider layer = plain `httpx` via `_http_get_bytes`.
+
+### 15.9. Atomic-chain skeleton (Planner handoff — Stub-First, for /vdd-plan)
+
+| Bead | Scope (RTM) | Stub-First role |
+|---|---|---|
+| **023-01** | Freeze the new CLI surface (`--engine remote`, `--no-remote`, `--remote-format`, `--target-selector`, `--search`, `--max-results`) + `RemoteReader`/`SearchProvider` records + ladder skeleton (stubs) + **RED** tests (ladder matrix, classification, privacy guard, search) via the `_http_get_bytes` seam | STUB + tests (Red) |
+| **023-02** | `RemoteReader` provider layer: jina + generic/env-configured + ordering + header/URL construction (R2) | LOGIC (Green) — R2 |
+| **023-03** | Fetch-ladder orchestrator: local-first (auto) + remote-first (jina/remote) + fall-through + one terminal typed error + `tried` trace (R1/R3/R6) | LOGIC (Green) — R1/R3/R6 |
+| **023-04** | Privacy/SSRF: target public-IP gate before remote + `--no-remote` enforcement + tests (R5) | LOGIC (Green) — R5 |
+| **023-05** | Smarter extraction: `X-Target-Selector` + `--remote-format markdown` trust-mode emit (+ image localization) (R4) | LOGIC (Green) — R4 |
+| **023-06** | Web search: `SearchProvider` layer (`s.jina.ai` combined + generic links-shape via env) + `--search`/`--max-results` + per-result FETCH-ladder routing + search-provider fallback + per-result skip-on-fail + one-note-per-result emit (R9) | LOGIC (Green) — R9 |
+| **023-07** | Docs + integration: `SKILL.md`, `references/html-to-markdown.md`, KNOWN_ISSUES HTML2MD-1/-6, backlog §2; `validate_skill.py` exit 0; **assert G-1/G-2/G-3 unchanged**; dogfood anti-bot URL + forced-Jina-failure + a `--search` run | INTEGRATION + DOC — R7/R8 |
+
+**MVP gate = 023-01…04** (resilient vendor-agnostic ladder + privacy). 023-05 (smarter
+extraction), 023-06 (web search, R9) and 023-07 (docs) complete the task. Each Phase-2
+bead gets an adversarial logic+security roast (`/vdd-multi`) before "done"; **no
+auto-commit**.
+
+### 15.10. Open questions (TASK 023)
+
+- **OQ-23-1 (default privacy posture):** auto-escalate to remote by default for public
+  targets (chosen) vs require explicit `--allow-remote`. Default = auto-escalate-on,
+  `--no-remote` opt-out — to be confirmed at the architecture-review gate.
+- **OQ-23-2 (provider-config surface):** single `HTML2MD_READER_URL` vs ordered
+  `HTML2MD_READER_PROVIDERS` — proposed: support both.
+- **OQ-23-3 (RESOLVED):** web search is **IN SCOPE** (user 2026-06-23) — see §15.3a + R9.
+  `s.jina.ai` is the built-in default; the *links*-shape generic provider routes each
+  result through the FETCH ladder so search inherits the full fallback discipline.
+- **OQ-23-4 (trust-markdown image localization):** localize only `http(s)` image URLs in
+  the returned Markdown, bounded by `--max-images`/`--max-bytes` — proposed: yes.
+
+### 15.11. As-built deltas (TASK 023, 2026-06-23)
+
+Shipped (7 beads + `/vdd-multi`), additive to §15.1–10:
+
+- **`engine:` frontmatter** added to `emit._frontmatter` (real tier, AC-R6) — the spec's
+  R6(b) field, completed after live dogfood.
+- **`_url_tiers(engine, allow_chrome=True)`** — search-result fetches pass `allow_chrome=False`
+  (drop the chrome tier) unless the user explicitly chose `--engine chrome`: an
+  attacker-influenceable search URL must not reach the un-network-hardened Chrome tier (S-1).
+- **Trust-markdown HTML fallback** — `_LOOKS_HTML` (broad block-tag/doctype/xml sniff): if a
+  reader returns HTML despite `--remote-format markdown`, route it through the normal pipeline
+  instead of emitting raw HTML (L-2).
+- **`_search_result_urls(raw, limit)`** — bounded + deduped extraction (stops at `limit`); no
+  unbounded junk list from a large/HTML body (P-3/L-4).
+- **Request-URL encoding by base shape** — a `?url=`-ending reader base encodes the target as
+  a single query value (`quote(safe="")`); the `/`-ending Jina convention keeps it readable
+  (S-3). `--target-selector` is CR/LF-guarded (L-3).
+- **Search emits one note per result** (`_convert_one(query=…)` suppresses the reader variant).
+- **Honest-scope (deferred, KNOWN_ISSUES HTML2MD-9):** no aggregate `--deadline` (bounded but
+  uncapped serial ladder latency, P-1/P-2); `--max-bytes` unbounded default (P-4). The Chrome
+  engine's lack of a per-request SSRF gate is unchanged for an *explicit* `--engine chrome`
+  (HTML2MD-4); search no longer exposes it (S-1 above).

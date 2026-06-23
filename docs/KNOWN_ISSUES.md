@@ -414,24 +414,33 @@ All deferred-by-design; the backlog row `docs/office-skills-backlog.md` §2 «ht
 owns the decisions. Cross-skill replication (G-1/G-3) and security guards are tested,
 not listed here.
 
-### HTML2MD-1 — Cloudflare/captcha-hard sites still need an escalation engine
-**Status:** open (honest-scope, narrowed) • **Severity:** LOW • **Location:** `acquire._http_get_bytes`.
-**Symptom:** simple UA-checking 403s now self-recover (one automatic **browser-UA retry** —
-e.g. uncommoncore.co), and transient blips retry with backoff. But Cloudflare/captcha sites
-(papers.ssrn, researchgate) still 403 the lite path → clean `FetchFailed` (exit 10).
-**Workaround:** **`--engine jina`** (Jina Reader server-side render — recovered both ssrn +
-researchgate in testing) or `--engine chrome` (after `install.sh --with-chrome`), or save the
-page manually and convert the `.webarchive`/`.html`. **Do-not:** treat exit 10 as a bug — it
-is a remote block; and do not use `--engine jina` for sensitive/internal URLs (see HTML2MD-6).
+### HTML2MD-1 — Cloudflare/captcha-hard sites now auto-recover via the remote tier (TASK 023)
+**Status:** handled (residual: needs a reachable reader) • **Severity:** LOW • **Location:**
+`acquire._acquire_url` ladder + `_fetch_remote_html`.
+**Was:** Cloudflare/captcha sites (papers.ssrn, researchgate) 403'd the lite path and required
+the user to know to retry with `--engine jina`/`chrome`.
+**Now:** `--engine auto` (default) **auto-escalates** a hard-blocked public page to the remote
+reader tier (jina default, vendor-agnostic) after lite (+chrome if installed) fail — recovering
+ssrn/researchgate without manual intervention. If the reader is also down, the ladder falls
+back and finally fails with one `FetchFailed (kind=all_engines_failed, details.tried=[…])`.
+**Residual:** still needs a reachable reader OR `install.sh --with-chrome`; `--no-remote`
+opts out of any external escalation (then a hard block is a clean exit 10). **Do-not:** treat
+`all_engines_failed` as a bug — every tier was tried; see the `tried` trace. Privacy posture: HTML2MD-6.
 
-### HTML2MD-6 — `--engine jina` sends the target URL to an external service
-**Status:** open (by design) • **Severity:** LOW • **Location:** `acquire._fetch_jina_html`.
-**Symptom:** `--engine jina` fetches via `r.jina.ai`, which retrieves the page **server-side**
-— the target URL leaves the machine. **Mitigation:** it is **explicit-only** (never part of
-`auto`), validates the target is `http(s)`, and the local hop is to public `r.jina.ai` (passes
-the SSRF gate). **Do-not:** point `--engine jina` at internal/sensitive URLs; use lite/chrome
-in an egress-restricted sandbox instead. Keyless by default (rate-limited); `JINA_API_KEY`
-raises quota.
+### HTML2MD-6 — the remote-reader tier sends the target URL to an external service (TASK 023)
+**Status:** open (by design) • **Severity:** LOW • **Location:** `acquire._fetch_remote_html`.
+**Symptom:** the remote tier fetches via `r.jina.ai` (or a configured reader), which retrieves
+the page **server-side** — the target URL leaves the machine. As of TASK 023 the remote tier is
+**reachable from `--engine auto`** as an automatic last-resort escalation for **public** targets
+(not just explicit `--engine jina|remote`), so a public URL may leave the machine on escalation.
+**Mitigations:** a private/internal/loopback/metadata target is **never** forwarded (a public-IP
+gate runs before any remote request); **`--no-remote`** disables the remote tier entirely (fully
+local, no external egress); CR/LF/control chars in the target are refused; the local hop is to a
+public reader (passes the SSRF gate); the tier is **vendor-agnostic** (`HTML2MD_READER_URL` /
+`HTML2MD_READER_PROVIDERS` → self-hosted Jina or another reader). **Do-not:** rely on `auto`
+for sensitive/internal conversions without `--no-remote`. Keyless by default (rate-limited);
+`JINA_API_KEY` / `HTML2MD_READER_TOKEN` raise/authorize quota. **Residual:** a reader follows its
+own server-side redirects beyond our control.
 
 ### HTML2MD-2 — PDFs / binary URLs are not converted
 **Status:** open (by design) • **Severity:** LOW • **Location:** `acquire._fetch_lite_html`.
@@ -485,6 +494,25 @@ frontmatter-only note — the worst failure class (looks like success, silently 
 raises typed **`EmptyExtraction` (exit 11)** so callers can retry with another engine/endpoint.
 **Do-not:** widen the thresholds without re-running the battery — a genuinely image-only or
 one-line page must NOT trip the guard.
+
+### HTML2MD-9 — ladder latency has no aggregate deadline; `--max-bytes` is unbounded by default (TASK 023 /vdd-multi)
+**Status:** open (honest-scope) • **Severity:** LOW (was perf-HIGH in review) • **Location:**
+`acquire._acquire_url` ladder + `_http_get_bytes` + `run_search`.
+**Symptom:** the fallback ladder runs tiers sequentially and each tier has its OWN retry budget
+(`--retries`, default 2) × per-request timeout (~20s). There is no *aggregate* wall-clock cap, so a
+target that times out on every tier can take minutes (worst case ≈ Σ tiers; `--search` multiplies it
+by `--max-results`). Separately, **`--max-bytes` defaults to unbounded**, so a remote reader / search
+response is fully buffered + decoded (peak ≈ 3× body) unless the user sets a cap.
+**Workaround:** for untrusted / bulk / flaky targets pass `--retries 0` (or low), `--rate-limit`, and
+an explicit `--max-bytes` (e.g. `--max-bytes 52428800`); Ctrl-C is always available. **Fix path
+(follow-up, beyond TASK 023 RTM):** add an aggregate `--deadline SECONDS` checked per-tier + a sane
+default `--max-bytes`. **Do-not:** treat a slow multi-tier fall-through as a hang — it is bounded,
+just uncapped; the `details.tried` trace shows what was attempted.
+**Note (handled in this task):** the related SSRF concern — a `--search` result URL escalating to the
+un-network-hardened Chrome tier — IS fixed: search-result fetches drop the chrome tier unless the
+user explicitly chose `--engine chrome` (`acquire._url_tiers(allow_chrome=…)`). The remaining Chrome
+honest-scope (no per-request SSRF gate, follows internal redirects) is unchanged for an *explicit*
+`--engine chrome` on a user-supplied URL — see HTML2MD-4.
 
 ---
 

@@ -34,13 +34,19 @@ def _yaml_escape(value: str) -> str:
     return '"' + value + '"'
 
 
-def _frontmatter(meta: SourceMeta) -> str:
-    """YAML frontmatter block from the source metadata (ARCH §4.3)."""
+def _frontmatter(meta: SourceMeta, query: str | None = None,
+                 engine: str | None = None) -> str:
+    """YAML frontmatter block from the source metadata (ARCH §4.3). ``query`` is set for
+    ``--search`` results; ``engine`` records the real fetch tier (provenance — TASK 023 R6)."""
     lines = ["---"]
     for key, val in (("source", meta.url), ("title", meta.title),
                      ("date", meta.date), ("author", meta.author)):
         if val:
             lines.append(f"{key}: {_yaml_escape(val)}")
+    if engine:
+        lines.append(f"engine: {_yaml_escape(engine)}")
+    if query:
+        lines.append(f"query: {_yaml_escape(query)}")
     lines.append("tags: []")
     lines.append("---")
     return "\n".join(lines) + "\n\n"
@@ -237,10 +243,11 @@ def emit(
     output_dir: Path | None,
     stdout_mode: bool,
     input_ref: str,
+    query: str | None = None,
 ) -> None:
     """Write frontmatter + Markdown (+ optional attachments / reader variant), or
     stream the whole-page Markdown to stdout."""
-    front = _frontmatter(acq.source_meta)
+    front = _frontmatter(acq.source_meta, query, getattr(acq, "engine", None))
 
     # stdout mode: whole-page Markdown only, no files, no image download (ARCH §5.1).
     if stdout_mode:

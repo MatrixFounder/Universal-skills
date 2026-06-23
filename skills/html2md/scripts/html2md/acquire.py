@@ -14,13 +14,16 @@ from __future__ import annotations
 import atexit
 import html as _html
 import ipaddress
+import json
+import os
 import re
 import shutil
 import socket
 import tempfile
 import time
 from pathlib import Path
-from urllib.parse import parse_qsl, urlencode, urljoin, urlparse
+from typing import NamedTuple
+from urllib.parse import parse_qsl, quote, urlencode, urljoin, urlparse
 
 from web_clean import extract_archive
 
@@ -541,32 +544,329 @@ def _fetch_chrome_html(url: str) -> str:
 
 _JINA_READER_PREFIX = "https://r.jina.ai/"
 
+# --------------------------------------------------------------------------- #
+# Remote-reader + search provider layer (TASK 023) — vendor-agnostic, pluggable.
+# Records + the fall-through signal are frozen here (023-01); behaviour lands in
+# 023-02 (providers), 023-03 (ladder), 023-04 (privacy), 023-06 (search).
+# --------------------------------------------------------------------------- #
+_DEFAULT_TARGET_SELECTOR = "article, main, [role=main]"  # X-Target-Selector default (023-05)
 
-def _fetch_jina_html(url: str, max_bytes: int | None, retries: int = 2) -> str:
-    """Fetch via Jina Reader (``r.jina.ai``) → rendered HTML, for JS/SPA / anti-bot pages
-    WITHOUT a local browser. Borrowed (keyless) idea from last30days' web_fetch_keyless.
 
-    We request ``X-Return-Format: html`` so Jina returns rendered HTML (not its default
-    markdown), letting the page flow through the SAME pipeline as every other engine
-    (web_clean → turndown → frontmatter → _attachments). An optional ``JINA_API_KEY``
-    env raises the (otherwise keyless, rate-limited) quota.
+class _RemoteReader(NamedTuple):
+    """A remote URL→content reader provider (e.g. Jina Reader). ``name`` is the engine
+    label (``jina`` or ``remote:<host>``); ``base`` is concatenated with the target URL
+    (literal join, Jina's ``r.jina.ai/https://…`` convention)."""
 
-    PRIVACY / honest scope: the **target URL leaves the machine** — Jina fetches it
-    server-side. Hence this engine is explicit-only (``--engine jina``), never part of
-    ``auto``. The local connection is to public ``r.jina.ai`` (passes the SSRF gate).
+    name: str
+    base: str
+    token: str | None = None
+
+
+class _SearchProvider(NamedTuple):
+    """A web-search provider. ``shape`` is ``"combined"`` (returns merged Markdown of the
+    top results server-side, e.g. ``s.jina.ai``) or ``"links"`` (returns result URLs →
+    each fetched through the FETCH ladder so it inherits per-result fallback)."""
+
+    name: str
+    base: str
+    shape: str
+    token: str | None = None
+
+
+class _TierUnavailable(Exception):
+    """Internal fall-through signal: a fetch TIER (remote provider / engine) is unavailable,
+    so the ladder should try the next one. Carries the classification for the ``tried``
+    trace. NEVER surfaced to the user (distinct from :class:`FetchFailed`)."""
+
+    def __init__(self, kind: str, status: int | None = None):
+        super().__init__(kind)
+        self.kind = kind
+        self.status = status
+
+
+# Preserve URL structure when appending the target to a reader base (Jina's
+# ``r.jina.ai/https://…`` convention); only space/control/<>" and other truly-unsafe
+# bytes are percent-encoded. ``%`` is in the safe set so an already-encoded target is not
+# double-encoded. (The hard CRLF/injection rejection is 023-04.)
+_READER_TARGET_SAFE = "%:/?#[]@!$&'()*+,;=~"
+
+
+def _norm_base(base: str) -> str:
+    """Normalise a reader base for literal ``base + target`` joins. Ensures a trailing
+    ``/`` unless the base ends with ``=`` (a ``?url=``-style reader) so the join is valid."""
+    base = base.strip()
+    if not base.endswith(("/", "=")):
+        base += "/"
+    return base
+
+
+def _reader_from_base(base: str) -> "_RemoteReader":
+    """Build a provider record from a base URL, picking the right name + auth env.
+
+    ``r.jina.ai`` → name ``jina`` + ``JINA_API_KEY``; any other host → ``remote:<host>`` +
+    ``HTML2MD_READER_TOKEN`` (per-provider, not interchangeable — TASK 023 R2)."""
+    nb = _norm_base(base)
+    host = (urlparse(nb).hostname or "").lower()
+    if host == "r.jina.ai":
+        return _RemoteReader("jina", nb, os.environ.get("JINA_API_KEY"))
+    return _RemoteReader(f"remote:{host}" if host else "remote", nb,
+                         os.environ.get("HTML2MD_READER_TOKEN"))
+
+
+def _configured_providers() -> "tuple[list[_RemoteReader], str]":
+    """The env-configured reader list + a kind tag (``"list"``/``"single"``/``"none"``).
+
+    ``HTML2MD_READER_PROVIDERS`` (comma/space list) is the exact operator order;
+    else ``HTML2MD_READER_URL`` (single); else none."""
+    provs = os.environ.get("HTML2MD_READER_PROVIDERS")
+    if provs and provs.strip():
+        return [_reader_from_base(b) for b in re.split(r"[,\s]+", provs.strip()) if b], "list"
+    single = os.environ.get("HTML2MD_READER_URL")
+    if single and single.strip():
+        return [_reader_from_base(single)], "single"
+    return [], "none"
+
+
+def _remote_providers(opts) -> "list[_RemoteReader]":
+    """Ordered remote-reader providers for ``opts.engine`` (TASK 023 R2).
+
+    - ``jina``   → the built-in ``jina`` provider only.
+    - ``remote`` → the env-configured providers ONLY (never a silent jina fall-back —
+      privacy; usage-guarded non-empty in cli).
+    - ``auto``   → an explicit ``HTML2MD_READER_PROVIDERS`` list verbatim; else
+      ``HTML2MD_READER_URL`` then the built-in ``jina``; else just ``jina``.
+    De-duped by base, order preserved.
     """
-    import os
+    engine = (getattr(opts, "engine", "auto") or "auto").lower()
+    jina = _RemoteReader("jina", _JINA_READER_PREFIX, os.environ.get("JINA_API_KEY"))
+    if engine == "jina":
+        out = [jina]
+    else:
+        configured, kind = _configured_providers()
+        if engine == "remote":
+            out = list(configured)                 # configured only — no jina fall-back
+        elif kind == "list":
+            out = list(configured)                 # auto: exact operator order
+        elif kind == "single":
+            out = configured + [jina]              # auto: url then jina fallback
+        else:
+            out = [jina]                           # auto: built-in default
+    seen: set[str] = set()
+    dedup: list[_RemoteReader] = []
+    for p in out:
+        if p.base not in seen:
+            seen.add(p.base)
+            dedup.append(p)
+    return dedup
 
-    if urlparse(url).scheme not in ("http", "https"):
-        raise FetchFailed(f"--engine jina needs an http(s) URL, got {_redact(url)}",
-                          details={"url": _redact(url)})
-    headers = {"X-Return-Format": "html"}
-    key = os.environ.get("JINA_API_KEY")
-    if key:
-        headers["Authorization"] = f"Bearer {key}"
-    raw = _http_get_bytes(_JINA_READER_PREFIX + url, max_bytes=max_bytes,
-                          retries=retries, extra_headers=headers)
-    return _decode_bytes(raw)
+
+def _build_reader_request(provider: "_RemoteReader", target: str, opts) -> "tuple[str, dict]":
+    """Build ``(reader_url, headers)`` for a provider + target URL.
+
+    URL = ``provider.base`` + URL-encoded ``target`` (literal join). Headers:
+    ``X-Return-Format`` follows ``opts.remote_format`` (default ``html``);
+    ``Authorization: Bearer`` when the provider has a token. (``X-Target-Selector`` is
+    added in 023-05; the CRLF/injection guard in 023-04.)"""
+    # A `?url=`-style reader base (ends with `=`) takes the target as a SINGLE query value →
+    # encode it fully so its `&`/`=`/`#`/`?` cannot break out into the reader's own query
+    # (CWE-88). The path-append (Jina `/`-ending) convention keeps URL structure readable.
+    safe = "" if provider.base.endswith("=") else _READER_TARGET_SAFE
+    reader_url = provider.base + quote(target, safe=safe)
+    selector = (getattr(opts, "target_selector", None) or _DEFAULT_TARGET_SELECTOR)
+    if any(ord(c) < 0x20 or ord(c) == 0x7f for c in selector):  # header-injection guard (L-3)
+        raise FetchFailed("refused control characters in --target-selector",
+                          details={"kind": "refused"})
+    headers = {
+        "X-Return-Format": (getattr(opts, "remote_format", None) or "html"),
+        # Extract just the article block server-side (TASK 023 R4); single-source default.
+        "X-Target-Selector": selector,
+    }
+    if provider.token:
+        headers["Authorization"] = f"Bearer {provider.token}"
+    return reader_url, headers
+
+
+_REMOTE_MIN_CHARS = 32           # a remote-reader body shorter than this ⇒ provider miss
+# A lite/chrome FetchFailed with one of these kinds is a TERMINAL target condition (no
+# other tier can fix it) → the ladder surfaces it instead of escalating.
+_TERMINAL_TARGET_KINDS = {"not_found", "auth_required", "pdf", "binary"}
+# A reader 4xx reflecting the TARGET's own state (not the provider being down) → stop
+# trying more remote PROVIDERS and let the ladder try a different TIER.
+_READER_TARGET_BLOCK_KINDS = {"not_found", "auth_required", "bot_blocked"}
+
+
+def _fetch_remote_html(target: str, opts) -> "tuple[str, str]":
+    """Remote-reader TIER: try each provider in order; return ``(content, engine_label)``.
+
+    Classification (TASK 023 R3): provider-down / transient (429 / 402 / 5xx / transport /
+    empty body) → try the next provider; a reader-reported **target** block (403 / 401 /
+    404) → stop trying providers and raise :class:`_TierUnavailable` so the ladder can try a
+    DIFFERENT tier (provider-terminal ≠ tier-terminal); all providers exhausted →
+    :class:`_TierUnavailable("remote_exhausted")`. Never raises a bare exception.
+
+    PRIVACY (TASK 023 R5): the remote tier is skipped (``disabled`` via ``--no-remote``, or
+    ``skipped_private`` for a non-public target) BEFORE any request — a private / internal /
+    unresolvable target URL is NEVER forwarded to an external reader."""
+    if getattr(opts, "no_remote", False):
+        raise _TierUnavailable("disabled")
+    host = (urlparse(target).hostname or "").lower()
+    if not _host_is_public(host):
+        raise _TierUnavailable("skipped_private")  # never send a non-public URL to a reader
+    providers = _remote_providers(opts)
+    if not providers:
+        raise _TierUnavailable("no_remote_provider")
+    max_bytes = getattr(opts, "max_bytes", None)
+    retries = getattr(opts, "retries", 2)
+    for prov in providers:
+        url, headers = _build_reader_request(prov, target, opts)
+        try:
+            raw = _http_get_bytes(url, max_bytes=max_bytes, retries=retries,
+                                  extra_headers=headers)
+        except FetchFailed as exc:
+            kind = exc.details.get("kind")
+            if kind in _READER_TARGET_BLOCK_KINDS:
+                raise _TierUnavailable(kind, exc.details.get("status")) from exc
+            continue  # provider-down / transient → next provider
+        content = _decode_bytes(raw)
+        if len(content.strip()) < _REMOTE_MIN_CHARS:
+            continue  # provider miss (blank / tiny error body) → next provider
+        return content, prov.name
+    raise _TierUnavailable("remote_exhausted")
+
+
+_JINA_SEARCH_PREFIX = "https://s.jina.ai/"
+
+
+def _search_from_base(base: str) -> "_SearchProvider":
+    nb = _norm_base(base)
+    host = (urlparse(nb).hostname or "").lower()
+    if host == "s.jina.ai":
+        return _SearchProvider("s.jina.ai", nb, "links", os.environ.get("JINA_API_KEY"))
+    return _SearchProvider(f"search:{host}" if host else "search", nb, "links",
+                           os.environ.get("HTML2MD_READER_TOKEN"))
+
+
+def _search_providers(opts) -> "list[_SearchProvider]":
+    """Ordered search providers (R9): ``HTML2MD_SEARCH_PROVIDERS`` (list) else
+    ``HTML2MD_SEARCH_URL`` then the built-in ``s.jina.ai``. De-duped by base."""
+    provs = os.environ.get("HTML2MD_SEARCH_PROVIDERS")
+    if provs and provs.strip():
+        out = [_search_from_base(b) for b in re.split(r"[,\s]+", provs.strip()) if b]
+    else:
+        single = os.environ.get("HTML2MD_SEARCH_URL")
+        out = [_search_from_base(single)] if (single and single.strip()) else []
+        out.append(_SearchProvider("s.jina.ai", _JINA_SEARCH_PREFIX, "links",
+                                   os.environ.get("JINA_API_KEY")))
+    seen: set[str] = set()
+    dedup: list[_SearchProvider] = []
+    for p in out:
+        if p.base not in seen:
+            seen.add(p.base)
+            dedup.append(p)
+    return dedup
+
+
+def _assert_safe_query(query: str) -> None:
+    """Reject CR/LF/control chars in a search query before it is put on the wire (R5)."""
+    if any(ord(c) < 0x20 or ord(c) == 0x7f for c in query):
+        raise FetchFailed("refused control characters in search query",
+                          details={"kind": "refused"})
+
+
+def _search_result_urls(raw: bytes, limit: int) -> "list[str]":
+    """Extract up to ``limit`` UNIQUE result URLs from a search-provider response: JSON
+    ``data[]``/``results[]`` objects with a ``url`` field (Jina ``s.jina.ai`` JSON), or a
+    bare list of URL strings, else a regex sweep of ``http(s)`` URLs. Bounded + deduped so a
+    huge / HTML-error body can't materialise an unbounded junk list (P-3) and the same URL
+    isn't fetched twice (L-4)."""
+    text = _decode_bytes(raw)
+    out: list[str] = []
+    seen: set[str] = set()
+
+    def _add(u) -> None:
+        if isinstance(u, str) and u.startswith(("http://", "https://")) and u not in seen:
+            seen.add(u)
+            out.append(u)
+
+    try:
+        data = json.loads(text)
+    except ValueError:
+        for m in re.finditer(r'https?://[^\s)>"\'\]]+', text):  # bounded: stop at `limit`
+            _add(m.group(0))
+            if len(out) >= limit:
+                break
+        return out
+    items: list = []
+    if isinstance(data, dict):
+        items = data.get("data") or data.get("results") or []
+    elif isinstance(data, list):
+        items = data
+    for it in items:
+        _add(it.get("url") if isinstance(it, dict) else it)
+        if len(out) >= limit:
+            break
+    return out
+
+
+def run_search(query: str, opts) -> "list[AcquireResult]":
+    """Web search → top-N results → list of :class:`AcquireResult` (R9).
+
+    Vendor-agnostic: tries each search provider in order, falling through on provider-down;
+    extracts result URLs and fetches EACH through the full FETCH ladder (:func:`_acquire_url`)
+    so every result inherits per-result Jina/local fallback. A result whose own ladder fails
+    is skipped (not fatal). A healthy search with zero results returns ``[]`` (caller emits a
+    note, exit 0); only an all-providers-down state raises one typed FetchFailed."""
+    global _RATE_LIMITER
+    rate = getattr(opts, "rate_limit", None)
+    _RATE_LIMITER = _RateLimiter(rate) if rate else None  # throttle covers the whole search run
+    _assert_safe_query(query)
+    max_results = getattr(opts, "max_results", 5) or 5
+    max_bytes = getattr(opts, "max_bytes", None)
+    retries = getattr(opts, "retries", 2)
+
+    urls: list[str] | None = None
+    any_ok = False
+    tried: list[dict] = []
+    for prov in _search_providers(opts):
+        req = prov.base + quote(query, safe=_READER_TARGET_SAFE)
+        headers = {"Accept": "application/json", "X-Respond-With": "no-content"}
+        if prov.token:
+            headers["Authorization"] = f"Bearer {prov.token}"
+        try:
+            raw = _http_get_bytes(req, max_bytes=max_bytes, retries=retries,
+                                  extra_headers=headers)
+        except FetchFailed as exc:
+            tried.append({"engine": prov.name, "kind": exc.details.get("kind", "unreachable")})
+            continue  # provider-down → next search provider
+        any_ok = True
+        found = _search_result_urls(raw, max_results)
+        if found:
+            urls = found
+            break
+    if urls is None:
+        if any_ok:
+            return []  # healthy search, zero results → not an error
+        raise FetchFailed(
+            f"search failed for query {query!r} (all providers exhausted)",
+            details={"kind": "all_engines_failed", "tried": tried},
+        )
+
+    # SSRF (S-1): a search result URL is attacker-influenceable, so do NOT let it escalate to
+    # the un-network-hardened chrome tier in non-explicit-chrome modes — chrome follows
+    # redirects to internal hosts. chrome is allowed only if the user explicitly chose it.
+    allow_chrome = (getattr(opts, "engine", "auto") or "auto").lower() == "chrome"
+    results: list[AcquireResult] = []
+    for u in urls[:max_results]:
+        try:
+            results.append(_acquire_url(u, opts, allow_chrome=allow_chrome))
+        except (FetchFailed, EngineNotInstalled):
+            continue  # a result whose own ladder fails is skipped, not fatal
+    return results
+
+
+# NOTE: the former ``_fetch_jina_html`` is gone — the ``jina`` engine now flows through the
+# generic remote-reader tier (``_fetch_remote_html`` → ``_remote_providers`` →
+# ``_build_reader_request``), where ``jina`` is one provider among many (TASK 023 R2/R3).
 
 
 def _nojs_variant(url: str) -> str | None:
@@ -692,65 +992,166 @@ def _absolutize_img_srcs(html: str, page_url: str) -> str:
     return _IMG_SRC_RE.sub(_sub, html)
 
 
-def _acquire_url(input_ref: str, opts) -> AcquireResult:
-    """URL fetch: lite (httpx+trafilatura) by default, auto-fallback to Chrome for
-    JS/SPA shells, explicit ``--engine chrome``, or explicit ``--engine jina`` (Jina
-    Reader, external). Returns RAW page HTML (web_clean does the uniform cleaning
-    downstream); trafilatura supplies frontmatter metadata."""
-    engine = (getattr(opts, "engine", "auto") or "auto").lower()
+_MD_CONTENT_MARK = re.compile(r'(?ims)^Markdown Content:\s*\n')
+# A reader that ignored the markdown ask returns HTML. Detect it broadly (doctype / xml-decl /
+# common block tags) so trust-mode falls back to the pipeline (L-2). Biased toward detecting
+# HTML: a false positive (markdown-with-inline-HTML) is SAFE — it just routes through turndown.
+_LOOKS_HTML = re.compile(
+    r'(?is)<(?:!doctype\b|\?xml\b|html\b|head\b|body\b|div\b|article\b|main\b|'
+    r'section\b|nav\b|header\b|footer\b|table\b|ul\b|ol\b|h[1-6]\b)')
+
+
+def _split_remote_markdown(md: str, url: str) -> "tuple[SourceMeta, str]":
+    """Trust-markdown helper (R4): lift a Jina-style ``Title:`` / ``URL Source:`` preamble
+    into :class:`SourceMeta` and return the body after ``Markdown Content:`` (if present).
+    A reader that returns pure Markdown (no preamble) → ``(SourceMeta(url), md)`` unchanged."""
+    head = md[:2000]
+    tm = re.search(r'(?im)^Title:\s*(.+)$', head)
+    um = re.search(r'(?im)^URL Source:\s*(\S+)$', head)
+    title = _clean_text(tm.group(1)) if tm else None
+    src = (_clean_text(um.group(1)) if um else None) or url
+    cm = _MD_CONTENT_MARK.search(md)
+    body = md[cm.end():] if cm else md
+    return SourceMeta(url=src, title=title), body
+
+
+def _assert_safe_target(target: str) -> None:
+    """Reject CR/LF/control chars in a target URL before it is concatenated onto a reader
+    base (TASK 023 R5 — request-splitting / header-injection / SSRF-via-injection guard).
+    The operator-set reader base is trusted; the target is not. Raises FetchFailed(refused)."""
+    if any(ord(c) < 0x20 or ord(c) == 0x7f for c in target):
+        raise FetchFailed(
+            f"refused control characters in target URL: {_redact(target)}",
+            details={"url": _redact(target), "kind": "refused"})
+
+
+# --------------------------------------------------------------------------- #
+# Fetch tiers (TASK 023 R1/R3) — each returns (html, engine_label) or raises
+# _TierUnavailable (escalate) / FetchFailed (terminal target) / EngineNotInstalled.
+# --------------------------------------------------------------------------- #
+def _tier_lite(target: str, opts) -> "tuple[str, str]":
+    """Local lite tier: httpx + trafilatura, with proactive clean-source site-variant
+    rewrites (arXiv/Wikipedia/HackerNoon) preserved. In ``auto`` a thin/JS-shell body
+    escalates (raise _TierUnavailable("thin")). Terminal target conditions (arXiv-no-html /
+    pdf / binary / 404 / auth) raise FetchFailed; provider/transient blocks (403/429/5xx/
+    transport) raise _TierUnavailable for the ladder to fall through."""
     max_bytes = getattr(opts, "max_bytes", None)
     retries = getattr(opts, "retries", 2)
+    arxiv_v = _arxiv_html_variant(target)
+    mw_v = _mediawiki_rest_variant(target)
+    nojs_v = _nojs_variant(target)
+    fetch_url = arxiv_v or mw_v or nojs_v or target
+    try:
+        page_html = _fetch_lite_html(fetch_url, max_bytes, retries=retries)
+    except FetchFailed as exc:
+        status = exc.details.get("status")
+        kind = exc.details.get("kind")
+        if arxiv_v and status == 404:
+            raise FetchFailed(
+                f"arXiv has no HTML version for {_redact(target)} (older PDF-only paper). "
+                "Fetch the PDF and convert it with the pdf skill (scripts/pdf_extract.py).",
+                details={"url": _redact(target), "kind": "arxiv_no_html", "status": 404},
+            ) from exc
+        if kind in _TERMINAL_TARGET_KINDS:
+            raise  # terminal target condition (no other tier can fix it)
+        raise _TierUnavailable(kind or "unreachable", status) from exc
+    label = ("lite+arxiv-html" if arxiv_v else "lite+restapi" if mw_v
+             else "lite+nojs" if nojs_v else "lite")
+    if (getattr(opts, "engine", "auto") or "auto").lower() == "auto" \
+            and not _looks_substantial(page_html):
+        raise _TierUnavailable("thin")  # JS shell → escalate
+    return page_html, label
 
-    page_html: str | None = None
-    used: str | None = None
-    if engine == "jina":
-        page_html = _fetch_jina_html(input_ref, max_bytes, retries=retries)
-        used = "jina"
-    elif engine in ("lite", "auto"):
-        # Some hosts serve a clean article only at a sibling endpoint, and the canonical
-        # URL is either a JS shell Chrome can't unlock (HackerNoon /lite/, R-1), a
-        # chrome-heavy page our preprocess strips to nothing (Wikipedia REST, R-7), or a
-        # PDF/abstract stub (arXiv /html/, R-9). Rewrite PROACTIVELY — the URL, not the
-        # browser, is the fix. Precedence: arXiv > Wikipedia > HackerNoon (mutually
-        # exclusive hosts in practice; order only matters for determinism).
-        arxiv_v = _arxiv_html_variant(input_ref)
-        mw_v = _mediawiki_rest_variant(input_ref)
-        nojs_v = _nojs_variant(input_ref)
-        fetch_url = arxiv_v or mw_v or nojs_v or input_ref
+
+def _tier_chrome(target: str, opts) -> "tuple[str, str]":
+    """Headless-Chrome tier. EngineNotInstalled propagates (the ladder makes it terminal for
+    explicit ``--engine chrome``, fall-through otherwise); a render error becomes
+    _TierUnavailable."""
+    try:
+        page_html = _fetch_chrome_html(target)
+    except FetchFailed as exc:
+        raise _TierUnavailable(exc.details.get("kind") or "chrome_failed",
+                               exc.details.get("status")) from exc
+    return page_html, "chrome"
+
+
+def _tier_remote(target: str, opts) -> "tuple[str, str]":
+    """Remote-reader tier (vendor-agnostic; jina default). Delegates to
+    :func:`_fetch_remote_html` (provider loop + classification)."""
+    return _fetch_remote_html(target, opts)
+
+
+def _url_tiers(engine: str, allow_chrome: bool = True):
+    """Ordered (name, tier_fn) for the engine (TASK 023 §15.2). ``auto`` is local-first;
+    ``jina``/``remote`` are remote-first with local fallback; ``lite``/``chrome`` are a
+    single explicit tier. ``allow_chrome=False`` drops the chrome tier (used for
+    attacker-influenceable search-result fetches — S-1)."""
+    if engine in ("jina", "remote"):
+        tiers = [("remote", _tier_remote), ("lite", _tier_lite), ("chrome", _tier_chrome)]
+    elif engine == "lite":
+        tiers = [("lite", _tier_lite)]
+    elif engine == "chrome":
+        tiers = [("chrome", _tier_chrome)]
+    else:
+        tiers = [("lite", _tier_lite), ("chrome", _tier_chrome), ("remote", _tier_remote)]
+    if not allow_chrome:
+        tiers = [t for t in tiers if t[0] != "chrome"]
+    return tiers
+
+
+def _acquire_url(input_ref: str, opts, *, allow_chrome: bool = True) -> AcquireResult:
+    """URL fetch via the resilient tier ladder (TASK 023 R1/R3/R6): try each tier in order,
+    falling through on provider/engine unavailability, surfacing a terminal target condition
+    immediately, and raising exactly ONE typed FetchFailed (kind=all_engines_failed, with a
+    ``tried`` trace) only when every viable tier is exhausted — never a bare traceback.
+    Returns RAW page HTML (web_clean cleans downstream); trafilatura supplies metadata."""
+    _assert_safe_target(input_ref)  # CR/LF/control-char injection guard (R5)
+    engine = (getattr(opts, "engine", "auto") or "auto").lower()
+    explicit_chrome = engine == "chrome"
+    tried: list[dict] = []
+
+    def _record(name: str, kind: str, status: int | None = None) -> None:
+        entry: dict = {"engine": name, "kind": kind}  # NB: no URL in the trace (no leak)
+        if status is not None:
+            entry["status"] = status
+        tried.append(entry)
+
+    for name, tier_fn in _url_tiers(engine, allow_chrome):
         try:
-            page_html = _fetch_lite_html(fetch_url, max_bytes, retries=retries)
-        except FetchFailed as exc:
-            if arxiv_v and exc.details.get("status") == 404:
-                raise FetchFailed(
-                    f"arXiv has no HTML version for {_redact(input_ref)} (older PDF-only "
-                    "paper). Fetch the PDF and convert it with the pdf skill "
-                    "(scripts/pdf_extract.py).",
-                    details={"url": _redact(input_ref), "kind": "arxiv_no_html",
-                             "status": 404},
-                ) from exc
+            page_html, label = tier_fn(input_ref, opts)
+        except _TierUnavailable as tu:
+            _record(name, tu.kind, tu.status)
+            continue
+        except EngineNotInstalled:
+            if explicit_chrome:
+                raise  # explicit --engine chrome with no Playwright → terminal exit 3
+            _record(name, "engine_not_installed")
+            continue
+        except FetchFailed as ff:  # terminal target condition (arxiv_no_html/pdf/binary/404/auth)
+            _record(name, ff.details.get("kind") or "fetch_failed", ff.details.get("status"))
+            ff.details["tried"] = tried
             raise
-        if arxiv_v:
-            used = "lite+arxiv-html"
-        elif mw_v:
-            used = "lite+restapi"
-        elif nojs_v:
-            used = "lite+nojs"
-        else:
-            used = "lite"
-        if engine == "auto" and not _looks_substantial(page_html):
-            page_html, used = None, None  # genuine JS shell → escalate to Chrome
-    if page_html is None:  # explicit chrome, or auto-fallback
-        page_html = _fetch_chrome_html(input_ref)
-        used = "chrome"
+        remote_md = (name == "remote"
+                     and (getattr(opts, "remote_format", "html") or "html") == "markdown")
+        # Trust-mode (R4): use the reader's own clean Markdown; bypass web_clean+turndown.
+        # Defensive: if the reader IGNORED the markdown ask and returned HTML, fall back to the
+        # normal pipeline rather than emitting raw HTML as "markdown".
+        if remote_md and not _LOOKS_HTML.search(page_html[:512].lstrip("﻿ \t\r\n")):
+            meta, body = _split_remote_markdown(page_html, input_ref)
+            return AcquireResult(
+                html="", base_url=input_ref, mode="url", engine=label,
+                content_kind="markdown", markdown=body, source_meta=meta, images={},
+            )
+        page_html = _absolutize_links(_absolutize_img_srcs(page_html, input_ref), input_ref)
+        return AcquireResult(
+            html=page_html, base_url=input_ref, mode="url", engine=label,
+            source_meta=_trafilatura_meta(page_html, input_ref), images={},
+        )
 
-    page_html = _absolutize_links(_absolutize_img_srcs(page_html, input_ref), input_ref)
-    return AcquireResult(
-        html=page_html,
-        base_url=input_ref,
-        mode="url",
-        engine=used,
-        source_meta=_trafilatura_meta(page_html, input_ref),
-        images={},
+    raise FetchFailed(
+        f"all fetch engines failed for {_redact(input_ref)} (tried "
+        f"{', '.join(t['engine'] for t in tried) or 'none'})",
+        details={"url": _redact(input_ref), "kind": "all_engines_failed", "tried": tried},
     )
 
 

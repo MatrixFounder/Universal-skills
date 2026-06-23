@@ -281,6 +281,21 @@ rate-limit — ответственность пользователя. Арте
 (TASK 022) + `docs/ARCHITECTURE.md` §html2md + `docs/PLAN.md` (на фазе
 планирования).
 
+**TASK 023 ✅ (resilient vendor-agnostic remote-reader + fallback + web search).**
+Jina перестала быть единственной точкой отказа: добавлена **fallback-лестница**
+(`auto` = local-first `lite→chrome→remote`; `jina|remote` = remote-first с откатом
+на локальные движки; одна типизированная `FetchFailed(kind=all_engines_failed,
+details.tried=[…])` только когда исчерпаны все ступени). Remote-слой **vendor-agnostic**
+(`HTML2MD_READER_URL`/`_PROVIDERS` → self-hosted Jina / любой reader; jina — дефолт).
+Privacy: target public-IP gate до remote, `--no-remote` kill-switch, CR/LF-injection guard.
+Умное извлечение: `X-Target-Selector` + `--remote-format markdown` (trust-mode).
+**Web search** `--search "QUERY"` (s.jina.ai дефолт + vendor-agnostic; каждый результат
+через FETCH-лестницу). Всё в html2md-**owned** `acquire.py`/`cli.py`/`model.py`/`emit.py` —
+ни один gated-мастер не тронут, gate зелёный by construction; новых зависимостей нет.
+**Отложено (R10, не строилось):** VLM alt-text (`X-With-Generated-Alt`), cookie/auth
+passthrough (`x-set-cookie`), screenshots/`pageshot`, `X-With-Links-Summary`. Артефакты:
+`docs/tasks/task-023-*.md` + `docs/ARCHITECTURE.md` §15 + `docs/reviews/{task,arch,plan}-023-review.md`.
+
 ---
 
 ## 3. Cross-cutting (затрагивают все 4 скилла)

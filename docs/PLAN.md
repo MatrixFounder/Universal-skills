@@ -1,96 +1,113 @@
-# PLAN 022 — `html2md` (Web/HTML → Markdown) — Stub-First
+# PLAN 023 — `html2md` resilient vendor-agnostic remote-reader + fallback + search — Stub-First
 
-Maps **TASK 022** R1–R8 onto an atomic Stub-First bead chain for the NEW
-`skills/html2md/` skill. Architecture: `docs/ARCHITECTURE.md` (TASK 022).
-**License:** Proprietary (embeds docx/pdf code — ARCH §9 / CLAUDE.md §3).
+Maps **TASK 023** R1–R10 onto an atomic Stub-First bead chain. Architecture:
+`docs/ARCHITECTURE.md` §15 (TASK 023 delta). **License:** Proprietary (html2md;
+ARCH §9 / CLAUDE.md §3). **Scope guard:** every bead edits only html2md-**owned**
+files (`acquire.py`, `cli.py`, `model.py`, `emit.py`, html2md tests, `SKILL.md`,
+`references/`) — **no `diff -q`-gated master** is touched, so the two-master gate
+(G-1/G-2/G-3) stays green by construction (asserted in 023-07).
 
 **Phasing (`tdd-stub-first`):**
-- **Phase 1 (Stub + RED tests + replication):** bead **022-01** freezes the
-  public surface, replicates the two gated clusters, and lays RED tests.
-- **Phase 2 (Logic, Green):** beads **022-02…06** fill each Functional
-  Component behind the frozen surface, tightening the Phase-1 tests.
-- **Integration + Docs:** bead **022-07** ships SKILL.md/license/CI gates.
+- **Phase 1 (Stub + RED tests):** bead **023-01** freezes the new public surface
+  (CLI flags, `RemoteReader`/`SearchProvider` records, ladder skeleton) and lays
+  RED tests via the `acquire._http_get_bytes` monkeypatch seam.
+- **Phase 2 (Logic, Green):** beads **023-02…06** fill each concern behind the
+  frozen surface, turning RED tests green and adding unit tests.
+- **Integration + Docs:** bead **023-07** ships docs + gates + dogfood.
 
-## Replication note (LOAD-BEARING — ARCH §9, CLAUDE.md §2)
-
-This task **is** a replication event (the repo's first **two-master** skill).
-No bead may edit a gated master's source semantics; beads **copy** masters and
-the guards live at **022-01** (G-2 smoke) and **022-07** (G-1 `diff -q`, G-4 CI).
-
-| Gated unit | Master | Bead that lands the copy |
-|---|---|---|
-| `html2md_core.js` | **docx** (`docx2md.js` `buildTurndown`+`expandTableToGrid`) | 022-03 (with G-3 docx no-drift) |
-| `web_clean/{archives,reader_mode,preprocess,dom_utils,normalize_css}.py` | **pdf** (`html2pdf_lib/`) | 022-01 |
-| EXCLUDED: `render.py`, `chrome_engine.py`, pkg `__init__.py` | — | **never copied** |
-| `web_clean/__init__.py` (thin, html2md-owned, NOT gated) | html2md | 022-01 |
-| `_errors.py`, `_venv_bootstrap.py` | **docx** | 022-01 (4→**5**-skill) |
+**No new dependency:** the provider layer is plain `httpx` (existing base dep) via
+the single network seam `_http_get_bytes`. **No auto-commit** (per `/vdd-*`); each
+Phase-2 bead gets an adversarial logic+security roast (`/vdd-multi`) before "done".
 
 ## Stub-First ordering (beads)
 
-- **022-01 — [R6/R7 scaffold + IR] Skeleton + replication + RED tests.**
-  `skills/html2md/` scaffold via `init_skill.py`; `scripts/` package + thin
-  shim (`_venv_bootstrap` prelude); frozen CLI surface (ARCH §5.1), exit-map,
-  `_AppError` hierarchy, IR dataclasses (`AcquireResult`/`CleanResult`);
-  **replicate** `web_clean/*` (pdf) + thin `web_clean/__init__.py`,
-  `_errors.py`+`_venv_bootstrap.py` (docx, 4→5); FC-1/2/3/4 as **stubs**;
-  **G-2 import smoke-test** (import `web_clean.archives`+`web_clean.reader_mode`
-  → `weasyprint`/`playwright` absent from `sys.modules`); RED E2E/unit
-  scaffolding. → [task-022-01](docs/tasks/task-022-01-skeleton-replication-tests.md)
-- **022-02 — [R1c–e] FC-1 `acquire.py` OFFLINE paths.** file read + archive
-  dispatch (`web_clean/archives.py`, `--archive-frame`) + format/magic-byte
-  detection → `AcquireResult`; **zero network** (I-3). →
-  [task-022-02](docs/tasks/task-022-02-acquire-offline.md)
-- **022-03 — [R3] FC-3 core lift + Node bridge.** Extract
-  `htmlToMarkdown(html)→md` into `html2md_core.js` (verbatim from
-  `docx2md.js`); wire `docx2md.js` to import it; FC-5 Node bridge
-  (`node html2md_core.js`, stdin→stdout); **G-3 docx no-drift** regression
-  (AC-R3). → [task-022-03](docs/tasks/task-022-03-core-lift-node-bridge.md)
-- **022-04 — [R2] FC-2 `web_clean` wiring.** `preprocess_html` (whole) +
-  `reader_mode_html` (reader) → `CleanResult`; AC-R2 reader-needle test on an
-  SPA fixture. → [task-022-04](docs/tasks/task-022-04-web-clean-wiring.md)
-- **022-05 — [R4/R5] FC-4 `emit.py` (MVP gate).** YAML frontmatter +
-  `--download-images`→`_attachments/` (sha1-dedup, relative links) +
-  dual-output (`<slug>.md`+`<slug>.reader.md`, `--no-reader`) + stdout +
-  `--json-errors`. **MVP gate** = offline file/archive → dual MD. →
-  [task-022-05](docs/tasks/task-022-05-emit-obsidian.md)
-- **022-06 — [R1a–b] FC-1 URL fetch.** `httpx`+`trafilatura` lite (+ frontmatter
-  metadata) + Chrome `auto`-fallback (soft-optional) + SSRF/DoS caps
-  (`--max-bytes`/`--max-images`) + exit-3/10. →
-  [task-022-06](docs/tasks/task-022-06-acquire-url-fetch.md)
-- **022-07 — [R7/R8] Integration + docs + gates.** `SKILL.md`,
-  `references/html-to-markdown.md`, per-skill `LICENSE`/`NOTICE`,
-  `THIRD_PARTY_NOTICES.md`, `install.sh --with-chrome`, backlog html2md-1…5 →
-  done; **G-1 `diff -q` + G-2 + `validate_skill.py` ×5 + (G-4) CI gate**;
-  dogfood real URL + `.webarchive` + `.mhtml`. →
-  [task-022-07](docs/tasks/task-022-07-docs-integration-gates.md)
+- **023-01 — [STUB] Public surface + records + ladder skeleton + RED tests.**
+  Freeze `cli.py` flags (`--engine …|remote`, `--no-remote`, `--remote-format
+  html|markdown`, `--target-selector`, `--search`, `--max-results`; `--search` ⊥
+  positional INPUT → exit 2); add `RemoteReader`/`SearchProvider` records +
+  `_TierUnavailable` internal signal (stubs); extend `model.AcquireResult`
+  (`content_kind`, `markdown`); ladder/provider/search functions as stubs
+  (`NotImplementedError`/sentinel); **RED** unit tests (ladder matrix, classification,
+  privacy guard, provider construction, search) wired to the `_http_get_bytes` seam.
+  → [task-023-01](docs/tasks/task-023-01-surface-stubs-red-tests.md)
+- **023-02 — [R2] RemoteReader provider layer.** `_remote_providers(opts)` from env
+  (`HTML2MD_READER_URL`/`HTML2MD_READER_PROVIDERS`) + `jina` default + ordering;
+  `_build_reader_request(provider, target, opts) -> (url, headers)` (URL-encoded
+  target, `X-Return-Format`, `Authorization`); keep `_fetch_jina_html` behaviour as
+  the `jina` provider. → [task-023-02](docs/tasks/task-023-02-remote-reader-providers.md)
+- **023-03 — [R1/R3/R6] Fallback-ladder orchestrator.** Rewrite `_acquire_url` as a
+  tier loop: `auto`=local-first (`lite`→`chrome`→remote), `jina`/`remote`=remote-first
+  (→`lite`→`chrome`), `lite`/`chrome`=single tier; fall-through on provider/transient
+  (incl. auto `EngineNotInstalled`); one terminal `FetchFailed(kind=all_engines_failed,
+  details.tried=[…])`; `engine`/`tried` provenance. Preserve existing site-variant
+  rewrites + `_looks_substantial`. → [task-023-03](docs/tasks/task-023-03-fallback-ladder-orchestrator.md)
+- **023-04 — [R5] Privacy / SSRF gate.** Apply `_host_is_public(target)` BEFORE any
+  remote escalation (auto + on-demand); enforce `--no-remote`; request-URL injection
+  guard (URL-encode target/query, reject CRLF/control chars). →
+  [task-023-04](docs/tasks/task-023-04-privacy-ssrf-gate.md)
+- **023-05 — [R4] Smarter extraction.** `X-Target-Selector` (default `article, main,
+  [role=main]`, `--target-selector`) on remote requests; `--remote-format markdown`
+  trust-mode (`content_kind=markdown` bypasses `clean`+`core_bridge`; frontmatter +
+  image localization only; no reader variant). →
+  [task-023-05](docs/tasks/task-023-05-smarter-extraction.md)
+- **023-06 — [R9] Web search.** `SearchProvider` layer (`s.jina.ai` combined +
+  generic links-shape via `HTML2MD_SEARCH_URL`/`HTML2MD_SEARCH_PROVIDERS`);
+  `--search "QUERY"`/`--max-results`; links-shape routes each result URL through the
+  R1 FETCH ladder; per-result skip-on-fail; one-note-per-result emit loop (shared
+  `_attachments/`, `query:` frontmatter); search-provider fallback. →
+  [task-023-06](docs/tasks/task-023-06-web-search.md)
+- **023-07 — [R7/R8] Integration + docs + gates.** `SKILL.md`,
+  `references/html-to-markdown.md`, `docs/KNOWN_ISSUES.md` HTML2MD-1/-6, backlog §2;
+  `validate_skill.py skills/html2md` exit 0; **assert G-1/G-2/G-3 unchanged** + no new
+  `requirements.txt` line; dogfood an anti-bot URL (auto-escalation) + a
+  forced-Jina-failure (fallback) + a `--search` run. →
+  [task-023-07](docs/tasks/task-023-07-docs-integration-gates.md)
 
-## RTM → Bead checklist (mandatory RTM linking, one RTM item per line)
+## RTM → Bead checklist (mandatory RTM linking — one RTM item per line)
 
-- [ ] **[R1]** Input acquisition — **022-02** (offline c–e) + **022-06** (URL a–b)
-- [ ] **[R2]** HTML cleaning (reader-mode + preprocess) — **022-04**
-- [ ] **[R3]** HTML→Markdown core (turndown lift) — **022-03**
-- [ ] **[R4]** Obsidian emit (frontmatter + `_attachments` + dual-output) — **022-05**
-- [ ] **[R5]** Agent-step contract (stdout + `--json-errors`) — **022-05**
-- [ ] **[R6]** Fork-free two-master replication — **022-01** (copies) + **022-07** (G-1/G-2/G-4)
-- [ ] **[R7]** Skill packaging & isolation — **022-07**
-- [ ] **[R8]** CI fork-gate (post-MVP) — **022-07**
+- [ ] **[R1]** Resilient fallback ladder (no single point of failure) — **023-01** (surface/stub) + **023-03** (logic)
+- [ ] **[R2]** Vendor-agnostic remote-reader provider layer — **023-02**
+- [ ] **[R3]** Failure classification (provider-down / target-blocked / tier-block) — **023-03**
+- [ ] **[R4]** Smarter extraction (X-Target-Selector + trust-markdown) — **023-05**
+- [ ] **[R5]** Privacy / SSRF / injection guards — **023-04**
+- [ ] **[R6]** Observability (`engine` + `tried` trace) — **023-03**
+- [ ] **[R7]** Tests (jina-gap + ladder + classification + privacy + search) — **023-01** (RED) + **023-02…06** (Green) + **023-07** (suite/validate)
+- [ ] **[R8]** Docs, packaging, fork-free integrity (gate unchanged, no new dep) — **023-07**
+- [ ] **[R9]** Web search (vendor-agnostic) — **023-06**
+- [ ] **[R10]** Explicitly deferred (VLM alt-text / cookie / screenshot / links-summary) — *no bead; recorded in TASK §2 + backlog*
+
+## Use-Case → Bead coverage table
+
+| Use Case | Beads |
+|---|---|
+| UC-1 anti-bot page auto-recovers | 023-03 (ladder) + 023-02 (provider) + 023-04 (public-target guard) |
+| UC-2 `--engine jina` survives a Jina outage | 023-03 (remote-first + local fallback) |
+| UC-3 vendor-agnostic / self-hosted reader | 023-02 (env providers) |
+| UC-4 privacy: internal URL never sent remote | 023-04 |
+| UC-5 smarter extraction (trust-markdown) | 023-05 |
+| UC-6 web search → Markdown notes | 023-06 (+ 023-03 ladder for links-shape results) |
 
 ## MVP gate
 
-**022-01…05** = offline `file`/`.webarchive`/`.mhtml` → dual Markdown +
-frontmatter + `_attachments/`, no network. **022-06 (URL)** is MVP but the
-Chrome fallback is engine-soft-optional (lite path always available).
+**023-01…04** = the resilient vendor-agnostic ladder + privacy gate (the user's two
+hard requirements). **023-05** (smarter extraction), **023-06** (web search, R9) and
+**023-07** (docs/gates) complete TASK 023.
 
-## Acceptance (rolls up TASK 022 §4 + ARCH §9 guards)
+## Acceptance (rolls up TASK 023 §4 + ARCH §15 guards)
 
-- [ ] **AC-R1** offline determinism (archive → MD, zero network) — 022-02/05
-- [ ] **AC-R2** reader needle (body present, nav/sidebar absent) — 022-04
-- [ ] **AC-R3** docx round-trip byte-identical before/after core lift (G-3) — 022-03
-- [ ] **AC-R4** `--download-images` → `_attachments/<sha1>`; `--no-` keeps URLs; dual-output default — 022-05
-- [ ] **AC-R5** `--json-errors` envelope; stdout-only on success — 022-05
-- [ ] **AC-R6** `diff -q` silent (G-1) + smoke-test (G-2) — 022-01/07
-- [ ] **AC-R7** `validate_skill.py skills/html2md` exit 0; `.skill` runs isolated — 022-07
-- [ ] **G-4** CI `diff -q` gate + html2md in skill matrix (post-MVP) — 022-07
+- [ ] **AC-R1** ladder never crashes; one typed error only when all tiers exhausted — 023-03
+- [ ] **AC-R2** `HTML2MD_READER_URL` → configured base, not r.jina.ai; ordered providers — 023-02
+- [ ] **AC-R3** provider-down → fall-through; reader-reported target-404 → terminal-per-provider — 023-03
+- [ ] **AC-R4** `X-Target-Selector` sent; `--remote-format markdown` trust-mode; default html unchanged — 023-05
+- [ ] **AC-R5** private/internal target never sent remote; `--no-remote` disables tier — 023-04
+- [ ] **AC-R6** `engine`/`tried` reflect the real tier; `source:` = canonical URL — 023-03
+- [ ] **AC-R7** I-3 offline zero-network preserved; new coverage incl. previously-untested jina — 023-01…06
+- [ ] **AC-R8** `diff -q` (G-1/G-2) silent + docx G-3 byte-identical; `validate_skill.py` exit 0; no new dep — 023-07
+- [ ] **AC-R9** `--search` ≤ N notes; per-result FETCH-ladder fallback; per-result skip; search-provider fallback — 023-06
 
-**No auto-commit** (per `/vdd-*`). Each Phase-2 bead runs an adversarial
-logic+security roast before being declared done.
+## Strict-mode note
+
+The **security-critical** beads (**023-03** ladder + **023-04** SSRF/injection gate)
+SHOULD follow `tdd-strict` (write the failing test first, incl. the SSRF/injection and
+all-tiers-fail cases) — they are the parts where a regression silently leaks a URL or
+masks a failure.

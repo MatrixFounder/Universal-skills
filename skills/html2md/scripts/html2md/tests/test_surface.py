@@ -152,5 +152,89 @@ class TestModel(unittest.TestCase):
             acq.mode = "url"  # type: ignore[misc]
 
 
+class TestTask023Surface(unittest.TestCase):
+    """TASK 023 frozen CLI/IR surface (bead 023-01)."""
+
+    def _clean_env(self):
+        for k in ("HTML2MD_READER_URL", "HTML2MD_READER_PROVIDERS",
+                  "HTML2MD_SEARCH_URL", "HTML2MD_SEARCH_PROVIDERS"):
+            os.environ.pop(k, None)
+
+    def test_parser_accepts_new_flags(self):
+        """TC-01-01: every new flag parses with the expected value."""
+        a = cli.build_parser().parse_args([
+            "https://x.com", "out", "--engine", "remote", "--no-remote",
+            "--remote-format", "markdown", "--target-selector", ".content",
+            "--max-results", "3",
+        ])
+        self.assertEqual(a.engine, "remote")
+        self.assertIs(a.no_remote, True)
+        self.assertEqual(a.remote_format, "markdown")
+        self.assertEqual(a.target_selector, ".content")
+        self.assertEqual(a.max_results, 3)
+        b = cli.build_parser().parse_args(["--search", "berachain ibgt"])
+        self.assertEqual(b.search, "berachain ibgt")
+        # defaults
+        d = cli.build_parser().parse_args(["x.html"])
+        self.assertIs(d.no_remote, False)
+        self.assertEqual(d.remote_format, "html")
+        self.assertIsNone(d.target_selector)
+        self.assertIsNone(d.search)
+        self.assertEqual(d.max_results, 5)
+
+    def test_search_input_mutual_exclusion(self):
+        """TC-01-02: --search + a URL positional → exit 2 (Usage)."""
+        buf = io.StringIO()
+        with redirect_stderr(buf):
+            rc = cli.main(["--search", "q", "https://example.com", "--json-errors"])
+        self.assertEqual(rc, 2)
+        self.assertIn('"type": "Usage"', buf.getvalue())
+
+    def test_acquireresult_new_fields(self):
+        """TC-01-03: AcquireResult defaults content_kind='html', markdown=None."""
+        acq = AcquireResult(html="<p>x</p>")
+        self.assertEqual(acq.content_kind, "html")
+        self.assertIsNone(acq.markdown)
+        acq2 = AcquireResult(html="", content_kind="markdown", markdown="# hi")
+        self.assertEqual(acq2.content_kind, "markdown")
+        self.assertEqual(acq2.markdown, "# hi")
+
+    def test_engine_remote_requires_config(self):
+        """TC-01-07: --engine remote with no reader env → exit 2 (not a jina fall-back)."""
+        self._clean_env()
+        rc = cli.main(["https://x.com", "out", "--engine", "remote"])
+        self.assertEqual(rc, 2)
+
+    def test_max_results_must_be_positive(self):
+        """TC-01-08: --max-results <= 0 → exit 2."""
+        self.assertEqual(cli.main(["x.html", "--max-results", "0"]), 2)
+        self.assertEqual(cli.main(["x.html", "--max-results", "-1"]), 2)
+
+    def test_frontmatter_engine_field(self):
+        """TC-01-10 (AC-R6): frontmatter records the real engine + query; offline → no engine."""
+        from html2md import emit
+        from html2md.model import SourceMeta
+        fm = emit._frontmatter(SourceMeta(url="https://x.com"), query="q", engine="jina")
+        self.assertIn('engine: "jina"', fm)
+        self.assertIn('query: "q"', fm)
+        self.assertIn('source: "https://x.com"', fm)
+        off = emit._frontmatter(SourceMeta(url="file:///t"))
+        self.assertNotIn("engine:", off)  # offline (engine=None) → no engine line
+
+    def test_search_outputdir_resolution(self):
+        """TC-01-09: --search resolves OUTPUT_DIR without an INPUT-required error."""
+        a = cli.build_parser().parse_args(["--search", "q"])
+        out, stdout_mode = cli._resolve_search_paths(a)
+        self.assertFalse(stdout_mode)
+        self.assertTrue(str(out).endswith(os.path.join("tmp", "html2md_out")))
+        b = cli.build_parser().parse_args(["--search", "q", "mydir"])
+        out_b, _ = cli._resolve_search_paths(b)
+        self.assertTrue(str(out_b).endswith("mydir"))
+        c = cli.build_parser().parse_args(["--search", "q", "--stdout"])
+        out_c, stdout_c = cli._resolve_search_paths(c)
+        self.assertIsNone(out_c)
+        self.assertTrue(stdout_c)
+
+
 if __name__ == "__main__":
     unittest.main()

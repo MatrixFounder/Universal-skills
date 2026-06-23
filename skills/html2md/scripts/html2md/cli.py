@@ -23,7 +23,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import _errors  # noqa: E402
 
 from .exceptions import (  # noqa: E402
-    BadInput, EmptyExtraction, InternalError, SelfOverwriteRefused, _AppError,
+    BadInput, EmptyExtraction, InternalError, SelfOverwriteRefused, Usage, _AppError,
 )
 
 _EXIT_OK = 0
@@ -65,11 +65,38 @@ def build_parser() -> argparse.ArgumentParser:
         help="Directory to write Markdown + _attachments into (default: stdout mode).",
     )
     p.add_argument(
-        "--engine", choices=("lite", "chrome", "auto", "jina"), default="auto",
+        "--engine", choices=("lite", "chrome", "auto", "jina", "remote"), default="auto",
         help="URL fetch engine: lite (httpx+trafilatura), chrome (Playwright), "
-             "auto (lite then chrome fallback), or jina (Jina Reader r.jina.ai — "
-             "server-side JS render, NO local browser; sends the URL to an external "
-             "service). Default: auto.",
+             "auto (local-first: lite→chrome→remote last-resort), jina (Jina Reader "
+             "r.jina.ai, remote-first + local fallback), or remote (a configured "
+             "vendor-agnostic reader, remote-first + local fallback). The remote tier "
+             "sends the URL to an external service. Default: auto.",
+    )
+    p.add_argument(
+        "--no-remote", dest="no_remote", action="store_true", default=False,
+        help="Disable the remote-reader tier entirely (auto + on-demand). No URL is ever "
+             "sent to an external reader; jina/remote engines become local-only.",
+    )
+    p.add_argument(
+        "--remote-format", dest="remote_format", choices=("html", "markdown"),
+        default="html",
+        help="What the remote reader returns: html (default — flows through the local "
+             "clean→turndown pipeline) or markdown (trust the reader's own clean Markdown).",
+    )
+    p.add_argument(
+        "--target-selector", dest="target_selector", metavar="SEL", default=None,
+        help="X-Target-Selector sent to the remote reader to extract just the article "
+             "(default: 'article, main, [role=main]').",
+    )
+    p.add_argument(
+        "--search", metavar="QUERY", default=None,
+        help="Web-search mode: QUERY → top results → Markdown notes (vendor-agnostic; "
+             "s.jina.ai default). Mutually exclusive with a URL/file INPUT; the first "
+             "positional is then the OUTPUT_DIR.",
+    )
+    p.add_argument(
+        "--max-results", dest="max_results", metavar="N", type=int, default=5,
+        help="For --search: max number of top results to fetch + convert (default: 5).",
     )
     reader = p.add_mutually_exclusive_group()
     reader.add_argument(
@@ -187,23 +214,74 @@ def _extraction_is_empty(md_whole: str, source_html: str) -> bool:
             and len(source_html or "") >= _SUBSTANTIAL_SOURCE_CHARS)
 
 
-def convert(args: argparse.Namespace) -> int:
-    """Run the full pipeline for parsed ``args``: acquire → clean → core → emit.
+def _validate_usage(args: argparse.Namespace) -> None:
+    """Post-parse usage checks argparse can't express → raise :class:`Usage` (exit 2).
 
-    Returns 0 on success.
+    - ``--search`` takes a QUERY, not a URL: a URL positional is a usage error (the first
+      positional is the OUTPUT_DIR in search mode).
+    - ``--engine remote`` needs a configured reader (never a silent fall-back to jina.ai).
+    - ``--max-results`` must be ≥ 1.
     """
-    from . import acquire as acquire_mod
-    from . import clean as clean_mod
-    from . import core_bridge, emit as emit_mod
+    if args.search is not None:
+        for pos in (args.INPUT, args.OUTPUT_DIR):
+            if pos is not None and urlparse(pos).scheme in ("http", "https"):
+                raise Usage("--search takes a QUERY, not a URL; pass an OUTPUT_DIR positional.")
+    if args.engine == "remote" and not (
+            os.environ.get("HTML2MD_READER_URL") or os.environ.get("HTML2MD_READER_PROVIDERS")):
+        raise Usage(
+            "--engine remote requires HTML2MD_READER_URL or HTML2MD_READER_PROVIDERS "
+            "(use --engine jina for the built-in reader).")
+    if args.max_results is not None and args.max_results < 1:
+        raise Usage("--max-results must be >= 1.")
+
+
+def _resolve_search_paths(args: argparse.Namespace) -> tuple[Path | None, bool]:
+    """Resolve OUTPUT_DIR for ``--search`` (no INPUT — the positional is the OUTPUT_DIR).
+
+    ``--stdout`` → ``(None, True)``; an explicit dir → that; otherwise the default
+    ``./tmp/html2md_out/``. Raises :class:`Usage` on >1 positional.
+    """
+    positionals = [p for p in (args.INPUT, args.OUTPUT_DIR) if p is not None]
+    if len(positionals) > 1:
+        raise Usage("--search accepts at most one OUTPUT_DIR positional.")
+    if bool(args.stdout):
+        return None, True
+    out = Path(positionals[0]) if positionals else (Path.cwd() / "tmp" / "html2md_out")
+    return out.resolve(), False
+
+
+def _convert_one(
+    acq, args: argparse.Namespace, output_dir: Path | None, *,
+    stdout_mode: bool, input_ref: str, query: str | None = None,
+) -> int:
+    """Convert ONE acquired document → emit. Shared by the single-input path and the
+    ``--search`` per-result loop (so a search result and a direct URL take identical
+    treatment). ``query`` is threaded to emit's frontmatter in 023-06; the
+    ``content_kind == "markdown"`` trust-mode bypass is added in 023-05.
+    """
+    from . import emit as emit_mod
     from .md_clean import tidy_markdown
 
-    input_ref, mode, output_dir, stdout_mode = _resolve_paths(args)
-    acq = acquire_mod.acquire(input_ref, args)
-    cleaned = clean_mod.clean(acq, reader=bool(args.reader))
+    # Trust-markdown (R4): the remote reader already returned clean Markdown — bypass
+    # web_clean + turndown; only frontmatter + image localization apply (no reader variant).
+    if getattr(acq, "content_kind", "html") == "markdown":
+        md_whole = tidy_markdown(acq.markdown or "")
+        emit_mod.emit(acq, None, md_whole, None, args,
+                      output_dir=output_dir, stdout_mode=stdout_mode, input_ref=input_ref,
+                      query=query)
+        return _EXIT_OK
+
+    from . import clean as clean_mod
+    from . import core_bridge
+
+    # Search results are emitted as ONE note each (R9: N results → N notes); a direct
+    # conversion keeps the dual-output default. `query is not None` ⇒ search mode.
+    want_reader = bool(args.reader) and query is None
+    cleaned = clean_mod.clean(acq, reader=want_reader)
     md_whole = tidy_markdown(core_bridge.html_to_markdown(cleaned.whole_html))
     md_reader = (
         tidy_markdown(core_bridge.html_to_markdown(cleaned.reader_html))
-        if cleaned.reader_html is not None else None
+        if (want_reader and cleaned.reader_html is not None) else None
     )
     if _extraction_is_empty(md_whole, acq.html):
         raise EmptyExtraction(
@@ -216,9 +294,41 @@ def convert(args: argparse.Namespace) -> int:
         )
     emit_mod.emit(
         acq, cleaned, md_whole, md_reader, args,
-        output_dir=output_dir, stdout_mode=stdout_mode, input_ref=input_ref,
+        output_dir=output_dir, stdout_mode=stdout_mode, input_ref=input_ref, query=query,
     )
     return _EXIT_OK
+
+
+def _convert_search(args: argparse.Namespace) -> int:
+    """``--search`` branch: query → top-N results → one note per result (023-06 logic)."""
+    from . import acquire as acquire_mod
+    output_dir, stdout_mode = _resolve_search_paths(args)
+    results = acquire_mod.run_search(args.search, args)
+    if not results:  # healthy search, zero results → not content-loss (exit 0 + note)
+        sys.stderr.write(f"html2md: no results for query: {args.search!r}\n")
+        return _EXIT_OK
+    for i, acq in enumerate(results):
+        ref = (acq.source_meta.url if acq.source_meta else None) or args.search
+        if stdout_mode and i:
+            sys.stdout.write("\n\n")  # blank-line + `---` frontmatter = note boundary (L-5)
+        _convert_one(acq, args, output_dir, stdout_mode=stdout_mode,
+                     input_ref=ref, query=args.search)
+    return _EXIT_OK
+
+
+def convert(args: argparse.Namespace) -> int:
+    """Run the full pipeline for parsed ``args``: acquire → clean → core → emit.
+
+    Returns 0 on success.
+    """
+    _validate_usage(args)
+    if args.search is not None:
+        return _convert_search(args)
+
+    from . import acquire as acquire_mod
+    input_ref, mode, output_dir, stdout_mode = _resolve_paths(args)
+    acq = acquire_mod.acquire(input_ref, args)
+    return _convert_one(acq, args, output_dir, stdout_mode=stdout_mode, input_ref=input_ref)
 
 
 def main(argv: list[str] | None = None) -> int:

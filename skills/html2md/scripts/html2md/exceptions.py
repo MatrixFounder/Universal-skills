@@ -34,6 +34,18 @@ class BadInput(_AppError):
     error_type = "BadInput"
 
 
+class Usage(_AppError):
+    """A post-parse usage error (semantic, not an argparse syntax error) — exit 2.
+
+    Used for validations argparse cannot express: ``--search`` ⊥ a URL positional,
+    ``--engine remote`` with no provider configured, ``--max-results`` ≤ 0. Flows
+    through ``main``'s ``_AppError`` handler exactly like every other domain error,
+    so it returns CODE 2 (matching the argparse usage convention)."""
+
+    CODE = 2
+    error_type = "Usage"
+
+
 class ConvertFailed(_AppError):
     CODE = 1
     error_type = "ConvertFailed"
