@@ -744,3 +744,138 @@ Shipped (7 beads + `/vdd-multi`), additive to §15.1–10:
   uncapped serial ladder latency, P-1/P-2); `--max-bytes` unbounded default (P-4). The Chrome
   engine's lack of a per-request SSRF gate is unchanged for an *explicit* `--engine chrome`
   (HTML2MD-4); search no longer exposes it (S-1 above).
+
+---
+
+## 16. TASK 024 — authenticated (login-gated) Chrome engine, server/Hermes-deployable
+
+Living-document delta for **TASK 024** (`docs/TASK.md`). Adds **authenticated fetch** to the
+Chrome tier, the **SSRF-hardening that must precede it**, a **server/Hermes deployment model**,
+and a **Jina-key strategy**. All changes are html2md-**owned** (`acquire.py`, `cli.py`, new
+`_cookies.py`/`_chrome_auth.py`, docs, tests) — no `diff -q`-gated master touched (§9 holds).
+Chrome stays **soft-optional** (no new base dep).
+
+### 16.1. Chrome SSRF hardening (prerequisite — R1)
+
+Today only lite/remote call `_assert_public_http`; `_fetch_chrome_html` is a bare
+`launch + goto` that follows redirects to any host. Attaching credentials to that is an exfil
+vector, so **R1 lands with/before R2**. All guards are installed **before `page.goto`** and at
+the **context level** (so popups/workers are covered, no first-request TOCTOU):
+- `_assert_public_http(url)` **before** `page.goto`.
+- A navigation guard re-checking `_host_is_public` on the **main-frame redirect chain** (refuse
+  a redirect to a non-public host).
+- **Off-target *public* redirect guard:** before snapshotting, assert the **final landed origin
+  == the requested target's eTLD+1** — a public→public off-target redirect (`example.com` →
+  `evil-public.com`) is refused, so a session is never carried to a different public site.
+  (Cookie host-scoping itself is the **browser's** native cookie-domain matching for the
+  storage_state/cookies paths; this guard adds the navigation-level control.)
+- `context.route("**/*", …)` to **abort sub-resource + JS `fetch`/`sendBeacon` requests to
+  non-public hosts** (best-effort; route catches all request types).
+- **Honest-scope residuals:** (a) **DNS-rebinding TOCTOU** is inherited from the lite path (§10,
+  resolve-then-connect) — unchanged; (b) `storage_state` **localStorage** is origin-restored and
+  readable by any same-origin script the page loads (not further filtered); (c) not full beacon
+  isolation. The egress-restricted-sandbox advice stands for fully-untrusted input.
+
+### 16.2. Authenticated context (R2) — `_chrome_auth.py`
+
+`_fetch_chrome_html(url)` → `_fetch_chrome_html(url, opts)`; `_tier_chrome` already has `opts`.
+`_chrome_auth.py` resolves ONE auth source into context kwargs:
+
+| Flag / env | Playwright call | Carries | Server-fit |
+|---|---|---|---|
+| `--chrome-storage-state PATH` / `HTML2MD_CHROME_STORAGE_STATE` **(primary)** | `new_context(storage_state=PATH)` | cookies + localStorage + sessionStorage | ✅ portable, **read-only at runtime → concurrency-safe** |
+| `--chrome-cookies-file PATH` / `…_COOKIES_FILE` | `new_context()` + `add_cookies([…])` (Netscape→dicts via hardened loader) | cookies only | ✅ read-only |
+| `--chrome-user-data-dir DIR` / `…_USER_DATA_DIR` | `launch_persistent_context(user_data_dir=DIR, headless=True)` | full profile (self-refreshes, survives 2FA) | ⚠️ **mutable, single-concurrency — local only** |
+
+Mutually-exclusive group. **Any auth flag sets the effective engine to `chrome`** (bypasses
+lite/remote so the credential is never silently dropped by the ladder).
+
+**Graceful degradation (R10 — user-required, non-regression invariant).** Auth is strictly
+additive: with **no `--chrome-*` flag/env and no `JINA_API_KEY`**, behaviour is byte-for-byte
+TASK 023 (the `auto` ladder, keyless fallback) — the default install + default invocation are
+unchanged, no crash. A `--chrome-*` flag whose file is **missing/unreadable/malformed** → a
+clean typed error (`BadInput`), not a traceback; **Playwright absent** + a `--chrome-*` flag →
+`EngineNotInstalled` (exit 3) with remediation. `JINA_API_KEY` absent → keyless tier as today.
+
+### 16.3. Session minting (R3) — the one interactive step
+
+`html2md.py login URL [--save-state out.json]`: **headful** Chromium → user logs in by hand
+(2FA ok) → `context.storage_state(path=out.json)` → `chmod 0600`. Only headful path; runtime is
+always headless. Alternatives: `playwright codegen --save-storage`, browser `cookies.txt` export.
+
+### 16.4. Scroll-to-load (R4)
+
+`--chrome-scroll [--chrome-scroll-passes N]`: after `goto`, scroll to bottom N times awaiting
+`networkidle`/settle, bounded by a **wall-clock budget**, then snapshot. Pulls lazy
+replies/comments. Best-effort (deep threads may truncate — logged).
+
+### 16.5. Remote / Hermes deployment model (R5)
+
+The **`storage_state.json` is the unit of auth deployment**:
+```
+workstation (browser)          secret transport           Hermes server (headless)
+  html2md login URL ─mint─▶  x.json (0600) ─deploy─▶  HTML2MD_CHROME_STORAGE_STATE=/secrets/x.json
+                                                        html2md … --engine chrome   (N concurrent)
+```
+- **Concurrency-safe:** state file is **read-only at runtime** → N parallel runs share it (no
+  lock/corruption). Persistent-profile is mutable → single-concurrency, not server-recommended.
+- **Stale-session detection** (X serves a *200* login wall, not a 401 → `_fetch_kind` alone
+  misses it): a **best-effort, per-site login-wall heuristic** — signal class = {redirected to a
+  `/login`-class URL · a known login-wall marker/needle · the `--target-selector` absent} →
+  `FetchFailed kind=auth_required`, never returned as content → Hermes can alert/re-mint.
+  Honest-scope: best-effort, tuned for X first; needles kept conservative + tested (a
+  false-negative would emit a wall).
+- **Rotation:** re-mint on a workstation → redeploy the secret. No auto-refresh (R9).
+- **In-network synergy:** Hermes can run a **self-hosted Jina Reader** and point the TASK 023
+  remote tier at it (`HTML2MD_READER_URL=http://reader.internal/`) — no 3rd-party egress.
+
+### 16.6. Jina-key strategy (R6)
+
+`JINA_API_KEY` from **env/secret only** (never argv/logs); keyed = higher quota + reliability,
+keyless = rate-limited fallback. **Matrix:** auth'd content → local chrome-auth (never ship a
+live session to jina); anti-bot **non-auth** / server volume → keyed jina or a self-hosted
+reader. Live-session `x-set-cookie` forwarding **deferred** (R9 — unverified + 3rd-party exfil).
+
+### 16.7. Data-model & interface deltas
+
+- **CLI:** `--chrome-storage-state` / `--chrome-cookies-file` / `--chrome-user-data-dir`
+  (mutually-exclusive), `--chrome-scroll` / `--chrome-scroll-passes N`; new `login` subcommand.
+- **Env:** `HTML2MD_CHROME_STORAGE_STATE` / `_COOKIES_FILE` / `_USER_DATA_DIR`.
+- **`_fetch_kind`** maps 401/407 → `auth_required`; add a **login-wall heuristic** for the chrome
+  path (X serves a 200 login wall, not a 401) → `auth_required`.
+- **Provenance/redaction:** `engine: chrome`; auth recorded only as a boolean in the trace —
+  `_redact` extended so storage_state/cookie values never surface.
+
+### 16.8. Security (R7)
+
+Hardened loader: reject symlink, **reject BOTH group- and world-accessible modes** (`st_mode &
+0o077` → error — *tighter* than transcript-fetcher's world-only check (`_cookies.py:84`); an
+**intentional divergence** for the multi-tenant server threat model, flagged so a reviewer
+doesn't "fix" it back), sanitized errors that never echo file contents. **Lift only the
+file-hardening half** of `transcript-fetcher/_cookies.py` (`load_cookie_jar`); the
+Netscape→Playwright-cookie-dict conversion for `add_cookies` is **new html2md code** (the
+urllib `_RestrictedRedirectHandler` is irrelevant to the Playwright transport). Copy is
+html2md-owned, NOT gated — add a tracking note vs the source, don't silently fork. Secrets via
+file/env only (never argv). **Cookie host-scoping** = the browser's native cookie-domain
+matching (storage_state/cookies paths) **plus** the §16.1 final-origin gate — NOT a urllib
+handler. Replay-only (no password/2FA automation). Full redaction everywhere.
+
+### 16.9. Fork-free (R8)
+
+`acquire.py`/`cli.py`/`_cookies.py`/`_chrome_auth.py` are html2md-owned, **absent** from the
+G-1/G-2 gate. No master byte-change ⇒ gate silent, docx G-3 byte-identical. Chrome stays the
+soft-optional extra ⇒ no base-dep change.
+
+### 16.10. Atomic-chain skeleton (Planner handoff, for /vdd-plan)
+
+| Bead | Scope (RTM) | Role |
+|---|---|---|
+| **024-01** | STUB: CLI flags + `login` subcommand surface (dispatch shape: a `login` verb handled in `main` before the flat parser, or `add_subparsers` — pick at planning) + `_chrome_auth`/`_cookies` skeletons + RED tests (SSRF private-redirect-block **on first request**, **off-target public-redirect block**, auth-context, stale-session→`auth_required`, cookie-scope, **R10 non-regression: no-auth = TASK-023 behaviour + missing-file→typed-error**) | STUB |
+| **024-02** | **Chrome SSRF hardening** (R1): `_assert_public_http` + nav/redirect host gate + sub-resource route abort | LOGIC `tdd-strict` |
+| **024-03** | Authenticated context (R2): storage_state / cookies.txt / persistent-profile + auth-implies-chrome | LOGIC |
+| **024-04** | `login` mint helper (R3) + hardened `_cookies.py` + 0600 (R7) | LOGIC `tdd-strict` |
+| **024-05** | Scroll-to-load (R4) + stale-session→`auth_required` (R5c) | LOGIC |
+| **024-06** | Docs + Hermes deploy section + Jina-key matrix (R5/R6) + KNOWN_ISSUES + gates + dogfood (mint→render X Article) | INTEGRATION |
+
+**MVP gate = 024-01…04** (hardened authenticated render). 05 + 06 complete it. Security beads
+(02, 04) under `tdd-strict`; **no auto-commit**.

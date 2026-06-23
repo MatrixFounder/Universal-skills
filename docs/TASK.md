@@ -1,72 +1,64 @@
-# TASK 023 — `html2md`: resilient vendor-agnostic remote-reader tier & Jina fallback ladder
+# TASK 024 — `html2md`: authenticated (login-gated) fetch via a hardened Chrome engine, server/Hermes-deployable
 
 **Status:** 🟡 ANALYSIS (VDD start-feature) — TASK + ARCHITECTURE drafted, pending
 review-loop gates. NOT yet planned/implemented.
-**Skill:** `html2md` (existing, **Proprietary, All Rights Reserved**). This task
-adds only html2md-**owned** code (`acquire.py`, `cli.py`, tests, docs) — it touches
-**no** `diff -q`-gated master, so the two-master replication gate (G-1/G-2/G-3)
-stays green by construction.
-**Predecessor:** TASK 022 (`html2md` base build) — SHIPPED & archived
-(`docs/tasks/task-022-html2md-web-to-markdown.md`).
-**Mode:** VDD (Verification-Driven Development).
-**Driver:** user enhancement request + spec `docs/html2md_enh.md` (Jina Reader as a
-universal URL→Markdown layer), with the **non-negotiable** requirement: *"if Jina
-ever stops working, there must be a fallback"*, plus *"use an LLM/vendor-agnostic
-web search/fetch tool"* (user 2026-06-22/23).
+**Skill:** `html2md` (existing, **Proprietary, All Rights Reserved**). Adds only
+html2md-**owned** code (`acquire.py`, `cli.py`, a new `_cookies.py`/`_chrome_auth.py`,
+tests, docs) — touches **no** `diff -q`-gated master, so G-1/G-2/G-3 stay green.
+**Predecessor:** TASK 023 (resilient vendor-agnostic remote-reader + fallback + search) —
+SHIPPED & archived (`docs/tasks/task-023-html2md-remote-reader-fallback.md`).
+**Mode:** VDD.
+**Driver:** dogfooding hit X Articles / reply-threads behind **login + JS** that no engine
+can read unauthenticated (lite → "JavaScript is not available" wall; keyless jina →
+rate-limited fallback; chrome → login wall). User chose **Chrome-auth** and added two
+constraints: **(a)** it must later run on a **remote server (e.g. Hermes)** and **(b)**
+the **Jina API-key** story must be worked out (user 2026-06-23).
+**Provenance:** design locked over a 6-agent `/vdd-multi`-style design panel (recon ×3 +
+approach panel ×3); see `docs/reviews/` + the workflow output.
 
 ---
 
 ## 0. Meta Information
 
-- **Task ID:** 023
-- **Slug:** `html2md-remote-reader-fallback`
-- **Context:** html2md already ships `--engine jina` (opt-in, explicit-only; forces
-  `X-Return-Format: html` so the page flows through the local clean→turndown
-  pipeline). But Jina is a **single hard-coded external provider with no fallback**:
-  if `r.jina.ai` is down / rate-limited / quota-exhausted / changes its API, the run
-  just errors (`FetchFailed`, exit 10) and the conversion is lost. Jina is also never
-  auto-tried, so the exact pages it solves (Cloudflare / anti-bot / JS-SPA) still fail
-  on `--engine auto` unless the user happens to know to retry manually. This task makes
-  the remote-reader tier **resilient** (never a single point of failure),
-  **vendor-agnostic** (pluggable / self-hostable providers, not locked to jina.ai),
-  **auto-integrated** behind a privacy-preserving fallback ladder, and **smarter**
-  (article target-selector + opt-in trust-the-reader's-Markdown).
-- **Runtime:** unchanged — Python orchestrator (`acquire.py`) + Node converter. All
-  network goes through the single seam `acquire._http_get_bytes` (SSRF-safe, streaming,
-  retrying), which the new provider layer reuses; no new runtime dependency (`httpx`
-  is already a base dep).
+- **Task ID:** 024
+- **Slug:** `html2md-authenticated-chrome`
+- **Context:** Login-gated content (X long-form Articles, reply threads, paywalled/members
+  articles, private docs) requires a **real, authenticated, JS-rendering browser**. The
+  current Chrome tier is a bare `launch + goto` with **no auth and — critically — no SSRF
+  gate** (unlike lite/remote). Attaching real session credentials to a redirect-following,
+  un-gated browser would be a **credential-exfiltration regression**, so SSRF-hardening the
+  Chrome tier is a **hard prerequisite** of this task. The chosen auth primitive is
+  Playwright **`storage_state`** (cookies + localStorage/sessionStorage) because it is a
+  **portable, read-only-at-runtime file** — ideal for a remote/Hermes server (mint once
+  where a browser exists → ship the state file as a secret → render headless; safe under
+  concurrency, unlike a mutable persistent profile).
+- **Runtime:** unchanged hybrid; Chrome tier stays **soft-optional** (`install.sh
+  --with-chrome` / `requirements-chrome.txt`). No new base dependency.
 
 ---
 
 ## 1. Problem Description
 
-The current Jina integration ([acquire.py](skills/html2md/scripts/html2md/acquire.py)
-`_fetch_jina_html`) has four gaps the user's request targets:
+From the dogfood: `html2md` cannot read login-gated pages, and the only working path today
+is the **manual** offline `.webarchive` (save-from-browser → convert offline). Gaps:
 
-1. **No fallback (the headline requirement).** `--engine jina` → `_fetch_jina_html`
-   → `_http_get_bytes(r.jina.ai/...)`. If that hop fails (service outage, 429
-   rate-limit, 402 quota, 5xx, DNS, timeout, API change), the call raises `FetchFailed`
-   and the whole conversion dies. There is **no automatic degradation** to the local
-   `lite`/`chrome` engines that need no external service.
-2. **Single-vendor lock-in.** The reader endpoint `https://r.jina.ai/` is hard-coded.
-   Resilience cannot depend on one company's uptime; the user explicitly asked for a
-   **vendor-agnostic web fetch tool** so an alternative (e.g. a self-hosted Jina Reader,
-   which is open-source, or any compatible `<base>/<url>` reader) can be swapped in.
-3. **Jina never escalates automatically.** It is `--engine jina`-only and excluded from
-   `auto` for privacy. So an `auto` run against a Cloudflare-protected page returns a
-   bare `FetchFailed kind=bot_blocked` even though the remote reader would have recovered
-   it (see `docs/KNOWN_ISSUES.md` HTML2MD-1: ssrn / researchgate).
-4. **Richer extraction unused.** Jina supports `X-Target-Selector` (grab just the article
-   block) and a native clean-Markdown return mode (`X-Return-Format: markdown`) — higher
-   fidelity on hard pages than re-cleaning its HTML locally. Today the skill always forces
-   `X-Return-Format: html`.
-5. **No web search.** Jina also exposes `s.jina.ai/<query>` (search → fetch top results →
-   Markdown), turning a converter into a research/grounding step. The skill has no search
-   entrypoint at all. *(Pulled into scope by the user 2026-06-23 — see R9.)*
+1. **No authenticated fetch.** `_fetch_chrome_html` (acquire.py) does `pw.chromium.launch()`
+   + `browser.new_page(user_agent=…)` + `goto` — **no browser context, no cookies, no
+   storage_state**. So JS+login pages return a login wall.
+2. **Chrome tier is SSRF-un-gated.** Only lite/remote call `_assert_public_http`; the Chrome
+   path follows redirects (incl. to internal/metadata hosts) with no public-IP check. Adding
+   credentials here **without** a gate turns a render into an exfil vector → hardening is a
+   prerequisite, not an afterthought.
+3. **No server/remote story.** A one-time login is inherently interactive (needs a browser);
+   a server (Hermes) is headless. There is no defined way to **mint auth once, deploy it as a
+   secret, and consume it headless + concurrently** on a server.
+4. **Jina key strategy is undocumented.** `JINA_API_KEY` is read but there is no guidance on
+   keyless-vs-keyed quotas, where the key lives on a server, or when to prefer local
+   chrome-auth over sending content to Jina (and the live-session `x-set-cookie` forwarding
+   is unverified + 3rd-party — out of scope here).
 
-This task closes all five **without forking** (owned files only) and **without a new
-dependency**, by introducing a small vendor-agnostic remote-reader/search provider
-abstraction and a bidirectional fallback ladder around the existing engines.
+This task closes 1–4 **without forking** (owned files only) and **without a new base
+dependency** (Chrome stays the existing soft-optional extra).
 
 ---
 
@@ -74,235 +66,145 @@ abstraction and a bidirectional fallback ladder around the existing engines.
 
 | ID | Requirement | MVP? | Sub-features |
 |---|---|---|---|
-| **R1** | **Resilient fallback ladder** — no single point of failure | ✅ | (a) `--engine auto` (default) stays **local-first / privacy-first**: `lite` (**preserving** the existing proactive site-variant rewrites — arXiv/Wikipedia/HackerNoon — and the `_looks_substantial` JS-shell check; the ladder *wraps*, does not replace them) → (JS-shell? `chrome` if installed) → **remote-reader as last-resort escalation**; (b) on-demand `--engine jina` / `--engine remote` = **remote-first** with automatic fallback to local `lite`→`chrome`; (c) **bidirectional** — any tier's failure degrades to the next viable tier (Jina-down→local, local-blocked→Jina); (d) a single typed `FetchFailed` is raised **only when every viable tier is exhausted**, never a bare crash; (e) `--no-remote` kill-switch disables the remote tier entirely (auto + on-demand). |
-| **R2** | **Vendor-agnostic remote-reader provider layer** | ✅ | (a) a small `RemoteReader` provider abstraction (given a target URL → build reader request URL + headers; classify the response); (b) built-in **`jina`** provider (`r.jina.ai`, current behaviour preserved); (c) a **configurable generic provider** via env (`HTML2MD_READER_URL` for a single `<base>/<url>`-style reader, and/or an ordered `HTML2MD_READER_PROVIDERS` list) — enables a **self-hosted Jina** or any compatible reader; (d) providers tried **in order** with fall-through to the next on "provider-down"; (e) per-provider auth via env, **not interchangeable** — built-in `jina` → `JINA_API_KEY` (retained); generic/configured → `HTML2MD_READER_TOKEN` → `Authorization: Bearer`; (f) **`--engine remote` requires a configured provider** (`HTML2MD_READER_URL`/`_PROVIDERS`) — with none set it is a **usage error (exit 2)**, never a silent fall-back to `jina.ai`. |
-| **R3** | **Failure classification** — "provider down" vs "target blocked" vs "tier blocked" | ✅ | (a) treat **DNS/connect/timeout, HTTP 5xx, 429, 402, 408, 503** as *provider/transient unavailable* → fall through to the next provider/tier; (b) reuse the existing retry + exponential backoff + `Retry-After` honouring for the transient classes before falling through; (c) a **local** `lite`/`chrome` block (a 403 that survives the browser-UA retry / Cloudflare) is a **tier**-failure → **escalate to the remote tier** (this is the core ssrn/researchgate recovery case, KNOWN_ISSUES HTML2MD-1); (d) a reader-reported **target** block/absence (reader maps the target's 403/401/404) is **terminal across remaining remote *providers*** (they would hit the same wall) — but in `auto` the ladder MAY still try a different **tier** (`chrome` executes JS and can pass checks `lite`/`jina` cannot) before the final error: **provider-terminal ≠ tier-terminal**; (e) an **empty / too-short reader body** counts as a provider-miss → fall through; (f) **`EngineNotInstalled`** (chrome requested but Playwright absent) is a **fall-through** trigger when chrome is reached as an *auto / remote-first fallback*, but stays **terminal exit 3** for an **explicit** `--engine chrome`; (g) net: no pointless cross-provider retries of a genuine 404, yet survival of any single provider/engine outage. |
-| **R4** | **Smarter extraction** (the user-selected Jina capability) | ✅ | (a) pass **`X-Target-Selector`** (default `article, main, [role=main]`, overridable via `--target-selector`) so the reader returns just the article block; (b) opt-in **`--remote-format markdown`** "trust the reader's Markdown" mode → use the reader's own clean Markdown directly (skip the local `web_clean`→turndown pass) for hard pages, still wrapped with **our** YAML frontmatter; (c) **default `--remote-format html`** — the reader returns HTML that flows through the **same** local pipeline (consistent frontmatter / `_attachments` / dual-output) — preserving today's behaviour; (d) trust-markdown still honours `--download-images` (localize image URLs found in the returned Markdown). |
-| **R5** | **Privacy / SSRF / honest-scope guards** | ✅ | (a) **NEVER** send a private / loopback / link-local / metadata / unresolvable **TARGET** URL to a remote reader — apply `_host_is_public` to the *target* before any remote escalation (auto **and** on-demand); (b) the auto remote-escalation is documented as "**target URL leaves the machine**" and is suppressible with `--no-remote`; (c) the local hop to the reader endpoint still passes the existing SSRF gate; (d) keyless rate-limit + `*_API_KEY` quota behaviour documented; (e) `SKILL.md` §5, `references/html-to-markdown.md`, and `docs/KNOWN_ISSUES.md` (HTML2MD-1/-6) updated for the new auto-escalation posture. |
-| **R6** | **Observability for agent callers** | ✅ | (a) `AcquireResult.engine` reports the **real** tier used (`lite` / `lite+arxiv-html` / `lite+restapi` / `lite+nojs` / `jina` / `remote:<host>` / `chrome`); (b) frontmatter `engine:` / `source:` reflect provenance — `source:` stays the **canonical target URL**, never the reader URL; (c) on total failure the `--json-errors` `FetchFailed.details` carries a **`tried` trace** (each tier/provider attempted + its failure `kind`) so a caller can choose the next action; (d) extend the `details.kind` taxonomy where needed (e.g. `all_engines_failed`). |
-| **R7** | **Tests** — close the Jina coverage gap + ladder | ✅ | (a) unit tests for provider request-URL/header construction (jina + a configured generic provider); (b) **fallback-ladder** tests that inject per-URL outcomes via the `_http_get_bytes` / provider seam (jina-down→lite; lite-blocked→jina; all-fail→one typed error with trace); (c) classification tests (provider-down vs reader-reported target-404); (d) **preserve the I-3 offline zero-network guard** (file/archive still make zero calls); (e) trust-markdown emit test; (f) privacy-guard test (an internal/private target is **not** sent to the reader). |
-| **R8** | **Docs, packaging, fork-free integrity** | ✅ | (a) `SKILL.md` capabilities + engine table + safety boundaries updated; (b) `references/html-to-markdown.md` decision tree + provider-config + privacy section; (c) `docs/KNOWN_ISSUES.md` HTML2MD-1/-6 revised (auto-escalation + fallback now handled); (d) `validate_skill.py skills/html2md` exits 0; (e) **G-1/G-2/G-3 replication gate UNCHANGED** — assert `acquire.py`/`cli.py` are NOT gated units and no master byte-changes; (f) **no new runtime dependency** (`httpx` reused); (g) `docs/office-skills-backlog.md` §2 updated (record what shipped + what was deferred). |
-| **R9** | **Web search (vendor-agnostic)** — query → top-N pages → Markdown | ✅ | (a) `--search "QUERY"` entrypoint (mutually exclusive with a URL/file INPUT); (b) vendor-agnostic **search-provider** layer — **`s.jina.ai`** built-in default + configurable via env (`HTML2MD_SEARCH_URL` / `HTML2MD_SEARCH_PROVIDERS`); (c) **two provider shapes** — *combined* (provider returns merged Markdown of the top results server-side, e.g. `s.jina.ai`) and *links* (provider returns the top result URLs → each is fetched through the **R1 FETCH ladder**, so every result inherits its own fallback); (d) `--max-results N` bound (default 5); (e) **search-provider fallback** — primary search provider down/429/402/5xx → fall through to the next configured provider; one typed `FetchFailed` only when all are exhausted; (f) emit **one note per result** into OUTPUT_DIR sharing `_attachments/`, frontmatter carries the query + the result URL; `--stdout` concatenates results |
-| **R10** | **Explicitly deferred** (out of scope) | ⬜ | (a) **`X-With-Generated-Alt`** VLM image captions; (b) **cookie / auth passthrough** (`x-set-cookie`); (c) **screenshot / `pageshot`**; (d) **`X-With-Links-Summary`**. Recorded for a future task; not built (user scope = smarter-extraction + fetch-resilience + search). |
+| **R1** | **Chrome SSRF hardening** (HARD PREREQUISITE of auth) | ✅ | (a) `_assert_public_http(url)` before `goto` in the chrome tier; (b) refuse navigation/redirect to a non-public host (a `page.on("request"/"response")` or `route` guard re-checking `_host_is_public` on the main-frame navigation chain); (c) best-effort **abort sub-resource requests to non-public hosts** via `page.route`; (d) honest-scope note for residual (full beacon isolation deferred); (e) regression test: a redirect to `169.254.169.254` / `127.0.0.1` is blocked even with auth attached |
+| **R2** | **Authenticated Chrome context** | ✅ | (a) `--chrome-storage-state PATH` (**primary**) → `browser.new_context(storage_state=…)` (cookies + localStorage); (b) `--chrome-cookies-file PATH` (Netscape `cookies.txt`) → convert via a hardened loader → `context.add_cookies([...])`; (c) `--chrome-user-data-dir DIR` → `launch_persistent_context` (local convenience; flagged NOT-for-server-concurrency); (d) mutually-exclusive group; env fallbacks `HTML2MD_CHROME_STORAGE_STATE`/`_COOKIES_FILE`/`_USER_DATA_DIR`; (e) **any auth flag implies the chrome tier** (never silently fall back to lite and drop the credential) |
+| **R3** | **Session minting helper** (interactive, local) | ✅ | (a) `html2md.py login URL [--save-state out.json]` → **headful** Chromium, user logs in by hand (incl. 2FA), then `context.storage_state(path=out.json)`; (b) output `chmod 0600`; (c) document the alternatives (`playwright codegen --save-storage`, browser `cookies.txt` export); (d) the mint helper is the ONLY interactive/headful path — runtime stays headless |
+| **R4** | **Scroll-to-load** (lazy content / replies) | ✅ | (a) opt-in `--chrome-scroll` + `--chrome-scroll-passes N` (default ~8); (b) after `goto`, scroll to bottom N times, awaiting `networkidle`/settle, bounded by a **wall-clock budget**; (c) then snapshot `page.content()`; (d) honest scope: best-effort, deep/infinite threads may truncate (logged) |
+| **R5** | **Remote / Hermes deployability** | ✅ | (a) **`storage_state.json` is the portable auth unit** — mint on a workstation, ship to the server as a secret (env path or mounted 0600 file), consume headless; (b) **read-only at runtime → concurrency-safe** (N parallel Hermes runs share one state file); persistent-profile is explicitly **single-concurrency / not server-recommended**; (c) **stale-session detection** (load-bearing for Hermes; X serves a *200* login wall, not a 401, so `_fetch_kind` alone misses it): a **best-effort, per-site login-wall heuristic** — signal class = {redirected to a `/login`-class URL, a known login-wall marker/needle, or the requested `--target-selector` absent} → classify `FetchFailed kind=auth_required` (never return the logged-out wall as content). Honest-scope: best-effort, tuned for X first; a false-negative would emit a wall, so the needles must be conservative and tested; (d) secret-management + rotation guidance (re-mint → redeploy); (e) optional synergy doc: a **self-hosted Jina** (TASK 023 `HTML2MD_READER_URL`) on the Hermes box keeps the remote tier in-network (no 3rd-party egress) |
+| **R6** | **Jina API-key strategy** | ✅ | (a) document `JINA_API_KEY` (env/secret) keyless-vs-keyed quota + reliability; (b) **decision matrix:** auth'd content → **local chrome-auth** (never ship a live session to jina by default); anti-bot **non-auth** content / server volume → **keyed jina** (higher quota) or self-hosted reader; (c) ensure the key is read from env/secret only (never argv/logs); (d) explicitly DO NOT enable live-session `x-set-cookie` forwarding (R9) |
+| **R7** | **Security** | ✅ | (a) `storage_state.json`/`cookies.txt` are bearer creds → hardened loader (reject symlink, enforce 0600, sanitized errors that never echo file contents) reusing the `transcript-fetcher` pattern; (b) secrets via **file/env only, never argv** (no `ps`/history leak); (c) **redaction**: cookie/state values + auth headers never appear in any error / `--json-errors` / `tried` trace; (d) **host-scope cookies** to the target eTLD+1 (a redirect to `evil.com` cannot replay `example.com`'s session); (e) ToS/honest-scope: this replays the *user's own* human-minted session (no programmatic login/password handling) |
+| **R8** | **Tests, docs, fork-free** | ✅ | (a) unit tests via the Playwright seam (monkeypatch `_fetch_chrome_html`/context builder) + offline cookie-loader tests; SSRF-block test (R1e); stale-session→`auth_required` test; (b) `SKILL.md` + `references/` + a server/Hermes deploy section + KNOWN_ISSUES update; (c) `validate_skill.py` exit 0; (d) **G-1/G-2/G-3 unchanged** (assert acquire.py/cli.py/new modules not gated); (e) no new **base** dep (Chrome stays the soft-optional extra) |
+| **R10** | **Graceful degradation / non-regression** (auth is strictly additive) | ✅ | (a) **No auth configured** (no `JINA_API_KEY`, no `--chrome-*` flag/env) → behaviour is **byte-for-byte TASK 023**: the resilient `auto` ladder (lite→chrome→remote), keyless-jina fallback, **no crash**; (b) auth/keys are **opt-in only** — never a hard requirement to run; (c) Playwright absent + a `--chrome-*` flag given → graceful `EngineNotInstalled` (exit 3) with remediation, **not a traceback**; (d) an auth flag given but the state/cookies file is **missing/unreadable/malformed** → a clean typed error (`BadInput`/`Usage`), never an unhandled exception; (e) `JINA_API_KEY` absent → keyless tier as today (TASK 023). The **default install + default invocation are unchanged**. |
+| **R9** | **Explicitly deferred** | ⬜ | (a) Jina **live-session `x-set-cookie`** forwarding (unverified vs Jina's real API + ships the session to a 3rd party); (b) **programmatic** login / username-password / 2FA automation (we only replay a human-minted session); (c) **auto-refresh** of expired sessions (user re-mints); (d) cookies→lite-tier auth (the panel's clean MVP for *server-rendered* cookie sites) — recordable as a small fast-follow if non-JS login sites become a need |
 
 ---
 
 ## 3. Use Cases
 
-### UC-1 — Anti-bot page on `auto` auto-recovers (primary)
-- **Actor:** User / agent clipping a Cloudflare/WAF-protected article.
-- **Preconditions:** Network reachable; target host is public.
-- **Main scenario:** `auto` tries `lite` → 403 even after the browser-UA retry
-  (`kind=bot_blocked`) → **auto-escalates to the remote-reader tier** (default provider
-  `jina`) → reader returns the article HTML → normal clean→turndown→emit.
-- **Alternatives:** (a) the remote reader is **down/rate-limited/quota** → ladder falls
-  through to `chrome` if installed, else raises one typed `FetchFailed` with the `tried`
-  trace; (b) `chrome` is not installed and remote is down → typed error (no crash).
-- **Postconditions:** A note is produced via whichever tier succeeded;
-  `frontmatter.engine` records it; `source:` is the canonical URL.
-- **Acceptance:** A simulated `lite`-403 + healthy reader yields a non-empty note with
-  `engine: jina`; a simulated `lite`-403 + reader-down + no chrome yields exactly one
-  `FetchFailed` whose `details.tried` lists both failed tiers.
+### UC-1 — Mint locally, clip an authed X Article (primary)
+- **Actor:** User on a workstation with a browser.
+- **Main scenario:** `html2md.py login https://x.com --save-state ~/.html2md/x.json` →
+  headful Chromium, user logs in (2FA ok) → `x.json` (0600) written. Then
+  `html2md.py "https://x.com/i/article/<id>" out/ --engine chrome --chrome-storage-state ~/.html2md/x.json`
+  → headless render of the **logged-in** page → full article Markdown + images.
+- **Acceptance:** the full article body (not a login wall) is emitted; `engine: chrome`;
+  the state file is never logged/redacted into output.
 
-### UC-2 — `--engine jina` survives a Jina outage (the headline requirement)
-- **Actor:** User who prefers the remote reader for a known-hard page.
-- **Preconditions:** Network reachable; target public.
-- **Main scenario:** `--engine jina` (remote-first) → reader returns 503 / 429 / times
-  out → **automatic fallback to `lite`**, then `chrome` if needed → conversion succeeds.
-- **Postconditions:** Note produced via the fallback tier; the failure is invisible to
-  the user except in `engine:` provenance.
-- **Acceptance:** With the reader stubbed to fail and `lite` stubbed to succeed, the run
-  exits 0 and `engine` ≠ `jina`. With **all** tiers stubbed to fail, exactly one typed
-  `FetchFailed` (exit 10) is raised — never a traceback.
+### UC-2 — Hermes server, headless, concurrent (the remote requirement)
+- **Actor:** Hermes agent on a headless server.
+- **Preconditions:** `x.json` minted on a workstation and **deployed as a secret** (env
+  `HTML2MD_CHROME_STORAGE_STATE=/secrets/x.json`, mode 0600); `install.sh --with-chrome` on
+  the server.
+- **Main scenario:** N concurrent Hermes runs each call `--engine chrome` reading the **same
+  read-only** state file → each renders headless independently (no profile lock contention).
+- **Acceptance:** concurrent runs do not corrupt/lock shared state; no interactive/headful
+  step at runtime; a stale state surfaces `auth_required` (exit) rather than logged-out content.
 
-### UC-3 — Vendor-agnostic / self-hosted reader (no jina.ai dependency)
-- **Actor:** Operator who self-hosts a reader or distrusts a single SaaS.
-- **Preconditions:** `HTML2MD_READER_URL` (or `HTML2MD_READER_PROVIDERS`) points at a
-  compatible reader.
-- **Main scenario:** The remote tier uses the **configured** provider(s) in order; a
-  jina.ai outage is irrelevant because jina.ai is not in the chain (or is last).
-- **Acceptance:** With `HTML2MD_READER_URL=https://reader.internal.example/`, a remote
-  escalation builds the request against that base and never contacts `r.jina.ai`.
+### UC-3 — Pull reply threads / lazy content
+- **Main scenario:** `--engine chrome --chrome-storage-state … --chrome-scroll --chrome-scroll-passes 12`
+  → after load, scroll to load replies (bounded by passes + wall-clock) → snapshot.
+- **Acceptance:** replies present in output up to the scroll budget; never hangs (hard cap).
 
-### UC-4 — Privacy: internal URL is never sent to a remote service
-- **Actor:** Agent converting an intranet/CRM URL.
-- **Preconditions:** Target resolves to a private/internal/loopback address.
-- **Main scenario:** `auto` → `lite` (SSRF gate already refuses private targets) → the
-  remote tier is **skipped** because the target is not public; no external egress occurs.
-  `--no-remote` additionally forces remote off for any target.
-- **Acceptance:** With a private-resolving target, no request to any reader endpoint is
-  attempted (verified by stub); `--no-remote` makes the remote tier unreachable.
+### UC-4 — Stale / expired session
+- **Main scenario:** state file expired → render returns X's login wall → a login-wall
+  heuristic classifies it `FetchFailed kind=auth_required` (exit 10).
+- **Acceptance:** the logged-out wall is NOT emitted as "content"; the error tells the user
+  to re-mint.
 
-### UC-5 — Smarter extraction (trust the reader's Markdown)
-- **Actor:** User clipping a hard page where local re-clean is noisy.
-- **Main scenario:** `--engine jina --remote-format markdown` → reader returns clean
-  Markdown (with `X-Target-Selector`) → wrapped with our frontmatter + (optionally)
-  localized images → emitted.
-- **Acceptance:** The emitted body equals the reader's Markdown (modulo frontmatter +
-  image-link rewriting), and `--download-images` still localizes resolvable image URLs.
-
-### UC-6 — Web search → Markdown notes (new capability)
-- **Actor:** Agent / user researching a topic (no specific URL yet).
-- **Preconditions:** Network reachable; a search provider configured (default `s.jina.ai`).
-- **Main scenario:** `html2md.py --search "QUERY" OUTPUT_DIR --max-results 5` → the search
-  provider returns the top results → for a *links* provider each result URL is fetched via
-  the R1 FETCH ladder (per-result fallback), for a *combined* provider the merged Markdown
-  is taken directly → one note per result is emitted, each with frontmatter carrying the
-  query + result URL, sharing one `_attachments/`.
-- **Alternatives:** (a) the primary search provider is down/rate-limited → fall through to
-  the next configured provider; (b) all search providers exhausted → one typed
-  `FetchFailed` (exit 10) with the `tried` trace.
-- **Postconditions:** Up to N self-contained notes (or concatenated Markdown with
-  `--stdout`); no partial-crash if an individual result fails (it is skipped, others
-  proceed).
-- **Acceptance:** With the search provider stubbed to return 3 result URLs and the FETCH
-  tier stubbed healthy, 3 notes are written; with the primary search provider stubbed to
-  503 and a secondary healthy, results come from the secondary; with all stubbed to fail,
-  exactly one `FetchFailed` is raised.
+### UC-5 — Jina key for anti-bot non-auth content (server volume)
+- **Main scenario:** a Cloudflare-protected **public** page on the server → keyed
+  `JINA_API_KEY` raises quota/reliability for the remote tier (no session involved).
+- **Acceptance:** with `JINA_API_KEY` set, the remote tier uses it (Bearer); without it,
+  keyless fallback still works (TASK 023 behaviour); a live session is **never** sent to jina.
 
 ---
 
 ## 4. Acceptance Criteria (binary)
 
-1. **AC-R1 (ladder/never-crash):** For every combination of {tier succeeds / tier fails}
-   across the active tiers, the run either produces a note (exit 0) or raises exactly one
-   typed `FetchFailed` (exit 10) — never an unhandled exception. `auto` is local-first;
-   `--engine jina|remote` is remote-first; both fall back the other way.
-2. **AC-R2 (vendor-agnostic):** With `HTML2MD_READER_URL` set, remote escalation targets
-   the configured base and not `r.jina.ai`; with multiple providers configured they are
-   tried in order until one succeeds or all are exhausted.
-3. **AC-R3 (classification):** A reader/transport outcome in {DNS, timeout, 5xx, 429,
-   402, 503} triggers fall-through; a reader-reported **target** 404/403 is terminal for
-   that target (surfaced with the target `kind`, not retried across providers).
-4. **AC-R4 (smarter extraction):** `X-Target-Selector` is sent on remote requests;
-   `--remote-format markdown` uses the reader's Markdown directly (frontmatter still
-   added; `--download-images` still localizes); default `html` preserves today's pipeline
-   output.
-5. **AC-R5 (privacy/SSRF):** A private/internal/unresolvable target is **never** sent to
-   a remote reader (auto or on-demand); `--no-remote` disables the remote tier; docs state
-   the URL-leaves-machine posture.
-6. **AC-R6 (observability):** `frontmatter.engine` and `AcquireResult.engine` report the
-   real tier; `source:` is the canonical target URL; on total failure
-   `FetchFailed.details.tried` lists every attempted tier + its failure kind.
-7. **AC-R7 (offline + coverage):** `I-3` holds (file/archive = zero network); new unit
-   tests cover provider construction, the ladder, classification, trust-markdown, and the
-   privacy guard; the previously-untested Jina path now has coverage.
-8. **AC-R8 (fork-free + validate):** `diff -q` (G-1/G-2) stays silent and docx G-3 stays
-   byte-identical (no master touched); `validate_skill.py skills/html2md` exits 0; no new
-   line in `requirements.txt`.
-9. **AC-R9 (search):** `--search "QUERY"` emits ≤ `--max-results` notes (one per result),
-   each with the query + result URL in frontmatter; a *links* provider routes each result
-   through the FETCH ladder (so a result's Jina-failure still falls back); search-provider
-   failure falls through to the next provider, and only an all-providers-exhausted state
-   raises one typed `FetchFailed`; an individual failed result is skipped, not fatal. A
-   **healthy** search returning **zero** results exits **0 with a stderr note** (zero-results
-   is not content-loss → not `EmptyExtraction`/11). `--max-results` must be **≥ 1** (≤ 0 →
-   usage error, exit 2).
+1. **AC-R1:** with auth attached, a chrome render whose target (or a redirect) resolves to a
+   private/loopback/metadata host is **blocked** (`_assert_public_http`); a test proves a
+   `169.254.169.254`/`127.0.0.1` redirect is refused **on the first request** (guards installed
+   **before** `goto`, at the context level). Additionally, an **off-target *public* redirect**
+   (`example.com`→`evil-public.com`) is refused before snapshot — the final landed origin must
+   equal the requested target's eTLD+1 (so a session is never carried to a different public
+   site). DNS-rebinding TOCTOU remains an inherited residual (§10).
+2. **AC-R2:** `--chrome-storage-state` produces an authenticated context (cookies+localStorage);
+   `--chrome-cookies-file` converts Netscape cookies → context cookies; the three auth sources
+   are mutually exclusive; any auth flag forces the chrome tier (never silently lite).
+3. **AC-R3:** `html2md.py login URL --save-state f.json` writes a 0600 `storage_state` JSON via
+   a headful browser; runtime consumption is headless.
+4. **AC-R4:** `--chrome-scroll` loads additional lazy content bounded by `--chrome-scroll-passes`
+   (default 8) + a wall-clock cap (default 60 s) — never hangs.
+5. **AC-R5:** the same read-only `storage_state.json` is consumed headless by concurrent runs
+   without corruption/lock; a stale session yields `auth_required`, not logged-out content;
+   docs describe the mint→deploy→rotate flow + the self-hosted-Jina synergy.
+6. **AC-R6:** `JINA_API_KEY` (env only) is used when present (keyed) and absent→keyless; a live
+   session is never forwarded to jina; the decision matrix is documented.
+7. **AC-R7:** state/cookie files reject **both group- and world-accessible** modes (`st_mode &
+   0o077` → error; tighter than the transcript-fetcher world-only check — an intentional
+   server-threat-model divergence), symlink-rejected, sanitized-on-error; secrets never appear
+   on argv or in any error/`--json-errors`/`tried` output. Cookie host-scoping is enforced by
+   the browser's native cookie-domain matching **plus** the AC-R1 final-origin gate (the
+   Playwright path does not use a urllib redirect handler).
+8. **AC-R8:** `diff -q` (G-1/G-2) silent + docx G-3 byte-identical; `validate_skill.py` exit 0;
+   no new line in base `requirements.txt`; new tests cover R1/R2/R4/R5/R7.
+9. **AC-R10 (non-regression):** with NO auth/keys configured, the full existing test suite stays
+   green and `--engine auto` behaves identically to TASK 023 (a test asserts no `--chrome-*`/key
+   path is taken by default); a `--chrome-*` flag with a missing/malformed file → a typed error
+   (not a traceback); Playwright-absent + `--chrome-*` → exit 3 `EngineNotInstalled`.
 
 ---
 
 ## 5. Design Decisions (locked) & Constraints
 
-- **D-A (engine ladder — "best option", user-confirmed):** `auto` = local-first
-  (`lite`→`chrome`→remote last-resort, privacy-preserving), opt-out `--no-remote`;
-  `--engine jina|remote` = remote-first with local fallback. Combines the recommended
-  "local-first, Jina auto-escalates + falls back" with on-demand remote-first.
-- **D-B (vendor-agnostic remote tier — user-requested):** providers are pluggable and
-  configurable (env), with `jina` as the built-in default; resilience never depends on a
-  single vendor's uptime. Self-hosted Jina Reader is a first-class configuration.
-- **D-C (provider-down vs target-blocked):** the fallback only fires for provider/transient
-  failures; a genuinely blocked/absent *target* is reported honestly, not laundered into
-  an infinite provider retry.
-- **D-D (smarter extraction):** `X-Target-Selector` + opt-in `--remote-format markdown`;
-  default stays HTML-through-local-pipeline for output consistency.
-- **D-E (fork-free, owned files only):** all changes in `acquire.py`, `cli.py`, html2md
-  tests, `SKILL.md`, `references/`, `KNOWN_ISSUES.md`. **No** `diff -q`-gated master
-  (`web_clean/*`, `html2md_core.js`, `_errors.py`, `_venv_bootstrap.py`) is edited — the
-  replication gate stays green by construction (CLAUDE.md §2). `acquire.py`/`cli.py` are
-  confirmed html2md-owned and absent from the G-1/G-2 gate.
-- **D-F (no new dependency):** the provider layer is plain `httpx` (already a base dep)
-  through the existing `_http_get_bytes` seam — keeping the skill installable in isolation.
-- **D-G (web search in scope — user-pulled-in 2026-06-23):** `--search "QUERY"` via a
-  vendor-agnostic search-provider layer (`s.jina.ai` default + fallback). *Links*-shape
-  providers route each result through the **same** R1 FETCH ladder, so search inherits the
-  full fallback discipline; *combined*-shape providers (s.jina.ai) take merged Markdown
-  directly. One note per result. Search providers fall through on provider-down; an
-  individual failed result is skipped, not fatal.
-- **D-H (latency bound — non-functional):** each tier is bounded by the existing
-  per-request timeout; worst-case ladder latency = Σ attempted tiers. Acceptable for the
-  serial v1; a slow provider cannot stall unboundedly (bounded timeout per hop). Revisit
-  if/when batch is added.
-- **Honest-scope inheritance:** all TASK 022 residuals (DNS-rebinding TOCTOU, un-hardened
-  Chrome engine, data-grid SPAs, PDFs→pdf skill) remain; this task does not regress them.
+- **D-A (chrome SSRF gate is a prerequisite):** R1 lands with/before R2 — never attach
+  credentials to an un-gated, redirect-following browser.
+- **D-B (`storage_state` primary, server-first):** portable, read-only-at-runtime,
+  concurrency-safe → the unit of remote/Hermes auth deployment. `cookies.txt` is the
+  cookie-only alternative; persistent-profile is local-convenience only (not server-concurrent).
+- **D-C (replay-only, never programmatic login):** the skill replays a *human-minted* session;
+  it never handles passwords or automates 2FA — narrower attack surface + cleaner ToS posture.
+- **D-D (auth only on the chrome tier; never to jina by default):** live sessions stay local;
+  the remote/jina tier is for non-auth content (keyed for quota). `x-set-cookie` forwarding is
+  deferred (R9) — unverified + 3rd-party exfil.
+- **D-E (secrets discipline):** file/env only (never argv), 0600 + symlink-reject + sanitized
+  errors (reuse `transcript-fetcher` `_cookies.py` pattern), full redaction, host-scoped cookies.
+- **D-F (fork-free, owned files; no new base dep):** all changes in `acquire.py`, `cli.py`, new
+  html2md-owned `_cookies.py`/`_chrome_auth.py`, tests, docs; Chrome stays soft-optional.
+- **D-G (graceful degradation — auth is strictly additive; user-required):** with NO keys and
+  NO chrome session configured, html2md runs **exactly as TASK 023** (resilient ladder, no
+  crash) — auth/keys are opt-in, never a precondition. A `--chrome-*` flag with a missing/broken
+  file, or Playwright absent, degrades to a **typed error** (exit 1 / exit 3), never a traceback.
+  The default install and default invocation are unchanged. (R10.)
+- **Honest-scope inheritance:** TASK 022/023 residuals stand; the chrome network hardening here
+  is **best-effort** (main-frame + sub-resource host gating), not full beacon isolation — the
+  egress-restricted-sandbox advice remains for fully-untrusted input.
 
 ---
 
 ## 6. Open Questions
 
-- **Q1 (non-blocking, decided default):** Should the remote tier auto-escalate in `auto`
-  by **default** (privacy trade-off: the target URL leaves the machine on escalation)?
-  **Decision:** YES by default for **public** targets only, suppressible via `--no-remote`
-  — this is exactly the "Jina becomes an automatic safety net" option the user chose. The
-  architecture-reviewer should confirm the default is acceptable vs. requiring an explicit
-  `--allow-remote` opt-in. *(Recorded for the review gate; default = auto-escalate-on.)*
-- **Q2 (non-blocking):** Provider-config surface — a single `HTML2MD_READER_URL`, an
-  ordered `HTML2MD_READER_PROVIDERS` list, or both? **Proposed:** support both (single var
-  is the simple case; list is the power case), `jina` appended as the final default unless
-  the user sets an explicit order.
-- **Q3 (RESOLVED):** Web **search** is **IN SCOPE** — the user pulled it in (2026-06-23).
-  Delivered by **R9** (vendor-agnostic search provider, `s.jina.ai` default + fallback,
-  `--search`/`--max-results`, per-result FETCH-ladder routing). The vendor-agnostic
-  **fetch** part remains R2; search reuses the same fallback discipline.
-- **Q4 (non-blocking):** `--remote-format markdown` image localization — localize only
-  `http(s)` image URLs found in the returned Markdown (skip `data:`), bounded by
-  `--max-images`/`--max-bytes`. Proposed: yes, reuse the existing url-mode image path.
+- **Q1 (non-blocking):** include the persistent-profile path (`--chrome-user-data-dir`) in the
+  MVP, or defer it? **Proposed:** include but document as local-only / single-concurrency
+  (it's the only path that self-refreshes + survives 2FA without re-mint).
+- **Q2 (non-blocking):** scroll defaults — passes (8?) + wall-clock cap (e.g. 60s)? confirm at
+  planning.
+- **Q3 (non-blocking, recorded):** also wire **cookies→lite** (the panel's S-effort MVP for
+  *server-rendered* cookie sites)? Deferred to R9(d) — html2md's login cases are JS-walled
+  (X), which lite can't render; pull in only if a non-JS login site becomes a need.
+- **Q4 (Hermes secret transport) — RESOLVED (scoping):** the **skill's contract terminates at
+  "read a 0600 file at a path given by `--chrome-storage-state` / `HTML2MD_CHROME_STORAGE_STATE`"**.
+  HOW the secret is delivered (mounted volume / env / secret manager) is **Hermes-owned, out of
+  this skill's scope** — so Q4's open status does NOT block R5/MVP. Recommend env-path to a 0600
+  file; confirm the transport with the Hermes integration owner at deploy time.
 
 ---
 
 ## 7. Verification plan (rolls into PLAN at /vdd-plan)
 
-- Unit + ladder tests via the `_http_get_bytes` monkeypatch seam (offline, deterministic).
-- `bash skills/html2md/scripts/tests/test_e2e.sh` — full suite + G-1/G-2 `diff -q` gate
-  (must stay PASS).
-- `validate_skill.py skills/html2md` exit 0.
-- A real dogfood run on a known anti-bot URL (ssrn/researchgate) demonstrating
-  auto-escalation, and a forced-Jina-failure run demonstrating fallback.
-- **No auto-commit** (per `/vdd-*`); each logic bead gets an adversarial logic+security
-  roast before being declared done.
-
----
-
-## 8. As-built (post-implementation, 2026-06-23)
-
-**Status:** ✅ SHIPPED — all 7 beads (023-01…07) merged via `/vdd-develop-all`, then a
-3-critic `/vdd-multi` adversarial pass. **NOT committed** (per `/vdd-*`). **145 unit tests**
-green; `test_e2e.sh` PASS incl. the G-1/G-2 `diff -q` replication gate; docx G-3
-byte-identical; `validate_skill.py skills/html2md` exit 0; `requirements.txt` unchanged
-(no new dependency). All changes in html2md-**owned** files (`acquire.py`, `cli.py`,
-`model.py`, `emit.py`, `exceptions.py`).
-
-Beyond the §2 RTM, the as-built adds:
-
-- **`engine:` frontmatter (AC-R6 completion).** `emit._frontmatter` records the real fetch
-  tier (caught by live dogfood — the spec required it but the first cut omitted it).
-- **Search = one note per result.** `--search` results suppress the reader variant (R9 intent
-  "N results → N notes"), via `_convert_one(query=…)`.
-- **`/vdd-multi` hardening (7 findings fixed, +7 regression tests):**
-  - *L-2* broadened the trust-markdown HTML sniff (`_LOOKS_HTML`) — a reader returning HTML
-    despite `--remote-format markdown` (no doctype, `<?xml>`, comment, `<div>`/`<article>`)
-    now falls back to the pipeline instead of emitting raw HTML.
-  - *S-1* a `--search` result URL no longer escalates to the un-network-hardened Chrome tier
-    in non-explicit-chrome modes (`_url_tiers(allow_chrome=…)`).
-  - *P-3/L-4* `_search_result_urls` is bounded + deduped (no unbounded junk list).
-  - *S-3* a `?url=`-style reader base fully encodes the target (query-injection guard).
-  - *L-3* `--target-selector` CR/LF refused; *L-6* `run_search` per-result catch narrowed.
-  - *L-5* `--search --stdout` emits a document separator.
-- **Deferred (documented, `docs/KNOWN_ISSUES.md` HTML2MD-9):** *P-1/P-2* no aggregate
-  `--deadline` (bounded but uncapped serial latency) and *P-4* `--max-bytes` unbounded default
-  — both flagged as follow-ups beyond this task's RTM.
-- **Verification artifacts:** `docs/tasks/task-023-0N-*.md` (beads),
-  `docs/reviews/{task,arch,plan}-023-review.md` (gates), `docs/ARCHITECTURE.md` §15.
-  New tests: `tests/test_{providers,ladder,privacy,extraction,search}.py` + `test_surface`
-  additions. The critics confirmed sound: ladder always terminates with one typed error;
-  `tried` trace is URL-free; private-target-never-sent-to-a-reader holds; YAML escaping;
-  `_host_is_public` IPv6/encoded-host posture; no ReDoS; lazy heavy-dep imports.
+- Playwright-seam unit tests (monkeypatch the context builder + a fake page) — no real browser
+  in CI; an opt-in live mint+render dogfood (the X Article) recorded, not CI-gated.
+- SSRF-block test (R1e), stale-session→`auth_required` (R5c), cookie host-scope + file-hardening
+  (R7), concurrency note (read-only state).
+- `bash scripts/tests/test_e2e.sh` (suite + G-1/G-2 gate) PASS; `validate_skill.py` exit 0.
+- **No auto-commit** (per `/vdd-*`); security beads (R1 gate, R7) under `tdd-strict`.

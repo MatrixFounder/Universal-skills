@@ -1,113 +1,113 @@
-# PLAN 023 — `html2md` resilient vendor-agnostic remote-reader + fallback + search — Stub-First
+# PLAN 024 — `html2md` authenticated Chrome (server/Hermes-deployable) — Stub-First
 
-Maps **TASK 023** R1–R10 onto an atomic Stub-First bead chain. Architecture:
-`docs/ARCHITECTURE.md` §15 (TASK 023 delta). **License:** Proprietary (html2md;
-ARCH §9 / CLAUDE.md §3). **Scope guard:** every bead edits only html2md-**owned**
-files (`acquire.py`, `cli.py`, `model.py`, `emit.py`, html2md tests, `SKILL.md`,
-`references/`) — **no `diff -q`-gated master** is touched, so the two-master gate
-(G-1/G-2/G-3) stays green by construction (asserted in 023-07).
+Maps **TASK 024** R1–R10 onto an atomic Stub-First bead chain. Architecture:
+`docs/ARCHITECTURE.md` §16. **License:** Proprietary (html2md). **Scope guard:** every bead
+edits only html2md-**owned** files (`acquire.py`, `cli.py`, new `_chrome_auth.py`/`_cookies.py`,
+tests, docs) — **no `diff -q`-gated master** is touched (G-1/G-2/G-3 green by construction,
+asserted in 024-06). Chrome stays **soft-optional** → no new base dependency.
+
+**Load-bearing ordering:** **R1 (Chrome SSRF hardening, 024-02) lands BEFORE R2 (auth context,
+024-03)** — attaching credentials to an un-gated, redirect-following browser is a cred-exfil
+regression. Security beads **024-02** and **024-04** run under **`tdd-strict`** (failing
+SSRF/exfil + file-hardening tests first). **Cookies sub-path forward-ref (no inversion):** the
+`storage_state` (primary) + persistent-profile paths land green in **024-03**; only the
+`cookies.txt` sub-path needs `to_playwright_cookies` from **024-04**, so its one test (TC-03-02)
+is written **RED in 024-03 and greened in 024-04** — the chain stays linear. **`login` dispatch:
+DECIDED = verb-intercept in `main`** (the flat `nargs="?"` parser would mis-parse `login URL`).
 
 **Phasing (`tdd-stub-first`):**
-- **Phase 1 (Stub + RED tests):** bead **023-01** freezes the new public surface
-  (CLI flags, `RemoteReader`/`SearchProvider` records, ladder skeleton) and lays
-  RED tests via the `acquire._http_get_bytes` monkeypatch seam.
-- **Phase 2 (Logic, Green):** beads **023-02…06** fill each concern behind the
-  frozen surface, turning RED tests green and adding unit tests.
-- **Integration + Docs:** bead **023-07** ships docs + gates + dogfood.
+- **Phase 1 (Stub + RED):** **024-01** freezes the CLI/`login`-subcommand surface + records +
+  RED tests (incl. the **R10 non-regression** test).
+- **Phase 2 (Logic, Green):** **024-02…05** fill each concern behind the frozen surface.
+- **Integration + Docs:** **024-06** ships docs + Hermes-deploy + gates + dogfood.
 
-**No new dependency:** the provider layer is plain `httpx` (existing base dep) via
-the single network seam `_http_get_bytes`. **No auto-commit** (per `/vdd-*`); each
-Phase-2 bead gets an adversarial logic+security roast (`/vdd-multi`) before "done".
+**No auto-commit** (per `/vdd-*`); each Phase-2 bead gets an adversarial `/vdd-multi` roast.
+
+## R10 — graceful degradation is a CROSS-CUTTING invariant (not one bead)
+
+Auth/keys are strictly additive. **Every** bead must preserve: no `--chrome-*`/no `JINA_API_KEY`
+→ byte-for-byte TASK 023, no crash. 024-01 lays the non-regression test; 024-06 asserts the full
+no-auth suite stays green.
 
 ## Stub-First ordering (beads)
 
-- **023-01 — [STUB] Public surface + records + ladder skeleton + RED tests.**
-  Freeze `cli.py` flags (`--engine …|remote`, `--no-remote`, `--remote-format
-  html|markdown`, `--target-selector`, `--search`, `--max-results`; `--search` ⊥
-  positional INPUT → exit 2); add `RemoteReader`/`SearchProvider` records +
-  `_TierUnavailable` internal signal (stubs); extend `model.AcquireResult`
-  (`content_kind`, `markdown`); ladder/provider/search functions as stubs
-  (`NotImplementedError`/sentinel); **RED** unit tests (ladder matrix, classification,
-  privacy guard, provider construction, search) wired to the `_http_get_bytes` seam.
-  → [task-023-01](docs/tasks/task-023-01-surface-stubs-red-tests.md)
-- **023-02 — [R2] RemoteReader provider layer.** `_remote_providers(opts)` from env
-  (`HTML2MD_READER_URL`/`HTML2MD_READER_PROVIDERS`) + `jina` default + ordering;
-  `_build_reader_request(provider, target, opts) -> (url, headers)` (URL-encoded
-  target, `X-Return-Format`, `Authorization`); keep `_fetch_jina_html` behaviour as
-  the `jina` provider. → [task-023-02](docs/tasks/task-023-02-remote-reader-providers.md)
-- **023-03 — [R1/R3/R6] Fallback-ladder orchestrator.** Rewrite `_acquire_url` as a
-  tier loop: `auto`=local-first (`lite`→`chrome`→remote), `jina`/`remote`=remote-first
-  (→`lite`→`chrome`), `lite`/`chrome`=single tier; fall-through on provider/transient
-  (incl. auto `EngineNotInstalled`); one terminal `FetchFailed(kind=all_engines_failed,
-  details.tried=[…])`; `engine`/`tried` provenance. Preserve existing site-variant
-  rewrites + `_looks_substantial`. → [task-023-03](docs/tasks/task-023-03-fallback-ladder-orchestrator.md)
-- **023-04 — [R5] Privacy / SSRF gate.** Apply `_host_is_public(target)` BEFORE any
-  remote escalation (auto + on-demand); enforce `--no-remote`; request-URL injection
-  guard (URL-encode target/query, reject CRLF/control chars). →
-  [task-023-04](docs/tasks/task-023-04-privacy-ssrf-gate.md)
-- **023-05 — [R4] Smarter extraction.** `X-Target-Selector` (default `article, main,
-  [role=main]`, `--target-selector`) on remote requests; `--remote-format markdown`
-  trust-mode (`content_kind=markdown` bypasses `clean`+`core_bridge`; frontmatter +
-  image localization only; no reader variant). →
-  [task-023-05](docs/tasks/task-023-05-smarter-extraction.md)
-- **023-06 — [R9] Web search.** `SearchProvider` layer (`s.jina.ai` combined +
-  generic links-shape via `HTML2MD_SEARCH_URL`/`HTML2MD_SEARCH_PROVIDERS`);
-  `--search "QUERY"`/`--max-results`; links-shape routes each result URL through the
-  R1 FETCH ladder; per-result skip-on-fail; one-note-per-result emit loop (shared
-  `_attachments/`, `query:` frontmatter); search-provider fallback. →
-  [task-023-06](docs/tasks/task-023-06-web-search.md)
-- **023-07 — [R7/R8] Integration + docs + gates.** `SKILL.md`,
-  `references/html-to-markdown.md`, `docs/KNOWN_ISSUES.md` HTML2MD-1/-6, backlog §2;
-  `validate_skill.py skills/html2md` exit 0; **assert G-1/G-2/G-3 unchanged** + no new
-  `requirements.txt` line; dogfood an anti-bot URL (auto-escalation) + a
-  forced-Jina-failure (fallback) + a `--search` run. →
-  [task-023-07](docs/tasks/task-023-07-docs-integration-gates.md)
+- **024-01 — [STUB] Surface + records + RED tests.** `cli.py`: add `--chrome-storage-state` /
+  `--chrome-cookies-file` / `--chrome-user-data-dir` (mutually-exclusive), `--chrome-scroll` /
+  `--chrome-scroll-passes`, and the `login` subcommand surface (dispatch shape: a `login` verb in
+  `main` before the flat parser, **or** `add_subparsers` — decide here). New `_chrome_auth.py` /
+  `_cookies.py` skeletons + `_fetch_chrome_html(url)`→`(url, opts)` signature stub. **RED** tests:
+  SSRF private-redirect-block (first request), off-target public-redirect block, auth-context,
+  stale-session→`auth_required`, cookie host-scope, **R10 non-regression** (no-auth=TASK-023 +
+  missing-file→typed-error). → [task-024-01](docs/tasks/task-024-01-surface-stubs-red-tests.md)
+- **024-02 — [R1] Chrome SSRF hardening (`tdd-strict`).** In `_fetch_chrome_html`: install
+  guards **before `page.goto`** at the **context** level — `_assert_public_http(url)`; main-frame
+  redirect host-gate; **off-target public-redirect refusal** (final landed origin == target
+  eTLD+1); `context.route("**/*")` abort of non-public sub-resource/`fetch`/`sendBeacon`.
+  Honest-scope: DNS-rebind TOCTOU inherited, localStorage origin-restored. →
+  [task-024-02](docs/tasks/task-024-02-chrome-ssrf-hardening.md)
+- **024-03 — [R2] Authenticated context.** `_chrome_auth.resolve_context_kwargs(opts)` →
+  `new_context(storage_state=…)` / `new_context()+add_cookies(…)` / `launch_persistent_context(…)`;
+  mutually-exclusive; **any auth flag sets effective engine=chrome** (never silently drops the
+  credential to lite). → [task-024-03](docs/tasks/task-024-03-authenticated-context.md)
+- **024-04 — [R3/R7] `login` mint helper + hardened cookie loader (`tdd-strict`).** `login`
+  subcommand → headful Chromium → `context.storage_state(path=…)` → `chmod 0600`. `_cookies.py`:
+  lift `load_cookie_jar` (symlink-reject, **reject `st_mode & 0o077`** group+world, sanitized
+  errors) + new Netscape→Playwright-cookie-dict conversion. Secrets file/env-only; redaction. →
+  [task-024-04](docs/tasks/task-024-04-login-mint-cookie-loader.md)
+- **024-05 — [R4/R5c] Scroll-to-load + stale-session detection.** `--chrome-scroll` (passes
+  default 8, wall-clock cap 60 s); login-wall heuristic (redirect-to-/login · marker needle ·
+  target-selector absent) → `FetchFailed kind=auth_required`. →
+  [task-024-05](docs/tasks/task-024-05-scroll-and-stale-session.md)
+- **024-06 — [R5/R6/R8] Docs + Hermes deploy + Jina-key matrix + gates + dogfood.** `SKILL.md`,
+  `references/`, a **server/Hermes deploy** section (mint→deploy→consume→rotate; storage_state as
+  secret; concurrency; self-hosted-Jina synergy), the **Jina-key matrix** (R6), KNOWN_ISSUES;
+  `validate_skill.py` exit 0; **assert G-1/G-2/G-3 unchanged + no new base dep + full no-auth
+  suite green (R10)**; dogfood: `login` → render an authed X Article. →
+  [task-024-06](docs/tasks/task-024-06-docs-hermes-gates.md)
 
-## RTM → Bead checklist (mandatory RTM linking — one RTM item per line)
+## RTM → Bead checklist (one RTM item per line)
 
-- [ ] **[R1]** Resilient fallback ladder (no single point of failure) — **023-01** (surface/stub) + **023-03** (logic)
-- [ ] **[R2]** Vendor-agnostic remote-reader provider layer — **023-02**
-- [ ] **[R3]** Failure classification (provider-down / target-blocked / tier-block) — **023-03**
-- [ ] **[R4]** Smarter extraction (X-Target-Selector + trust-markdown) — **023-05**
-- [ ] **[R5]** Privacy / SSRF / injection guards — **023-04**
-- [ ] **[R6]** Observability (`engine` + `tried` trace) — **023-03**
-- [ ] **[R7]** Tests (jina-gap + ladder + classification + privacy + search) — **023-01** (RED) + **023-02…06** (Green) + **023-07** (suite/validate)
-- [ ] **[R8]** Docs, packaging, fork-free integrity (gate unchanged, no new dep) — **023-07**
-- [ ] **[R9]** Web search (vendor-agnostic) — **023-06**
-- [ ] **[R10]** Explicitly deferred (VLM alt-text / cookie / screenshot / links-summary) — *no bead; recorded in TASK §2 + backlog*
+- [ ] **[R1]** Chrome SSRF hardening (prerequisite) — **024-01** (RED) + **024-02** (logic)
+- [ ] **[R2]** Authenticated Chrome context — **024-01** (surface) + **024-03**
+- [ ] **[R3]** Session minting helper (`login`) — **024-04**
+- [ ] **[R4]** Scroll-to-load — **024-05**
+- [ ] **[R5]** Remote / Hermes deployability — **024-05** (stale-session) + **024-06** (deploy/synergy)
+- [ ] **[R6]** Jina API-key strategy — **024-06**
+- [ ] **[R7]** Security (file hardening / redaction / host-scope) — **024-02** (SSRF) + **024-04** (creds) + cross-cutting
+- [ ] **[R8]** Tests, docs, fork-free — all beads (tests) + **024-06** (gates/validate)
+- [ ] **[R9]** Explicitly deferred (x-set-cookie / programmatic-login / auto-refresh / cookies→lite) — *no bead*
+- [ ] **[R10]** Graceful degradation / non-regression — **024-01** (test) + **ALL beads preserve** + **024-06** (no-auth suite green)
 
-## Use-Case → Bead coverage table
+## Use-Case → Bead coverage
 
 | Use Case | Beads |
 |---|---|
-| UC-1 anti-bot page auto-recovers | 023-03 (ladder) + 023-02 (provider) + 023-04 (public-target guard) |
-| UC-2 `--engine jina` survives a Jina outage | 023-03 (remote-first + local fallback) |
-| UC-3 vendor-agnostic / self-hosted reader | 023-02 (env providers) |
-| UC-4 privacy: internal URL never sent remote | 023-04 |
-| UC-5 smarter extraction (trust-markdown) | 023-05 |
-| UC-6 web search → Markdown notes | 023-06 (+ 023-03 ladder for links-shape results) |
+| UC-1 mint locally + clip authed X Article | 024-04 (mint) + 024-03 (context) + 024-02 (gate) |
+| UC-2 Hermes server, headless, concurrent | 024-03 (storage_state) + 024-06 (deploy docs) |
+| UC-3 reply threads / lazy content | 024-05 (scroll) |
+| UC-4 stale/expired session | 024-05 (auth_required heuristic) |
+| UC-5 jina key for anti-bot non-auth | 024-06 (key matrix) |
 
 ## MVP gate
 
-**023-01…04** = the resilient vendor-agnostic ladder + privacy gate (the user's two
-hard requirements). **023-05** (smarter extraction), **023-06** (web search, R9) and
-**023-07** (docs/gates) complete TASK 023.
+**024-01…04** = the hardened authenticated render (SSRF gate + auth context + mint/loader).
+**024-05** (scroll/staleness) and **024-06** (docs/server/gates) complete TASK 024.
 
-## Acceptance (rolls up TASK 023 §4 + ARCH §15 guards)
+## Acceptance (rolls up TASK 024 §4)
 
-- [ ] **AC-R1** ladder never crashes; one typed error only when all tiers exhausted — 023-03
-- [ ] **AC-R2** `HTML2MD_READER_URL` → configured base, not r.jina.ai; ordered providers — 023-02
-- [ ] **AC-R3** provider-down → fall-through; reader-reported target-404 → terminal-per-provider — 023-03
-- [ ] **AC-R4** `X-Target-Selector` sent; `--remote-format markdown` trust-mode; default html unchanged — 023-05
-- [ ] **AC-R5** private/internal target never sent remote; `--no-remote` disables tier — 023-04
-- [ ] **AC-R6** `engine`/`tried` reflect the real tier; `source:` = canonical URL — 023-03
-- [ ] **AC-R7** I-3 offline zero-network preserved; new coverage incl. previously-untested jina — 023-01…06
-- [ ] **AC-R8** `diff -q` (G-1/G-2) silent + docx G-3 byte-identical; `validate_skill.py` exit 0; no new dep — 023-07
-- [ ] **AC-R9** `--search` ≤ N notes; per-result FETCH-ladder fallback; per-result skip; search-provider fallback — 023-06
+- [ ] **AC-R1** private + off-target-public redirects blocked on first request (guards before goto) — 024-02
+- [ ] **AC-R2** storage_state/cookies context; mutually-exclusive; auth⇒chrome — 024-03
+- [ ] **AC-R3** `login` writes 0600 storage_state via headful; runtime headless — 024-04
+- [ ] **AC-R4** scroll bounded by passes(8)+wall-clock(60s); never hangs — 024-05
+- [ ] **AC-R5** read-only state concurrency-safe; stale→auth_required; deploy/rotate docs — 024-05/06
+- [ ] **AC-R6** `JINA_API_KEY` env-only keyed/keyless; live session never to jina; matrix doc — 024-06
+- [ ] **AC-R7** reject `0o077` perms + symlink + sanitized; secrets never argv/logs; host-scope — 024-02/04
+- [ ] **AC-R8** `diff -q` (G-1/G-2) silent + docx G-3; `validate_skill.py` exit 0; no new base dep — 024-06
+- [ ] **AC-R10** no-auth = TASK-023 (suite green); missing-file→typed-error; Playwright-absent→exit 3 — 024-01/06
 
 ## Strict-mode note
 
-The **security-critical** beads (**023-03** ladder + **023-04** SSRF/injection gate)
-SHOULD follow `tdd-strict` (write the failing test first, incl. the SSRF/injection and
-all-tiers-fail cases) — they are the parts where a regression silently leaks a URL or
-masks a failure.
+**024-02** (SSRF/exfil gate) and **024-04** (credential file handling) MUST follow `tdd-strict` —
+write the failing security tests first (private + off-target-public redirect refusal on the first
+request; group/world-perm rejection; secret-never-in-logs). These are where a regression silently
+exfiltrates a session or leaks a credential.
