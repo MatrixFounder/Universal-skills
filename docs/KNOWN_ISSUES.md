@@ -532,8 +532,17 @@ egress-restricted sandbox; (b) `storage_state` **localStorage is origin-restored
 same-origin script the page loads); (c) the **login-wall heuristic** (stale session → `auth_required`)
 is best-effort/per-site (X-tuned first); (d) **`_registrable` = last-2-labels** (no public-suffix
 list → multi-level suffixes like `co.uk` over-match the off-target check); (e) **no 2FA/auto-refresh**
-— re-mint when the session expires. **Do-not:** put secrets on argv (file/env only); cookies/state
-files must be `0600` (group+world rejected) or they're refused.
+— re-mint when the session expires; (f) **Google "Continue with Google" SSO cannot be completed in
+the mint window** — Google's OAuth bot-detection refuses automation-controlled browsers (*"this
+browser or app may not be secure"*). **TASK 025 mitigation:** mint/render now prefer the **real
+system Chrome channel** (`channel="chrome"`, bundled-Chromium fallback) + suppress the automation
+signal (`--disable-blink-features=AutomationControlled` + `navigator.webdriver` mask), which makes
+**native** logins (X email/password) and authed renders reliable — but Google OAuth specifically may
+**still** block (intentional, not a bug). For Google-SSO accounts use **email/password** in the mint
+window, or **export cookies** from your everyday browser → `--chrome-cookies-file` (sanctioned path;
+manual §5b). **Do-not:** put secrets on argv (file/env only); cookies/state
+files must be `0600` (group+world rejected) or they're refused; **do-not** add fingerprint-spoofing
+beyond the standard de-automation flag to chase Google's check (arms race — cookie export wins).
 
 ---
 

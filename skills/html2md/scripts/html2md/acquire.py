@@ -519,9 +519,10 @@ def _login_render(url: str, save_state_path: str, opts) -> None:
     sync_playwright = _import_sync_playwright()
     try:
         with sync_playwright() as pw:
-            browser = pw.chromium.launch(headless=False)
+            browser = _launch_chrome_browser(pw, headless=False)  # real Chrome + de-automation (R1/R2)
             try:
                 context = browser.new_context(user_agent=_BROWSER_UA)
+                context.add_init_script(_WEBDRIVER_MASK_JS)  # mask the residual webdriver flag (R2)
                 page = context.new_page()
                 page.goto(url, wait_until="load", timeout=120000)
                 sys.stderr.write(
@@ -556,6 +557,39 @@ def _import_sync_playwright():
             details={"remediation": "install.sh --with-chrome"},
         ) from exc
     return sync_playwright
+
+
+# --- Chrome launch hardening (TASK 025) --------------------------------------------- #
+# Bundled Chromium under CDP automation sets ``navigator.webdriver = true``, which first-party
+# logins (X email/password) and authed renders flag as bot traffic ("JavaScript is not available"
+# wall / Google's "this browser may not be secure"). Prefer the user's REAL system Chrome channel
+# and suppress the automation signal; fall back to bundled Chromium when system Chrome is absent —
+# never a hard failure (R10 parity). NB: Google's OAuth bot-detection is intentionally strong and
+# may STILL refuse — the sanctioned path for Google-SSO accounts is cookie export (manual §5b),
+# NOT a fingerprint arms race.
+_CHROME_LAUNCH_ARGS = ["--disable-blink-features=AutomationControlled"]
+_WEBDRIVER_MASK_JS = "Object.defineProperty(navigator, 'webdriver', {get: () => undefined})"
+
+
+def _launch_chrome_browser(pw, *, headless: bool):
+    """Launch a Chromium browser preferring the real system Chrome channel (TASK 025 R1/R2);
+    fall back to bundled Chromium if that channel is not installed (R10 — never a hard failure)."""
+    try:
+        return pw.chromium.launch(headless=headless, channel="chrome", args=_CHROME_LAUNCH_ARGS)
+    except Exception:  # noqa: BLE001 — system Chrome absent → bundled Chromium fallback
+        return pw.chromium.launch(headless=headless, args=_CHROME_LAUNCH_ARGS)
+
+
+def _launch_chrome_persistent(pw, *, headless: bool, kwargs: dict):
+    """Persistent-profile variant of :func:`_launch_chrome_browser` (``--chrome-user-data-dir``):
+    same system-Chrome-then-bundled fallback; returns a context directly. Pairing the real Chrome
+    channel with the user's own Chrome profile is what makes the persistent-profile path usable."""
+    try:
+        return pw.chromium.launch_persistent_context(
+            headless=headless, channel="chrome", args=_CHROME_LAUNCH_ARGS, **kwargs)
+    except Exception:  # noqa: BLE001 — system Chrome absent → bundled Chromium fallback
+        return pw.chromium.launch_persistent_context(
+            headless=headless, args=_CHROME_LAUNCH_ARGS, **kwargs)
 
 
 def _registrable(host: str | None) -> str:
@@ -639,15 +673,16 @@ def _fetch_chrome_html(url: str, opts=None) -> str:
             # Context (not new_page) so the SSRF route-guard + auth state attach to ALL
             # pages/popups/workers; guards installed BEFORE goto (no first-request TOCTOU).
             if spec and spec["mode"] == "persistent":
-                context = pw.chromium.launch_persistent_context(
-                    user_agent=_BROWSER_UA, headless=True, **spec["kwargs"])
+                context = _launch_chrome_persistent(  # real Chrome + de-automation (R1/R2)
+                    pw, headless=True, kwargs={"user_agent": _BROWSER_UA, **spec["kwargs"]})
                 browser = None
             else:
-                browser = pw.chromium.launch()
+                browser = _launch_chrome_browser(pw, headless=True)  # real Chrome + de-automation
                 context = browser.new_context(
                     user_agent=_BROWSER_UA, **(spec["kwargs"] if spec else {}))
                 if spec and spec.get("cookies"):
                     context.add_cookies(spec["cookies"])
+            context.add_init_script(_WEBDRIVER_MASK_JS)  # mask the residual webdriver flag (R2)
             try:
                 _install_chrome_guards(context)
                 page = context.new_page()

@@ -228,8 +228,24 @@ a **human-minted** session — html2md never automates login/passwords/2FA.
 ```bash
 python3 scripts/html2md.py login https://x.com --save-state ~/.html2md/x.json
 ```
-A headful Chromium opens → log in by hand (2FA ok) → press Enter → a `0600` `storage_state.json`
-(cookies + localStorage) is written.
+A headful browser opens — your **real system Chrome** when installed (less bot-detectable),
+else bundled Chromium — with the automation signal suppressed (`navigator.webdriver` masked) so a
+first-party login isn't refused as an "automated browser". Log in by hand (2FA ok) → press Enter →
+a `0600` `storage_state.json` (cookies + localStorage) is written.
+
+> **⚠️ Google / "Continue with Google" SSO is blocked.** Google's OAuth bot-detection refuses
+> automation-controlled browsers (*"this browser or app may not be secure"*) and our de-automation
+> does **not** reliably defeat it (chasing it is an arms race we don't play). Two ways around it:
+> 1. **Log into the site directly** with email/password (X has a native form) instead of the Google
+>    button — the mint window then works.
+> 2. **Export cookies from your everyday browser** (where you're already logged in via Google) with
+>    a "Get cookies.txt LOCALLY" / Cookie-Editor extension, `chmod 600` the file, and skip `login`:
+>    ```bash
+>    python3 scripts/html2md.py "https://x.com/i/article/<id>" out/ --engine chrome \
+>        --chrome-cookies-file ~/.html2md/x-cookies.txt --chrome-scroll
+>    ```
+>    This is the **most robust** path for Google-SSO accounts — the login already happened in a
+>    trusted browser, so Google never sees automation.
 
 **Then convert headless** (one auth source, mutually exclusive; any of them forces `--engine chrome`):
 ```bash

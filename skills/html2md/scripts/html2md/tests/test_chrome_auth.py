@@ -146,6 +146,10 @@ class _FakePage:
 class _FakeContext:
     def __init__(self, page):
         self._page, self.routes, self.kwargs, self.added_cookies, self.closed = page, [], None, [], False
+        self.init_scripts = []  # TASK 025: de-automation init scripts (navigator.webdriver mask)
+
+    def add_init_script(self, script):
+        self.init_scripts.append(script)
 
     def route(self, pattern, handler):
         self.routes.append((pattern, handler))
@@ -377,6 +381,100 @@ class TestLoginMint(_ChromeBase):
         with mock.patch("builtins.input", return_value=""):
             with self.assertRaises(acquire.FetchFailed):
                 acquire._login_render("https://127.0.0.1/login", "x.json", _args("https://x"))
+
+    def test_mint_prefers_chrome_channel_and_masks_webdriver(self):
+        """TASK 025 R1/R2: the mint launch requests the real Chrome channel + de-automation arg,
+        and the context masks navigator.webdriver."""
+        ctx = _FakeContext(_FakePage('{"ok":1}', None))
+        calls = []
+
+        class _Rec(_FakeChromium):
+            def launch(self, **kw):
+                calls.append(kw)
+                return _FakeBrowser(self._ctx)
+
+        pw = _FakePW(ctx)
+        pw.chromium = _Rec(ctx)
+        acquire._import_sync_playwright = lambda: (lambda: pw)
+        with tempfile.TemporaryDirectory() as d, mock.patch("builtins.input", return_value=""):
+            acquire._login_render("https://x.com", str(Path(d) / "x.json"), _args("https://x.com"))
+        self.assertEqual(calls[0].get("channel"), "chrome")
+        self.assertIn("--disable-blink-features=AutomationControlled", calls[0].get("args", []))
+        self.assertIn(acquire._WEBDRIVER_MASK_JS, ctx.init_scripts)
+
+
+class TestChromeLaunchHardening(_ChromeBase):
+    """TASK 025: real-Chrome-channel preference + de-automation on the headless render path."""
+
+    def test_render_prefers_chrome_channel_and_masks_webdriver(self):
+        """R1/R2: render launch requests channel='chrome' + the AutomationControlled arg, and
+        the context masks navigator.webdriver."""
+        ctx = _FakeContext(_FakePage("<html><body><p>real authed body ok</p></body></html>", None))
+        calls = []
+
+        class _Rec(_FakeChromium):
+            def launch(self, **kw):
+                calls.append(kw)
+                return _FakeBrowser(self._ctx)
+
+        pw = _FakePW(ctx)
+        pw.chromium = _Rec(ctx)
+        acquire._import_sync_playwright = lambda: (lambda: pw)
+        acquire._fetch_chrome_html("https://example.com/x")
+        self.assertEqual(calls[0].get("channel"), "chrome")
+        self.assertIn("--disable-blink-features=AutomationControlled", calls[0].get("args", []))
+        self.assertIn(acquire._WEBDRIVER_MASK_JS, ctx.init_scripts)
+
+    def test_render_falls_back_to_bundled_when_channel_missing(self):
+        """R1 (R10 parity): if the system Chrome channel is absent, launch falls back to bundled
+        Chromium (still de-automated) — never a hard failure."""
+        ctx = _FakeContext(_FakePage("<html><body><p>real authed body ok</p></body></html>", None))
+        calls = []
+
+        class _Flaky(_FakeChromium):
+            def launch(self, **kw):
+                calls.append(kw)
+                if kw.get("channel"):
+                    raise RuntimeError("Chromium distribution 'chrome' is not found")
+                return _FakeBrowser(self._ctx)
+
+        pw = _FakePW(ctx)
+        pw.chromium = _Flaky(ctx)
+        acquire._import_sync_playwright = lambda: (lambda: pw)
+        html = acquire._fetch_chrome_html("https://example.com/x")  # must NOT raise
+        self.assertIn("authed body", html)
+        self.assertEqual(len(calls), 2)  # channel attempt, then bundled fallback
+        self.assertEqual(calls[0].get("channel"), "chrome")
+        self.assertIsNone(calls[1].get("channel"))
+        self.assertIn("--disable-blink-features=AutomationControlled", calls[1].get("args", []))
+
+    def test_persistent_falls_back_to_bundled_when_channel_missing(self):
+        """R1 (persistent path): --chrome-user-data-dir also prefers channel='chrome', de-automates,
+        and falls back to bundled Chromium (preserving user_data_dir) when system Chrome is absent."""
+        ctx = _FakeContext(_FakePage("<html><body><p>real authed body ok</p></body></html>", None))
+        calls = []
+
+        class _FlakyP(_FakeChromium):
+            def launch_persistent_context(self, **kw):
+                calls.append(kw)
+                if kw.get("channel"):
+                    raise RuntimeError("Chromium distribution 'chrome' is not found")
+                self._ctx.kwargs = {"persistent": kw}
+                return self._ctx
+
+        pw = _FakePW(ctx)
+        pw.chromium = _FlakyP(ctx)
+        acquire._import_sync_playwright = lambda: (lambda: pw)
+        a = _args("https://example.com/x")
+        a.chrome_user_data_dir = "/prof"
+        html = acquire._fetch_chrome_html("https://example.com/x", a)  # must NOT raise
+        self.assertIn("authed body", html)
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(calls[0].get("channel"), "chrome")
+        self.assertIsNone(calls[1].get("channel"))
+        self.assertEqual(calls[1].get("user_data_dir"), "/prof")
+        self.assertIn("--disable-blink-features=AutomationControlled", calls[1].get("args", []))
+        self.assertIn(acquire._WEBDRIVER_MASK_JS, ctx.init_scripts)
 
 
 class TestScrollAndStale(_ChromeBase):

@@ -64,6 +64,30 @@ class TestTidyMarkdown(unittest.TestCase):
         out = tidy_markdown("Click Copy to copy the snippet.\n")
         self.assertIn("Click Copy to copy the snippet.", out)
 
+    def test_leaked_button_attr_soup_removed(self):
+        """Leaked X button markup (the `[&>svg]:` tag-break artifact) is dropped; prose kept."""
+        soup = ('svg\\]:size-5 text-body hover:bg-mix-current active:bg-mix-amount-15 '
+                'aria-label="Reply" type="button" data-state="closed">89')
+        out = tidy_markdown(f"Real article body here.\n\n{soup}\n\nMore real text.\n")
+        self.assertIn("Real article body here.", out)
+        self.assertIn("More real text.", out)
+        self.assertNotIn("data-state=", out)
+        self.assertNotIn('type="button"', out)
+
+    def test_attr_soup_inside_code_fence_preserved(self):
+        """A legit HTML example in a code fence is NEVER treated as leaked soup."""
+        md = '```html\n<button type="button" data-state="closed">Save</button>\n```\n'
+        out = tidy_markdown(md)
+        self.assertIn('<button type="button" data-state="closed">Save</button>', out)
+
+    def test_inline_attr_prose_not_overstripped(self):
+        """Prose mentioning a single attribute, or non-widget attrs, is kept (high-confidence gate)."""
+        md = ('Set type="button" on the element.\n\n'
+              'The role="main" wrapper holds the article.\n')
+        out = tidy_markdown(md)
+        self.assertIn('Set type="button" on the element.', out)
+        self.assertIn('The role="main" wrapper holds the article.', out)
+
 
 if __name__ == "__main__":
     unittest.main()
