@@ -57,6 +57,7 @@ public contract; the package layout is internal and may evolve.
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import shutil
 import sys
@@ -277,6 +278,22 @@ def main(argv: list[str] | None = None) -> int:
             json_mode=je,
         )
 
+    # Auto-enable --untrusted when the input is an `html` skill fetch artifact (a sibling
+    # `<stem>.meta.json` with the fetch-artifact schema). Such HTML is arbitrary fetched web
+    # content; the confined file:// fetcher renders its localized `_attachments/` while
+    # refusing any out-of-base `file://` — so the pipeline is safe even if --untrusted was
+    # forgotten. A plain user-saved .html (no sidecar) keeps the permissive default.
+    untrusted = bool(args.untrusted)
+    if not untrusted and ext in (".html", ".htm"):
+        _sidecar = args.input.with_name(args.input.stem + ".meta.json")
+        if _sidecar.is_file():
+            try:
+                if str(json.loads(_sidecar.read_text(encoding="utf-8")).get("schema", "")
+                       ).startswith("html/fetch-artifact"):
+                    untrusted = True
+            except (OSError, ValueError):
+                pass
+
     tmp_dir: str | None = None
     try:
         if ext in (".html", ".htm"):
@@ -303,7 +320,7 @@ def main(argv: list[str] | None = None) -> int:
             timeout=args.timeout,
             engine=args.engine,
             chrome_javascript=args.chrome_javascript,
-            untrusted=args.untrusted,
+            untrusted=untrusted,
         )
     except ChromeEngineUnavailable as exc:
         return report_error(

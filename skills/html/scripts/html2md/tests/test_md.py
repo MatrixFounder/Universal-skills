@@ -76,6 +76,13 @@ class TestCombined(unittest.TestCase):
             self.assertNotIn("in.html", names)        # intermediate HTML deleted
             self.assertNotIn("in.meta.json", names)   # sidecar deleted
 
+    def test_combined_validates_before_search_dispatch(self):
+        # combined_main must run _validate_usage BEFORE the --search branch, so the
+        # security guard "--chrome-* auth cannot be combined with --search" still fires.
+        rc = cli.combined_main(["--search", "kubernetes", "--chrome-storage-state",
+                                "/secrets/x.json", "--json-errors"])
+        self.assertEqual(rc, 2)  # Usage, not a silently-bypassed search
+
 
 class TestSelfOverwriteGuard(unittest.TestCase):
     def test_emit_refuses_output_equals_input(self):
@@ -110,6 +117,73 @@ class TestStaleReaderCleanup(unittest.TestCase):
                       output_dir=out, stdout_mode=False, input_ref=ref)
             self.assertTrue((out / "page.md").is_file())
             self.assertFalse((out / "page.reader.md").exists())
+
+
+class TestReaderOnly(unittest.TestCase):
+    def _ro_opts(self, **kw):
+        base = dict(download_images=False, attachments_dir="_attachments", max_images=None,
+                    reader=True, reader_only=True)
+        base.update(kw)
+        return argparse.Namespace(**base)
+
+    def test_single_md_is_reader_and_no_reader_file(self):
+        with tempfile.TemporaryDirectory() as d:
+            out = Path(d)
+            acq = AcquireResult(html="<p>x</p>", base_url="", mode="file",
+                                source_meta=SourceMeta(url="https://e/x"))
+            emit.emit(acq, None, "WHOLE PAGE BODY with nav chrome",
+                      "READER EXTRACTED ARTICLE BODY " * 10, self._ro_opts(),
+                      output_dir=out, stdout_mode=False, input_ref="https://e/x")
+            mds = sorted(out.glob("*.md"))
+            self.assertEqual(len(mds), 1, "reader-only must write exactly one .md")
+            self.assertFalse(mds[0].name.endswith(".reader.md"))
+            body = mds[0].read_text()
+            self.assertIn("READER EXTRACTED ARTICLE BODY", body)
+            self.assertNotIn("WHOLE PAGE BODY", body)
+
+    def test_falls_back_to_whole_when_reader_empty(self):
+        with tempfile.TemporaryDirectory() as d:
+            out = Path(d)
+            acq = AcquireResult(html="<p>x</p>", base_url="", mode="file",
+                                source_meta=SourceMeta(url="https://e/y"))
+            # reader over-stripped to a tiny body (< _READER_ONLY_MIN_BODY) ⇒ fall back to whole
+            emit.emit(acq, None, "SUBSTANTIAL WHOLE PAGE BODY " * 20, "tiny", self._ro_opts(),
+                      output_dir=out, stdout_mode=False, input_ref="https://e/y")
+            mds = sorted(out.glob("*.md"))
+            self.assertEqual(len(mds), 1)
+            self.assertFalse(mds[0].name.endswith(".reader.md"))
+            self.assertIn("SUBSTANTIAL WHOLE PAGE BODY", mds[0].read_text(),
+                          "empty reader must fall back to the whole page — never an empty note")
+
+    def test_reader_only_removes_stale_reader_md(self):
+        with tempfile.TemporaryDirectory() as d:
+            out = Path(d)
+            acq = AcquireResult(html="<p>x</p>", base_url="", mode="file",
+                                source_meta=SourceMeta())  # url=None ⇒ marker keys on input_ref
+            ref = str(out / "page.input")
+            # 1) dual-output run leaves page.md + page.reader.md
+            emit.emit(acq, None, "whole", "reader body " * 30,
+                      argparse.Namespace(download_images=False, attachments_dir="_attachments",
+                                         max_images=None, reader=True, reader_only=False),
+                      output_dir=out, stdout_mode=False, input_ref=ref)
+            self.assertTrue((out / "page.reader.md").is_file())
+            # 2) reader-only re-run of the same input drops the stale .reader.md
+            emit.emit(acq, None, "whole", "reader body " * 30, self._ro_opts(),
+                      output_dir=out, stdout_mode=False, input_ref=ref)
+            self.assertTrue((out / "page.md").is_file())
+            self.assertFalse((out / "page.reader.md").exists())
+
+    def test_cli_md_reader_only_one_file(self):
+        with tempfile.TemporaryDirectory() as d:
+            out = Path(d)
+            (out / "art.html").write_text(
+                "<html><head><title>T</title></head><body><nav>Home Menu Copy</nav>"
+                "<article><h1>Real Title</h1><p>" + ("Substantial article body sentence. " * 20)
+                + "</p></article></body></html>", encoding="utf-8")
+            rc = cli.main(["md", str(out / "art.html"), str(out), "--reader-only", "--json-errors"])
+            self.assertEqual(rc, 0)
+            self.assertEqual(len(list(out.glob("art.md"))), 1)
+            self.assertEqual(len(list(out.glob("*.reader.md"))), 0)
 
 
 if __name__ == "__main__":

@@ -141,6 +141,12 @@ def build_parser() -> argparse.ArgumentParser:
         "--no-reader", dest="reader", action="store_false",
         help="Suppress the reader-extracted variant; emit a single .md only.",
     )
+    reader.add_argument(
+        "--reader-only", dest="reader_only", action="store_true", default=False,
+        help="Emit ONLY the reader-extracted content as a single <slug>.md (no whole-page "
+             "file, no <slug>.reader.md). Falls back to the whole page when the reader "
+             "extraction is empty/over-stripped — never an empty note. For note pipelines.",
+    )
     dl = p.add_mutually_exclusive_group()
     dl.add_argument(
         "--download-images", dest="download_images", action="store_true", default=True,
@@ -371,7 +377,8 @@ def _convert_one(
 
     # Search results are emitted as ONE note each (R9: N results → N notes); a direct
     # conversion keeps the dual-output default. `query is not None` ⇒ search mode.
-    want_reader = bool(args.reader) and query is None
+    # --reader-only also needs the reader variant computed (emit collapses to it).
+    want_reader = (bool(args.reader) or bool(getattr(args, "reader_only", False))) and query is None
     cleaned = clean_mod.clean(acq, reader=want_reader)
     md_whole = tidy_markdown(core_bridge.html_to_markdown(cleaned.whole_html))
     md_reader = (
@@ -606,9 +613,9 @@ def combined_main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     json_mode = bool(args.json_errors)
     try:
+        _validate_usage(args)  # before the --search dispatch (parity with convert())
         if args.search is not None:
             return _convert_search(args)  # search is inherently fetch+convert per result
-        _validate_usage(args)
         input_ref, _mode, output_dir, stdout_mode = _resolve_paths(args)
         from . import acquire as acquire_mod
         from . import serialize as serialize_mod

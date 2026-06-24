@@ -11,6 +11,8 @@ from __future__ import annotations
 
 import signal
 from pathlib import Path
+from urllib.parse import urlparse
+from urllib.request import url2pathname
 
 from weasyprint import CSS, HTML, default_url_fetcher  # type: ignore
 
@@ -48,20 +50,56 @@ def _offline_url_fetcher(url: str) -> dict:
 _UNTRUSTED_DATA_MAX = 8 * 1024 * 1024
 
 
-def _untrusted_url_fetcher(url: str) -> dict:
-    """Stricter fetcher for HTML of unknown provenance (e.g. the ``html`` skill's fetch
-    artifact): refuse ``file://`` AND remote; allow only bounded ``data:`` URIs.
+def _base_dir_of(base_url: str) -> "Path | None":
+    """Resolve ``base_url`` (a ``file://`` URL or a plain directory path, as html2pdf
+    passes) to a real directory Path for confinement; None if it isn't local."""
+    if not base_url:
+        return None
+    try:
+        if base_url.startswith("file://"):
+            return Path(url2pathname(urlparse(base_url).path)).resolve()
+        if "://" not in base_url:               # plain path (input's parent dir / temp dir)
+            return Path(base_url).resolve()
+    except (OSError, ValueError):
+        return None
+    return None
 
-    The default ``_offline_url_fetcher`` resolves ``file://`` with no path confinement —
+
+def _make_untrusted_url_fetcher(base_url: str):
+    """Fetcher for HTML of unknown provenance (e.g. the ``html`` skill's fetch artifact):
+    refuse remote; allow bounded ``data:``; allow ``file://`` ONLY when confined within
+    ``base_url``'s directory (the localized ``_attachments/`` live there) — an out-of-base
+    ``file:///etc/passwd`` is refused.
+
+    The default ``_offline_url_fetcher`` resolves ANY ``file://`` with no confinement —
     fine for a user-saved local input, but a CWE-22 local-file-exfiltration primitive for
     attacker-controlled fetched HTML. ``--untrusted`` selects this fetcher; the documented
-    ``html fetch → html2pdf`` pipeline always passes it.
+    ``html fetch → html2pdf`` pipeline always passes it. Confining (rather than refusing
+    all ``file://``) lets the artifact's own localized images still render. Because the
+    renderer decodes HTML/CSS escapes before calling the fetcher, this also neutralizes any
+    entity-encoded ``file://`` ref that slipped past the fetch-time sanitizer.
     """
-    if url.startswith("data:"):
-        if len(url) > _UNTRUSTED_DATA_MAX:
-            raise ValueError("untrusted mode: data: URI exceeds the size cap")
-        return default_url_fetcher(url)
-    raise ValueError(f"untrusted mode: refused non-data resource: {url}")
+    base_dir = _base_dir_of(base_url)
+
+    def _fetch(url: str) -> dict:
+        if url.startswith("data:"):
+            if len(url) > _UNTRUSTED_DATA_MAX:
+                raise ValueError("untrusted mode: data: URI exceeds the size cap")
+            return default_url_fetcher(url)
+        if url.startswith("file://") and base_dir is not None:
+            try:
+                target = Path(url2pathname(urlparse(url).path)).resolve()
+                target.relative_to(base_dir)          # ValueError if outside base_dir
+            except (OSError, ValueError):
+                raise ValueError(f"untrusted mode: file:// outside base dir refused: {url}")
+            return default_url_fetcher(url)
+        raise ValueError(f"untrusted mode: refused non-data / out-of-base resource: {url}")
+
+    return _fetch
+
+
+# Back-compat / no-base default (refuses all file://; only bounded data:).
+_untrusted_url_fetcher = _make_untrusted_url_fetcher("")
 
 
 class RenderTimeout(Exception):
@@ -225,7 +263,8 @@ def convert(
         HTML(
             string=html_text,
             base_url=base_url,
-            url_fetcher=_untrusted_url_fetcher if untrusted else _offline_url_fetcher,
+            url_fetcher=(_make_untrusted_url_fetcher(base_url) if untrusted
+                        else _offline_url_fetcher),
         ).write_pdf(str(output_path), stylesheets=stylesheets)
     finally:
         _clear_render_watchdog(prev_handler)

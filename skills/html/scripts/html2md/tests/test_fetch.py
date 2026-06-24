@@ -17,6 +17,7 @@ if SCRIPTS not in sys.path:
     sys.path.insert(0, SCRIPTS)
 
 from html2md import cli, serialize  # noqa: E402
+from html2md.exceptions import SelfOverwriteRefused  # noqa: E402
 from html2md.model import AcquireResult, SourceMeta  # noqa: E402
 
 
@@ -108,16 +109,38 @@ class TestWriteArtifact(unittest.TestCase):
 
     def test_authenticated_fetch_writes_0600(self):
         with tempfile.TemporaryDirectory() as d:
-            acq = AcquireResult(html="<html><body><p>secret</p></body></html>",
-                                base_url="", mode="url", engine="chrome",
-                                source_meta=SourceMeta(url="https://x.com/private"))
+            base = Path(d) / "src"
+            base.mkdir()
+            (base / "pic.png").write_bytes(b"\x89PNG\r\n\x1a\nDATA")
+            acq = AcquireResult(
+                html='<html><body><img src="pic.png"><p>secret</p></body></html>',
+                base_url=str(base), mode="file", engine="chrome",
+                source_meta=SourceMeta(url="https://x.com/private"))
             art = serialize.write_artifact(
-                acq, Path(d),
-                _opts(download_images=False, chrome_storage_state="/secrets/x.json"),
+                acq, Path(d) / "out",
+                _opts(download_images=True, chrome_storage_state="/secrets/x.json"),
                 input_ref="https://x.com/private")
             mode = stat.S_IMODE(os.stat(art.html_path).st_mode)
             self.assertEqual(mode, 0o600, f"authed body must be 0600, got {oct(mode)}")
             self.assertEqual(stat.S_IMODE(os.stat(art.meta_path).st_mode), 0o600)
+            # the localized image bytes must also be owner-only (no group/world read)
+            img = next(art.attachments_dir.glob("*.png"))
+            self.assertEqual(stat.S_IMODE(os.stat(img).st_mode), 0o600,
+                             "authed localized image must be 0600")
+
+    def test_refuses_overwriting_the_input(self):
+        # `html2md ./page.html .` resolves the artifact path back onto the input → must
+        # refuse (else the combined command would overwrite then DELETE the user's source).
+        with tempfile.TemporaryDirectory() as d:
+            out = Path(d)
+            src = out / "page.html"
+            src.write_text("<html><body><p>x</p></body></html>", encoding="utf-8")
+            acq = AcquireResult(html=src.read_text(), base_url="", mode="file",
+                                source_meta=SourceMeta())
+            with self.assertRaises(SelfOverwriteRefused):
+                serialize.write_artifact(acq, out, _opts(download_images=False),
+                                         input_ref=str(src))
+            self.assertTrue(src.is_file(), "input must NOT be clobbered/deleted")
 
 
 class TestReadArtifact(unittest.TestCase):

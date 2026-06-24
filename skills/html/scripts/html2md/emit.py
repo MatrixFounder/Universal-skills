@@ -32,6 +32,10 @@ from .naming import (  # shared with serialize (OP1) — re-aliased to the histo
 # Markdown image syntax: ![alt](src "optional title")
 _IMG_RE = re.compile(r'!\[([^\]]*)\]\(\s*<?([^)\s>]+)>?(\s+"[^"]*")?\s*\)')
 
+# --reader-only fallback: a reader extraction whose body is shorter than this is treated as
+# empty/over-stripped → fall back to the faithful whole page (mirrors wiki-import's heuristic).
+_READER_ONLY_MIN_BODY = 200
+
 
 # --------------------------------------------------------------------------- #
 # Frontmatter
@@ -141,7 +145,17 @@ def emit(
     stream the whole-page Markdown to stdout."""
     front = _frontmatter(acq.source_meta, query, getattr(acq, "engine", None))
 
-    # stdout mode: whole-page Markdown only, no files, no image download (ARCH §5.1).
+    # --reader-only: collapse to a SINGLE output = the reader extraction, falling back to
+    # the faithful whole page when the reader is empty/over-stripped (so a note is never
+    # empty). Reuses the single-output path (md_reader=None ⇒ one <slug>.md, no .reader.md,
+    # stdout streams the reader content). Not applied to --search results (one note each).
+    if query is None and getattr(opts, "reader_only", False):
+        md_whole = (md_reader if (md_reader is not None
+                                  and len(md_reader.strip()) >= _READER_ONLY_MIN_BODY)
+                    else md_whole)
+        md_reader = None
+
+    # stdout mode: single Markdown body to stdout, no files, no image download (ARCH §5.1).
     if stdout_mode:
         sys.stdout.write(front + md_whole.strip() + "\n")
         return

@@ -57,6 +57,8 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
+from urllib.parse import urlparse
+from urllib.request import url2pathname
 
 # Layout-normalisation strategy (post-VDD-iter-3, enterprise-grade).
 #
@@ -475,20 +477,51 @@ def _block_remote_routes(route, request):
         route.abort()
 
 
-def _block_local_and_remote_routes(route, request):
-    """Untrusted-input route handler — refuse ``file://`` AND remote; allow only
-    ``data:`` / ``about:``.
+def _untrusted_base_dir(base_url: str):
+    """Resolve ``base_url`` (file:// URL or plain dir path) to a real dir for confinement."""
+    if not base_url:
+        return None
+    try:
+        if base_url.startswith("file://"):
+            return Path(url2pathname(urlparse(base_url).path)).resolve()
+        if "://" not in base_url:
+            return Path(base_url).resolve()
+    except (OSError, ValueError):
+        return None
+    return None
 
-    For HTML that originated from an arbitrary web fetch (e.g. the ``html`` skill's
-    ``fetch`` artifact), a ``file://`` ref would let the renderer read an arbitrary local
-    file and bake it into the PDF (CWE-22). The trusted handler above assumes a
-    user-saved local input; this one is selected by ``--untrusted``.
+
+def _make_untrusted_route(base_url: str):
+    """Untrusted-input route handler — refuse remote; allow ``data:``/``about:``; allow
+    ``file://`` ONLY when confined within ``base_url``'s directory (the artifact's localized
+    ``_attachments/`` live there). An out-of-base ``file:///etc/passwd`` is aborted (CWE-22).
+
+    The trusted handler (``_block_remote_routes``) assumes a user-saved local input and
+    allows any ``file://``; this confined one is selected by ``--untrusted``.
     """
-    url = request.url
-    if url.startswith(("data:", "about:")):
-        route.continue_()
-    else:
+    base_dir = _untrusted_base_dir(base_url)
+
+    def _handler(route, request):
+        url = request.url
+        if url.startswith(("data:", "about:")):
+            route.continue_()
+            return
+        if url.startswith("file://") and base_dir is not None:
+            try:
+                target = Path(url2pathname(urlparse(url).path)).resolve()
+                target.relative_to(base_dir)      # ValueError if outside base_dir
+            except (OSError, ValueError):
+                route.abort()
+            else:
+                route.continue_()
+            return
         route.abort()
+
+    return _handler
+
+
+# Back-compat / no-base default (refuses all file://; allows only data:/about:).
+_block_local_and_remote_routes = _make_untrusted_route("")
 
 
 def _resolve_temp_html_path(base_url: str) -> Path:
@@ -672,7 +705,7 @@ def render_chrome(
                     viewport=_DEFAULT_VIEWPORT,
                     java_script_enabled=True,
                 )
-                context.route("**/*", _block_local_and_remote_routes if untrusted
+                context.route("**/*", _make_untrusted_route(base_url) if untrusted
                               else _block_remote_routes)
                 # Inject the offline-API patch BEFORE any page script
                 # runs. With JS enabled, page scripts (Gmail's offline

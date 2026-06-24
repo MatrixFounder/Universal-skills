@@ -61,12 +61,14 @@ from html2pdf_lib.render import (  # noqa: E402
     _UNTRUSTED_DATA_MAX,
     _clear_render_watchdog,
     _install_render_watchdog,
+    _make_untrusted_url_fetcher,
     _offline_url_fetcher,
     _untrusted_url_fetcher,
 )
 from html2pdf_lib.chrome_engine import (  # noqa: E402
     _block_local_and_remote_routes,
     _block_remote_routes,
+    _make_untrusted_route,
 )
 
 
@@ -2608,6 +2610,41 @@ class TestUntrustedChromeRoute(unittest.TestCase):
         r = _FakeRoute()
         _block_remote_routes(r, _FakeReq("http://cdn/x.png"))
         self.assertEqual(r.action, "abort")
+
+
+# ── --untrusted CONFINED file:// (renders the artifact's localized _attachments, refuses
+#    out-of-base /etc/passwd) — the load-bearing CWE-22 control + the functional fix ──────
+class TestUntrustedConfinement(unittest.TestCase):
+    def test_weasyprint_fetcher_confines_file_to_base_dir(self):
+        with tempfile.TemporaryDirectory() as d:
+            base = Path(d).resolve()
+            (base / "_attachments").mkdir()
+            asset = base / "_attachments" / "x.png"
+            asset.write_bytes(b"\x89PNG\r\n\x1a\n")
+            fetch = _make_untrusted_url_fetcher(str(base))
+            # in-base localized asset → resolves (no exception)
+            fetch(asset.as_uri())
+            # out-of-base file:// → refused (CWE-22)
+            with self.assertRaises(ValueError):
+                fetch("file:///etc/passwd")
+            # remote still refused
+            with self.assertRaises(ValueError):
+                fetch("https://cdn/x.png")
+
+    def test_chrome_route_confines_file_to_base_dir(self):
+        with tempfile.TemporaryDirectory() as d:
+            base = Path(d).resolve()
+            (base / "img.png").write_bytes(b"\x89PNG")
+            handler = _make_untrusted_route(str(base))
+            r = _FakeRoute()
+            handler(r, _FakeReq((base / "img.png").as_uri()))
+            self.assertEqual(r.action, "continue")          # in-base asset renders
+            r = _FakeRoute()
+            handler(r, _FakeReq("file:///etc/passwd"))
+            self.assertEqual(r.action, "abort")             # out-of-base refused
+            r = _FakeRoute()
+            handler(r, _FakeReq("http://cdn/x.png"))
+            self.assertEqual(r.action, "abort")             # remote refused
 
 
 if __name__ == "__main__":

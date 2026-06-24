@@ -63,7 +63,8 @@ for two consumers: (1) an **Obsidian web-clipper** (self-contained note), and
 - **Archive → Markdown**: Safari `.webarchive` + Chrome `.mhtml` (subframe-aware) +
   plain `.html`/`.htm`, fully offline.
 - **Obsidian emit**: YAML frontmatter; `--download-images` → `_attachments/`
-  (sha1-dedup, relative links); **dual-output** (`<slug>.md` + `<slug>.reader.md`).
+  (sha1-dedup, relative links); **dual-output** (`<slug>.md` + `<slug>.reader.md`); `--reader-only` emits a SINGLE
+  `<slug>.md` = the reader extraction (whole-page fallback if empty) — for note pipelines.
 - **Agent step**: `--stdout` (Markdown to stdout) + `--json-errors` envelope.
 
 ## 3. Execution Mode
@@ -96,7 +97,7 @@ for two consumers: (1) an **Obsidian web-clipper** (self-contained note), and
 > - **download → docx:** `html fetch URL out/ && html md out/<slug>.html out/ && node ../docx/scripts/md2docx.js out/<slug>.md out.docx`.
 
 - **Command** (bare / `md` verb):
-  - `python3 scripts/html INPUT [OUTPUT_DIR] [--engine lite|chrome|auto|jina|remote] [--no-remote] [--remote-format html|markdown] [--target-selector SEL] [--chrome-storage-state PATH | --chrome-cookies-file PATH | --chrome-user-data-dir DIR] [--chrome-scroll] [--chrome-scroll-passes N] [--reader-mode|--no-reader] [--download-images|--no-download-images] [--attachments-dir _attachments] [--archive-frame main|N|all|auto] [--max-bytes N] [--max-images N] [--retries N] [--rate-limit REQS_PER_SEC] [--stdout] [--json-errors]`
+  - `python3 scripts/html INPUT [OUTPUT_DIR] [--engine lite|chrome|auto|jina|remote] [--no-remote] [--remote-format html|markdown] [--target-selector SEL] [--chrome-storage-state PATH | --chrome-cookies-file PATH | --chrome-user-data-dir DIR] [--chrome-scroll] [--chrome-scroll-passes N] [--reader-mode|--no-reader|--reader-only] [--download-images|--no-download-images] [--attachments-dir _attachments] [--archive-frame main|N|all|auto] [--max-bytes N] [--max-images N] [--retries N] [--rate-limit REQS_PER_SEC] [--stdout] [--json-errors]`
   - Search: `python3 scripts/html search "QUERY" [OUTPUT_DIR] [--max-results N] [...]` (or the legacy `--search "QUERY"`).
   - Login (mint a session, headful): `python3 scripts/html login URL [--save-state state.json]`.
 - **Environment (optional):** `HTML_READER_URL` / `HTML_READER_PROVIDERS` (remote reader base(s)), `HTML_READER_TOKEN` (generic reader auth), `JINA_API_KEY` (jina quota), `HTML_SEARCH_URL` / `HTML_SEARCH_PROVIDERS` (search provider base(s)), `HTML_CHROME_STORAGE_STATE` / `HTML_CHROME_COOKIES_FILE` / `HTML_CHROME_USER_DATA_DIR` (Chrome auth — server-deployable secrets). All optional; see [`.env.example`](.env.example) for a documented template (read from the process env; not auto-loaded).

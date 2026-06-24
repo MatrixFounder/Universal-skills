@@ -29,6 +29,7 @@ import re
 from pathlib import Path
 
 from . import naming
+from .exceptions import SelfOverwriteRefused
 from .model import AcquireResult, FetchArtifact, SourceMeta
 
 SCHEMA = "html/fetch-artifact@1"
@@ -48,8 +49,11 @@ _SRCSET_DANGER_RE = re.compile(
     r'(\bsrcset\s*=\s*["\'])[^"\']*\b' + _DANGER_SCHEME + r'\s*:[^"\']*(["\'])',
     re.IGNORECASE)
 # CSS url(file:…) in a style="" attr or a <style> block  →  url()
+# Single \s* (not \s*…\s*): two whitespace runs around an optional quote create a
+# partition ambiguity → O(n²) backtracking on a long whitespace blob in untrusted HTML
+# (ReDoS). Whitespace between the quote and the scheme is not valid CSS anyway.
 _CSS_URL_DANGER_RE = re.compile(
-    r'url\(\s*["\']?\s*' + _DANGER_SCHEME + r'\s*:[^)]*\)', re.IGNORECASE)
+    r'url\(\s*["\']?' + _DANGER_SCHEME + r'\s*:[^)]*\)', re.IGNORECASE)
 # Private / loopback / link-local literal hosts in an http(s) resource ref (no DNS — a
 # cheap defense-in-depth; full SSRF is handled at fetch time by _assert_public_http).
 _PRIVATE_HOST_RE = re.compile(
@@ -126,53 +130,69 @@ def write_artifact(acq: AcquireResult, output_dir: Path, opts, *, input_ref: str
     """OP1: localize images → sanitize → write ``<slug>.html`` + ``<slug>.meta.json``.
 
     Returns a :class:`FetchArtifact` describing what was written. An authenticated fetch's
-    HTML + sidecar are written ``0600`` (the body may hold session-bound/private content).
+    HTML + sidecar + localized images are written ``0600`` from the start (via ``umask`` —
+    no world-readable window; mirrors the login mint), because the body may hold
+    session-bound/private content. Refuses to overwrite the INPUT (a local file whose own
+    directory is the OUTPUT_DIR) — that would clobber, and the combined command later
+    delete, the user's source.
     """
-    output_dir.mkdir(parents=True, exist_ok=True)
-    slug = naming.slugify(naming.base_name(acq.mode, input_ref))
-    attach_name = getattr(opts, "attachments_dir", "_attachments")
-    attach_dir = output_dir / attach_name
+    authed = _is_authenticated(opts)
+    old_umask = os.umask(0o077) if authed else None
+    try:
+        output_dir.mkdir(parents=True, exist_ok=True)
+        slug = naming.slugify(naming.base_name(acq.mode, input_ref))
+        attach_name = getattr(opts, "attachments_dir", "_attachments")
+        attach_dir = output_dir / attach_name
 
-    html = acq.html
-    wrote_imgs = False
-    if getattr(opts, "download_images", True):
-        html, wrote_imgs = _localize_images(
-            html, acq, attach_dir, attach_name,
-            max_images=getattr(opts, "max_images", None), opts=opts)
+        # Collision-free base name, keyed on the original source URL (round-trip idempotent).
+        provenance = (acq.source_meta.url if acq.source_meta and acq.source_meta.url
+                      else input_ref)
+        marker = naming.src_marker(provenance)
+        base = naming.resolve_base(output_dir, slug, marker)
+        html_path = output_dir / f"{base}.html"
+        meta_path = output_dir / f"{base}.meta.json"
 
-    # Sanitize AFTER localization: legit local images are now relative `_attachments/…`
-    # links; any remaining file:/javascript: ref (non-img, or an out-of-base img the
-    # CWE-22 confinement refused to download) is neutralized before it reaches a renderer.
-    html = sanitize_untrusted_html(html)
+        # Self-overwrite guard: a local INPUT whose directory IS the OUTPUT_DIR resolves the
+        # artifact path back onto the input file. The dir-vs-file check in _resolve_paths
+        # can't see this; without it `html2md ./page.html .` would overwrite then (combined)
+        # DELETE the user's source.
+        try:
+            in_resolved = Path(input_ref).resolve()
+            if html_path.resolve() == in_resolved or meta_path.resolve() == in_resolved:
+                raise SelfOverwriteRefused(
+                    f"fetch artifact would overwrite the input: {Path(input_ref).name}",
+                    details={"path": Path(input_ref).name})
+        except OSError:
+            pass  # input_ref is a URL / unresolvable → no local collision possible
 
-    # Collision-free base name, keyed on the original source URL (round-trip idempotent).
-    provenance = (acq.source_meta.url if acq.source_meta and acq.source_meta.url
-                  else input_ref)
-    marker = naming.src_marker(provenance)
-    base = naming.resolve_base(output_dir, slug, marker)
-    html_path = output_dir / f"{base}.html"
-    meta_path = output_dir / f"{base}.meta.json"
+        html = acq.html
+        wrote_imgs = False
+        if getattr(opts, "download_images", True):
+            html, wrote_imgs = _localize_images(
+                html, acq, attach_dir, attach_name,
+                max_images=getattr(opts, "max_images", None), opts=opts)
 
-    sidecar = {
-        "schema": SCHEMA,
-        "source": acq.source_meta.url if acq.source_meta else None,
-        "title": acq.source_meta.title if acq.source_meta else None,
-        "date": acq.source_meta.date if acq.source_meta else None,
-        "author": acq.source_meta.author if acq.source_meta else None,
-        "engine": getattr(acq, "engine", None),
-        "content_kind": getattr(acq, "content_kind", "html"),
-        "base_kind": "dir",
-        "input_ref": input_ref,
-    }
-    naming.atomic_write(html_path, html if html.endswith("\n") else html + "\n")
-    naming.atomic_write(meta_path, json.dumps(sidecar, ensure_ascii=False, indent=2) + "\n")
+        # Sanitize AFTER localization: legit local images are now relative `_attachments/…`
+        # links; any remaining file:/javascript: ref (non-img, or an out-of-base img the
+        # CWE-22 confinement refused to download) is neutralized before it reaches a renderer.
+        html = sanitize_untrusted_html(html)
 
-    if _is_authenticated(opts):  # bearer-derived body → owner-only (mirror the login mint)
-        for p in (html_path, meta_path):
-            try:
-                os.chmod(p, 0o600)
-            except OSError:
-                pass
+        sidecar = {
+            "schema": SCHEMA,
+            "source": acq.source_meta.url if acq.source_meta else None,
+            "title": acq.source_meta.title if acq.source_meta else None,
+            "date": acq.source_meta.date if acq.source_meta else None,
+            "author": acq.source_meta.author if acq.source_meta else None,
+            "engine": getattr(acq, "engine", None),
+            "content_kind": getattr(acq, "content_kind", "html"),
+            "base_kind": "dir",
+            "input_ref": input_ref,
+        }
+        naming.atomic_write(html_path, html if html.endswith("\n") else html + "\n")
+        naming.atomic_write(meta_path, json.dumps(sidecar, ensure_ascii=False, indent=2) + "\n")
+    finally:
+        if old_umask is not None:
+            os.umask(old_umask)
 
     return FetchArtifact(
         html_path=html_path,
