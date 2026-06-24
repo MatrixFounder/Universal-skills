@@ -82,7 +82,8 @@ python3 scripts/html2md.py INPUT [OUTPUT_DIR] [flags]
 | `--max-results N` | `5` | for `--search`: max results to fetch + convert |
 | `--chrome-storage-state PATH` | — | authed Chrome: Playwright `storage_state` JSON (mint via `login`); server-deployable. See [§5b](#5b-authenticated-login-gated-chrome) |
 | `--chrome-cookies-file PATH` | — | authed Chrome: Netscape `cookies.txt` (cookie-only session) |
-| `--chrome-user-data-dir DIR` | — | authed Chrome: persistent profile (local only) — the three `--chrome-*` auth sources are mutually exclusive + force `--engine chrome` |
+| `--chrome-user-data-dir DIR` | — | authed Chrome: persistent profile (local only) — the `--chrome-*` auth sources are mutually exclusive + force `--engine chrome` |
+| `--chrome-auth-map PATH` | — | authed Chrome for **multiple sites**: JSON map `host → {cookies_file\|storage_state}`; forces chrome only for a **mapped** target domain. See [§5b](#5b-authenticated-login-gated-chrome) |
 | `--chrome-scroll` / `--chrome-scroll-passes N` | off / `8` | scroll to pull lazy content (replies); bounded by passes + a 60 s cap |
 | `login URL [--save-state PATH]` | `./html2md-state.json` | **subcommand** — open a headful browser, log in by hand, save the session |
 | `--reader-mode` / `--no-reader` | reader **on** | also emit `<slug>.reader.md` (article-extracted) / suppress it |
@@ -257,6 +258,63 @@ python3 scripts/html2md.py "https://x.com/i/article/<id>" out/ --engine chrome \
 | `--chrome-storage-state` / `HTML2MD_CHROME_STORAGE_STATE` | cookies + localStorage | **primary**; portable, read-only → **server-deployable + concurrency-safe** |
 | `--chrome-cookies-file` / `HTML2MD_CHROME_COOKIES_FILE` | cookies only (Netscape `cookies.txt`) | cookie-only sessions |
 | `--chrome-user-data-dir` / `HTML2MD_CHROME_USER_DATA_DIR` | full persistent profile | local only (mutable, single-concurrency; survives 2FA) |
+| `--chrome-auth-map` / `HTML2MD_CHROME_AUTH_MAP` | a **per-domain map** to any of the above | multiple logged-in sites; routes by target domain |
+
+### Multiple logged-in sites — the auth map
+
+One fixed source (above) holds whatever domains its file contains, but a single `cookies.txt`
+with **all** your sites is one big credential. To keep a **small blast radius** and route
+automatically, use a **per-domain auth map**: a JSON file mapping each site's domain to its own
+credential file.
+
+`~/.html2md/auth-map.json`:
+```json
+{
+  "x.com":      { "cookies_file":  "~/.html2md/x-cookies.txt" },
+  "medium.com": { "cookies_file":  "~/.html2md/medium-cookies.txt" },
+  "github.com": { "storage_state": "~/.html2md/gh-state.json" }
+}
+```
+
+**Permissions — the map AND every file it points to must be `0600`** (html2md refuses any file
+readable by group/world, and refuses symlinks):
+```bash
+mkdir -p ~/.html2md
+chmod 700 ~/.html2md                       # dir: only you can list it
+chmod 600 ~/.html2md/auth-map.json         # the map (paths inside it)
+chmod 600 ~/.html2md/x-cookies.txt \
+          ~/.html2md/medium-cookies.txt \
+          ~/.html2md/gh-state.json         # every referenced credential
+ls -l ~/.html2md/                          # each must show -rw------- (600)
+```
+
+Then point html2md at the map (per-run flag, or set it once in the environment):
+```bash
+# per-run:
+python3 scripts/html2md.py "https://medium.com/@user/post" out/ \
+    --chrome-auth-map ~/.html2md/auth-map.json --chrome-scroll
+
+# or set-and-forget (auto-used for mapped domains only):
+export HTML2MD_CHROME_AUTH_MAP=~/.html2md/auth-map.json
+python3 scripts/html2md.py "https://x.com/i/article/<id>" out/      # → authed chrome (x.com mapped)
+python3 scripts/html2md.py "https://example.com/blog" out/         # → normal ladder (not mapped)
+```
+
+Behaviour:
+- The map **forces `--engine chrome` only for a mapped domain**; an unmapped target keeps the
+  normal local-first ladder (so a set-and-forget map does **not** turn every public page into a
+  browser render).
+- A mapped domain with no valid session → `FetchFailed kind=auth_required` (refresh that one file).
+- **Matching is a label-boundary domain suffix** (not eTLD+1): a `x.com` key covers `x.com` and any
+  subdomain (`www.x.com`, `mobile.x.com`); the **most specific** key wins if several match. **Key the
+  exact domain you control** — on shared platforms (`*.github.io`, `*.s3.amazonaws.com`, `*.co.uk`)
+  use your full subdomain (`mybucket.s3.amazonaws.com`), never the bare apex, so a credential is
+  **never** routed to a sibling tenant.
+- Each entry names **exactly one** credential (`cookies_file` **or** `storage_state`); a referenced
+  `storage_state` is `0600`-enforced (symlink-rejected) just like a `cookies_file`. Both the map and
+  every file it points to must be `0600`.
+- The map is **mutually exclusive** with a single fixed `--chrome-*` source and with `--search`.
+- There is **no per-site routing beyond this** — it is one map of `domain → file`, not a rules engine.
 
 `--chrome-scroll [--chrome-scroll-passes N]` scrolls to pull lazy replies (bounded by passes + a
 60 s wall-clock — never hangs). A stale/expired session → `FetchFailed kind=auth_required` (re-mint).
@@ -376,6 +434,9 @@ than crashing (add `--rate-limit 2` to be a polite citizen on a long list).
   the rendered body is bounded by `--max-bytes`. Session files are **bearer credentials** —
   path/env only (never argv), **0600** enforced (group+world refused), symlinks rejected,
   values never logged. `--chrome-*` cannot be combined with `--search`. Target + session stay local.
+  A **per-domain auth map** (`--chrome-auth-map`) routes by target domain to per-site credential
+  files for a small blast radius — the map **and** every file it references are `0600`-enforced
+  (symlink-rejected) too, and it forces chrome only for a *mapped* domain.
 - **PDF / binary guard.** A URL that returns a PDF (`%PDF` magic) or binary
   payload fails with a clear `FetchFailed` (exit 10) instead of feeding garbage to
   turndown — html2md is HTML→Markdown only.

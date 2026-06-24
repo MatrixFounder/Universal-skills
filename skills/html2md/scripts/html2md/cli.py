@@ -116,6 +116,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="Persistent Chrome profile dir (local convenience; self-refreshes, survives 2FA; "
              "NOT for concurrent/server use).",
     )
+    chrome_auth.add_argument(
+        "--chrome-auth-map", dest="chrome_auth_map", metavar="PATH", default=None,
+        help="Per-domain auth map (JSON: host → {cookies_file|storage_state}) for MULTIPLE "
+             "logged-in sites. Forces chrome ONLY for a mapped target domain; non-mapped targets "
+             "keep the normal ladder. Map + each referenced file must be chmod 600.",
+    )
     p.add_argument(
         "--chrome-scroll", dest="chrome_scroll", action="store_true", default=False,
         help="After load, scroll to pull lazy content (e.g. replies). Bounded by "
@@ -285,6 +291,24 @@ def _validate_usage(args: argparse.Namespace) -> None:
             if f and not Path(f).is_file():
                 raise BadInput(f"chrome auth file not found: {Path(f).name}",
                                details={"path": Path(f).name})
+
+    # Per-domain auth map (TASK 026, multi-site): env fallback; cannot mix with a fixed source or
+    # --search (a session must not fan over search results). Unlike a fixed source it forces chrome
+    # ONLY when the target domain is mapped — non-mapped targets keep the normal ladder (so a
+    # set-and-forget HTML2MD_CHROME_AUTH_MAP does not turn every public page into a chrome render).
+    args.chrome_auth_map = (getattr(args, "chrome_auth_map", None)
+                            or os.environ.get("HTML2MD_CHROME_AUTH_MAP"))
+    if args.chrome_auth_map:
+        if _auth:
+            raise Usage("--chrome-auth-map cannot be combined with --chrome-storage-state / "
+                        "--chrome-cookies-file / --chrome-user-data-dir.")
+        if args.search is not None:
+            raise Usage("--chrome-auth-map cannot be combined with --search.")
+        if args.INPUT and urlparse(args.INPUT).scheme in ("http", "https"):
+            from . import _chrome_auth
+            amap = _chrome_auth.load_auth_map(Path(args.chrome_auth_map))  # hardened: 0600/JSON/shape
+            if _chrome_auth.host_in_map(args.INPUT, amap):
+                args.engine = "chrome"  # mapped domain ⇒ authed chrome; others stay on the ladder
 
 
 def _resolve_search_paths(args: argparse.Namespace) -> tuple[Path | None, bool]:

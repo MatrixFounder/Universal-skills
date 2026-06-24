@@ -664,9 +664,11 @@ def _fetch_chrome_html(url: str, opts=None) -> str:
     """
     _assert_public_http(url)  # gate the TARGET before any browser work (TASK 024 R1)
     from . import _chrome_auth
-    spec = _chrome_auth.resolve_context_kwargs(opts) if opts is not None else None  # R2 (None ⇒ R10 anon)
+    target_host = urlparse(url).hostname
+    target_reg = _registrable(target_host)
+    # R2 (None ⇒ R10 anon); target_host drives the per-domain auth map (TASK 026, suffix match)
+    spec = _chrome_auth.resolve_context_kwargs(opts, target_host) if opts is not None else None
     sync_playwright = _import_sync_playwright()
-    target_reg = _registrable(urlparse(url).hostname)
     final_url = url
     try:
         with sync_playwright() as pw:

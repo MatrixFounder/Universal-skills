@@ -6,6 +6,7 @@ degradation). Behavioural tests are RED (skipped) until their logic bead lands.
 from __future__ import annotations
 
 import io
+import json
 import os
 import sys
 import tempfile
@@ -21,7 +22,7 @@ if SCRIPTS not in sys.path:
 from html2md import _chrome_auth, _cookies, acquire, cli  # noqa: E402
 
 _ENV = ("HTML2MD_CHROME_STORAGE_STATE", "HTML2MD_CHROME_COOKIES_FILE",
-        "HTML2MD_CHROME_USER_DATA_DIR")
+        "HTML2MD_CHROME_USER_DATA_DIR", "HTML2MD_CHROME_AUTH_MAP")
 
 
 def _args(*argv):
@@ -537,6 +538,194 @@ class TestScrollAndStale(_ChromeBase):
         with self.assertRaises(acquire.FetchFailed) as cm:
             acquire._fetch_chrome_html("https://example.com/x", self._opts(max_bytes=100))
         self.assertEqual(cm.exception.details.get("kind"), "max_bytes")
+
+
+class TestChromeAuthMap(_ChromeBase):
+    """TASK 026: per-domain auth map — route the right credential by the target's eTLD+1, force
+    chrome only for mapped domains, hardened map loader (0600 / symlink / JSON shape)."""
+
+    @staticmethod
+    def _write(d, name, text, mode=0o600):
+        p = Path(d) / name
+        p.write_text(text, encoding="utf-8")
+        os.chmod(p, mode)
+        return p
+
+    def _cookies_txt(self, d, name="x-cookies.txt"):
+        body = ("# Netscape HTTP Cookie File\n"
+                ".x.com\tTRUE\t/\tTRUE\t9999999999\tauth_token\tSEKRET\n")
+        return self._write(d, name, body)
+
+    def _opts_map(self, url, amap):
+        a = _args(url, "/tmp/out")
+        a.chrome_auth_map = str(amap)
+        return a
+
+    def test_map_routes_cookies_by_domain(self):
+        with tempfile.TemporaryDirectory() as d:
+            cookies = self._cookies_txt(d)
+            amap = self._write(d, "auth.json", json.dumps({"x.com": {"cookies_file": str(cookies)}}))
+            ctx = self._fake()
+            acquire._fetch_chrome_html("https://x.com/i/article/1",
+                                       self._opts_map("https://x.com/i/article/1", amap))
+            self.assertTrue(any(c["name"] == "auth_token" for c in ctx.added_cookies))
+
+    def test_map_no_match_is_anonymous(self):
+        """An unmapped target gets NO credential (small blast radius, R10)."""
+        with tempfile.TemporaryDirectory() as d:
+            cookies = self._cookies_txt(d)
+            amap = self._write(d, "auth.json", json.dumps({"x.com": {"cookies_file": str(cookies)}}))
+            ctx = self._fake()
+            acquire._fetch_chrome_html("https://example.com/p",
+                                       self._opts_map("https://example.com/p", amap))
+            self.assertEqual(ctx.added_cookies, [])
+
+    def test_map_matches_registrable_subdomain(self):
+        with tempfile.TemporaryDirectory() as d:
+            cookies = self._cookies_txt(d)
+            amap = self._write(d, "auth.json", json.dumps({"x.com": {"cookies_file": str(cookies)}}))
+            ctx = self._fake()
+            acquire._fetch_chrome_html("https://mobile.x.com/i/article/1",
+                                       self._opts_map("https://mobile.x.com/i/article/1", amap))
+            self.assertTrue(ctx.added_cookies, "mobile.x.com should match the x.com key")
+
+    def test_map_storage_state_entry(self):
+        with tempfile.TemporaryDirectory() as d:
+            ss = self._write(d, "m-state.json", '{"cookies":[],"origins":[]}')
+            amap = self._write(d, "auth.json", json.dumps({"medium.com": {"storage_state": str(ss)}}))
+            ctx = self._fake()
+            acquire._fetch_chrome_html("https://medium.com/p",
+                                       self._opts_map("https://medium.com/p", amap))
+            self.assertEqual(ctx.kwargs.get("storage_state"), str(ss))
+
+    def test_map_rejects_group_world_perms(self):
+        with tempfile.TemporaryDirectory() as d:
+            amap = self._write(d, "auth.json", json.dumps({"x.com": {"cookies_file": "x"}}), mode=0o644)
+            with self.assertRaises(acquire.BadInput):
+                _chrome_auth.load_auth_map(amap)
+
+    def test_map_rejects_symlink(self):
+        with tempfile.TemporaryDirectory() as d:
+            real = self._write(d, "real.json", json.dumps({"x.com": {"cookies_file": "x"}}))
+            link = Path(d) / "link.json"
+            link.symlink_to(real)
+            with self.assertRaises(acquire.BadInput):
+                _chrome_auth.load_auth_map(link)
+
+    def test_map_rejects_bad_structure(self):
+        with tempfile.TemporaryDirectory() as d:
+            amap = self._write(d, "auth.json", json.dumps({"x.com": {"foo": "bar"}}))  # neither key
+            with self.assertRaises(acquire.BadInput):
+                _chrome_auth.load_auth_map(amap)
+
+    def test_cli_map_forces_chrome_only_when_mapped(self):
+        with tempfile.TemporaryDirectory() as d:
+            cookies = self._cookies_txt(d)
+            amap = self._write(d, "auth.json", json.dumps({"x.com": {"cookies_file": str(cookies)}}))
+            hit = _args("https://x.com/i/article/1", d, "--chrome-auth-map", str(amap))
+            cli._validate_usage(hit)
+            self.assertEqual(hit.engine, "chrome")
+            miss = _args("https://example.com/p", d, "--chrome-auth-map", str(amap))
+            cli._validate_usage(miss)
+            self.assertNotEqual(miss.engine, "chrome")  # unmapped target → normal ladder
+
+    def test_cli_map_rejects_search_combo(self):
+        with tempfile.TemporaryDirectory() as d:
+            amap = self._write(d, "auth.json", json.dumps({"x.com": {"cookies_file": "x"}}))
+            a = _args("--search", "q", d, "--chrome-auth-map", str(amap))
+            with self.assertRaises(cli.Usage):
+                cli._validate_usage(a)
+
+    def test_cli_map_rejects_fixed_source_combo_via_env(self):
+        """Env-level: a fixed source + map cannot coexist (argparse guards the flag-level case)."""
+        with tempfile.TemporaryDirectory() as d:
+            cookies = self._cookies_txt(d)
+            amap = self._write(d, "auth.json", json.dumps({"x.com": {"cookies_file": str(cookies)}}))
+            a = _args("https://x.com/p", d, "--chrome-auth-map", str(amap))
+            a.chrome_cookies_file = str(cookies)  # simulate HTML2MD_CHROME_COOKIES_FILE present
+            with self.assertRaises(cli.Usage):
+                cli._validate_usage(a)
+
+    # ── vdd-multi-026 fixes: F-1 (storage_state hardening) / F-2 (suffix match) / dup+both keys ──
+
+    def test_map_does_not_match_shared_apex_sibling(self):
+        """F-2: a key for ONE tenant of a shared apex (s3/github.io/…) must NOT leak to a sibling."""
+        with tempfile.TemporaryDirectory() as d:
+            cookies = self._cookies_txt(d)
+            amap = self._write(d, "auth.json",
+                               json.dumps({"mybucket.s3.amazonaws.com": {"cookies_file": str(cookies)}}))
+            ctx = self._fake()
+            acquire._fetch_chrome_html("https://evil.s3.amazonaws.com/x",
+                                       self._opts_map("https://evil.s3.amazonaws.com/x", amap))
+            self.assertEqual(ctx.added_cookies, [], "credential leaked to a sibling tenant")
+
+    def test_map_matches_own_subdomain_on_shared_apex(self):
+        """Flip side of F-2: the keyed tenant and its subdomains DO match."""
+        with tempfile.TemporaryDirectory() as d:
+            cookies = self._cookies_txt(d)
+            amap = self._write(d, "auth.json",
+                               json.dumps({"mybucket.s3.amazonaws.com": {"cookies_file": str(cookies)}}))
+            ctx = self._fake()
+            acquire._fetch_chrome_html("https://cdn.mybucket.s3.amazonaws.com/x",
+                                       self._opts_map("https://cdn.mybucket.s3.amazonaws.com/x", amap))
+            self.assertTrue(ctx.added_cookies)
+
+    def test_map_most_specific_key_wins(self):
+        with tempfile.TemporaryDirectory() as d:
+            broad = self._cookies_txt(d, "broad.txt")
+            specific = self._cookies_txt(d, "specific.txt")
+            amap = self._write(d, "auth.json", json.dumps(
+                {"x.com": {"cookies_file": str(broad)},
+                 "api.x.com": {"cookies_file": str(specific)}}))
+            loaded = _chrome_auth.load_auth_map(amap)
+            self.assertEqual(_chrome_auth._match_host("api.x.com", loaded)["cookies_file"], str(specific))
+            self.assertEqual(_chrome_auth._match_host("www.x.com", loaded)["cookies_file"], str(broad))
+
+    def test_map_rejects_entry_with_both_credentials(self):
+        """F-1: an entry naming BOTH cookies_file and storage_state is rejected (no silent pick)."""
+        with tempfile.TemporaryDirectory() as d:
+            amap = self._write(d, "auth.json", json.dumps(
+                {"x.com": {"cookies_file": "a.txt", "storage_state": "b.json"}}))
+            with self.assertRaises(acquire.BadInput):
+                _chrome_auth.load_auth_map(amap)
+
+    def test_map_rejects_duplicate_host(self):
+        """F-2: two keys that normalize identically are rejected (no silent last-wins)."""
+        with tempfile.TemporaryDirectory() as d:
+            amap = self._write(d, "auth.json", json.dumps(
+                {"x.com": {"cookies_file": "a.txt"}, "X.com.": {"cookies_file": "b.txt"}}))
+            with self.assertRaises(acquire.BadInput):
+                _chrome_auth.load_auth_map(amap)
+
+    def test_map_storage_state_rejects_bad_perms(self):
+        """F-1: a group/world-readable storage_state referenced by the map is refused (parity)."""
+        with tempfile.TemporaryDirectory() as d:
+            ss = self._write(d, "m-state.json", '{"cookies":[],"origins":[]}', mode=0o644)
+            amap = self._write(d, "auth.json", json.dumps({"medium.com": {"storage_state": str(ss)}}))
+            with self.assertRaises(acquire.BadInput):
+                acquire._fetch_chrome_html("https://medium.com/p",
+                                           self._opts_map("https://medium.com/p", amap))
+
+    def test_map_env_fallback_real(self):
+        """The actual HTML2MD_CHROME_AUTH_MAP env fallback forces chrome for a mapped target."""
+        with tempfile.TemporaryDirectory() as d:
+            cookies = self._cookies_txt(d)
+            amap = self._write(d, "auth.json", json.dumps({"x.com": {"cookies_file": str(cookies)}}))
+            a = _args("https://x.com/i/article/1", d)  # NO --chrome-auth-map flag
+            with mock.patch.dict(os.environ, {"HTML2MD_CHROME_AUTH_MAP": str(amap)}):
+                cli._validate_usage(a)
+            self.assertEqual(a.chrome_auth_map, str(amap))
+            self.assertEqual(a.engine, "chrome")
+
+    def test_map_local_file_input_is_noop(self):
+        """A set-and-forget map must NOT force chrome for a LOCAL file input."""
+        with tempfile.TemporaryDirectory() as d:
+            cookies = self._cookies_txt(d)
+            amap = self._write(d, "auth.json", json.dumps({"x.com": {"cookies_file": str(cookies)}}))
+            a = _args("./page.html", d)
+            with mock.patch.dict(os.environ, {"HTML2MD_CHROME_AUTH_MAP": str(amap)}):
+                cli._validate_usage(a)
+            self.assertNotEqual(a.engine, "chrome")
 
 
 if __name__ == "__main__":
