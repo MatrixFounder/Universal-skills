@@ -19,6 +19,7 @@ class TestHelpSurface(unittest.TestCase):
         r = subprocess.run(
             [sys.executable, SHIM, "--help"], cwd=SCRIPTS,
             capture_output=True, text=True,
+            env={**os.environ, "HTML2MD_NO_DOTENV": "1"},  # hermetic: ignore a dev's skill .env
         )
         self.assertEqual(r.returncode, 0, r.stderr)
         out = r.stdout

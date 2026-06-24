@@ -18,7 +18,7 @@ import _venv_bootstrap  # noqa: E402
 
 _venv_bootstrap.reexec_into_venv(requires=("html2md",), _file=__file__)
 
-from html2md import main  # noqa: E402,F401
+from html2md import main, _load_skill_env  # noqa: E402,F401
 from html2md import (  # noqa: E402,F401
     BadInput,
     ConvertFailed,
@@ -30,4 +30,5 @@ from html2md import (  # noqa: E402,F401
 )
 
 if __name__ == "__main__":
+    _load_skill_env()  # skill-local <skill>/.env → env (encapsulation), BEFORE any flag/env read
     sys.exit(main())

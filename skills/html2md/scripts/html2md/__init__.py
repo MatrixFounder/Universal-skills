@@ -10,7 +10,7 @@ LICENSE/NOTICE (see CLAUDE.md §3).
 """
 from __future__ import annotations
 
-from .cli import convert, main
+from .cli import _load_skill_env, convert, main
 from .exceptions import (
     BadInput,
     ConvertFailed,
@@ -24,6 +24,7 @@ from .exceptions import (
 __all__ = [
     "main",
     "convert",
+    "_load_skill_env",
     "_AppError",
     "BadInput",
     "ConvertFailed",

@@ -135,7 +135,9 @@ def load_auth_map(path: Path) -> dict:
         if len(spec) > 1:  # F-1: ONE credential per host — never silently pick one
             raise BadInput(f"auth-map entry for {host!r} must name ONE credential "
                            "(cookies_file OR storage_state, not both)", details={"path": name})
-        key = str(host).lower().strip(".")
+        key = str(host).strip().lower().strip(".")  # tolerate surrounding whitespace too
+        if not key:  # an empty host key would be a silent dead entry — fail loud
+            raise BadInput(f"auth-map has an empty host key: {host!r}", details={"path": name})
         if key in out:  # F-2: duplicate host → fail loud, never silently last-wins
             raise BadInput(f"auth-map has a duplicate host entry: {key!r}", details={"path": name})
         out[key] = spec

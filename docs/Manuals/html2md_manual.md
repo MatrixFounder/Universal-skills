@@ -55,6 +55,14 @@ No global installs — Python deps live in `scripts/.venv`, Node deps in
 Chrome is opt-in and only required for pages that render their content with
 JavaScript.
 
+**Skill-local config (encapsulation).** Copy [`.env.example`](../../skills/html2md/.env.example)
+to `skills/html2md/.env` and the CLI **auto-loads it at startup** — the config (auth map, scroll,
+Jina key, reader providers) lives *with the skill*, so **any** caller (a project, an importer, a
+cron job — anything that runs `html2md.py`) gets it transparently, with no `export` and no machine-
+global env pollution. The process environment still wins (callers can override per-run); `chmod 600`
+the file (a group/world-readable `.env` is ignored with a warning); `HTML2MD_NO_DOTENV=1` disables
+auto-load. See [§5b](#5b-authenticated-login-gated-chrome) for the chrome/auth keys.
+
 Smoke test:
 
 ```bash
@@ -317,7 +325,10 @@ Behaviour:
 - There is **no per-site routing beyond this** — it is one map of `domain → file`, not a rules engine.
 
 `--chrome-scroll [--chrome-scroll-passes N]` scrolls to pull lazy replies (bounded by passes + a
-60 s wall-clock — never hangs). A stale/expired session → `FetchFailed kind=auth_required` (re-mint).
+60 s wall-clock — never hangs); also settable via `HTML2MD_CHROME_SCROLL=1` /
+`HTML2MD_CHROME_SCROLL_PASSES=N` for env-only callers (e.g. an importer that forwards env but not
+flags). **X articles/threads need scroll** — without it the render extracts an empty body. A
+stale/expired session → `FetchFailed kind=auth_required` (re-mint).
 **Security:** the Chrome tier is **SSRF-gated** (private + off-target-public redirects refused;
 non-public sub-resources aborted); session files are bearer credentials — path/env only (never
 argv), `0600` enforced (group+world refused). Auth is **opt-in / additive**: with none set,

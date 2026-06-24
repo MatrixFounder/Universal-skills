@@ -269,13 +269,17 @@ def _validate_usage(args: argparse.Namespace) -> None:
 
     # Chrome auth (TASK 024 R2/R10): env fallbacks; sources mutually exclusive; any source forces
     # the chrome engine (never silently drop the credential to lite); a missing/unreadable
-    # storage_state/cookies file → typed BadInput (graceful, not a traceback).
-    args.chrome_storage_state = (getattr(args, "chrome_storage_state", None)
-                                 or os.environ.get("HTML2MD_CHROME_STORAGE_STATE"))
-    args.chrome_cookies_file = (getattr(args, "chrome_cookies_file", None)
-                                or os.environ.get("HTML2MD_CHROME_COOKIES_FILE"))
-    args.chrome_user_data_dir = (getattr(args, "chrome_user_data_dir", None)
-                                 or os.environ.get("HTML2MD_CHROME_USER_DATA_DIR"))
+    # storage_state/cookies file → typed BadInput (graceful, not a traceback). Paths are
+    # ``~``-expanded so a value from the auto-loaded `.env` (literal ``~``, unlike a shell `export`)
+    # resolves correctly.
+    def _expand(p):
+        return os.path.expanduser(p) if p else p
+    args.chrome_storage_state = _expand(getattr(args, "chrome_storage_state", None)
+                                        or os.environ.get("HTML2MD_CHROME_STORAGE_STATE"))
+    args.chrome_cookies_file = _expand(getattr(args, "chrome_cookies_file", None)
+                                       or os.environ.get("HTML2MD_CHROME_COOKIES_FILE"))
+    args.chrome_user_data_dir = _expand(getattr(args, "chrome_user_data_dir", None)
+                                        or os.environ.get("HTML2MD_CHROME_USER_DATA_DIR"))
     _auth = [s for s in (args.chrome_storage_state, args.chrome_cookies_file,
                          args.chrome_user_data_dir) if s]
     if len(_auth) > 1:
@@ -296,8 +300,8 @@ def _validate_usage(args: argparse.Namespace) -> None:
     # --search (a session must not fan over search results). Unlike a fixed source it forces chrome
     # ONLY when the target domain is mapped — non-mapped targets keep the normal ladder (so a
     # set-and-forget HTML2MD_CHROME_AUTH_MAP does not turn every public page into a chrome render).
-    args.chrome_auth_map = (getattr(args, "chrome_auth_map", None)
-                            or os.environ.get("HTML2MD_CHROME_AUTH_MAP"))
+    args.chrome_auth_map = _expand(getattr(args, "chrome_auth_map", None)
+                                   or os.environ.get("HTML2MD_CHROME_AUTH_MAP"))
     if args.chrome_auth_map:
         if _auth:
             raise Usage("--chrome-auth-map cannot be combined with --chrome-storage-state / "
@@ -309,6 +313,20 @@ def _validate_usage(args: argparse.Namespace) -> None:
             amap = _chrome_auth.load_auth_map(Path(args.chrome_auth_map))  # hardened: 0600/JSON/shape
             if _chrome_auth.host_in_map(args.INPUT, amap):
                 args.engine = "chrome"  # mapped domain ⇒ authed chrome; others stay on the ladder
+
+    # Chrome scroll via env — parity with the --chrome-* env fallbacks. An env-only caller (e.g.
+    # wiki-import, which forwards os.environ but hardcodes its html2md flags) can thus pull lazy
+    # content: X articles/threads materialize ONLY after scrolling (no scroll → EmptyExtraction).
+    # Harmless when the chrome engine isn't used (only _fetch_chrome_html reads it).
+    if not args.chrome_scroll and os.environ.get(
+            "HTML2MD_CHROME_SCROLL", "").strip().lower() in ("1", "true", "yes", "on"):
+        args.chrome_scroll = True
+    _passes = os.environ.get("HTML2MD_CHROME_SCROLL_PASSES")
+    if _passes and getattr(args, "chrome_scroll_passes", 8) == 8:  # env fills only the default
+        try:
+            args.chrome_scroll_passes = int(_passes)
+        except ValueError:
+            raise Usage("HTML2MD_CHROME_SCROLL_PASSES must be an integer.")
 
 
 def _resolve_search_paths(args: argparse.Namespace) -> tuple[Path | None, bool]:
@@ -433,6 +451,60 @@ def _login_main(argv: list[str]) -> int:
         return _errors.report_error(f"login failed: {type(exc).__name__}",
                                     code=InternalError.CODE, error_type="InternalError",
                                     json_mode=json_mode, stream=sys.stderr)
+
+
+_SKILL_ENV_PATH = Path(__file__).resolve().parents[2] / ".env"  # <skill>/.env (one above scripts/)
+
+
+def _load_skill_env(path: Path = _SKILL_ENV_PATH) -> None:
+    """Skill-LOCAL config bootstrap (encapsulation): load ``<skill>/.env`` into the process
+    environment so the skill's settings (auth map, scroll, reader/jina keys) travel WITH the skill.
+    ANY caller — invoking the CLI directly or via the ``~/.claude/skills/html2md`` symlink — then
+    picks them up with zero awareness, WITHOUT polluting the machine-global environment. Called only
+    from the shim entry point, so importing the package (tests) never triggers it.
+
+    - **Process env wins:** an already-set variable is never overridden (a caller may still override).
+    - **Opt out:** ``HTML2MD_NO_DOTENV=1`` skips it (the test harness sets this for determinism).
+    - **Secrets-safe:** the file may hold tokens → skipped (with a stderr warning) if it is a symlink
+      or group/world-accessible (require ``0600``). Never raises — config must not break a run (R10).
+    """
+    if os.environ.get("HTML2MD_NO_DOTENV", "").strip().lower() in ("1", "true", "yes", "on"):
+        return
+    try:
+        if path.is_symlink() or not path.is_file():
+            return
+        if path.stat().st_mode & 0o077:
+            sys.stderr.write(
+                f"html2md: ignoring {path.name} (group/world-accessible — chmod 600 to enable)\n")
+            return
+        for raw in path.read_text(encoding="utf-8").splitlines():
+            line = raw.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, _, val = line.partition("=")
+            key = key.strip()
+            if key.startswith("export "):
+                key = key[len("export "):].strip()
+            if key and key not in os.environ:  # process env wins — never override a caller's value
+                os.environ[key] = _dotenv_value(val)
+    except OSError:
+        return  # config must never break a run
+
+
+def _dotenv_value(val: str) -> str:
+    """Parse a `.env` RHS the way shell sourcing does: a quoted value keeps its contents (trailing
+    text ignored); an unquoted value drops an inline ``#`` comment that follows whitespace (so
+    ``KEY=jina_xxx   # note`` → ``jina_xxx``, never the comment), then is stripped."""
+    val = val.strip()
+    if val[:1] in ("'", '"'):
+        q = val[0]
+        end = val.find(q, 1)
+        return val[1:end] if end != -1 else val[1:]
+    for sep in (" #", "\t#"):
+        i = val.find(sep)
+        if i != -1:
+            val = val[:i]
+    return val.strip()
 
 
 def main(argv: list[str] | None = None) -> int:

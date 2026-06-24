@@ -10,6 +10,7 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"   # scripts/
 ROOT="$(cd "$HERE/../../.." && pwd)"                        # repo root
 cd "$HERE"
 PY="./.venv/bin/python"; [ -x "$PY" ] || PY=python3
+export HTML2MD_NO_DOTENV=1   # hermetic: never auto-load a developer's skill .env during tests
 fail=0
 
 echo "== html2md unit suite =="
