@@ -210,19 +210,31 @@ class TestLite(unittest.TestCase):
 
 class TestChrome(unittest.TestCase):
     def test_chrome_absent_envelope(self):
-        """TC-06-03: --engine chrome with Playwright absent → EngineNotInstalled (3)."""
+        """TC-06-03: --engine chrome with Playwright absent → EngineNotInstalled (3).
+
+        The SSRF public-target gate deliberately PRECEDES the engine-availability check
+        (asserted by test_chrome_auth TC-02-01: a private/unresolvable target is refused
+        before any browser work). So to exercise the engine-absent path we must present a
+        target that passes that gate — neutralise the DNS lookup hermetically (no real
+        egress; mirrors test_chrome_auth._ChromeBase) rather than relying on `x.example`
+        resolving, which it never does (RFC 2606 reserved TLD → the gate fires first)."""
         if "playwright" in sys.modules or _playwright_installed():
             self.skipTest("playwright is installed; absent-path not exercisable")
-        with self.assertRaises(EngineNotInstalled) as ctx:
-            acquire.acquire("https://x.example/y", _opts(engine="chrome"))
-        self.assertEqual(ctx.exception.CODE, 3)
-        # end-to-end through main → exit 3 + envelope (tempdir, never written to)
-        err = io.StringIO()
-        with tempfile.TemporaryDirectory() as out, redirect_stderr(err):
-            rc = cli.main(["https://x.example/y", os.path.join(out, "o"),
-                           "--engine", "chrome", "--json-errors"])
-        self.assertEqual(rc, 3)
-        self.assertIn('"type": "EngineNotInstalled"', err.getvalue())
+        saved_public = acquire._host_is_public
+        acquire._host_is_public = lambda h: True  # treat target as public (no real DNS)
+        try:
+            with self.assertRaises(EngineNotInstalled) as ctx:
+                acquire.acquire("https://x.example/y", _opts(engine="chrome"))
+            self.assertEqual(ctx.exception.CODE, 3)
+            # end-to-end through main → exit 3 + envelope (tempdir, never written to)
+            err = io.StringIO()
+            with tempfile.TemporaryDirectory() as out, redirect_stderr(err):
+                rc = cli.main(["https://x.example/y", os.path.join(out, "o"),
+                               "--engine", "chrome", "--json-errors"])
+            self.assertEqual(rc, 3)
+            self.assertIn('"type": "EngineNotInstalled"', err.getvalue())
+        finally:
+            acquire._host_is_public = saved_public
 
 
 class TestSsrfAndErrors(unittest.TestCase):
