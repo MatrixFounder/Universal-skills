@@ -22,8 +22,8 @@ from html2md.exceptions import EngineNotInstalled, FetchFailed  # noqa: E402
 from html2md.model import SourceMeta  # noqa: E402
 
 GOOD = b"<html><head><title>R</title></head><body><p>a substantial result body here</p></body></html>"
-_ENV = ("HTML2MD_SEARCH_URL", "HTML2MD_SEARCH_PROVIDERS", "HTML2MD_READER_URL",
-        "HTML2MD_READER_PROVIDERS", "HTML2MD_READER_TOKEN", "JINA_API_KEY")
+_ENV = ("HTML_SEARCH_URL", "HTML_SEARCH_PROVIDERS", "HTML_READER_URL",
+        "HTML_READER_PROVIDERS", "HTML_READER_TOKEN", "JINA_API_KEY")
 
 
 def _opts(**over):
@@ -65,9 +65,9 @@ class _Base(unittest.TestCase):
 
 class TestSearch(_Base):
     def test_search_provider_order(self):
-        """TC-06-01: default [s.jina.ai]; HTML2MD_SEARCH_URL prepends a provider."""
+        """TC-06-01: default [s.jina.ai]; HTML_SEARCH_URL prepends a provider."""
         self.assertEqual([p.name for p in acquire._search_providers(_opts())], ["s.jina.ai"])
-        os.environ["HTML2MD_SEARCH_URL"] = "https://srch.internal/"
+        os.environ["HTML_SEARCH_URL"] = "https://srch.internal/"
         names = [p.name for p in acquire._search_providers(_opts())]
         self.assertEqual(names, ["search:srch.internal", "s.jina.ai"])
 
@@ -98,7 +98,7 @@ class TestSearch(_Base):
 
     def test_search_provider_fallback(self):
         """TC-06-04: primary search provider down (503) → secondary used."""
-        os.environ["HTML2MD_SEARCH_PROVIDERS"] = "https://s1/ https://s2/"
+        os.environ["HTML_SEARCH_PROVIDERS"] = "https://s1/ https://s2/"
 
         def router(url, **kw):
             if "://s1/" in url:

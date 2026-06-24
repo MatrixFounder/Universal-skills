@@ -58,9 +58,15 @@ from html2pdf_lib.archives import (  # noqa: E402
 from html2pdf_lib.normalize_css import NORMALIZE_CSS  # noqa: E402
 from html2pdf_lib.reader_mode import reader_mode_html  # noqa: E402
 from html2pdf_lib.render import (  # noqa: E402
+    _UNTRUSTED_DATA_MAX,
     _clear_render_watchdog,
     _install_render_watchdog,
     _offline_url_fetcher,
+    _untrusted_url_fetcher,
+)
+from html2pdf_lib.chrome_engine import (  # noqa: E402
+    _block_local_and_remote_routes,
+    _block_remote_routes,
 )
 
 
@@ -2538,6 +2544,70 @@ class TestStripBaseTags(unittest.TestCase):
             images, 1,
             "no raster image embedded — base-href relative <img> dropped "
             "(regression of the figure fix)")
+
+
+class _FakeRoute:
+    def __init__(self):
+        self.action = None
+
+    def continue_(self):
+        self.action = "continue"
+
+    def abort(self):
+        self.action = "abort"
+
+
+class _FakeReq:
+    def __init__(self, url):
+        self.url = url
+
+
+# ── --untrusted hardening (TASK 027: html fetch → pdf) ───────────────────────
+class TestUntrustedFetcher(unittest.TestCase):
+    """The --untrusted weasyprint fetcher refuses file:// (CWE-22) and remote; only
+    bounded data: URIs pass. The trusted fetcher still allows file:// (user-saved input)."""
+
+    def test_untrusted_refuses_file_and_remote(self):
+        for url in ("file:///etc/passwd", "file:///Users/x/.ssh/id_rsa",
+                    "http://example.com/x.png", "https://cdn/x.css"):
+            with self.assertRaises(ValueError, msg=url):
+                _untrusted_url_fetcher(url)
+
+    def test_untrusted_allows_small_data_uri(self):
+        # tiny 1x1 gif data: URI → resolves (no exception)
+        _untrusted_url_fetcher("data:image/gif;base64,R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABAAEAAAICTAEAOw==")
+
+    def test_untrusted_rejects_oversized_data_uri(self):
+        big = "data:text/plain;base64," + "A" * (_UNTRUSTED_DATA_MAX + 1)
+        with self.assertRaises(ValueError):
+            _untrusted_url_fetcher(big)
+
+    def test_trusted_fetcher_still_allows_file(self):
+        # the default (non-untrusted) fetcher keeps the user-saved-input contract
+        try:
+            _offline_url_fetcher("data:text/plain,hi")  # must not raise
+        except ValueError:
+            self.fail("trusted fetcher should allow data:")
+        with self.assertRaises(ValueError):
+            _offline_url_fetcher("http://example.com/remote")  # remote still refused
+
+
+class TestUntrustedChromeRoute(unittest.TestCase):
+    def test_untrusted_route_aborts_file_allows_data(self):
+        r = _FakeRoute()
+        _block_local_and_remote_routes(r, _FakeReq("file:///etc/passwd"))
+        self.assertEqual(r.action, "abort")
+        r = _FakeRoute()
+        _block_local_and_remote_routes(r, _FakeReq("data:image/png;base64,iVBORw0KGgo="))
+        self.assertEqual(r.action, "continue")
+
+    def test_trusted_route_still_allows_file(self):
+        r = _FakeRoute()
+        _block_remote_routes(r, _FakeReq("file:///tmp/asset.png"))
+        self.assertEqual(r.action, "continue")
+        r = _FakeRoute()
+        _block_remote_routes(r, _FakeReq("http://cdn/x.png"))
+        self.assertEqual(r.action, "abort")
 
 
 if __name__ == "__main__":

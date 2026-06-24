@@ -1,4 +1,4 @@
-"""html2md-OWNED post-turndown Markdown tidy pass (FC-4 helper).
+"""html-OWNED post-turndown Markdown tidy pass (FC-4 helper).
 
 Cleans artifacts that survive the HTML→MD core because doc-site SPAs
 (GitBook/Mintlify/Fern/Discord) wrap content in widgets the turndown core can't know

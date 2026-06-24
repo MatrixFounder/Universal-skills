@@ -1,4 +1,4 @@
-"""Application error hierarchy for the html2md skill (stdlib-only).
+"""Application error hierarchy for the html skill (stdlib-only).
 
 Each subclass carries a class-level ``CODE`` (the process exit status) and an
 ``error_type`` string surfaced in the ``_errors`` JSON envelope. The exit-code map
@@ -18,7 +18,7 @@ from typing import Any
 
 
 class _AppError(Exception):
-    """Base for all html2md domain errors. ``main`` maps ``CODE``/``error_type``."""
+    """Base for all html domain errors. ``main`` maps ``CODE``/``error_type``."""
 
     CODE: int = 1
     error_type: str = "InternalError"

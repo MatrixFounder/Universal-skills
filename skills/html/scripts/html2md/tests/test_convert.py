@@ -1,6 +1,6 @@
-"""html2md_convert.js wrapper: ARIA-role tables → GFM + chrome-button strip.
+"""html_convert.js wrapper: ARIA-role tables → GFM + chrome-button strip.
 
-Exercised through the Python bridge (core_bridge → html2md_convert.js). Requires node.
+Exercised through the Python bridge (core_bridge → html_convert.js). Requires node.
 """
 from __future__ import annotations
 

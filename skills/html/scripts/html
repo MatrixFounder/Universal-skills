@@ -1,9 +1,16 @@
 #!/usr/bin/env python3
-"""Thin CLI entrypoint for the html2md skill (FC-5 shim).
+"""Thin CLI entrypoint for the html skill (FC-5 shim).
 
-Re-execs into ``scripts/.venv`` so ``python3 html2md.py …`` works on any host
-(pyenv/conda/system), then delegates to the ``html2md`` package. The body lives in
-the package; this shim only wires the venv bootstrap + re-exports.
+Re-execs into ``scripts/.venv`` so ``python3 html …`` works on any host
+(pyenv/conda/system), then delegates to the ``html2md`` package.
+
+This launcher is the EXTENSIONLESS file ``html`` (NOT ``html.py``) on purpose: ``scripts/``
+sits at ``sys.path[0]``, so a ``html.py`` here — or renaming the ``html2md`` package dir to
+``html`` — would shadow the stdlib ``html`` module that ``acquire.py`` and the pdf-mastered,
+un-editable ``web_clean/preprocess.py`` import (``html.escape`` / ``html.unescape``). An
+extensionless file is not importable, so ``import html`` keeps resolving to the stdlib. The
+package name ``html2md`` is retained for the same reason; see scripts/.AGENTS.md.
+The body lives in the package; this shim only wires the venv bootstrap + re-exports.
 
 ``requires=("html2md",)`` is a no-op venv-absent marker: the package is always
 importable via the inserted ``scripts/`` path, so when no ``.venv`` exists the CLI

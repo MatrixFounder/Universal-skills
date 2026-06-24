@@ -1,5 +1,5 @@
 "use strict";
-// html2md_convert.js — html2md-OWNED turndown wrapper (NOT a replication unit, NOT gated).
+// html_convert.js — html-OWNED turndown wrapper (NOT a replication unit, NOT gated).
 //
 // It require()s the docx-mastered, byte-identical `html2md_core.buildTurndown()` and
 // EXTENDS it with markdown-oriented rules that web pages need but docx (mammoth's clean
@@ -102,7 +102,7 @@ function buildConverter() {
     // anchors whose visible text is empty / zero-width only (icon/hash-link chrome);
     // an emptied heading anchor then leaves a bare "## " that md_clean merges with its
     // title.
-    td.addRule("html2mdInlineLink", {
+    td.addRule("htmlInlineLink", {
         filter: "a",
         replacement: (content, node) => {
             const href = (typeof node.getAttribute === "function" && node.getAttribute("href")) || "";
@@ -116,7 +116,7 @@ function buildConverter() {
         },
     });
     // ARIA-role tables → GFM (the core only handles real <table>).
-    td.addRule("html2mdAriaTable", {
+    td.addRule("htmlAriaTable", {
         filter: (node) =>
             node.nodeName !== "TABLE" &&
             typeof node.getAttribute === "function" &&
@@ -132,7 +132,7 @@ function buildConverter() {
     });
     // Drop `data:` URI images — base64 icon/mascot blobs that otherwise dump kilobytes
     // of base64 into the Markdown. Keep real images with a resolvable src.
-    td.addRule("html2mdImage", {
+    td.addRule("htmlImage", {
         filter: "img",
         replacement: (_content, node) => {
             const src = _getAttr(node, "src");
@@ -147,7 +147,7 @@ function buildConverter() {
     // turndown would explode every token onto its own paragraph and glue the line-number
     // gutter onto the first token ("1PROMPT_TEMPLATE"). Rebuild a fenced code block,
     // dropping the gutter span — mirrors docx's _html2docx_walker.emitLatexmlListing.
-    td.addRule("html2mdLatexmlListing", {
+    td.addRule("htmlLatexmlListing", {
         filter: (node) => node.nodeName === "DIV" && _hasClass(node, "ltx_listing"),
         replacement: (content, node) => {
             const lineEls = Array.from(node.children || []).filter((c) => _hasClass(c, "ltx_listingline"));

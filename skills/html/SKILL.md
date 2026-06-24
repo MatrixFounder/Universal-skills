@@ -1,11 +1,11 @@
 ---
-name: html2md
-description: Use when converting a web page (URL) or a saved .html/.htm/.mhtml/.webarchive into clean Markdown — a web-clipper for Obsidian notes and a universal HTML→Markdown step for agent workflows. Triggers include "html to markdown", "url to markdown", "web page to obsidian", "webarchive to markdown", "mhtml to markdown", "scrape page to notes", "clip this article".
+name: html
+description: Use to fetch a web page/URL or a saved .html/.htm/.mhtml/.webarchive and convert it to clean Markdown — an Obsidian web-clipper and a universal HTML acquisition + HTML→Markdown step that also feeds the pdf and docx skills. Triggers include "html to markdown", "url to markdown", "download this page", "save the html", "web page to obsidian", "webarchive/mhtml to markdown", "clip this article".
 tier: 2
-version: 1.0
+version: 1.1
 license: LicenseRef-Proprietary
 ---
-# html2md skill
+# html skill
 
 **Purpose**: Convert a web URL or a downloaded `.html`/`.htm`/`.mhtml`/`.webarchive`
 into clean Markdown — with YAML frontmatter and a shared `_attachments/` folder —
@@ -30,21 +30,21 @@ for two consumers: (1) an **Obsidian web-clipper** (self-contained note), and
   provider then to the local engines; only when *every* viable tier is exhausted does it fail
   with one typed `FetchFailed (kind=all_engines_failed)` carrying a `details.tried` trace.
 - **Vendor-agnostic remote reader** (`--engine jina|remote`): the remote tier is a pluggable
-  provider layer — `jina` (`r.jina.ai`) is the built-in default, but `HTML2MD_READER_URL` /
-  `HTML2MD_READER_PROVIDERS` point it at a **self-hosted Jina** or any compatible reader, so
+  provider layer — `jina` (`r.jina.ai`) is the built-in default, but `HTML_READER_URL` /
+  `HTML_READER_PROVIDERS` point it at a **self-hosted Jina** or any compatible reader, so
   resilience does not depend on any single vendor. `--engine remote` REQUIRES a configured
   provider (never a silent fall-back to jina.ai). `--no-remote` disables the remote tier
   entirely. `--remote-format markdown` trusts the reader's own clean Markdown; `--target-selector`
   extracts just the article block. `--rate-limit` throttles fetches.
 - **Web search → Markdown** (`--search "QUERY" [OUTPUT_DIR] [--max-results N]`): a
-  vendor-agnostic search provider (`s.jina.ai` default; `HTML2MD_SEARCH_URL` /
-  `HTML2MD_SEARCH_PROVIDERS` override) returns the top results; **each result URL is fetched
+  vendor-agnostic search provider (`s.jina.ai` default; `HTML_SEARCH_URL` /
+  `HTML_SEARCH_PROVIDERS` override) returns the top results; **each result URL is fetched
   through the same fallback ladder** (so every result inherits per-result fallback) and
   written as one note (frontmatter `query:` + `source:`). A failed result is skipped, not
   fatal; a healthy zero-result search exits 0.
 - **Authenticated (login-gated) Chrome** (`--engine chrome` + auth): read pages behind a login
   (X Articles/threads, paywalled/members, private docs) by replaying a **human-minted** session.
-  Mint once: `html2md.py login URL --save-state state.json` (headful; 2FA ok). Then convert with
+  Mint once: `html login URL --save-state state.json` (headful; 2FA ok). Then convert with
   `--chrome-storage-state state.json` (portable, **server/Hermes-deployable**, read-only →
   concurrency-safe), `--chrome-cookies-file cookies.txt` (cookie-only), or
   `--chrome-user-data-dir DIR` (local persistent profile). `--chrome-scroll [--chrome-scroll-passes N]`
@@ -74,14 +74,35 @@ for two consumers: (1) an **Obsidian web-clipper** (self-contained note), and
   has no SSRF protection.
 
 ## 4. Script Contract
-- **Command**:
-  - `python3 scripts/html2md.py INPUT [OUTPUT_DIR] [--engine lite|chrome|auto|jina|remote] [--no-remote] [--remote-format html|markdown] [--target-selector SEL] [--chrome-storage-state PATH | --chrome-cookies-file PATH | --chrome-user-data-dir DIR] [--chrome-scroll] [--chrome-scroll-passes N] [--reader-mode|--no-reader] [--download-images|--no-download-images] [--attachments-dir _attachments] [--archive-frame main|N|all|auto] [--max-bytes N] [--max-images N] [--retries N] [--rate-limit REQS_PER_SEC] [--stdout] [--json-errors]`
-  - Search: `python3 scripts/html2md.py --search "QUERY" [OUTPUT_DIR] [--max-results N] [...]` (mutually exclusive with INPUT).
-  - Login (mint a session, headful): `python3 scripts/html2md.py login URL [--save-state state.json]`.
-- **Environment (optional):** `HTML2MD_READER_URL` / `HTML2MD_READER_PROVIDERS` (remote reader base(s)), `HTML2MD_READER_TOKEN` (generic reader auth), `JINA_API_KEY` (jina quota), `HTML2MD_SEARCH_URL` / `HTML2MD_SEARCH_PROVIDERS` (search provider base(s)), `HTML2MD_CHROME_STORAGE_STATE` / `HTML2MD_CHROME_COOKIES_FILE` / `HTML2MD_CHROME_USER_DATA_DIR` (Chrome auth — server-deployable secrets). All optional; see [`.env.example`](.env.example) for a documented template (read from the process env; not auto-loaded).
+
+> **Two operations + a combined one-shot.** The skill exposes the pipeline as composable
+> verbs so a fetched page can feed Markdown, **pdf**, or **docx**:
+> - `python3 scripts/html fetch INPUT [OUTPUT_DIR]` — **OP1**: download to an on-disk
+>   `<slug>.html` + `<slug>.meta.json` sidecar (+ localized `_attachments/`). The HTML is
+>   **sanitized** (`file:`/`javascript:` refs stripped) so it is safe to render; an
+>   authenticated fetch's body is written `0600`. Keep the HTML to feed the **pdf** skill.
+> - `python3 scripts/html md INPUT [OUTPUT_DIR]` — **OP2**: convert a fetched artifact /
+>   local HTML / URL → Markdown. A local `.html` with a sibling `.meta.json` recovers full
+>   frontmatter from the sidecar.
+> - `python3 scripts/html2md.py INPUT [OUTPUT_DIR]` — **combined** (fetch → md → delete the
+>   intermediate HTML): the classic web-clip — you get just `<slug>.md` (+ `.reader.md`) +
+>   `_attachments/`, no leftover HTML. This is the bare/back-compat one-shot.
+>
+> **Pipelines:**
+> - **download → pdf:** `html fetch URL out/ && python3 ../pdf/scripts/html2pdf.py out/<slug>.html out.pdf --untrusted`
+>   (always pass `--untrusted` — it refuses `file://` at the renderer, defense-in-depth over
+>   the fetch-time sanitizer). Requires `html fetch` ran **with** images (the default) so the
+>   PDF has them (pdf is offline — it never fetches remote `<img>`).
+> - **download → docx:** `html fetch URL out/ && html md out/<slug>.html out/ && node ../docx/scripts/md2docx.js out/<slug>.md out.docx`.
+
+- **Command** (bare / `md` verb):
+  - `python3 scripts/html INPUT [OUTPUT_DIR] [--engine lite|chrome|auto|jina|remote] [--no-remote] [--remote-format html|markdown] [--target-selector SEL] [--chrome-storage-state PATH | --chrome-cookies-file PATH | --chrome-user-data-dir DIR] [--chrome-scroll] [--chrome-scroll-passes N] [--reader-mode|--no-reader] [--download-images|--no-download-images] [--attachments-dir _attachments] [--archive-frame main|N|all|auto] [--max-bytes N] [--max-images N] [--retries N] [--rate-limit REQS_PER_SEC] [--stdout] [--json-errors]`
+  - Search: `python3 scripts/html search "QUERY" [OUTPUT_DIR] [--max-results N] [...]` (or the legacy `--search "QUERY"`).
+  - Login (mint a session, headful): `python3 scripts/html login URL [--save-state state.json]`.
+- **Environment (optional):** `HTML_READER_URL` / `HTML_READER_PROVIDERS` (remote reader base(s)), `HTML_READER_TOKEN` (generic reader auth), `JINA_API_KEY` (jina quota), `HTML_SEARCH_URL` / `HTML_SEARCH_PROVIDERS` (search provider base(s)), `HTML_CHROME_STORAGE_STATE` / `HTML_CHROME_COOKIES_FILE` / `HTML_CHROME_USER_DATA_DIR` (Chrome auth — server-deployable secrets). All optional; see [`.env.example`](.env.example) for a documented template (read from the process env; not auto-loaded).
 - **INPUT**: a `http(s)` URL, or a local `.html`/`.htm`/`.mhtml`/`.mht`/`.webarchive`.
 - **OUTPUT_DIR**: directory to write `<slug>.md` (+ `<slug>.reader.md` by default) and
-  `_attachments/` into. **Omit → defaults to `./tmp/html2md_out/`** (created on demand,
+  `_attachments/` into. **Omit → defaults to `./tmp/html_out/`** (created on demand,
   in the working directory). `--stdout` opts into stdout mode: **YAML frontmatter +
   whole-page Markdown** (the reader variant and image files are skipped — not the
   reader-extracted text).
@@ -143,45 +164,45 @@ for two consumers: (1) an **Obsidian web-clipper** (self-contained note), and
 - **Local verification**:
   - `bash scripts/install.sh` — creates `.venv` (httpx, trafilatura), `node_modules`
     (turndown, turndown-plugin-gfm). `--with-chrome` adds Playwright Chromium.
-  - `python3 scripts/html2md.py examples/sample.html /tmp/h2m && test -s /tmp/h2m/*.md`
+  - `python3 scripts/html examples/sample.html /tmp/h2m && test -s /tmp/h2m/*.md`
     — offline file → dual Markdown + frontmatter.
   - `./scripts/.venv/bin/python -m unittest discover -s scripts/html2md/tests` and
     `-s scripts/tests` — full unit + E2E suite (file/archive/url mocked + real
     `tmp/` fixtures when present).
   - `bash scripts/tests/test_e2e.sh` — runs the suite + the `diff -q` replication gate.
 - **CI signal**: `python3 .claude/skills/skill-creator/scripts/validate_skill.py
-  skills/html2md` — exits 0.
+  skills/html` — exits 0.
 
 ## 7. Instructions
 
 ### 7.1 Clip a live URL into an Obsidian vault
 ```bash
-python3 scripts/html2md.py https://example.com/article ./MyVault/Clips/
+python3 scripts/html https://example.com/article ./MyVault/Clips/
 ```
 Produces `article.md` (whole) + `article.reader.md` (reader-extracted) + deduped
 `_attachments/`. Use `--engine chrome` (after `install.sh --with-chrome`) for JS/SPA pages.
 
 ### 7.2 Convert a saved archive offline
 ```bash
-python3 scripts/html2md.py ./saved.webarchive ./out/ --archive-frame main
-python3 scripts/html2md.py ./thread.mhtml ./out/ --archive-frame all
+python3 scripts/html ./saved.webarchive ./out/ --archive-frame main
+python3 scripts/html ./thread.mhtml ./out/ --archive-frame all
 ```
 
 ### 7.3 Use as a universal agent step
 ```bash
-python3 scripts/html2md.py ./page.html --stdout --no-download-images --no-reader --json-errors
+python3 scripts/html ./page.html --stdout --no-download-images --no-reader --json-errors
 ```
 Whole-page Markdown on stdout; failures as a single-line JSON envelope.
 
 ## 8. Architecture & Replication (for maintainers)
-`html2md` is the repo's first **two-master** skill (CLAUDE.md §2). It carries
+`html` (formerly `html2md`) is the repo's first **two-master** skill (CLAUDE.md §2). It carries
 byte-identical replicas — **do not edit them here**, `diff -q` gated:
 - `web_clean/{archives,reader_mode,preprocess,dom_utils,normalize_css}.py` — MASTER = pdf.
 - `html2md_core.js` — MASTER = docx.
 - `_errors.py`, `_venv_bootstrap.py` — MASTER = docx (4→5-skill).
 
 The pdf `render.py`/`chrome_engine.py`/package `__init__.py` (weasyprint/playwright
-carriers) are **never** replicated; `web_clean/__init__.py` is an html2md-owned thin
+carriers) are **never** replicated; `web_clean/__init__.py` is an html-owned thin
 facade. See `scripts/.AGENTS.md`.
 
 ## 9. License

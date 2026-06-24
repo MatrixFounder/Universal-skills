@@ -198,6 +198,13 @@ def main(argv: list[str] | None = None) -> int:
              "JS-on with offline network typically corrupts the DOM. "
              "Use only for canvas charts or pre-hydration HTML snapshots.",
     )
+    parser.add_argument(
+        "--untrusted", action="store_true",
+        help="Treat the INPUT HTML as untrusted (e.g. an `html fetch` artifact of an "
+             "arbitrary web page): refuse `file://` references (only bounded `data:` "
+             "URIs are allowed), so a crafted `<img src=\"file:///…\">` cannot read a "
+             "local file into the PDF (CWE-22). Always pass it in the html→pdf pipeline.",
+    )
     add_json_errors_argument(parser)
     args = parser.parse_args(argv)
     je = args.json_errors
@@ -296,6 +303,7 @@ def main(argv: list[str] | None = None) -> int:
             timeout=args.timeout,
             engine=args.engine,
             chrome_javascript=args.chrome_javascript,
+            untrusted=args.untrusted,
         )
     except ChromeEngineUnavailable as exc:
         return report_error(

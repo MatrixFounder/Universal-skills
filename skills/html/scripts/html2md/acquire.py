@@ -28,12 +28,14 @@ from urllib.parse import parse_qsl, quote, urlencode, urljoin, urlparse
 
 from web_clean import extract_archive
 
+from ._env import env as _env
+
 from .exceptions import BadInput, EngineNotInstalled, FetchFailed
 from .model import AcquireResult, SourceMeta
 
 # Honest default UA — what is actually fetching. A browser UA is used ONLY as a 403
 # escalation (see _http_get_bytes) and for the Chrome/Jina engines.
-_UA = "Mozilla/5.0 (compatible; html2md/0.1; +https://example.invalid/html2md)"
+_UA = "Mozilla/5.0 (compatible; html/0.1; +https://example.invalid/html)"
 _BROWSER_UA = (
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
@@ -108,7 +110,7 @@ _cleanup_registered = False
 
 def _new_work_dir() -> Path:
     global _cleanup_registered
-    d = tempfile.mkdtemp(prefix="html2md_")
+    d = tempfile.mkdtemp(prefix="html_")
     _TEMP_DIRS.append(d)
     if not _cleanup_registered:
         atexit.register(_cleanup_work_dirs)
@@ -526,7 +528,7 @@ def _login_render(url: str, save_state_path: str, opts) -> None:
                 page = context.new_page()
                 page.goto(url, wait_until="load", timeout=120000)
                 sys.stderr.write(
-                    "html2md: a browser window opened — log in there, then press Enter "
+                    "html: a browser window opened — log in there, then press Enter "
                     "here to save the session...\n")
                 sys.stderr.flush()
                 input()  # block for the manual login
@@ -789,24 +791,24 @@ def _reader_from_base(base: str) -> "_RemoteReader":
     """Build a provider record from a base URL, picking the right name + auth env.
 
     ``r.jina.ai`` → name ``jina`` + ``JINA_API_KEY``; any other host → ``remote:<host>`` +
-    ``HTML2MD_READER_TOKEN`` (per-provider, not interchangeable — TASK 023 R2)."""
+    ``HTML_READER_TOKEN`` (per-provider, not interchangeable — TASK 023 R2)."""
     nb = _norm_base(base)
     host = (urlparse(nb).hostname or "").lower()
     if host == "r.jina.ai":
         return _RemoteReader("jina", nb, os.environ.get("JINA_API_KEY"))
     return _RemoteReader(f"remote:{host}" if host else "remote", nb,
-                         os.environ.get("HTML2MD_READER_TOKEN"))
+                         _env("READER_TOKEN"))
 
 
 def _configured_providers() -> "tuple[list[_RemoteReader], str]":
     """The env-configured reader list + a kind tag (``"list"``/``"single"``/``"none"``).
 
-    ``HTML2MD_READER_PROVIDERS`` (comma/space list) is the exact operator order;
-    else ``HTML2MD_READER_URL`` (single); else none."""
-    provs = os.environ.get("HTML2MD_READER_PROVIDERS")
+    ``HTML_READER_PROVIDERS`` (comma/space list) is the exact operator order;
+    else ``HTML_READER_URL`` (single); else none."""
+    provs = _env("READER_PROVIDERS")
     if provs and provs.strip():
         return [_reader_from_base(b) for b in re.split(r"[,\s]+", provs.strip()) if b], "list"
-    single = os.environ.get("HTML2MD_READER_URL")
+    single = _env("READER_URL")
     if single and single.strip():
         return [_reader_from_base(single)], "single"
     return [], "none"
@@ -818,8 +820,8 @@ def _remote_providers(opts) -> "list[_RemoteReader]":
     - ``jina``   → the built-in ``jina`` provider only.
     - ``remote`` → the env-configured providers ONLY (never a silent jina fall-back —
       privacy; usage-guarded non-empty in cli).
-    - ``auto``   → an explicit ``HTML2MD_READER_PROVIDERS`` list verbatim; else
-      ``HTML2MD_READER_URL`` then the built-in ``jina``; else just ``jina``.
+    - ``auto``   → an explicit ``HTML_READER_PROVIDERS`` list verbatim; else
+      ``HTML_READER_URL`` then the built-in ``jina``; else just ``jina``.
     De-duped by base, order preserved.
     """
     engine = (getattr(opts, "engine", "auto") or "auto").lower()
@@ -928,17 +930,17 @@ def _search_from_base(base: str) -> "_SearchProvider":
     if host == "s.jina.ai":
         return _SearchProvider("s.jina.ai", nb, "links", os.environ.get("JINA_API_KEY"))
     return _SearchProvider(f"search:{host}" if host else "search", nb, "links",
-                           os.environ.get("HTML2MD_READER_TOKEN"))
+                           _env("READER_TOKEN"))
 
 
 def _search_providers(opts) -> "list[_SearchProvider]":
-    """Ordered search providers (R9): ``HTML2MD_SEARCH_PROVIDERS`` (list) else
-    ``HTML2MD_SEARCH_URL`` then the built-in ``s.jina.ai``. De-duped by base."""
-    provs = os.environ.get("HTML2MD_SEARCH_PROVIDERS")
+    """Ordered search providers (R9): ``HTML_SEARCH_PROVIDERS`` (list) else
+    ``HTML_SEARCH_URL`` then the built-in ``s.jina.ai``. De-duped by base."""
+    provs = _env("SEARCH_PROVIDERS")
     if provs and provs.strip():
         out = [_search_from_base(b) for b in re.split(r"[,\s]+", provs.strip()) if b]
     else:
-        single = os.environ.get("HTML2MD_SEARCH_URL")
+        single = _env("SEARCH_URL")
         out = [_search_from_base(single)] if (single and single.strip()) else []
         out.append(_SearchProvider("s.jina.ai", _JINA_SEARCH_PREFIX, "links",
                                    os.environ.get("JINA_API_KEY")))

@@ -11,10 +11,10 @@ import subprocess
 
 from .exceptions import ConvertFailed
 
-# scripts/html2md_convert.js — the html2md-owned turndown wrapper (ARIA tables +
+# scripts/html_convert.js — the html-owned turndown wrapper (ARIA tables +
 # button strip) over the docx-mastered html2md_core.js. Sibling of the package dir.
 _CORE_JS = os.path.join(
-    os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "html2md_convert.js"
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "html_convert.js"
 )
 _TIMEOUT_S = 120
 

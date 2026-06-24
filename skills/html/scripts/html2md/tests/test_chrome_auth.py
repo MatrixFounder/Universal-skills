@@ -21,9 +21,9 @@ if SCRIPTS not in sys.path:
 
 from html2md import _chrome_auth, _cookies, acquire, cli  # noqa: E402
 
-_ENV = ("HTML2MD_CHROME_STORAGE_STATE", "HTML2MD_CHROME_COOKIES_FILE",
-        "HTML2MD_CHROME_USER_DATA_DIR", "HTML2MD_CHROME_AUTH_MAP",
-        "HTML2MD_CHROME_SCROLL", "HTML2MD_CHROME_SCROLL_PASSES")
+_ENV = ("HTML_CHROME_STORAGE_STATE", "HTML_CHROME_COOKIES_FILE",
+        "HTML_CHROME_USER_DATA_DIR", "HTML_CHROME_AUTH_MAP",
+        "HTML_CHROME_SCROLL", "HTML_CHROME_SCROLL_PASSES")
 
 
 def _args(*argv):
@@ -213,7 +213,7 @@ class _ChromeBase(unittest.TestCase):
     def setUp(self):
         self._saved = {k: getattr(acquire, k) for k in ("_import_sync_playwright", "_host_is_public")}
         acquire._host_is_public = lambda h: h not in _PRIVATE and not h.startswith("10.")
-        # Env isolation: a developer's exported HTML2MD_CHROME_* (we instruct users to set these)
+        # Env isolation: a developer's exported HTML_CHROME_* (we instruct users to set these)
         # must NOT leak into _validate_usage's env fallbacks and perturb these tests.
         self._saved_env = {k: os.environ.pop(k, None) for k in _ENV}
 
@@ -648,7 +648,7 @@ class TestChromeAuthMap(_ChromeBase):
             cookies = self._cookies_txt(d)
             amap = self._write(d, "auth.json", json.dumps({"x.com": {"cookies_file": str(cookies)}}))
             a = _args("https://x.com/p", d, "--chrome-auth-map", str(amap))
-            a.chrome_cookies_file = str(cookies)  # simulate HTML2MD_CHROME_COOKIES_FILE present
+            a.chrome_cookies_file = str(cookies)  # simulate HTML_CHROME_COOKIES_FILE present
             with self.assertRaises(cli.Usage):
                 cli._validate_usage(a)
 
@@ -727,12 +727,12 @@ class TestChromeAuthMap(_ChromeBase):
                                            self._opts_map("https://medium.com/p", amap))
 
     def test_map_env_fallback_real(self):
-        """The actual HTML2MD_CHROME_AUTH_MAP env fallback forces chrome for a mapped target."""
+        """The actual HTML_CHROME_AUTH_MAP env fallback forces chrome for a mapped target."""
         with tempfile.TemporaryDirectory() as d:
             cookies = self._cookies_txt(d)
             amap = self._write(d, "auth.json", json.dumps({"x.com": {"cookies_file": str(cookies)}}))
             a = _args("https://x.com/i/article/1", d)  # NO --chrome-auth-map flag
-            with mock.patch.dict(os.environ, {"HTML2MD_CHROME_AUTH_MAP": str(amap)}):
+            with mock.patch.dict(os.environ, {"HTML_CHROME_AUTH_MAP": str(amap)}):
                 cli._validate_usage(a)
             self.assertEqual(a.chrome_auth_map, str(amap))
             self.assertEqual(a.engine, "chrome")
@@ -743,14 +743,14 @@ class TestChromeAuthMap(_ChromeBase):
             cookies = self._cookies_txt(d)
             amap = self._write(d, "auth.json", json.dumps({"x.com": {"cookies_file": str(cookies)}}))
             a = _args("./page.html", d)
-            with mock.patch.dict(os.environ, {"HTML2MD_CHROME_AUTH_MAP": str(amap)}):
+            with mock.patch.dict(os.environ, {"HTML_CHROME_AUTH_MAP": str(amap)}):
                 cli._validate_usage(a)
             self.assertNotEqual(a.engine, "chrome")
 
     def test_auth_map_env_path_is_expanduser(self):
-        """A `~`-path in HTML2MD_CHROME_AUTH_MAP (e.g. from the auto-loaded .env) is expanded."""
+        """A `~`-path in HTML_CHROME_AUTH_MAP (e.g. from the auto-loaded .env) is expanded."""
         a = _args("https://x.com/p", "/tmp/out")
-        with mock.patch.dict(os.environ, {"HTML2MD_CHROME_AUTH_MAP": "~/nope/auth-map.json"}):
+        with mock.patch.dict(os.environ, {"HTML_CHROME_AUTH_MAP": "~/nope/auth-map.json"}):
             # ~ must be expanded before the file check (else it'd fail on a literal '~' dir)
             try:
                 cli._validate_usage(a)
@@ -760,12 +760,12 @@ class TestChromeAuthMap(_ChromeBase):
             self.assertTrue(a.chrome_auth_map.startswith(os.path.expanduser("~")))
 
     def test_chrome_scroll_env_fallback(self):
-        """HTML2MD_CHROME_SCROLL(+_PASSES) enables scroll for env-only callers (wiki-import)."""
+        """HTML_CHROME_SCROLL(+_PASSES) enables scroll for env-only callers (wiki-import)."""
         with tempfile.TemporaryDirectory() as d:
             a = _args("https://example.com/p", d)
             self.assertFalse(a.chrome_scroll)
-            with mock.patch.dict(os.environ, {"HTML2MD_CHROME_SCROLL": "1",
-                                              "HTML2MD_CHROME_SCROLL_PASSES": "12"}):
+            with mock.patch.dict(os.environ, {"HTML_CHROME_SCROLL": "1",
+                                              "HTML_CHROME_SCROLL_PASSES": "12"}):
                 cli._validate_usage(a)
             self.assertTrue(a.chrome_scroll)
             self.assertEqual(a.chrome_scroll_passes, 12)
@@ -774,7 +774,7 @@ class TestChromeAuthMap(_ChromeBase):
         """An explicit --chrome-scroll-passes is not overridden by the env (env fills only default)."""
         with tempfile.TemporaryDirectory() as d:
             a = _args("https://example.com/p", d, "--chrome-scroll-passes", "3")
-            with mock.patch.dict(os.environ, {"HTML2MD_CHROME_SCROLL_PASSES": "12"}):
+            with mock.patch.dict(os.environ, {"HTML_CHROME_SCROLL_PASSES": "12"}):
                 cli._validate_usage(a)
             self.assertEqual(a.chrome_scroll_passes, 3)
 

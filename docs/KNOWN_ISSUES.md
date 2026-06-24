@@ -410,7 +410,7 @@ design, and it is a 4-skill replicated file).
 
 ## HTML2MD (TASK 022) — honest-scope limitations
 
-All deferred-by-design; the backlog row `docs/office-skills-backlog.md` §2 «html2md»
+All deferred-by-design; the backlog row `docs/office-skills-backlog.md` §2 «html»
 owns the decisions. Cross-skill replication (G-1/G-3) and security guards are tested,
 not listed here.
 
@@ -436,16 +436,16 @@ the page **server-side** — the target URL leaves the machine. As of TASK 023 t
 **Mitigations:** a private/internal/loopback/metadata target is **never** forwarded (a public-IP
 gate runs before any remote request); **`--no-remote`** disables the remote tier entirely (fully
 local, no external egress); CR/LF/control chars in the target are refused; the local hop is to a
-public reader (passes the SSRF gate); the tier is **vendor-agnostic** (`HTML2MD_READER_URL` /
-`HTML2MD_READER_PROVIDERS` → self-hosted Jina or another reader). **Do-not:** rely on `auto`
+public reader (passes the SSRF gate); the tier is **vendor-agnostic** (`HTML_READER_URL` /
+`HTML_READER_PROVIDERS` → self-hosted Jina or another reader). **Do-not:** rely on `auto`
 for sensitive/internal conversions without `--no-remote`. Keyless by default (rate-limited);
-`JINA_API_KEY` / `HTML2MD_READER_TOKEN` raise/authorize quota. **Residual:** a reader follows its
+`JINA_API_KEY` / `HTML_READER_TOKEN` raise/authorize quota. **Residual:** a reader follows its
 own server-side redirects beyond our control.
 
 ### HTML2MD-2 — PDFs / binary URLs are not converted
 **Status:** open (by design) • **Severity:** LOW • **Location:** `acquire._fetch_lite_html`.
 **Symptom:** a `*.pdf` (or binary) URL → `FetchFailed kind=pdf/binary` with a pointer to the
-pdf skill. html2md is HTML→Markdown only. **Fix path:** use `skills/pdf/scripts/pdf_extract.py`.
+pdf skill. html is HTML→Markdown only. **Fix path:** use `skills/pdf/scripts/pdf_extract.py`.
 **Do-not:** feed PDF bytes to turndown (it overflowed the Node stack before the guard).
 
 ### HTML2MD-3 — data-grid SPAs degrade
@@ -469,7 +469,7 @@ run untrusted conversions in an egress-restricted sandbox.
 is not always the bare stem. (b) **Empty-heading merge** (`md_clean`) re-levels the line
 after an empty heading into that heading — for the targeted GitBook/Mintlify pattern this is
 correct, but a body paragraph directly after an empty heading would be mis-leveled (never
-deleted). **Related:** `docs/office-skills-backlog.md` §2 «html2md».
+deleted). **Related:** `docs/office-skills-backlog.md` §2 «html».
 
 ### HTML2MD-7 — clean-source host variants (Wikipedia REST, arXiv /html)
 **Status:** handled • **Severity:** LOW (residual) • **Location:** `acquire._mediawiki_rest_variant`
@@ -519,7 +519,7 @@ the Chrome tier is now SSRF-gated always.)**
 **Status:** handled (with documented residuals) • **Severity:** LOW • **Location:**
 `acquire._fetch_chrome_html` / `_chrome_auth` / `_cookies` / `acquire._login_render`.
 **What shipped:** read login-gated pages (X Articles/threads, paywalled, private) by replaying a
-**human-minted** session — `html2md.py login URL --save-state s.json` (headful) then
+**human-minted** session — `html login URL --save-state s.json` (headful) then
 `--chrome-storage-state s.json` (also `--chrome-cookies-file` / `--chrome-user-data-dir`);
 `--chrome-scroll` for lazy replies. The Chrome tier is now **SSRF-gated** (supersedes the old
 HTML2MD-4 "chrome not hardened"): `_assert_public_http` before navigation, context-level route

@@ -1,8 +1,8 @@
 {
-  "name": "universal-skills-html2md",
+  "name": "universal-skills-html",
   "version": "0.1.0",
   "private": true,
-  "description": "Runtime dependencies for the html2md skill (html2md_core.js — the turndown HTML→Markdown core, replicated from docx).",
+  "description": "Runtime dependencies for the html skill (html2md_core.js — the turndown HTML→Markdown core, replicated from docx).",
   "license": "SEE LICENSE IN ../LICENSE",
   "dependencies": {
     "turndown": "^7.2.0",

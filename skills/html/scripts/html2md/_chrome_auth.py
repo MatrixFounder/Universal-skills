@@ -1,4 +1,4 @@
-"""TASK 024 — authenticated Chrome context + login-wall detection (html2md-owned, NOT gated).
+"""TASK 024 — authenticated Chrome context + login-wall detection (html-owned, NOT gated).
 
 Resolves ONE auth source (storage_state / cookies.txt / persistent-profile) into Playwright
 context kwargs (024-03), and detects a stale-session login wall (024-05). Heavy deps
@@ -103,8 +103,8 @@ def load_auth_map(path: Path) -> dict:
     """Load + harden a per-domain auth map (TASK 026). JSON object mapping a host to **exactly one**
     credential::
 
-        { "x.com":     {"cookies_file":  "~/.html2md/x-cookies.txt"},
-          "medium.com": {"storage_state": "~/.html2md/medium-state.json"} }
+        { "x.com":     {"cookies_file":  "~/.html/x-cookies.txt"},
+          "medium.com": {"storage_state": "~/.html/medium-state.json"} }
 
     Keys are lowercased + dot-stripped (matched by label-boundary suffix — :func:`_match_host`, NOT
     eTLD+1); value paths are ``~``-expanded. Hardened like the cookie loader — reject symlink /

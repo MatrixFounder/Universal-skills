@@ -1,4 +1,4 @@
-# html2md — обратная связь по батчу #01 (DeFi/Инвестиции), 2026-06-18
+# html (formerly html2md) — обратная связь по батчу #01 (DeFi/Инвестиции), 2026-06-18
 
 Прогон **после** обновления скилла (коммит `0d00392 "html2md enhancements"`), на котором
 были применены рекомендации из прошлого фидбэка (батч DAO). Источник — курируемый список
@@ -118,5 +118,5 @@ fix (reader_mode, master = pdf, реплицирован байт-в-байт). 
 | **Дефект №4** — полнота X-тредов | НИЗКИЙ (осведомлённость) | ↪ вне правки | Реплаи «ниже сгиба» в длинных тредах подгружаются JS-инфинит-скроллом; одностраничный фетч их не видит. Это honest-scope ограничение (как data-grid SPA, HTML2MD-3), не дефект конвертации. |
 
 Документация обновлена: `SKILL.md` (§2 capabilities, §4 exit-коды), `references/html-to-markdown.md`
-(таблица clean-source endpoints + EmptyExtraction), `docs/Manuals/html2md_manual.md` (exit-коды,
+(таблица clean-source endpoints + EmptyExtraction), `docs/Manuals/html_manual.md` (exit-коды,
 host-варианты, лимит reader на Wikipedia), `docs/KNOWN_ISSUES.md` (§HTML2MD-7/8).

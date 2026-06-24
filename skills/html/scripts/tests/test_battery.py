@@ -1,4 +1,4 @@
-"""html2md conversion-quality battery (mirrors docx/pdf `test_battery.py`).
+"""html conversion-quality battery (mirrors docx/pdf `test_battery.py`).
 
 Reads `battery_signatures.json` and, for every fixture present on disk, re-converts and
 asserts:

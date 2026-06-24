@@ -10,16 +10,16 @@ import sys
 import unittest
 
 SCRIPTS = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-SHIM = os.path.join(SCRIPTS, "html2md.py")
+SHIM = os.path.join(SCRIPTS, "html")
 
 
 class TestHelpSurface(unittest.TestCase):
     def test_help_lists_surface(self):
-        """TC-E2E-01: `python3 html2md.py --help` exits 0 and lists the surface."""
+        """TC-E2E-01: `python3 html --help` exits 0 and lists the surface."""
         r = subprocess.run(
             [sys.executable, SHIM, "--help"], cwd=SCRIPTS,
             capture_output=True, text=True,
-            env={**os.environ, "HTML2MD_NO_DOTENV": "1"},  # hermetic: ignore a dev's skill .env
+            env={**os.environ, "HTML_NO_DOTENV": "1"},  # hermetic: ignore a dev's skill .env
         )
         self.assertEqual(r.returncode, 0, r.stderr)
         out = r.stdout

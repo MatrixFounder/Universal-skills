@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""html2md conversion-quality battery — capture / refresh signatures.
+"""html conversion-quality battery — capture / refresh signatures.
 
 Mirrors `skills/pdf/scripts/tests/capture_signatures.py`. Converts each fixture to
 whole + reader Markdown and records a structural signature: line / heading / GFM-table-
@@ -26,11 +26,11 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent          # scripts/tests/
 SCRIPTS = HERE.parent                            # scripts/
-SKILL = SCRIPTS.parent                           # skills/html2md/
+SKILL = SCRIPTS.parent                           # skills/html/
 REPO = SKILL.parents[1]                          # repo root
 TMP = REPO / "tmp"
 SIG_PATH = HERE / "battery_signatures.json"
-SHIM = SCRIPTS / "html2md.py"
+SHIM = SCRIPTS / "html"
 
 FIXTURES: dict[str, dict] = {
     # Tier 2 — committed synthetic (always present): exercises every fix.

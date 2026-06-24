@@ -131,7 +131,7 @@ const SCRIPTS_DIR = __dirname;
 const mammoth = loadDependency("mammoth", SCRIPTS_DIR);
 // Turndown HTML→Markdown core lives in the docx-mastered shared module
 // html2md_core.js (buildTurndown + expandTableToGrid), replicated byte-identical
-// to the html2md skill (CLAUDE.md §2). docx2md.js consumes it via buildTurndown().
+// to the html skill (CLAUDE.md §2). docx2md.js consumes it via buildTurndown().
 const { buildTurndown } = require("./html2md_core");
 loadDependency("jszip", SCRIPTS_DIR); // prewarm for _assets / _shapes
 
@@ -252,7 +252,7 @@ const mammothOptions = {
 //
 // buildTurndown() and its rowspan/colspan-aware expandTableToGrid() were lifted
 // VERBATIM into the docx-mastered html2md_core.js module (required near the top of
-// this file) so the html2md skill can reuse the exact same converter. Behaviour is
+// this file) so the html skill can reuse the exact same converter. Behaviour is
 // unchanged — the call site below still does buildTurndown().turndown(html).
 
 // ---- Build header/footer prefix block -----------------------------------

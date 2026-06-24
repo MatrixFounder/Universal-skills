@@ -1,9 +1,14 @@
-# ARCHITECTURE: `html2md` — universal Web/HTML → Markdown converter & Obsidian web-clipper (TASK 022)
+# ARCHITECTURE: `html` (formerly `html2md`) — universal Web/HTML → Markdown converter & Obsidian web-clipper (TASK 022)
 
 > **License:** Proprietary, All Rights Reserved (derived work embedding
 > proprietary `docx`/`pdf` code — see `CLAUDE.md` §3 + §9 below).
 > **Runtime:** hybrid — Python orchestrator + Node converter subprocess
 > (mirrors the existing `md2pdf.py` → `mmdc` pattern).
+> **Naming (post-rename):** the skill is `html`; the user-facing launcher is
+> the **extensionless** `scripts/html` (a `html.py` would shadow stdlib `html`,
+> which is on `sys.path[0]`). The **internal Python package is still `html2md`**
+> (renaming it would shadow stdlib `html`), and the replicas keep their donor
+> names — `html2md_core.js` (docx master) and `web_clean/*` (pdf master).
 > **Source of truth for replication:** `CLAUDE.md` §2 «Future skill html2md —
 > TWO-master replication». §9 of this doc is **load-bearing** (non-empty,
 > unlike pptx2md/TASK 020).
@@ -66,14 +71,17 @@ Full requirements: `docs/TASK.md` (TASK 022) RTM R1–R8.
   - **Dual-output (default):** writes `<slug>.md` (whole) + `<slug>.reader.md`
     (reader); `--no-reader` collapses to one. Both share ONE `_attachments/`.
   - stdout mode + `--json-errors` envelope for agent use.
-- **FC-5 `html2md.py` (NEW)** — CLI orchestrator + entrypoint. `_venv_
+- **FC-5 `html` launcher (NEW)** — extensionless CLI orchestrator + entrypoint
+  (`scripts/html`; NOT `html.py`, which would shadow stdlib `html`). `_venv_
   bootstrap` prelude; threads flags; shells `node html2md_core.js` (HTML on
-  stdin → Markdown on stdout); maps exceptions → exit codes / envelope.
+  stdin → Markdown on stdout); maps exceptions → exit codes / envelope. (The
+  combined `scripts/html2md.py` command — fetch → convert → delete intermediate
+  HTML — re-exports through this launcher.)
 
 ### 2.2. Functional Components Diagram
 
 ```
-                 ┌──────────────────────── html2md.py (FC-5, orchestrator) ──────────────────────┐
+                 ┌──────────────────────── html launcher (FC-5, orchestrator) ───────────────────┐
  INPUT           │                                                                                │
  URL ───────────▶│  FC-1 acquire.py ──┐                                                           │
  .webarchive ───▶│   (dispatch +      │  raw HTML + source_meta + image map (AcquireResult)       │
@@ -109,9 +117,9 @@ hands a typed IR to the next, enabling stage-isolated tests.
 
 | Layer | Runtime | Origin | Replication master |
 |---|---|---|---|
-| `html2md.py`, `acquire.py`, `emit.py` | Python | NEW (html2md-owned) | — (skill-local) |
+| `html` launcher, `acquire.py`, `emit.py` | Python | NEW (html-owned) | — (skill-local) |
 | `web_clean/{archives,reader_mode,preprocess,dom_utils,normalize_css}.py` | Python | **pdf** `html2pdf_lib/` | **pdf** (`diff -q` gated) |
-| `web_clean/__init__.py` | Python | NEW (html2md-owned, thin) | — (NOT gated) |
+| `web_clean/__init__.py` | Python | NEW (html-owned, thin) | — (NOT gated) |
 | `html2md_core.js` | Node | **docx** `docx2md.js` | **docx** (`diff -q` gated) |
 | `_errors.py`, `_venv_bootstrap.py` | Python | **docx** | **docx** (4→5-skill) |
 | `package.json` (turndown, gfm), `requirements.txt`, `install.sh` | — | NEW | — (skill-local) |
@@ -120,7 +128,7 @@ hands a typed IR to the next, enabling stage-isolated tests.
 
 ```
   ┌─ Python venv (.venv) ───────────────────────────────┐      ┌─ Node (node_modules) ─┐
-  │ html2md.py ─ acquire.py ─ web_clean/* ─ emit.py      │ ───▶ │ html2md_core.js       │
+  │ html ─ acquire.py ─ web_clean/* ─ emit.py           │ ───▶ │ html2md_core.js       │
   │   ▲ _errors.py  ▲ _venv_bootstrap.py                 │ ◀─── │   turndown + gfm      │
   │   soft-optional: httpx, trafilatura, playwright      │ stdin│   (domino DOM)        │
   └─────────────────────────────────────────────────────┘ /out └───────────────────────┘
@@ -170,10 +178,10 @@ hands a typed IR to the next, enabling stage-isolated tests.
 
 ## 5. Interfaces
 
-### 5.1. `html2md.py` public CLI
+### 5.1. `html` launcher public CLI
 
 ```
-html2md INPUT [OUTPUT_DIR]
+html INPUT [OUTPUT_DIR]
   INPUT                  URL | path to .html/.htm/.mhtml/.mht/.webarchive
   --engine lite|chrome|auto      (default: auto = lite then chrome fallback)
   --reader-mode / --no-reader    (dual-output default ON; --no-reader = single .md)
@@ -195,7 +203,7 @@ stays 0–2), per the pdf/pptx convention.
 ### 5.2. Node bridge contract (FC-5 ↔ FC-3)
 
 ```
-# html2md.py spawns (NO shell; argv list; bounded):
+# the html launcher spawns (NO shell; argv list; bounded):
 node html2md_core.js   < clean.html   > body.md
 # stdin  : cleaned HTML (one variant per call: whole, then reader)
 # stdout : GFM Markdown body (frontmatter is added by emit.py, NOT the Node core)
@@ -300,13 +308,13 @@ master". Authoritative rule: `CLAUDE.md` §2 «Future skill html2md».
 | `web_clean/dom_utils.py` | **pdf** | NEW gated unit | byte-identical copy |
 | `web_clean/normalize_css.py` | **pdf** | NEW gated unit | byte-identical copy — inert for MD output, but a **hard import dependency** of `preprocess.py` (`from .normalize_css import NORMALIZE_CSS`), so it MUST be carried, not "optional ballast" |
 | `render.py`, `chrome_engine.py`, `html2pdf_lib/__init__.py` | pdf | **EXCLUDED** | **NEVER replicate** — only weasyprint/playwright carriers (weasyprint imported at module top in `render.py` alone) |
-| `web_clean/__init__.py` | html2md | NOT gated | html2md-authored thin re-export of clean symbols only |
-| `_errors.py` | **docx** | 4→**5**-skill | add `html2md` to existing replication loop |
-| `_venv_bootstrap.py` | **docx** | 4→**5**-skill | add `html2md` to existing replication loop |
-| `preview.py`, `_soffice.py`, `office/`, `office_passwd.py` | docx | N/A | **not used** (html2md emits Markdown, not renderable office docs) |
+| `web_clean/__init__.py` | html | NOT gated | html-authored thin re-export of clean symbols only |
+| `_errors.py` | **docx** | 4→**5**-skill | add `html` to existing replication loop |
+| `_venv_bootstrap.py` | **docx** | 4→**5**-skill | add `html` to existing replication loop |
+| `preview.py`, `_soffice.py`, `office/`, `office_passwd.py` | docx | N/A | **not used** (html emits Markdown, not renderable office docs) |
 
 **Why pdf-master (the exception):** the cleaning code physically originates in
-`pdf/html2pdf_lib/`. Replicating from there keeps html2md in sync with future
+`pdf/html2pdf_lib/`. Replicating from there keeps html in sync with future
 pdf hardening. Re-pointing it to docx would invert reality and break sync.
 Flagged loudly in CLAUDE.md anti-patterns so a reviewer never "corrects" it.
 
@@ -317,7 +325,7 @@ gate can verify a subset stayed in sync) → silent fork on the next pdf change.
 A few KB of unused code is the correct price for fork-freedom.
 
 **Guards (gate at integration bead):**
-- **G-1 `diff -q`:** silent between `docx↔html2md` core and `pdf↔html2md`
+- **G-1 `diff -q`:** silent between `docx↔html` core and `pdf↔html`
   `web_clean/*.py` (the 5 gated files), after `__pycache__` clean.
 - **G-2 import smoke-test:** `weasyprint` and `playwright` NOT in
   `sys.modules` after importing the **real leaf entrypoints** `acquire.py`
@@ -327,7 +335,7 @@ A few KB of unused code is the correct price for fork-freedom.
 - **G-3 docx no-drift:** docx `test_e2e.sh` + `test_battery.py` round-trip
   byte-identical before/after the core extraction (AC-R3).
 - **G-4 (R8, post-MVP):** CI `diff -q`/`diff -qr` step in
-  `.github/workflows/office-skills.yml` covering both masters + `html2md` in
+  `.github/workflows/office-skills.yml` covering both masters + `html` in
   the skill matrix — the only durable defence against silent divergence
   (replication is human-enforced today).
 
@@ -370,7 +378,7 @@ G-1…G-4) live at the integration bead.
 
 | Bead | Scope (RTM) | Stub-First role |
 |---|---|---|
-| **022-01** | Skeleton: `skills/html2md/` scaffold (`init_skill.py`), `scripts/` package, `_venv_bootstrap` prelude, **replicate** `web_clean/*` (pdf) + `html2md_core.js` (docx) + thin `web_clean/__init__.py`, `_errors.py`/`_venv_bootstrap.py` 4→5, import smoke-test (G-2), **RED** E2E/unit scaffolding (file/archive/url happy-paths, dual-output, `--no-reader`, `--no-download-images`, stdout, exit-3/6/10, `--json-errors`) | STUB + tests (Red) + replication |
+| **022-01** | Skeleton: `skills/html/` scaffold (`init_skill.py`), `scripts/` package, `_venv_bootstrap` prelude, **replicate** `web_clean/*` (pdf) + `html2md_core.js` (docx) + thin `web_clean/__init__.py`, `_errors.py`/`_venv_bootstrap.py` 4→5, import smoke-test (G-2), **RED** E2E/unit scaffolding (file/archive/url happy-paths, dual-output, `--no-reader`, `--no-download-images`, stdout, exit-3/6/10, `--json-errors`) | STUB + tests (Red) + replication |
 | **022-02** | FC-1 `acquire.py` **offline** paths first — file read + archive dispatch (`web_clean/archives.py`) + format/magic-byte detection → `AcquireResult` | LOGIC (Green) — R1(c–e), I-3 |
 | **022-03** | FC-3 `html2md_core.js` extraction from `docx2md.js` + Node bridge in FC-5 + **G-3 docx no-drift regression** | LOGIC (Green) — R3, AC-R3 |
 | **022-04** | FC-2 `web_clean` wiring — `preprocess_html` (whole) + `reader_mode_html` (reader) → `CleanResult`; reader needle test (AC-R2) | LOGIC (Green) — R2 |
@@ -394,7 +402,7 @@ lite path always available; Chrome fallback engine-gated like pdf-11).
   `web_clean/*` master=pdf. First documented exception to "docx is always
   master"; codified in CLAUDE.md §2 + anti-patterns. (Adversarial-verified.)
 - **D-3 (exclude the weasyprint carriers).** `render.py`/`chrome_engine.py`/
-  package `__init__.py` are NEVER replicated; html2md ships an owned thin
+  package `__init__.py` are NEVER replicated; html ships an owned thin
   `web_clean/__init__.py`. Verified: weasyprint is a module-top import in
   `render.py` alone; playwright absent from the 5 clean modules. Guard: G-2
   smoke-test.
@@ -406,7 +414,7 @@ lite path always available; Chrome fallback engine-gated like pdf-11).
 - **D-6 (dual-output default).** Emit both `<slug>.md` + `<slug>.reader.md`;
   `--no-reader` collapses. Per `feedback_pdf_dual_render`. (TASK Q5.)
 - **D-7 (`acquire.py` = owned fork, not gated replica).** Adapts
-  `chrome_engine.py`'s fetch hardening as html2md-owned code (fetch semantics
+  `chrome_engine.py`'s fetch hardening as html-owned code (fetch semantics
   differ from pdf's render-only `goto`). "Gated replication ≠ owned fork".
   (TASK Q7.)
 - **D-8 (image download flag + `_attachments`).** `--download-images` default
@@ -446,18 +454,19 @@ Living-document delta over §1–13 (which describe the planned design). Shipped
 `/vdd-develop-all` + two `/vdd-multi` review rounds + real-corpus dogfooding.
 
 - **FC-3 path is a wrapper, not the bare core.** `core_bridge.py` spawns the
-  html2md-owned **`html2md_convert.js`** (NOT gated), which `require()`s the
+  html-owned **`html_convert.js`** (NOT gated), which `require()`s the
   docx-mastered `html2md_core.buildTurndown()` (kept byte-identical) and adds web-page
   turndown rules the docx core doesn't need: **ARIA-role tables → GFM** (scoped to the
   own table; sibling-rowgroup headers), strip `<button>`/`role=button`(leaf)/
   `aria-label^="Copy"`, **collapse multi-line links to one line + drop icon/zero-width
   anchors**. docx2md.js still calls `buildTurndown()` directly (no wrapper) → unaffected.
-- **FC-4 gains a post-turndown tidy.** New html2md-owned **`html2md/md_clean.py`**:
+- **FC-4 gains a post-turndown tidy.** New html-owned **`html2md/md_clean.py`** (the
+  internal package keeps its `html2md` name to avoid shadowing stdlib `html`):
   merge empty ATX headings with their detached title, drop high-confidence standalone
   chrome lines, collapse blank runs. Applied in `cli.convert` to both variants.
 - **CLI default output (§5.1 amended):** omitting `OUTPUT_DIR` (and `--stdout`) now
-  writes to `./tmp/html2md_out/` (created **lazily** by `emit`); output names are
-  collision-safe + idempotent via a hidden `html2md-source-id` marker.
+  writes to `./tmp/html_out/` (created **lazily** by `emit`); output names are
+  collision-safe + idempotent via a hidden `html-source-id` marker.
 - **Security hardening (§7 as-built):** SSRF per-redirect-hop public-IP gate +
   streaming `--max-bytes` cap; `<img>` reads confined to `base_dir` (CWE-22);
   **PDF/binary fetch guard** (`%PDF`/NUL → clean `FetchFailed`, no turndown stack
@@ -474,7 +483,7 @@ Living-document delta over §1–13 (which describe the planned design). Shipped
 Living-document delta for **TASK 023** (`docs/TASK.md`). §1–14 describe the TASK 022
 base; this section specifies the enhancement and **supersedes** the named earlier
 clauses where it conflicts (§2.1 FC-1, §4.1 `engine` enum, §5.1 CLI, §7 security).
-Scope guard: **all changes are html2md-owned** (`acquire.py`, `cli.py`, html2md tests,
+Scope guard: **all changes are html-owned** (`acquire.py`, `cli.py`, the `html2md/` package tests,
 `SKILL.md`, `references/`); **no `diff -q`-gated master is touched**, so §9 G-1/G-2/G-3
 hold by construction.
 
@@ -541,23 +550,23 @@ the **reader request URL** + **headers**, and knows how to classify its own resp
 | Provider | Reader base | Selected by | Auth env |
 |---|---|---|---|
 | `jina` (built-in default) | `https://r.jina.ai/<url>` | default; `--engine jina` | `JINA_API_KEY` → `Authorization: Bearer` |
-| generic (configured) | `${HTML2MD_READER_URL}<url>` | `HTML2MD_READER_URL` set | optional `HTML2MD_READER_TOKEN` |
-| ordered list | each `<base><url>` | `HTML2MD_READER_PROVIDERS` (comma/space list) | per-entry |
+| generic (configured) | `${HTML_READER_URL}<url>` | `HTML_READER_URL` set | optional `HTML_READER_TOKEN` |
+| ordered list | each `<base><url>` | `HTML_READER_PROVIDERS` (comma/space list) | per-entry |
 
-- **Ordering:** if `HTML2MD_READER_PROVIDERS` is set it is the order; else `HTML2MD_READER_URL`
+- **Ordering:** if `HTML_READER_PROVIDERS` is set it is the order; else `HTML_READER_URL`
   (if set) then `jina`. Providers are tried in order, falling through on provider-down.
-- **Self-hosted Jina** (open-source `jina-ai/reader`) is just `HTML2MD_READER_URL` pointing
+- **Self-hosted Jina** (open-source `jina-ai/reader`) is just `HTML_READER_URL` pointing
   at the local instance — the key vendor-agnostic story (resilience independent of jina.ai
   uptime).
 - **`--engine remote` requires configuration (privacy guard).** `--engine remote` selects
-  the *configured generic* provider(s); with **no** `HTML2MD_READER_URL`/
-  `HTML2MD_READER_PROVIDERS` set it is a **usage error (exit 2)** ("use `--engine jina` for
+  the *configured generic* provider(s); with **no** `HTML_READER_URL`/
+  `HTML_READER_PROVIDERS` set it is a **usage error (exit 2)** ("use `--engine jina` for
   the built-in") — it MUST NOT silently fall back to `jina.ai` (that would betray a user who
   picked `remote` precisely to avoid jina). `--engine jina` = the built-in; `auto` = jina is
   the last-resort built-in. Decision frozen at bead 023-01 (CLI-surface freeze).
 - **Auth is per-provider, not interchangeable:** built-in `jina` → `JINA_API_KEY`;
-  generic/configured → `HTML2MD_READER_TOKEN`. A self-hosted "jina-shaped" reader configured
-  via `HTML2MD_READER_URL` uses `HTML2MD_READER_TOKEN`, NOT `JINA_API_KEY`.
+  generic/configured → `HTML_READER_TOKEN`. A self-hosted "jina-shaped" reader configured
+  via `HTML_READER_URL` uses `HTML_READER_TOKEN`, NOT `JINA_API_KEY`.
 - **Request shape:** `GET <base><target>` with headers `X-Return-Format: html|markdown`
   (§15.5 R4), `X-Target-Selector: <sel>` (R4), `Authorization` (if keyed). The base+target
   join is literal-concatenation (Jina's `r.jina.ai/https://…` convention), not `urljoin`.
@@ -570,9 +579,9 @@ A sibling of the reader abstraction for the **query → top-N pages → Markdown
 | Provider | Shape | Reader URL | Result handling |
 |---|---|---|---|
 | `s.jina.ai` (built-in default) | **combined** | `https://s.jina.ai/<query>` | server-side search+fetch returns **merged Markdown** of top results → split/wrap with frontmatter |
-| generic (configured) | **links** | `${HTML2MD_SEARCH_URL}<query>` | returns a list of **result URLs/JSON** → each URL fetched via the **R1 FETCH ladder** (so every result inherits Jina/local fallback) |
+| generic (configured) | **links** | `${HTML_SEARCH_URL}<query>` | returns a list of **result URLs/JSON** → each URL fetched via the **R1 FETCH ladder** (so every result inherits Jina/local fallback) |
 
-- **Selection/order:** `HTML2MD_SEARCH_PROVIDERS` (ordered list) else `HTML2MD_SEARCH_URL`
+- **Selection/order:** `HTML_SEARCH_PROVIDERS` (ordered list) else `HTML_SEARCH_URL`
   (if set) then `s.jina.ai`. Providers tried in order, falling through on provider-down
   (§15.4) — a search provider has **no local equivalent**, so once all are exhausted the
   ladder raises one typed `FetchFailed` (honest: there is no offline web search).
@@ -619,8 +628,8 @@ total-ladder failure, plus `kind="all_engines_failed"`.
 --search "QUERY"                        (R9 search entrypoint; mutually exclusive with a URL/file INPUT)
 --max-results N                         (top-N results to fetch+convert for --search; default 5)
 ```
-**Environment (new, optional):** `HTML2MD_READER_URL`, `HTML2MD_READER_PROVIDERS`,
-`HTML2MD_READER_TOKEN`, `HTML2MD_SEARCH_URL`, `HTML2MD_SEARCH_PROVIDERS`, plus the
+**Environment (new, optional):** `HTML_READER_URL`, `HTML_READER_PROVIDERS`,
+`HTML_READER_TOKEN`, `HTML_SEARCH_URL`, `HTML_SEARCH_PROVIDERS`, plus the
 existing `JINA_API_KEY`.
 
 **Frontmatter:** `engine:` reflects the real tier; **`source:` stays the canonical
@@ -673,7 +682,7 @@ trust-markdown mode (there is no second extraction to derive it from).
 
 ### 15.7. Fork-free integrity (R8 — confirmed)
 
-`acquire.py` and `cli.py` are **html2md-owned, NOT** in the G-1/G-2 gate (the gate covers
+`acquire.py` and `cli.py` are **html-owned, NOT** in the G-1/G-2 gate (the gate covers
 only `web_clean/*.py`, `html2md_core.js`, `_errors.py`, `_venv_bootstrap.py` — see
 `scripts/tests/test_e2e.sh`). No master byte-changes ⇒ G-1/G-2 stay silent and docx G-3
 stays byte-identical. No new dependency ⇒ isolation preserved.
@@ -714,8 +723,8 @@ auto-commit**.
 - **OQ-23-1 (default privacy posture):** auto-escalate to remote by default for public
   targets (chosen) vs require explicit `--allow-remote`. Default = auto-escalate-on,
   `--no-remote` opt-out — to be confirmed at the architecture-review gate.
-- **OQ-23-2 (provider-config surface):** single `HTML2MD_READER_URL` vs ordered
-  `HTML2MD_READER_PROVIDERS` — proposed: support both.
+- **OQ-23-2 (provider-config surface):** single `HTML_READER_URL` vs ordered
+  `HTML_READER_PROVIDERS` — proposed: support both.
 - **OQ-23-3 (RESOLVED):** web search is **IN SCOPE** (user 2026-06-23) — see §15.3a + R9.
   `s.jina.ai` is the built-in default; the *links*-shape generic provider routes each
   result through the FETCH ladder so search inherits the full fallback discipline.
@@ -751,7 +760,7 @@ Shipped (7 beads + `/vdd-multi`), additive to §15.1–10:
 
 Living-document delta for **TASK 024** (`docs/TASK.md`). Adds **authenticated fetch** to the
 Chrome tier, the **SSRF-hardening that must precede it**, a **server/Hermes deployment model**,
-and a **Jina-key strategy**. All changes are html2md-**owned** (`acquire.py`, `cli.py`, new
+and a **Jina-key strategy**. All changes are html-**owned** (`acquire.py`, `cli.py`, new
 `_cookies.py`/`_chrome_auth.py`, docs, tests) — no `diff -q`-gated master touched (§9 holds).
 Chrome stays **soft-optional** (no new base dep).
 
@@ -783,7 +792,7 @@ the **context level** (so popups/workers are covered, no first-request TOCTOU):
 
 | Flag / env | Playwright call | Carries | Server-fit |
 |---|---|---|---|
-| `--chrome-storage-state PATH` / `HTML2MD_CHROME_STORAGE_STATE` **(primary)** | `new_context(storage_state=PATH)` | cookies + localStorage + sessionStorage | ✅ portable, **read-only at runtime → concurrency-safe** |
+| `--chrome-storage-state PATH` / `HTML_CHROME_STORAGE_STATE` **(primary)** | `new_context(storage_state=PATH)` | cookies + localStorage + sessionStorage | ✅ portable, **read-only at runtime → concurrency-safe** |
 | `--chrome-cookies-file PATH` / `…_COOKIES_FILE` | `new_context()` + `add_cookies([…])` (Netscape→dicts via hardened loader) | cookies only | ✅ read-only |
 | `--chrome-user-data-dir DIR` / `…_USER_DATA_DIR` | `launch_persistent_context(user_data_dir=DIR, headless=True)` | full profile (self-refreshes, survives 2FA) | ⚠️ **mutable, single-concurrency — local only** |
 
@@ -799,7 +808,7 @@ clean typed error (`BadInput`), not a traceback; **Playwright absent** + a `--ch
 
 ### 16.3. Session minting (R3) — the one interactive step
 
-`html2md.py login URL [--save-state out.json]`: **headful** Chromium → user logs in by hand
+`html login URL [--save-state out.json]`: **headful** Chromium → user logs in by hand
 (2FA ok) → `context.storage_state(path=out.json)` → `chmod 0600`. Only headful path; runtime is
 always headless. Alternatives: `playwright codegen --save-storage`, browser `cookies.txt` export.
 
@@ -814,8 +823,8 @@ replies/comments. Best-effort (deep threads may truncate — logged).
 The **`storage_state.json` is the unit of auth deployment**:
 ```
 workstation (browser)          secret transport           Hermes server (headless)
-  html2md login URL ─mint─▶  x.json (0600) ─deploy─▶  HTML2MD_CHROME_STORAGE_STATE=/secrets/x.json
-                                                        html2md … --engine chrome   (N concurrent)
+  html login URL ─mint─▶  x.json (0600) ─deploy─▶  HTML_CHROME_STORAGE_STATE=/secrets/x.json
+                                                     html … --engine chrome   (N concurrent)
 ```
 - **Concurrency-safe:** state file is **read-only at runtime** → N parallel runs share it (no
   lock/corruption). Persistent-profile is mutable → single-concurrency, not server-recommended.
@@ -827,7 +836,7 @@ workstation (browser)          secret transport           Hermes server (headles
   false-negative would emit a wall).
 - **Rotation:** re-mint on a workstation → redeploy the secret. No auto-refresh (R9).
 - **In-network synergy:** Hermes can run a **self-hosted Jina Reader** and point the TASK 023
-  remote tier at it (`HTML2MD_READER_URL=http://reader.internal/`) — no 3rd-party egress.
+  remote tier at it (`HTML_READER_URL=http://reader.internal/`) — no 3rd-party egress.
 
 ### 16.6. Jina-key strategy (R6)
 
@@ -840,7 +849,7 @@ reader. Live-session `x-set-cookie` forwarding **deferred** (R9 — unverified +
 
 - **CLI:** `--chrome-storage-state` / `--chrome-cookies-file` / `--chrome-user-data-dir`
   (mutually-exclusive), `--chrome-scroll` / `--chrome-scroll-passes N`; new `login` subcommand.
-- **Env:** `HTML2MD_CHROME_STORAGE_STATE` / `_COOKIES_FILE` / `_USER_DATA_DIR`.
+- **Env:** `HTML_CHROME_STORAGE_STATE` / `_COOKIES_FILE` / `_USER_DATA_DIR`.
 - **`_fetch_kind`** maps 401/407 → `auth_required`; add a **login-wall heuristic** for the chrome
   path (X serves a 200 login wall, not a 401) → `auth_required`.
 - **Provenance/redaction:** `engine: chrome`; auth recorded only as a boolean in the trace —
@@ -853,16 +862,16 @@ Hardened loader: reject symlink, **reject BOTH group- and world-accessible modes
 **intentional divergence** for the multi-tenant server threat model, flagged so a reviewer
 doesn't "fix" it back), sanitized errors that never echo file contents. **Lift only the
 file-hardening half** of `transcript-fetcher/_cookies.py` (`load_cookie_jar`); the
-Netscape→Playwright-cookie-dict conversion for `add_cookies` is **new html2md code** (the
+Netscape→Playwright-cookie-dict conversion for `add_cookies` is **new html-skill code** (the
 urllib `_RestrictedRedirectHandler` is irrelevant to the Playwright transport). Copy is
-html2md-owned, NOT gated — add a tracking note vs the source, don't silently fork. Secrets via
+html-owned, NOT gated — add a tracking note vs the source, don't silently fork. Secrets via
 file/env only (never argv). **Cookie host-scoping** = the browser's native cookie-domain
 matching (storage_state/cookies paths) **plus** the §16.1 final-origin gate — NOT a urllib
 handler. Replay-only (no password/2FA automation). Full redaction everywhere.
 
 ### 16.9. Fork-free (R8)
 
-`acquire.py`/`cli.py`/`_cookies.py`/`_chrome_auth.py` are html2md-owned, **absent** from the
+`acquire.py`/`cli.py`/`_cookies.py`/`_chrome_auth.py` are html-owned, **absent** from the
 G-1/G-2 gate. No master byte-change ⇒ gate silent, docx G-3 byte-identical. Chrome stays the
 soft-optional extra ⇒ no base-dep change.
 

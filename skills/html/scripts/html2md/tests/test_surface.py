@@ -1,6 +1,6 @@
 """Bead 022-01 surface + replication unit cluster (stub phase).
 
-Run from ``skills/html2md/scripts``:
+Run from ``skills/html/scripts``:
     python -m unittest discover -s html2md/tests
 or via the repo harness. Each test is stdlib-only (no heavy deps needed in 022-01).
 """
@@ -156,8 +156,8 @@ class TestTask023Surface(unittest.TestCase):
     """TASK 023 frozen CLI/IR surface (bead 023-01)."""
 
     def _clean_env(self):
-        for k in ("HTML2MD_READER_URL", "HTML2MD_READER_PROVIDERS",
-                  "HTML2MD_SEARCH_URL", "HTML2MD_SEARCH_PROVIDERS"):
+        for k in ("HTML_READER_URL", "HTML_READER_PROVIDERS",
+                  "HTML_SEARCH_URL", "HTML_SEARCH_PROVIDERS"):
             os.environ.pop(k, None)
 
     def test_parser_accepts_new_flags(self):
@@ -226,7 +226,7 @@ class TestTask023Surface(unittest.TestCase):
         a = cli.build_parser().parse_args(["--search", "q"])
         out, stdout_mode = cli._resolve_search_paths(a)
         self.assertFalse(stdout_mode)
-        self.assertTrue(str(out).endswith(os.path.join("tmp", "html2md_out")))
+        self.assertTrue(str(out).endswith(os.path.join("tmp", "html_out")))
         b = cli.build_parser().parse_args(["--search", "q", "mydir"])
         out_b, _ = cli._resolve_search_paths(b)
         self.assertTrue(str(out_b).endswith("mydir"))

@@ -1,4 +1,4 @@
-"""CLI surface + orchestration for the html2md Web/HTML → Markdown converter (FC-5).
+"""CLI surface + orchestration for the html Web/HTML → Markdown converter (FC-5).
 
 Owns the argparse contract (ARCH §5.1), INPUT (URL-or-path) + OUTPUT_DIR resolution
 (self-overwrite guard + stdout mode), and the ``_errors`` envelope routing on every
@@ -25,6 +25,7 @@ import _errors  # noqa: E402
 from .exceptions import (  # noqa: E402
     BadInput, EmptyExtraction, InternalError, SelfOverwriteRefused, Usage, _AppError,
 )
+from ._env import env as _env  # noqa: E402
 
 _EXIT_OK = 0
 _EXIT_USAGE = 2
@@ -46,7 +47,7 @@ _SUBSTANTIAL_SOURCE_CHARS = 2048  # only flag when the SOURCE HTML was non-trivi
 def build_parser() -> argparse.ArgumentParser:
     """Construct the full CLI surface. Defaults are the 022-01 frozen baseline."""
     p = argparse.ArgumentParser(
-        prog="html2md.py",
+        prog="html",
         description="TASK 022: Convert a web URL or saved HTML/MHTML/webarchive into Markdown.",
         epilog=(
             "INPUT is a URL or a local .html/.htm/.mhtml/.mht/.webarchive. By default "
@@ -222,7 +223,7 @@ def _resolve_paths(args: argparse.Namespace) -> tuple[str, str, Path | None, boo
     # docx/pdf convention of writing files to an explicit working-dir path (never
     # silently to stdout). An explicit OUTPUT_DIR overrides; --stdout opts into stdout.
     output_dir = (Path(args.OUTPUT_DIR) if args.OUTPUT_DIR
-                  else Path.cwd() / "tmp" / "html2md_out").resolve()
+                  else Path.cwd() / "tmp" / "html_out").resolve()
     if mode == "local" and output_dir == Path(input_ref):
         raise SelfOverwriteRefused(
             f"OUTPUT_DIR resolves to INPUT: {Path(input_ref).name}",
@@ -260,9 +261,9 @@ def _validate_usage(args: argparse.Namespace) -> None:
             if pos is not None and urlparse(pos).scheme in ("http", "https"):
                 raise Usage("--search takes a QUERY, not a URL; pass an OUTPUT_DIR positional.")
     if args.engine == "remote" and not (
-            os.environ.get("HTML2MD_READER_URL") or os.environ.get("HTML2MD_READER_PROVIDERS")):
+            _env("READER_URL") or _env("READER_PROVIDERS")):
         raise Usage(
-            "--engine remote requires HTML2MD_READER_URL or HTML2MD_READER_PROVIDERS "
+            "--engine remote requires HTML_READER_URL or HTML_READER_PROVIDERS "
             "(use --engine jina for the built-in reader).")
     if args.max_results is not None and args.max_results < 1:
         raise Usage("--max-results must be >= 1.")
@@ -275,11 +276,11 @@ def _validate_usage(args: argparse.Namespace) -> None:
     def _expand(p):
         return os.path.expanduser(p) if p else p
     args.chrome_storage_state = _expand(getattr(args, "chrome_storage_state", None)
-                                        or os.environ.get("HTML2MD_CHROME_STORAGE_STATE"))
+                                        or _env("CHROME_STORAGE_STATE"))
     args.chrome_cookies_file = _expand(getattr(args, "chrome_cookies_file", None)
-                                       or os.environ.get("HTML2MD_CHROME_COOKIES_FILE"))
+                                       or _env("CHROME_COOKIES_FILE"))
     args.chrome_user_data_dir = _expand(getattr(args, "chrome_user_data_dir", None)
-                                        or os.environ.get("HTML2MD_CHROME_USER_DATA_DIR"))
+                                        or _env("CHROME_USER_DATA_DIR"))
     _auth = [s for s in (args.chrome_storage_state, args.chrome_cookies_file,
                          args.chrome_user_data_dir) if s]
     if len(_auth) > 1:
@@ -299,9 +300,9 @@ def _validate_usage(args: argparse.Namespace) -> None:
     # Per-domain auth map (TASK 026, multi-site): env fallback; cannot mix with a fixed source or
     # --search (a session must not fan over search results). Unlike a fixed source it forces chrome
     # ONLY when the target domain is mapped — non-mapped targets keep the normal ladder (so a
-    # set-and-forget HTML2MD_CHROME_AUTH_MAP does not turn every public page into a chrome render).
+    # set-and-forget HTML_CHROME_AUTH_MAP does not turn every public page into a chrome render).
     args.chrome_auth_map = _expand(getattr(args, "chrome_auth_map", None)
-                                   or os.environ.get("HTML2MD_CHROME_AUTH_MAP"))
+                                   or _env("CHROME_AUTH_MAP"))
     if args.chrome_auth_map:
         if _auth:
             raise Usage("--chrome-auth-map cannot be combined with --chrome-storage-state / "
@@ -315,32 +316,32 @@ def _validate_usage(args: argparse.Namespace) -> None:
                 args.engine = "chrome"  # mapped domain ⇒ authed chrome; others stay on the ladder
 
     # Chrome scroll via env — parity with the --chrome-* env fallbacks. An env-only caller (e.g.
-    # wiki-import, which forwards os.environ but hardcodes its html2md flags) can thus pull lazy
+    # wiki-import, which forwards os.environ but hardcodes its html flags) can thus pull lazy
     # content: X articles/threads materialize ONLY after scrolling (no scroll → EmptyExtraction).
     # Harmless when the chrome engine isn't used (only _fetch_chrome_html reads it).
-    if not args.chrome_scroll and os.environ.get(
-            "HTML2MD_CHROME_SCROLL", "").strip().lower() in ("1", "true", "yes", "on"):
+    if not args.chrome_scroll and _env(
+            "CHROME_SCROLL", default="").strip().lower() in ("1", "true", "yes", "on"):
         args.chrome_scroll = True
-    _passes = os.environ.get("HTML2MD_CHROME_SCROLL_PASSES")
+    _passes = _env("CHROME_SCROLL_PASSES")
     if _passes and getattr(args, "chrome_scroll_passes", 8) == 8:  # env fills only the default
         try:
             args.chrome_scroll_passes = int(_passes)
         except ValueError:
-            raise Usage("HTML2MD_CHROME_SCROLL_PASSES must be an integer.")
+            raise Usage("HTML_CHROME_SCROLL_PASSES must be an integer.")
 
 
 def _resolve_search_paths(args: argparse.Namespace) -> tuple[Path | None, bool]:
     """Resolve OUTPUT_DIR for ``--search`` (no INPUT — the positional is the OUTPUT_DIR).
 
     ``--stdout`` → ``(None, True)``; an explicit dir → that; otherwise the default
-    ``./tmp/html2md_out/``. Raises :class:`Usage` on >1 positional.
+    ``./tmp/html_out/``. Raises :class:`Usage` on >1 positional.
     """
     positionals = [p for p in (args.INPUT, args.OUTPUT_DIR) if p is not None]
     if len(positionals) > 1:
         raise Usage("--search accepts at most one OUTPUT_DIR positional.")
     if bool(args.stdout):
         return None, True
-    out = Path(positionals[0]) if positionals else (Path.cwd() / "tmp" / "html2md_out")
+    out = Path(positionals[0]) if positionals else (Path.cwd() / "tmp" / "html_out")
     return out.resolve(), False
 
 
@@ -399,7 +400,7 @@ def _convert_search(args: argparse.Namespace) -> int:
     output_dir, stdout_mode = _resolve_search_paths(args)
     results = acquire_mod.run_search(args.search, args)
     if not results:  # healthy search, zero results → not content-loss (exit 0 + note)
-        sys.stderr.write(f"html2md: no results for query: {args.search!r}\n")
+        sys.stderr.write(f"html: no results for query: {args.search!r}\n")
         return _EXIT_OK
     for i, acq in enumerate(results):
         ref = (acq.source_meta.url if acq.source_meta else None) or args.search
@@ -426,17 +427,17 @@ def convert(args: argparse.Namespace) -> int:
 
 
 def _login_main(argv: list[str]) -> int:
-    """``html2md.py login URL [--save-state PATH]`` — mint a Playwright ``storage_state`` via a
+    """``html login URL [--save-state PATH]`` — mint a Playwright ``storage_state`` via a
     HEADFUL browser (TASK 024 R3): the one interactive step; runtime is always headless. The
     surface is frozen here (024-01); the actual render lands in 024-04."""
     p = argparse.ArgumentParser(
-        prog="html2md.py login",
+        prog="html login",
         description="Open URL in a headful browser, log in by hand (2FA ok), then save the "
                     "session as a storage_state JSON (chmod 0600) for --chrome-storage-state.")
     p.add_argument("URL", help="page to open for login (e.g. https://x.com)")
     p.add_argument("--save-state", dest="save_state", metavar="PATH",
-                   default="html2md-state.json",
-                   help="where to write the storage_state JSON (default: ./html2md-state.json)")
+                   default="html-state.json",
+                   help="where to write the storage_state JSON (default: ./html-state.json)")
     _errors.add_json_errors_argument(p)
     args = p.parse_args(argv)
     json_mode = bool(args.json_errors)
@@ -459,23 +460,23 @@ _SKILL_ENV_PATH = Path(__file__).resolve().parents[2] / ".env"  # <skill>/.env (
 def _load_skill_env(path: Path = _SKILL_ENV_PATH) -> None:
     """Skill-LOCAL config bootstrap (encapsulation): load ``<skill>/.env`` into the process
     environment so the skill's settings (auth map, scroll, reader/jina keys) travel WITH the skill.
-    ANY caller — invoking the CLI directly or via the ``~/.claude/skills/html2md`` symlink — then
+    ANY caller — invoking the CLI directly or via the ``~/.claude/skills/html`` symlink — then
     picks them up with zero awareness, WITHOUT polluting the machine-global environment. Called only
     from the shim entry point, so importing the package (tests) never triggers it.
 
     - **Process env wins:** an already-set variable is never overridden (a caller may still override).
-    - **Opt out:** ``HTML2MD_NO_DOTENV=1`` skips it (the test harness sets this for determinism).
+    - **Opt out:** ``HTML_NO_DOTENV=1`` skips it (the test harness sets this for determinism).
     - **Secrets-safe:** the file may hold tokens → skipped (with a stderr warning) if it is a symlink
       or group/world-accessible (require ``0600``). Never raises — config must not break a run (R10).
     """
-    if os.environ.get("HTML2MD_NO_DOTENV", "").strip().lower() in ("1", "true", "yes", "on"):
+    if _env("NO_DOTENV", default="").strip().lower() in ("1", "true", "yes", "on"):
         return
     try:
         if path.is_symlink() or not path.is_file():
             return
         if path.stat().st_mode & 0o077:
             sys.stderr.write(
-                f"html2md: ignoring {path.name} (group/world-accessible — chmod 600 to enable)\n")
+                f"html: ignoring {path.name} (group/world-accessible — chmod 600 to enable)\n")
             return
         for raw in path.read_text(encoding="utf-8").splitlines():
             line = raw.strip()
@@ -507,17 +508,155 @@ def _dotenv_value(val: str) -> str:
     return val.strip()
 
 
+def _fetch_main(argv: list[str]) -> int:
+    """``html fetch INPUT [OUTPUT_DIR]`` — OP1: download a URL/HTML/archive to an on-disk
+    ``<slug>.html`` + ``<slug>.meta.json`` sidecar (+ localized ``_attachments/``), directly
+    consumable by the pdf skill and by ``html md``. The HTML is sanitized (file:/javascript:
+    refs stripped) before write; an authenticated fetch's body is written ``0600``.
+
+    Reuses the shared flag surface; flags that only apply to conversion (``--reader-mode``)
+    are accepted-and-ignored here. ``--remote-format markdown`` is refused: ``fetch`` emits
+    HTML (the trust-markdown reader path is convert-only — use ``html md``)."""
+    parser = build_parser()
+    parser.prog = "html fetch"
+    args = parser.parse_args(argv)
+    json_mode = bool(args.json_errors)
+    try:
+        if args.search is not None:
+            raise Usage("`html fetch` does not take --search; use `html search`.")
+        _validate_usage(args)
+        if getattr(args, "remote_format", "html") == "markdown":
+            raise Usage("--remote-format markdown is a convert-stage option; use `html md`.")
+        input_ref, _mode, output_dir, stdout_mode = _resolve_paths(args)
+
+        from . import acquire as acquire_mod
+        from . import serialize as serialize_mod
+        acq = acquire_mod.acquire(input_ref, args)
+        if getattr(acq, "content_kind", "html") == "markdown":
+            raise Usage("the remote reader returned Markdown, not HTML; use `html md`.")
+
+        if stdout_mode:  # fetch --stdout: the sanitized (absolutized) HTML, no files
+            html = acq.html
+            if acq.mode == "url" and acq.base_url:
+                html = acquire_mod._absolutize_img_srcs(
+                    acquire_mod._absolutize_links(html, acq.base_url), acq.base_url)
+            sys.stdout.write(serialize_mod.sanitize_untrusted_html(html))
+            return _EXIT_OK
+
+        art = serialize_mod.write_artifact(acq, output_dir, args, input_ref=input_ref)
+        note = f"html fetch: wrote {art.html_path.name} + {art.meta_path.name}"
+        if art.attachments_dir is not None:
+            note += f" + {art.attachments_dir.name}/"
+        sys.stderr.write(note + "\n")
+        return _EXIT_OK
+    except _AppError as exc:
+        return _errors.report_error(
+            str(exc), code=exc.CODE, error_type=exc.error_type,
+            details=exc.details, json_mode=json_mode, stream=sys.stderr)
+    except Exception as exc:  # noqa: BLE001 — terminal catch-all, redacted
+        return _errors.report_error(
+            f"Internal error: {type(exc).__name__}",
+            code=InternalError.CODE, error_type="InternalError",
+            json_mode=json_mode, stream=sys.stderr)
+
+
+def _md_main(argv: list[str]) -> int:
+    """``html md INPUT [OUTPUT_DIR]`` — OP2: convert a fetched artifact / local HTML / URL →
+    Markdown. A local ``.html``/``.htm`` with a sibling ``<slug>.meta.json`` is hydrated from
+    the sidecar (full trafilatura-grade frontmatter); a URL fetches+converts in one process;
+    other local files / archives go through ``acquire``."""
+    parser = build_parser()
+    parser.prog = "html md"
+    args = parser.parse_args(argv)
+    json_mode = bool(args.json_errors)
+    try:
+        if args.search is not None:
+            raise Usage("`html md` does not take --search; use `html search`.")
+        _validate_usage(args)
+        input_ref, mode, output_dir, stdout_mode = _resolve_paths(args)
+        from . import acquire as acquire_mod
+        from . import serialize as serialize_mod
+        if mode == "local" and Path(input_ref).suffix.lower() in (".html", ".htm"):
+            acq = serialize_mod.read_artifact(Path(input_ref))   # sidecar-aware
+        else:
+            acq = acquire_mod.acquire(input_ref, args)
+        return _convert_one(acq, args, output_dir, stdout_mode=stdout_mode, input_ref=input_ref)
+    except _AppError as exc:
+        return _errors.report_error(
+            str(exc), code=exc.CODE, error_type=exc.error_type,
+            details=exc.details, json_mode=json_mode, stream=sys.stderr)
+    except Exception as exc:  # noqa: BLE001 — terminal catch-all, redacted
+        return _errors.report_error(
+            f"Internal error: {type(exc).__name__}",
+            code=InternalError.CODE, error_type="InternalError",
+            json_mode=json_mode, stream=sys.stderr)
+
+
+def combined_main(argv: list[str] | None = None) -> int:
+    """The combined ``html2md`` command: **fetch → md → delete the intermediate HTML**.
+
+    Built from the two primitives (OP1 ``write_artifact`` → OP2 convert-from-artifact) so the
+    split is the single source of truth: the caller is left with just ``<slug>.md`` (+
+    ``.reader.md``) + ``_attachments/`` — no leftover HTML. ``--stdout`` and the trust-markdown
+    reader path have nothing to persist, so they convert in one pass."""
+    if argv is None:
+        argv = sys.argv[1:]
+    parser = build_parser()
+    parser.prog = "html2md"
+    args = parser.parse_args(argv)
+    json_mode = bool(args.json_errors)
+    try:
+        if args.search is not None:
+            return _convert_search(args)  # search is inherently fetch+convert per result
+        _validate_usage(args)
+        input_ref, _mode, output_dir, stdout_mode = _resolve_paths(args)
+        from . import acquire as acquire_mod
+        from . import serialize as serialize_mod
+        acq = acquire_mod.acquire(input_ref, args)
+        if stdout_mode or getattr(acq, "content_kind", "html") == "markdown":
+            return _convert_one(acq, args, output_dir, stdout_mode=stdout_mode,
+                                input_ref=input_ref)
+        art = serialize_mod.write_artifact(acq, output_dir, args, input_ref=input_ref)
+        try:
+            rc = _convert_one(serialize_mod.read_artifact(art.html_path), args, output_dir,
+                              stdout_mode=False, input_ref=str(art.html_path))
+        finally:  # cleanup the intermediate HTML + sidecar (keep .md / .reader.md / _attachments)
+            for p in (art.html_path, art.meta_path):
+                try:
+                    p.unlink(missing_ok=True)
+                except OSError:
+                    pass
+        return rc
+    except _AppError as exc:
+        return _errors.report_error(
+            str(exc), code=exc.CODE, error_type=exc.error_type,
+            details=exc.details, json_mode=json_mode, stream=sys.stderr)
+    except Exception as exc:  # noqa: BLE001 — terminal catch-all, redacted
+        return _errors.report_error(
+            f"Internal error: {type(exc).__name__}",
+            code=InternalError.CODE, error_type="InternalError",
+            json_mode=json_mode, stream=sys.stderr)
+
+
 def main(argv: list[str] | None = None) -> int:
     """Top-level orchestrator. Routes every failure through ``_errors.report_error``.
 
     Exit map (§5.1): 0 ok · 1 BadInput/ConvertFailed/internal · 2 usage ·
     3 EngineNotInstalled · 6 SelfOverwriteRefused · 10 FetchFailed · 11 EmptyExtraction.
-    A leading ``login`` verb is intercepted BEFORE the flat parser (the positional INPUT is
-    ``nargs="?"``, so ``login URL`` would otherwise mis-parse as INPUT="login")."""
+    Leading verbs (``login`` / ``fetch``) are intercepted BEFORE the flat parser (the
+    positional INPUT is ``nargs="?"``, so ``fetch URL`` would otherwise mis-parse as
+    INPUT="fetch"). A bare ``INPUT [OUTPUT_DIR] …`` (no verb) is the end-to-end pipeline
+    (fetch+convert in one process); the combined ``html2md`` command builds on it."""
     if argv is None:
         argv = sys.argv[1:]
     if argv and argv[0] == "login":
         return _login_main(argv[1:])
+    if argv and argv[0] == "fetch":
+        return _fetch_main(argv[1:])
+    if argv and argv[0] == "md":
+        return _md_main(argv[1:])
+    if argv and argv[0] == "search":  # `html search QUERY [OUT]` → the --search flag branch
+        return main(["--search", *argv[1:]])
     parser = build_parser()
     args = parser.parse_args(argv)
     json_mode = bool(args.json_errors)

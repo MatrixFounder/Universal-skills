@@ -475,6 +475,22 @@ def _block_remote_routes(route, request):
         route.abort()
 
 
+def _block_local_and_remote_routes(route, request):
+    """Untrusted-input route handler — refuse ``file://`` AND remote; allow only
+    ``data:`` / ``about:``.
+
+    For HTML that originated from an arbitrary web fetch (e.g. the ``html`` skill's
+    ``fetch`` artifact), a ``file://`` ref would let the renderer read an arbitrary local
+    file and bake it into the PDF (CWE-22). The trusted handler above assumes a
+    user-saved local input; this one is selected by ``--untrusted``.
+    """
+    url = request.url
+    if url.startswith(("data:", "about:")):
+        route.continue_()
+    else:
+        route.abort()
+
+
 def _resolve_temp_html_path(base_url: str) -> Path:
     """Pick a writable location for the preprocessed HTML.
 
@@ -554,6 +570,7 @@ def render_chrome(
     print_background: bool = True,
     javascript: bool = False,
     strip_scripts: bool = True,
+    untrusted: bool = False,
 ) -> None:
     """Render `html_text` to `output_path` via headless Chromium.
 
@@ -655,7 +672,8 @@ def render_chrome(
                     viewport=_DEFAULT_VIEWPORT,
                     java_script_enabled=True,
                 )
-                context.route("**/*", _block_remote_routes)
+                context.route("**/*", _block_local_and_remote_routes if untrusted
+                              else _block_remote_routes)
                 # Inject the offline-API patch BEFORE any page script
                 # runs. With JS enabled, page scripts (Gmail's offline
                 # detector, Angular's bootstrap calls) will hit our

@@ -1,19 +1,19 @@
-# html2md Manual
+# html (formerly html2md) Manual
 
-Practical reference for the [`html2md`](../../skills/html2md/) skill —
+Practical reference for the [`html`](../../skills/html/) skill (formerly `html2md`) —
 **Web/HTML → Markdown**: a web-clipper for Obsidian notes and a universal
 HTML→Markdown step for agent workflows.
 
 This manual is for **users** of the skill. The authoritative contract is
-[`skills/html2md/SKILL.md`](../../skills/html2md/SKILL.md); the decision tree
+[`skills/html/SKILL.md`](../../skills/html/SKILL.md); the decision tree
 and honest-scope notes are in
-[`references/html-to-markdown.md`](../../skills/html2md/references/html-to-markdown.md);
+[`references/html-to-markdown.md`](../../skills/html/references/html-to-markdown.md);
 the maintainer / replication protocol (this skill is the repo's first
 **two-master** skill) is in [CONTRIBUTING.md §3](../CONTRIBUTING.md#3-office-skills-modification-protocol-strict).
 
-`html2md` is **Proprietary, All Rights Reserved** (it embeds byte-identical
+`html` is **Proprietary, All Rights Reserved** (it embeds byte-identical
 copies of proprietary docx/pdf code; it is a derived work and is **not**
-Apache-2.0). See [`skills/html2md/LICENSE`](../../skills/html2md/LICENSE).
+Apache-2.0). See [`skills/html/LICENSE`](../../skills/html/LICENSE).
 
 ---
 
@@ -37,7 +37,7 @@ Two consumers in mind:
 
 It reuses hardened code from two skills (fork-free): the **docx turndown core**
 (GFM tables, rowspan→flat grid) and the **pdf `web_clean` cleaner** (reader-mode
-extraction, SPA-chrome stripping, archive decoding). On top it adds html2md-owned
+extraction, SPA-chrome stripping, archive decoding). On top it adds html-owned
 conversion for modern doc sites (see [§6](#6-what-the-converter-fixes)).
 
 ---
@@ -45,7 +45,7 @@ conversion for modern doc sites (see [§6](#6-what-the-converter-fixes)).
 ## 2. One-time setup
 
 ```bash
-cd skills/html2md/scripts
+cd skills/html/scripts
 bash install.sh                 # creates .venv (httpx, trafilatura) + node_modules (turndown, turndown-plugin-gfm)
 bash install.sh --with-chrome   # ALSO installs Playwright Chromium (only needed for JS/SPA pages)
 ```
@@ -55,18 +55,18 @@ No global installs — Python deps live in `scripts/.venv`, Node deps in
 Chrome is opt-in and only required for pages that render their content with
 JavaScript.
 
-**Skill-local config (encapsulation).** Copy [`.env.example`](../../skills/html2md/.env.example)
-to `skills/html2md/.env` and the CLI **auto-loads it at startup** — the config (auth map, scroll,
+**Skill-local config (encapsulation).** Copy [`.env.example`](../../skills/html/.env.example)
+to `skills/html/.env` and the CLI **auto-loads it at startup** — the config (auth map, scroll,
 Jina key, reader providers) lives *with the skill*, so **any** caller (a project, an importer, a
-cron job — anything that runs `html2md.py`) gets it transparently, with no `export` and no machine-
+cron job — anything that runs the `html` launcher) gets it transparently, with no `export` and no machine-
 global env pollution. The process environment still wins (callers can override per-run); `chmod 600`
-the file (a group/world-readable `.env` is ignored with a warning); `HTML2MD_NO_DOTENV=1` disables
+the file (a group/world-readable `.env` is ignored with a warning); `HTML_NO_DOTENV=1` disables
 auto-load. See [§5b](#5b-authenticated-login-gated-chrome) for the chrome/auth keys.
 
 Smoke test:
 
 ```bash
-python3 scripts/html2md.py examples/sample.html /tmp/h2m && ls /tmp/h2m
+python3 scripts/html examples/sample.html /tmp/h2m && ls /tmp/h2m
 ```
 
 ---
@@ -74,13 +74,13 @@ python3 scripts/html2md.py examples/sample.html /tmp/h2m && ls /tmp/h2m
 ## 3. Command-line reference
 
 ```
-python3 scripts/html2md.py INPUT [OUTPUT_DIR] [flags]
+python3 scripts/html INPUT [OUTPUT_DIR] [flags]
 ```
 
 | Argument / flag | Default | Meaning |
 |---|---|---|
 | `INPUT` | — | `http(s)` URL, or local `.html`/`.htm`/`.mhtml`/`.mht`/`.webarchive` |
-| `OUTPUT_DIR` | `./tmp/html2md_out/` | where `<slug>.md`, `<slug>.reader.md`, `_attachments/` are written (created on demand) |
+| `OUTPUT_DIR` | `./tmp/html_out/` | where `<slug>.md`, `<slug>.reader.md`, `_attachments/` are written (created on demand) |
 | `--stdout` | off | print whole-page Markdown to stdout instead of writing files |
 | `--engine lite\|chrome\|auto\|jina\|remote` | `auto` | fetch engine for URLs — resilient ladder (see [§5](#5-engines--the-resilient-fallback-ladder)) |
 | `--no-remote` | off | disable the remote-reader tier entirely (no URL ever sent to an external reader) |
@@ -93,7 +93,7 @@ python3 scripts/html2md.py INPUT [OUTPUT_DIR] [flags]
 | `--chrome-user-data-dir DIR` | — | authed Chrome: persistent profile (local only) — the `--chrome-*` auth sources are mutually exclusive + force `--engine chrome` |
 | `--chrome-auth-map PATH` | — | authed Chrome for **multiple sites**: JSON map `host → {cookies_file\|storage_state}`; forces chrome only for a **mapped** target domain. See [§5b](#5b-authenticated-login-gated-chrome) |
 | `--chrome-scroll` / `--chrome-scroll-passes N` | off / `8` | scroll to pull lazy content (replies); bounded by passes + a 60 s cap |
-| `login URL [--save-state PATH]` | `./html2md-state.json` | **subcommand** — open a headful browser, log in by hand, save the session |
+| `login URL [--save-state PATH]` | `./html-state.json` | **subcommand** — open a headful browser, log in by hand, save the session |
 | `--reader-mode` / `--no-reader` | reader **on** | also emit `<slug>.reader.md` (article-extracted) / suppress it |
 | `--download-images` / `--no-download-images` | download **on** | fetch images into `_attachments/` / keep remote URLs as-is |
 | `--max-images N` | unbounded | cap the number of **remote** image fetches (SSRF amplification bound) |
@@ -107,7 +107,7 @@ python3 scripts/html2md.py INPUT [OUTPUT_DIR] [flags]
 **Slug**: `<slug>` is derived deterministically from the input filename / URL
 path; the human-readable title lives in frontmatter. Distinct inputs that
 slugify to the same stem get a `-2`, `-3` suffix (idempotent via a hidden
-`html2md-source-id` marker — re-running the *same* input overwrites in place,
+`html-source-id` marker — re-running the *same* input overwrites in place,
 it does not pile up duplicates).
 
 ### Exit codes
@@ -191,9 +191,9 @@ without Playwright still exits 3.
 
 **Vendor-agnostic remote tier.** `jina` (`r.jina.ai`) is the built-in default, but point
 the remote tier at a **self-hosted Jina** or any compatible reader with
-`HTML2MD_READER_URL=https://reader.internal/` (or an ordered `HTML2MD_READER_PROVIDERS`
+`HTML_READER_URL=https://reader.internal/` (or an ordered `HTML_READER_PROVIDERS`
 list) — then a jina.ai outage is irrelevant. Auth is per-provider: `JINA_API_KEY` for jina,
-`HTML2MD_READER_TOKEN` for a generic reader. `--remote-format markdown` trusts the reader's
+`HTML_READER_TOKEN` for a generic reader. `--remote-format markdown` trusts the reader's
 own clean Markdown (skips the local clean/turndown); `--target-selector` extracts just the
 article block.
 
@@ -207,7 +207,7 @@ disables the remote tier entirely (fully local); CR/LF in the target/query is re
 **Fetch robustness (lite HTTP path):** transient failures (transport, HTTP 5xx, 429) are
 **retried with exponential backoff** (`--retries`, default 2; 429 honours `Retry-After`);
 a **403** triggers one automatic escalation to a real-browser User-Agent (the default UA is
-the honest `html2md/…`). This recovers most anti-scraper 403s with no flags.
+the honest `html/…`). This recovers most anti-scraper 403s with no flags.
 
 > **Latency note:** tiers run sequentially and each has its own retry budget, so a target
 > that times out on every tier can take minutes (no aggregate deadline yet — see
@@ -216,8 +216,8 @@ the honest `html2md/…`). This recovers most anti-scraper 403s with no flags.
 
 ## 5a. Web search (`--search`)
 
-`html2md.py --search "QUERY" [OUTPUT_DIR] [--max-results N]` runs a vendor-agnostic web
-search (`s.jina.ai` default; `HTML2MD_SEARCH_URL`/`HTML2MD_SEARCH_PROVIDERS` to override),
+`html --search "QUERY" [OUTPUT_DIR] [--max-results N]` runs a vendor-agnostic web
+search (`s.jina.ai` default; `HTML_SEARCH_URL`/`HTML_SEARCH_PROVIDERS` to override),
 takes the top results, and fetches **each result URL through the same fallback ladder** (so
 every result inherits per-result Jina/local fallback), writing **one note per result**
 (frontmatter `query:` + `source:`), sharing one `_attachments/`. A result whose own fetch
@@ -231,11 +231,11 @@ combined with `--chrome-*` auth — a session must not fan out across search res
 ## 5b. Authenticated (login-gated) Chrome
 
 Read pages behind a login (X **Articles**/threads, paywalled/members, private docs) by replaying
-a **human-minted** session — html2md never automates login/passwords/2FA.
+a **human-minted** session — html never automates login/passwords/2FA.
 
 **Mint once** (interactive, where a browser exists):
 ```bash
-python3 scripts/html2md.py login https://x.com --save-state ~/.html2md/x.json
+python3 scripts/html login https://x.com --save-state ~/.html/x.json
 ```
 A headful browser opens — your **real system Chrome** when installed (less bot-detectable),
 else bundled Chromium — with the automation signal suppressed (`navigator.webdriver` masked) so a
@@ -250,23 +250,23 @@ a `0600` `storage_state.json` (cookies + localStorage) is written.
 > 2. **Export cookies from your everyday browser** (where you're already logged in via Google) with
 >    a "Get cookies.txt LOCALLY" / Cookie-Editor extension, `chmod 600` the file, and skip `login`:
 >    ```bash
->    python3 scripts/html2md.py "https://x.com/i/article/<id>" out/ --engine chrome \
->        --chrome-cookies-file ~/.html2md/x-cookies.txt --chrome-scroll
+>    python3 scripts/html "https://x.com/i/article/<id>" out/ --engine chrome \
+>        --chrome-cookies-file ~/.html/x-cookies.txt --chrome-scroll
 >    ```
 >    This is the **most robust** path for Google-SSO accounts — the login already happened in a
 >    trusted browser, so Google never sees automation.
 
 **Then convert headless** (one auth source, mutually exclusive; any of them forces `--engine chrome`):
 ```bash
-python3 scripts/html2md.py "https://x.com/i/article/<id>" out/ --engine chrome \
-    --chrome-storage-state ~/.html2md/x.json --chrome-scroll
+python3 scripts/html "https://x.com/i/article/<id>" out/ --engine chrome \
+    --chrome-storage-state ~/.html/x.json --chrome-scroll
 ```
 | Flag / env | Carries | Notes |
 |---|---|---|
-| `--chrome-storage-state` / `HTML2MD_CHROME_STORAGE_STATE` | cookies + localStorage | **primary**; portable, read-only → **server-deployable + concurrency-safe** |
-| `--chrome-cookies-file` / `HTML2MD_CHROME_COOKIES_FILE` | cookies only (Netscape `cookies.txt`) | cookie-only sessions |
-| `--chrome-user-data-dir` / `HTML2MD_CHROME_USER_DATA_DIR` | full persistent profile | local only (mutable, single-concurrency; survives 2FA) |
-| `--chrome-auth-map` / `HTML2MD_CHROME_AUTH_MAP` | a **per-domain map** to any of the above | multiple logged-in sites; routes by target domain |
+| `--chrome-storage-state` / `HTML_CHROME_STORAGE_STATE` | cookies + localStorage | **primary**; portable, read-only → **server-deployable + concurrency-safe** |
+| `--chrome-cookies-file` / `HTML_CHROME_COOKIES_FILE` | cookies only (Netscape `cookies.txt`) | cookie-only sessions |
+| `--chrome-user-data-dir` / `HTML_CHROME_USER_DATA_DIR` | full persistent profile | local only (mutable, single-concurrency; survives 2FA) |
+| `--chrome-auth-map` / `HTML_CHROME_AUTH_MAP` | a **per-domain map** to any of the above | multiple logged-in sites; routes by target domain |
 
 ### Multiple logged-in sites — the auth map
 
@@ -275,37 +275,37 @@ with **all** your sites is one big credential. To keep a **small blast radius** 
 automatically, use a **per-domain auth map**: a JSON file mapping each site's domain to its own
 credential file.
 
-`~/.html2md/auth-map.json`:
+`~/.html/auth-map.json`:
 ```json
 {
-  "x.com":      { "cookies_file":  "~/.html2md/x-cookies.txt" },
-  "medium.com": { "cookies_file":  "~/.html2md/medium-cookies.txt" },
-  "github.com": { "storage_state": "~/.html2md/gh-state.json" }
+  "x.com":      { "cookies_file":  "~/.html/x-cookies.txt" },
+  "medium.com": { "cookies_file":  "~/.html/medium-cookies.txt" },
+  "github.com": { "storage_state": "~/.html/gh-state.json" }
 }
 ```
 
-**Permissions — the map AND every file it points to must be `0600`** (html2md refuses any file
+**Permissions — the map AND every file it points to must be `0600`** (the html skill refuses any file
 readable by group/world, and refuses symlinks):
 ```bash
-mkdir -p ~/.html2md
-chmod 700 ~/.html2md                       # dir: only you can list it
-chmod 600 ~/.html2md/auth-map.json         # the map (paths inside it)
-chmod 600 ~/.html2md/x-cookies.txt \
-          ~/.html2md/medium-cookies.txt \
-          ~/.html2md/gh-state.json         # every referenced credential
-ls -l ~/.html2md/                          # each must show -rw------- (600)
+mkdir -p ~/.html
+chmod 700 ~/.html                       # dir: only you can list it
+chmod 600 ~/.html/auth-map.json         # the map (paths inside it)
+chmod 600 ~/.html/x-cookies.txt \
+          ~/.html/medium-cookies.txt \
+          ~/.html/gh-state.json         # every referenced credential
+ls -l ~/.html/                          # each must show -rw------- (600)
 ```
 
-Then point html2md at the map (per-run flag, or set it once in the environment):
+Then point the html skill at the map (per-run flag, or set it once in the environment):
 ```bash
 # per-run:
-python3 scripts/html2md.py "https://medium.com/@user/post" out/ \
-    --chrome-auth-map ~/.html2md/auth-map.json --chrome-scroll
+python3 scripts/html "https://medium.com/@user/post" out/ \
+    --chrome-auth-map ~/.html/auth-map.json --chrome-scroll
 
 # or set-and-forget (auto-used for mapped domains only):
-export HTML2MD_CHROME_AUTH_MAP=~/.html2md/auth-map.json
-python3 scripts/html2md.py "https://x.com/i/article/<id>" out/      # → authed chrome (x.com mapped)
-python3 scripts/html2md.py "https://example.com/blog" out/         # → normal ladder (not mapped)
+export HTML_CHROME_AUTH_MAP=~/.html/auth-map.json
+python3 scripts/html "https://x.com/i/article/<id>" out/      # → authed chrome (x.com mapped)
+python3 scripts/html "https://example.com/blog" out/         # → normal ladder (not mapped)
 ```
 
 Behaviour:
@@ -325,8 +325,8 @@ Behaviour:
 - There is **no per-site routing beyond this** — it is one map of `domain → file`, not a rules engine.
 
 `--chrome-scroll [--chrome-scroll-passes N]` scrolls to pull lazy replies (bounded by passes + a
-60 s wall-clock — never hangs); also settable via `HTML2MD_CHROME_SCROLL=1` /
-`HTML2MD_CHROME_SCROLL_PASSES=N` for env-only callers (e.g. an importer that forwards env but not
+60 s wall-clock — never hangs); also settable via `HTML_CHROME_SCROLL=1` /
+`HTML_CHROME_SCROLL_PASSES=N` for env-only callers (e.g. an importer that forwards env but not
 flags). **X articles/threads need scroll** — without it the render extracts an empty body. A
 stale/expired session → `FetchFailed kind=auth_required` (re-mint).
 **Security:** the Chrome tier is **SSRF-gated** (private + off-target-public redirects refused;
@@ -334,14 +334,14 @@ non-public sub-resources aborted); session files are bearer credentials — path
 argv), `0600` enforced (group+world refused). Auth is **opt-in / additive**: with none set,
 behaviour is byte-for-byte the default ladder (no crash). **Server deploy** (e.g. an *example*
 Hermes box): mint on a workstation → ship the `storage_state.json` as a 0600 secret
-(`HTML2MD_CHROME_STORAGE_STATE`) → render headless; rotate = re-mint + redeploy. See
-`skills/html2md/.env.example` and `references/html-to-markdown.md` (full deploy + Jina-key matrix).
+(`HTML_CHROME_STORAGE_STATE`) → render headless; rotate = re-mint + redeploy. See
+`skills/html/.env.example` and `references/html-to-markdown.md` (full deploy + Jina-key matrix).
 
 ---
 
 ## 6. What the converter fixes
 
-Beyond the shared turndown core, html2md-owned rules clean up patterns that
+Beyond the shared turndown core, html-owned rules clean up patterns that
 plain turndown gets wrong on real web pages:
 
 - **ARIA-role tables → GFM.** GitBook/Mintlify/Fern render tables as
@@ -374,7 +374,7 @@ plain turndown gets wrong on real web pages:
 ### 7.1 Clip a live URL into an Obsidian vault
 
 ```bash
-python3 scripts/html2md.py https://example.com/article ./MyVault/Clips/
+python3 scripts/html https://example.com/article ./MyVault/Clips/
 # → Clips/article.md + Clips/article.reader.md + Clips/_attachments/
 ```
 
@@ -382,21 +382,21 @@ For a JS/SPA page:
 
 ```bash
 bash scripts/install.sh --with-chrome      # one-time
-python3 scripts/html2md.py https://app.example/spa ./MyVault/Clips/ --engine chrome
+python3 scripts/html https://app.example/spa ./MyVault/Clips/ --engine chrome
 ```
 
 ### 7.2 Convert a saved archive offline
 
 ```bash
-python3 scripts/html2md.py ./saved.webarchive ./out/                 # Safari archive, main frame
-python3 scripts/html2md.py ./thread.mhtml ./out/ --archive-frame all # Chrome MHTML, every frame
-python3 scripts/html2md.py ./page.html ./out/ --no-reader            # plain HTML, single .md
+python3 scripts/html ./saved.webarchive ./out/                 # Safari archive, main frame
+python3 scripts/html ./thread.mhtml ./out/ --archive-frame all # Chrome MHTML, every frame
+python3 scripts/html ./page.html ./out/ --no-reader            # plain HTML, single .md
 ```
 
 ### 7.3 Use as a universal agent step
 
 ```bash
-python3 scripts/html2md.py ./page.html --stdout --no-reader --no-download-images --json-errors
+python3 scripts/html ./page.html --stdout --no-reader --no-download-images --json-errors
 ```
 
 Whole-page Markdown on stdout; failures as a single-line JSON envelope your
@@ -406,7 +406,7 @@ workflow can branch on (`code`/`type`).
 
 ```bash
 while IFS= read -r url; do
-  python3 scripts/html2md.py "$url" ./out/ --no-reader --max-images 25 --max-bytes 8000000 --json-errors \
+  python3 scripts/html "$url" ./out/ --no-reader --max-images 25 --max-bytes 8000000 --json-errors \
     || echo "skip: $url"
 done < urls.txt
 ```
@@ -450,7 +450,7 @@ than crashing (add `--rate-limit 2` to be a polite citizen on a long list).
   (symlink-rejected) too, and it forces chrome only for a *mapped* domain.
 - **PDF / binary guard.** A URL that returns a PDF (`%PDF` magic) or binary
   payload fails with a clear `FetchFailed` (exit 10) instead of feeding garbage to
-  turndown — html2md is HTML→Markdown only.
+  turndown — html is HTML→Markdown only.
 - **Honest-scope residuals.** DNS-rebinding (resolve-then-connect TOCTOU) is inherited by
   both the lite and chrome tiers; `storage_state` localStorage is origin-restored; Chromium's
   in-render DOM memory is uncapped (the `--max-bytes` cap is post-render); the login-wall
@@ -486,13 +486,13 @@ See [`docs/KNOWN_ISSUES.md` §HTML2MD](../KNOWN_ISSUES.md) for the full list.
 ## 10. Verification & maintenance
 
 ```bash
-# from skills/html2md/scripts/:
+# from skills/html/scripts/:
 ./.venv/bin/python -m unittest discover -s html2md/tests -p 'test_*.py'   # unit suite
 ./.venv/bin/python -m unittest tests.test_battery                          # conversion-quality battery
 bash tests/test_e2e.sh                                                     # suite + battery + diff -q replication gate
 
 # from the repo root:
-python3 .claude/skills/skill-creator/scripts/validate_skill.py skills/html2md   # → exit 0
+python3 .claude/skills/skill-creator/scripts/validate_skill.py skills/html   # → exit 0
 ```
 
 The **battery** (`tests/battery_signatures.json` + a committed
@@ -507,4 +507,4 @@ the master (docx / pdf) and re-replicate; the `diff -q` gate in
 `tests/test_e2e.sh` (and CI) enforces it. The weasyprint/playwright carriers
 (`render.py`, `chrome_engine.py`, package `__init__.py`) are **never** replicated.
 Full protocol: [CONTRIBUTING.md §3](../CONTRIBUTING.md#3-office-skills-modification-protocol-strict)
-and [`scripts/.AGENTS.md`](../../skills/html2md/scripts/.AGENTS.md).
+and [`scripts/.AGENTS.md`](../../skills/html/scripts/.AGENTS.md).

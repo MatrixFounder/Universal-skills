@@ -1,6 +1,6 @@
 """TASK 023 bead 023-02 — vendor-agnostic RemoteReader provider construction.
 
-Run from ``skills/html2md/scripts``:  python -m unittest discover -s html2md/tests
+Run from ``skills/html/scripts``:  python -m unittest discover -s html2md/tests
 Offline / stdlib-only (env-driven; no network).
 """
 from __future__ import annotations
@@ -17,8 +17,8 @@ from html2md import acquire  # noqa: E402
 from html2md.cli import build_parser  # noqa: E402
 from html2md.exceptions import FetchFailed  # noqa: E402
 
-_ENV_KEYS = ("HTML2MD_READER_URL", "HTML2MD_READER_PROVIDERS", "HTML2MD_READER_TOKEN",
-             "JINA_API_KEY", "HTML2MD_SEARCH_URL", "HTML2MD_SEARCH_PROVIDERS")
+_ENV_KEYS = ("HTML_READER_URL", "HTML_READER_PROVIDERS", "HTML_READER_TOKEN",
+             "JINA_API_KEY", "HTML_SEARCH_URL", "HTML_SEARCH_PROVIDERS")
 
 
 def _opts(**over):
@@ -50,26 +50,26 @@ class TestProviderOrder(_EnvIsolated):
         self.assertEqual(provs[0].base, acquire._JINA_READER_PREFIX)
 
     def test_provider_order_single_url(self):
-        """TC-02-02a: HTML2MD_READER_URL + auto → [remote:<host>, jina]."""
-        os.environ["HTML2MD_READER_URL"] = "https://r.internal/"
+        """TC-02-02a: HTML_READER_URL + auto → [remote:<host>, jina]."""
+        os.environ["HTML_READER_URL"] = "https://r.internal/"
         provs = acquire._remote_providers(_opts(engine="auto"))
         self.assertEqual([p.name for p in provs], ["remote:r.internal", "jina"])
 
     def test_provider_order_explicit_list_no_jina(self):
         """TC-02-02b: explicit PROVIDERS list → exact order, jina NOT appended."""
-        os.environ["HTML2MD_READER_PROVIDERS"] = "https://a/ https://b/"
+        os.environ["HTML_READER_PROVIDERS"] = "https://a/ https://b/"
         provs = acquire._remote_providers(_opts(engine="auto"))
         self.assertEqual([p.name for p in provs], ["remote:a", "remote:b"])
 
     def test_engine_remote_configured_only(self):
         """TC-02-02c: engine remote → configured providers ONLY (never a jina fall-back)."""
-        os.environ["HTML2MD_READER_URL"] = "https://r.internal/"
+        os.environ["HTML_READER_URL"] = "https://r.internal/"
         provs = acquire._remote_providers(_opts(engine="remote"))
         self.assertEqual([p.name for p in provs], ["remote:r.internal"])
 
     def test_engine_jina_only(self):
         """engine jina → the built-in jina provider only, even with env set."""
-        os.environ["HTML2MD_READER_URL"] = "https://r.internal/"
+        os.environ["HTML_READER_URL"] = "https://r.internal/"
         provs = acquire._remote_providers(_opts(engine="jina"))
         self.assertEqual([p.name for p in provs], ["jina"])
 
@@ -94,8 +94,8 @@ class TestBuildReaderRequest(_EnvIsolated):
         self.assertEqual(headers["X-Return-Format"], "markdown")
 
     def test_build_reader_request_generic_token(self):
-        """TC-02-04: a generic configured provider carries HTML2MD_READER_TOKEN."""
-        os.environ["HTML2MD_READER_TOKEN"] = "TKN"
+        """TC-02-04: a generic configured provider carries HTML_READER_TOKEN."""
+        os.environ["HTML_READER_TOKEN"] = "TKN"
         prov = acquire._reader_from_base("https://r.internal/")
         url, headers = acquire._build_reader_request(prov, "https://x.com", _opts())
         self.assertEqual(url, "https://r.internal/https://x.com")

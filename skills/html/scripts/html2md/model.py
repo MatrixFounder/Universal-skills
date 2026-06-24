@@ -1,10 +1,12 @@
 """In-memory IR passed between the FC stages (ARCH §4). Dataclasses only — no logic.
 
 Flow:  acquire → AcquireResult → clean → CleanResult → core_bridge → markdown → emit
+       acquire → AcquireResult → serialize → FetchArtifact (OP1 fetch, on disk)
 """
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from pathlib import Path
 
 
 @dataclass(frozen=True)
@@ -15,6 +17,15 @@ class SourceMeta:
     title: str | None = None
     date: str | None = None
     author: str | None = None
+
+    def to_dict(self) -> dict:
+        return {"url": self.url, "title": self.title, "date": self.date,
+                "author": self.author}
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "SourceMeta":
+        return cls(url=d.get("url"), title=d.get("title"), date=d.get("date"),
+                   author=d.get("author"))
 
 
 @dataclass(frozen=True)
@@ -47,3 +58,22 @@ class CleanResult:
 
     whole_html: str
     reader_html: str | None = None
+
+
+@dataclass(frozen=True)
+class FetchArtifact:
+    """OP1 (`html fetch`) on-disk product (TASK 027).
+
+    What was written: the saved HTML page, its ``<slug>.meta.json`` sidecar, and the
+    attachments dir (when images were localized). The combined ``html2md`` command
+    deletes ``html_path`` + ``meta_path`` after OP2 converts, keeping the ``.md`` (+
+    ``.reader.md``) + ``_attachments/``. ``base_url`` is the directory the HTML lives in
+    (so OP2 / pdf resolve the localized images against it).
+    """
+
+    html_path: Path
+    meta_path: Path | None
+    attachments_dir: Path | None
+    source_meta: SourceMeta = field(default_factory=SourceMeta)
+    engine: str | None = None
+    base_url: str = ""

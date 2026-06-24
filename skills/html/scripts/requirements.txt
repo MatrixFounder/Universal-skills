@@ -1,4 +1,4 @@
-# html2md — Python runtime dependencies.
+# html — Python runtime dependencies.
 #
 # The offline path (file/archive) and the `web_clean` cleaning cluster are
 # stdlib-only; the HTML→Markdown core runs in Node (see package.json). These base

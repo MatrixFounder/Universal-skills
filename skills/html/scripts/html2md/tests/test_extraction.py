@@ -22,7 +22,7 @@ TARGET = "https://x.com/a"
 _PNG = b"\x89PNG\r\n\x1a\n" + b"\x00" * 64
 _MD = ("Title: Hello World\n\nURL Source: https://x.com/a\n\nMarkdown Content:\n"
        "# Hello World\n\nA substantial markdown body with enough characters here.\n")
-_ENV = ("HTML2MD_READER_URL", "HTML2MD_READER_PROVIDERS", "HTML2MD_READER_TOKEN", "JINA_API_KEY")
+_ENV = ("HTML_READER_URL", "HTML_READER_PROVIDERS", "HTML_READER_TOKEN", "JINA_API_KEY")
 
 
 def _opts(**over):

@@ -4,25 +4,33 @@ Builds YAML frontmatter, optionally downloads images into a shared ``_attachment
 (sha1-deduped, relative links), and writes dual-output (``<slug>.md`` +
 ``<slug>.reader.md``) or streams the whole-page Markdown to stdout.
 
-Image resolution in this bead is OFFLINE only (archive/file inputs, whose <img>
-src resolve against ``acq.base_url``). Remote (http/https) image download is wired
-in bead 022-06 via :func:`html2md.acquire._resolve_url_image`.
+Slug / provenance-marker / collision / local-image helpers live in ``naming`` (shared
+with the OP1 fetch artifact); this module imports them under their historical private
+names. Remote (http/https) image download is wired via
+:func:`html2md.acquire._resolve_url_image`.
 """
 from __future__ import annotations
 
 import hashlib
-import os
 import re
 import sys
 from pathlib import Path
-from urllib.parse import unquote, urlparse
-from urllib.request import url2pathname
 
+from .exceptions import SelfOverwriteRefused
 from .model import AcquireResult, CleanResult, SourceMeta
+from .naming import (  # shared with serialize (OP1) — re-aliased to the historical names
+    atomic_write as _atomic_write,
+    base_dir as _base_dir,
+    base_name as _base_name,
+    resolve_base as _resolve_base,
+    resolve_local_image as _resolve_local_image,
+    sniff_ext as _sniff_ext,
+    slugify as _slugify,
+    src_marker as _src_marker,
+)
 
 # Markdown image syntax: ![alt](src "optional title")
 _IMG_RE = re.compile(r'!\[([^\]]*)\]\(\s*<?([^)\s>]+)>?(\s+"[^"]*")?\s*\)')
-_SVG_HEAD = (b"<svg", b"<?xml")
 
 
 # --------------------------------------------------------------------------- #
@@ -52,88 +60,14 @@ def _frontmatter(meta: SourceMeta, query: str | None = None,
     return "\n".join(lines) + "\n\n"
 
 
-def _slugify(text: str) -> str:
-    s = re.sub(r"[^\w\s-]", "", text, flags=re.UNICODE).strip().lower()
-    s = re.sub(r"[\s_-]+", "-", s)
-    return s.strip("-") or "untitled"
-
-
-def _base_name(acq: AcquireResult, input_ref: str) -> str:
-    """Deterministic output base name from the INPUT (filename / URL path stem).
-
-    The human title lives in frontmatter; the file name is derived from the input
-    so the same input always yields the same output name (agent-friendly).
-    """
-    if acq.mode == "url":
-        parsed = urlparse(input_ref)
-        last = Path(parsed.path).name or parsed.netloc or "page"
-        return Path(last).stem or "page"
-    return Path(input_ref).stem
-
-
 # --------------------------------------------------------------------------- #
-# Image resolution (offline)
-# --------------------------------------------------------------------------- #
-def _base_dir(base_url: str) -> Path:
-    if base_url.startswith("file://"):
-        return Path(url2pathname(urlparse(base_url).path))
-    return Path(base_url)
-
-
-def _sniff_ext(src: str, data: bytes) -> str:
-    ext = Path(urlparse(src).path).suffix.lower()
-    if ext and len(ext) <= 5 and re.fullmatch(r"\.[a-z0-9]+", ext):
-        return ext
-    if data[:8].startswith(b"\x89PNG"):
-        return ".png"
-    if data[:3] == b"\xff\xd8\xff":
-        return ".jpg"
-    if data[:6] in (b"GIF87a", b"GIF89a"):
-        return ".gif"
-    if data[:4] == b"RIFF" and data[8:12] == b"WEBP":
-        return ".webp"
-    if data.lstrip()[:5].lower().startswith(_SVG_HEAD):
-        return ".svg"
-    return ".img"
-
-
-def _resolve_local_image(src: str, base_dir: Path) -> bytes | None:
-    """Read bytes for a local (relative / file://) image src; None if unresolved.
-
-    SECURITY (CWE-22 / CWE-73): the ``src`` is attacker-controlled (it comes from the
-    HTML of an untrusted page/archive). Reads are **confined to ``base_dir``** so a
-    crafted ``<img src="../../etc/passwd">`` / ``/etc/passwd`` / ``file:///etc/passwd``
-    cannot read arbitrary off-disk files into the user's vault. Legitimate archive/file
-    images are always bare names inside ``base_dir`` (``web_clean`` localizes them), so
-    confinement breaks no real input.
-    """
-    parsed = urlparse(src)
-    if parsed.scheme in ("http", "https", "data"):
-        return None  # remote/data — download lands in 022-06
-    if parsed.scheme == "file":
-        candidate = Path(url2pathname(parsed.path))
-    else:
-        rel = unquote(src)
-        candidate = Path(rel) if os.path.isabs(rel) else (base_dir / rel)
-    try:
-        resolved = candidate.resolve(strict=True)
-        resolved.relative_to(base_dir.resolve())  # ValueError if outside base_dir
-    except (OSError, ValueError):
-        return None
-    try:
-        return resolved.read_bytes()
-    except OSError:
-        return None
-
-
-# --------------------------------------------------------------------------- #
-# Image download + link rewrite
+# Image download + link rewrite (Markdown level)
 # --------------------------------------------------------------------------- #
 def _download_and_rewrite(
     markdowns: list[str | None],
     acq: AcquireResult,
     *,
-    attach_dir: Path,
+    attach_dir,
     attach_name: str,
     max_images: int | None,
     remote_resolver=None,
@@ -144,9 +78,9 @@ def _download_and_rewrite(
 
     Local (relative/file://) images are read from ``acq.base_url`` (confined). Remote
     (http/https) images are fetched via ``remote_resolver(src) -> bytes|None`` when
-    provided (url-mode, 022-06); otherwise left as the original link.
+    provided (url-mode); otherwise left as the original link.
     """
-    base_dir = _base_dir(acq.base_url)
+    base = _base_dir(acq.base_url)
     by_sha: dict[str, str] = {}          # sha1 -> relative link
     src_to_link: dict[str, str] = {}     # original src -> rewritten link (cache)
     written = 0
@@ -161,14 +95,14 @@ def _download_and_rewrite(
             alt, src, title = m.group(1), m.group(2), m.group(3) or ""
             if src in src_to_link:
                 return f"![{alt}]({src_to_link[src]}{title})"
-            data = _resolve_local_image(src, base_dir)
+            data = _resolve_local_image(src, base)
             if data is None and remote_resolver is not None:
                 # Gate the REMOTE fetch by --max-images BEFORE issuing it, so the cap
                 # bounds outbound network requests (SSRF amplification), not just disk
                 # writes. Local resolution above is offline + base_dir-confined.
                 if max_images is not None and written >= max_images:
                     return m.group(0)
-                data = remote_resolver(src)  # url-mode remote fetch (022-06)
+                data = remote_resolver(src)  # url-mode remote fetch
             if data is None:
                 return m.group(0)  # leave remote/unresolved untouched
             sha = hashlib.sha1(data).hexdigest()
@@ -191,48 +125,6 @@ def _download_and_rewrite(
 # --------------------------------------------------------------------------- #
 # Output
 # --------------------------------------------------------------------------- #
-def _atomic_write(path: Path, text: str) -> None:
-    tmp = path.with_suffix(path.suffix + ".partial")
-    try:
-        tmp.write_text(text, encoding="utf-8")
-    except BaseException:
-        tmp.unlink(missing_ok=True)
-        raise
-    os.replace(tmp, path)
-
-
-def _src_marker(input_ref: str) -> str:
-    """A stable, opaque per-input provenance marker (invisible HTML comment).
-
-    A short hash of the INPUT — never the raw path (no local-path leak) — so two
-    DIFFERENT inputs that slugify to the same name get distinct output files, while
-    re-running the SAME input overwrites its own file (idempotent).
-    """
-    sid = hashlib.sha1(input_ref.encode("utf-8", "surrogatepass")).hexdigest()[:12]
-    return f"<!-- html2md-source-id: {sid} -->"
-
-
-def _resolve_base(output_dir: Path, slug: str, marker: str, *, cap: int = 10000) -> str:
-    """Pick a collision-free output base name in ``output_dir``.
-
-    ``slug`` for the first claimant; ``slug-2``, ``slug-3``, … for distinct inputs
-    that collide. An existing ``<base>.md`` is reused (overwritten) ONLY if it carries
-    THIS input's ``marker`` — so re-running the same input is idempotent, while a
-    different input never silently clobbers it.
-    """
-    for i in range(cap):
-        base = slug if i == 0 else f"{slug}-{i + 1}"
-        md = output_dir / f"{base}.md"
-        if not md.exists():
-            return base
-        try:
-            if marker in md.read_text(encoding="utf-8", errors="replace"):
-                return base  # our own prior output → idempotent overwrite
-        except OSError:
-            pass
-    return f"{slug}-{marker[-15:-4]}"  # pathological fallback (unbounded collisions)
-
-
 def emit(
     acq: AcquireResult,
     clean_res: CleanResult,
@@ -240,7 +132,7 @@ def emit(
     md_reader: str | None,
     opts,
     *,
-    output_dir: Path | None,
+    output_dir,
     stdout_mode: bool,
     input_ref: str,
     query: str | None = None,
@@ -256,13 +148,17 @@ def emit(
 
     assert output_dir is not None
     output_dir.mkdir(parents=True, exist_ok=True)  # lazy: only once a write is certain
-    slug = _slugify(_base_name(acq, input_ref))
+    slug = _slugify(_base_name(acq.mode, input_ref))
     attach_name = getattr(opts, "attachments_dir", "_attachments")
     attach_dir = output_dir / attach_name
 
     if getattr(opts, "download_images", True):
         remote_resolver = None
-        if acq.mode == "url":
+        # Enable the SSRF-guarded remote fetch for url-mode AND file-mode (a fetched
+        # artifact whose <img> may still be absolute http(s) — e.g. `fetch --no-images`
+        # then `md` — must still recover images; round-trip fix #2). Archives are
+        # self-contained, so they stay local-only.
+        if acq.mode in ("url", "file"):
             from . import acquire as _acquire_mod
             remote_resolver = lambda src: _acquire_mod._resolve_url_image(src, opts)  # noqa: E731
         md_whole, md_reader = _download_and_rewrite(
@@ -272,11 +168,31 @@ def emit(
             remote_resolver=remote_resolver,
         )
 
-    # Collision-free, idempotent output base (slug / slug-2 / slug-3 …).
-    marker = _src_marker(input_ref)
+    # Collision-free, idempotent output base (slug / slug-2 / slug-3 …). Key the marker on
+    # the original source URL when known (round-trip idempotency), else the input path.
+    provenance = (acq.source_meta.url if acq.source_meta and acq.source_meta.url
+                  else input_ref)
+    marker = _src_marker(provenance)
     base = _resolve_base(output_dir, slug, marker)
-    _atomic_write(output_dir / f"{base}.md",
-                  front + md_whole.strip() + "\n\n" + marker + "\n")
+    out_md = output_dir / f"{base}.md"
+    out_reader = output_dir / f"{base}.reader.md"
+
+    # File-level self-overwrite guard (the dir-vs-file check in _resolve_paths can't see
+    # this): never let an emitted file clobber the INPUT being converted (e.g. a fetch→md
+    # round-trip in the same folder, or a local input whose name collides with an output).
+    try:
+        in_resolved = Path(input_ref).resolve()
+        if out_md.resolve() == in_resolved or out_reader.resolve() == in_resolved:
+            raise SelfOverwriteRefused(
+                f"output would overwrite the input: {Path(input_ref).name}",
+                details={"path": Path(input_ref).name})
+    except OSError:
+        pass  # input_ref is a URL or unresolvable → no local collision possible
+
+    _atomic_write(out_md, front + md_whole.strip() + "\n\n" + marker + "\n")
     if md_reader is not None:
-        _atomic_write(output_dir / f"{base}.reader.md",
-                      front + md_reader.strip() + "\n\n" + marker + "\n")
+        _atomic_write(out_reader, front + md_reader.strip() + "\n\n" + marker + "\n")
+    elif out_reader.exists():
+        # A prior run wrote <base>.reader.md; this --no-reader / search re-run must not
+        # leave a stale phantom dual-output for downstream (Obsidian/docx/pdf) to pick up.
+        out_reader.unlink(missing_ok=True)

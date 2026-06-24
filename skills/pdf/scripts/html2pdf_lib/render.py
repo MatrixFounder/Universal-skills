@@ -43,6 +43,27 @@ def _offline_url_fetcher(url: str) -> dict:
     raise ValueError(f"remote fetch refused (offline mode): {url}")
 
 
+# A bounded cap on inline data: URIs accepted in --untrusted mode (a self-contained blob
+# is not a file read, but an unbounded one is a DoS vector).
+_UNTRUSTED_DATA_MAX = 8 * 1024 * 1024
+
+
+def _untrusted_url_fetcher(url: str) -> dict:
+    """Stricter fetcher for HTML of unknown provenance (e.g. the ``html`` skill's fetch
+    artifact): refuse ``file://`` AND remote; allow only bounded ``data:`` URIs.
+
+    The default ``_offline_url_fetcher`` resolves ``file://`` with no path confinement —
+    fine for a user-saved local input, but a CWE-22 local-file-exfiltration primitive for
+    attacker-controlled fetched HTML. ``--untrusted`` selects this fetcher; the documented
+    ``html fetch → html2pdf`` pipeline always passes it.
+    """
+    if url.startswith("data:"):
+        if len(url) > _UNTRUSTED_DATA_MAX:
+            raise ValueError("untrusted mode: data: URI exceeds the size cap")
+        return default_url_fetcher(url)
+    raise ValueError(f"untrusted mode: refused non-data resource: {url}")
+
+
 class RenderTimeout(Exception):
     """Raised when weasyprint render exceeds the watchdog deadline."""
 
@@ -117,6 +138,7 @@ def convert(
     timeout: int = 0,
     engine: str = "weasyprint",
     chrome_javascript: bool = False,
+    untrusted: bool = False,
 ) -> None:
     """Render `html_text` to `output_path` via the chosen engine.
 
@@ -187,6 +209,7 @@ def convert(
                 page_size=page_size,
                 timeout=timeout,
                 javascript=chrome_javascript,
+                untrusted=untrusted,
             )
             return
 
@@ -202,7 +225,7 @@ def convert(
         HTML(
             string=html_text,
             base_url=base_url,
-            url_fetcher=_offline_url_fetcher,
+            url_fetcher=_untrusted_url_fetcher if untrusted else _offline_url_fetcher,
         ).write_pdf(str(output_path), stylesheets=stylesheets)
     finally:
         _clear_render_watchdog(prev_handler)

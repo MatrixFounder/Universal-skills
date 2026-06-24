@@ -9,7 +9,7 @@ on:
       - "skills/xlsx/**"
       - "skills/pptx/**"
       - "skills/pdf/**"
-      - "skills/html2md/**"
+      - "skills/html/**"
       - "tests/**"
       - ".github/workflows/office-skills.yml"
   workflow_dispatch:
@@ -25,10 +25,10 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # html2md participates in the same install.sh → validate_skill → E2E matrix.
-        # Its tests/test_e2e.sh runs the unit/e2e suite AND the two-master `diff -q`
-        # replication gate (G-1/G-2 — pdf→web_clean, docx→html2md_core.js/_errors/_venv).
-        skill: [docx, xlsx, pptx, pdf, html2md]
+        # html (formerly html2md) participates in the same install.sh → validate_skill →
+        # E2E matrix. Its tests/test_e2e.sh runs the unit/e2e suite AND the two-master
+        # `diff -q` replication gate (G-1/G-2 — pdf→web_clean, docx→html2md_core.js/_errors/_venv).
+        skill: [docx, xlsx, pptx, pdf, html]
     runs-on: ubuntu-22.04
     env:
       STRICT_VISUAL: "1"

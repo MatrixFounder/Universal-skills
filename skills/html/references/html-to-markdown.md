@@ -1,4 +1,4 @@
-# html2md — conversion guide & honest scope
+# html — conversion guide & honest scope
 
 ## Decision tree
 
@@ -67,7 +67,7 @@ Chrome is **soft-optional**: `bash scripts/install.sh --with-chrome`. Without it
 **Fetch robustness** (lite path, all engines that use it): `--retries N` (default 2)
 retries transport errors / HTTP 5xx / 429 with exponential backoff (429 honours
 `Retry-After`); a **403 auto-escalates once to a browser User-Agent** (default UA stays
-the honest `html2md/…`). `--rate-limit REQS_PER_SEC` throttles outbound fetches.
+the honest `html/…`). `--rate-limit REQS_PER_SEC` throttles outbound fetches.
 
 **Web search (`--search "QUERY"`).** A vendor-agnostic search provider (`s.jina.ai` default;
 override with `HTML2MD_SEARCH_URL` / `HTML2MD_SEARCH_PROVIDERS`) returns the top result URLs;
@@ -114,20 +114,20 @@ secret params are redacted). A separate `EmptyExtraction` (exit 11) means the fe
 ## Authenticated (login-gated) Chrome — and server / Hermes deploy
 
 Some content (X long-form **Articles**, reply threads, paywalled/members articles, private
-docs) needs a **real, authenticated, JS-rendering browser**. html2md replays a **human-minted**
+docs) needs a **real, authenticated, JS-rendering browser**. html replays a **human-minted**
 session (it never automates login/passwords/2FA).
 
 **Mint once (interactive, where a browser exists):**
 ```
-python3 scripts/html2md.py login https://x.com --save-state ~/.html2md/x.json
+python3 scripts/html login https://x.com --save-state ~/.html/x.json
 ```
 A headful Chromium opens; log in by hand (2FA ok); press Enter; the session is saved to a
 `0600` `storage_state.json` (cookies + localStorage).
 
 **Then convert headless** (one of three sources, mutually exclusive):
 ```
-python3 scripts/html2md.py "https://x.com/i/article/<id>" out/ --engine chrome \
-    --chrome-storage-state ~/.html2md/x.json --chrome-scroll
+python3 scripts/html "https://x.com/i/article/<id>" out/ --engine chrome \
+    --chrome-storage-state ~/.html/x.json --chrome-scroll
 ```
 | Source | Carries | Use |
 |---|---|---|

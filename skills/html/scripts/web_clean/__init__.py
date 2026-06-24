@@ -1,6 +1,6 @@
-"""html2md-OWNED thin facade over the pdf-mastered cleaning cluster.
+"""html-OWNED thin facade over the pdf-mastered cleaning cluster.
 
-This file is authored by html2md and is **NOT** under the ``diff -q`` replication
+This file is authored by the html skill and is **NOT** under the ``diff -q`` replication
 gate (ARCH §9 / CLAUDE.md §2). The five sibling modules
 (``archives``/``reader_mode``/``preprocess``/``dom_utils``/``normalize_css``) ARE
 byte-identical replicas of ``skills/pdf/scripts/html2pdf_lib/`` (master = pdf).

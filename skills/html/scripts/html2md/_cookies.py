@@ -1,9 +1,9 @@
-"""TASK 024 — hardened cookie-file loading for the Chrome auth path (html2md-owned, NOT gated).
+"""TASK 024 — hardened cookie-file loading for the Chrome auth path (html-owned, NOT gated).
 
 The file-hardening half (symlink-reject, **reject group AND world bits via `st_mode & 0o077`**,
 sanitized errors) is LIFTED from `skills/transcript-fetcher/scripts/sources/_cookies.py` and
 **tightened** (that source rejects world-only) for the multi-tenant server threat model. The
-Netscape→Playwright-cookie-dict conversion is NEW html2md code (the source's urllib opener /
+Netscape→Playwright-cookie-dict conversion is NEW html-skill code (the source's urllib opener /
 redirect handler is irrelevant to the Playwright transport).
 
 TRACKING NOTE (do NOT silently fork): keep `load_cookie_jar` in sync with the transcript-fetcher

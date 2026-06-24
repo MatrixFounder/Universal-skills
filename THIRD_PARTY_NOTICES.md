@@ -57,9 +57,9 @@ None are bundled in this repository.
 | `weasyprint` | BSD-3-Clause | pdf (Markdown/HTML → PDF) |
 | `markdown2` | MIT | pdf (Markdown → HTML preprocessing) |
 | `ocrmypdf` | MPL-2.0 | pdf (OCR scanned PDFs → searchable PDF; **soft-optional**, installed via `scripts/requirements-ocr.txt` only with `install.sh --with-ocr`) |
-| `httpx` | BSD-3-Clause | html2md (URL fetch transport) |
-| `trafilatura` | Apache-2.0 | html2md (lite article + title/date/author extraction) |
-| `playwright` | Apache-2.0 | html2md (headless Chromium engine for JS/SPA pages; **soft-optional**, installed via `scripts/requirements-chrome.txt` only with `install.sh --with-chrome`) |
+| `httpx` | BSD-3-Clause | html (URL fetch transport) |
+| `trafilatura` | Apache-2.0 | html (lite article + title/date/author extraction) |
+| `playwright` | Apache-2.0 | html (headless Chromium engine for JS/SPA pages; **soft-optional**, installed via `scripts/requirements-chrome.txt` only with `install.sh --with-chrome`) |
 
 ## JavaScript Libraries (runtime dependencies)
 
@@ -71,8 +71,8 @@ are bundled in this repository.
 | `docx` (docx-js) | MIT | docx/md2docx.js |
 | `marked` | MIT | docx/md2docx.js, pptx/md2pptx.js |
 | `mammoth` | Apache-2.0 | docx/docx2md.js |
-| `turndown` | MIT | docx/docx2md.js (via the docx-mastered `html2md_core.js`); html2md (byte-identical replica) |
-| `turndown-plugin-gfm` | MIT | docx/docx2md.js (via `html2md_core.js`); html2md (byte-identical replica) |
+| `turndown` | MIT | docx/docx2md.js (via the docx-mastered `html2md_core.js`); html (byte-identical replica) |
+| `turndown-plugin-gfm` | MIT | docx/docx2md.js (via `html2md_core.js`); html (byte-identical replica) |
 | `image-size` | MIT | docx/md2docx.js |
 | `pptxgenjs` | MIT | pptx/md2pptx.js |
 | `@mermaid-js/mermaid-cli` | MIT | docx/md2docx.js (optional mermaid rendering) |
@@ -96,7 +96,7 @@ repository does not link against, modify, or redistribute them.
 
 | Service | Terms | Used by |
 |---|---|---|
-| Jina Reader (`r.jina.ai`) | Jina AI Terms of Service (external API; keyless free tier, optional `JINA_API_KEY`) | html2md (`--engine jina` ONLY — server-side render of a JS/anti-bot page). **Opt-in**: it is never called by the default `auto` engine. No Jina code or dependency is bundled; the skill simply makes an HTTPS request, sending the **target URL** to the service. Do not use for sensitive/internal URLs. |
+| Jina Reader (`r.jina.ai`) | Jina AI Terms of Service (external API; keyless free tier, optional `JINA_API_KEY`) | html (`--engine jina` ONLY — server-side render of a JS/anti-bot page). **Opt-in**: it is never called by the default `auto` engine. No Jina code or dependency is bundled; the skill simply makes an HTTPS request, sending the **target URL** to the service. Do not use for sensitive/internal URLs. |
 
 ## Attribution
 

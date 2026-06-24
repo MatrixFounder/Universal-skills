@@ -2,7 +2,7 @@
 
 Drives the ladder offline through the ``acquire._http_get_bytes`` seam (a per-URL router)
 plus monkeypatched ``_fetch_chrome_html`` / ``_looks_substantial`` / ``_trafilatura_meta``.
-No real network. Run from ``skills/html2md/scripts``.
+No real network. Run from ``skills/html/scripts``.
 """
 from __future__ import annotations
 
@@ -19,7 +19,7 @@ from html2md.cli import build_parser  # noqa: E402
 from html2md.exceptions import EngineNotInstalled, FetchFailed  # noqa: E402
 from html2md.model import SourceMeta  # noqa: E402
 
-_ENV_KEYS = ("HTML2MD_READER_URL", "HTML2MD_READER_PROVIDERS", "HTML2MD_READER_TOKEN",
+_ENV_KEYS = ("HTML_READER_URL", "HTML_READER_PROVIDERS", "HTML_READER_TOKEN",
              "JINA_API_KEY")
 TARGET = "https://example.com/a"
 GOOD = b"<html><head><title>T</title></head><body><p>real article body</p></body></html>"
@@ -135,7 +135,7 @@ class TestLadder(_Ladder):
     def test_target_404_terminal_per_provider(self):
         """TC-03-05: a reader-reported target 404 does NOT try the next remote PROVIDER; the
         ladder ends terminal once lite also 404s. kind == not_found."""
-        os.environ["HTML2MD_READER_PROVIDERS"] = "https://a/ https://b/"
+        os.environ["HTML_READER_PROVIDERS"] = "https://a/ https://b/"
         self._chrome(EngineNotInstalled("no chrome"))
 
         def router(url, **kw):

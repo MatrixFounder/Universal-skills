@@ -18,7 +18,7 @@ from html2md.cli import build_parser  # noqa: E402
 from html2md.exceptions import EngineNotInstalled, FetchFailed  # noqa: E402
 from html2md.model import SourceMeta  # noqa: E402
 
-_ENV_KEYS = ("HTML2MD_READER_URL", "HTML2MD_READER_PROVIDERS", "HTML2MD_READER_TOKEN",
+_ENV_KEYS = ("HTML_READER_URL", "HTML_READER_PROVIDERS", "HTML_READER_TOKEN",
              "JINA_API_KEY")
 GOOD = b"<html><head><title>T</title></head><body><p>a real substantial body here</p></body></html>"
 

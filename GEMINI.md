@@ -103,28 +103,36 @@ Out of scope (docx-only, no replication): `skills/docx/scripts/docx_*.py`,
 `skills/docx/examples/`, `skills/docx/scripts/package.json`,
 `skills/docx/scripts/requirements.txt`, `skills/docx/scripts/install.sh`.
 
-### Future skill `html2md` — TWO-master replication (forward-looking)
+### Skill `html` (formerly `html2md`) — TWO-master replication
 
-A new standalone skill **`html2md`** (**Proprietary, All Rights Reserved** —
+The standalone skill **`html`** (**Proprietary, All Rights Reserved** —
 embeds proprietary docx/pdf code, joins the office-proprietary set, NOT
-Apache-2.0; Web/HTML → Markdown for Obsidian + agent workflows; see
-[`docs/office-skills-backlog.md` §2 «html2md»](docs/office-skills-backlog.md)
-and TASK 022) reuses code from **both** docx and pdf. It is the **one
+Apache-2.0; Web/HTML acquisition + HTML→Markdown for Obsidian + agent workflows; see
+[`docs/office-skills-backlog.md` §2 «html»](docs/office-skills-backlog.md)
+and TASK 022 / TASK 027) reuses code from **both** docx and pdf. It is the **one
 documented exception** to "docx is always master" — it has **two masters**.
-Forward-looking: when built, follow this topology and do NOT fork.
+Follow this topology and do NOT fork.
+
+**Naming caveat (load-bearing):** the launcher is the **extensionless** file
+`skills/html/scripts/html` (NOT `html.py`) and the internal package is still
+`skills/html/scripts/html2md/` — a `html.py`/`html/` on `scripts/` (`sys.path[0]`)
+would shadow the stdlib `html` module that `acquire.py` and the pdf replica
+`web_clean/preprocess.py` import. `skills/html/scripts/html2md.py` is the combined
+fetch → md → delete-HTML command. Env vars are `HTML_*` (hard rename, no aliases).
 
 1. **HTML→MD core — MASTER = docx.** `html2md_core.js` = verbatim lift of
-   `buildTurndown` + `expandTableToGrid` from `skills/docx/scripts/docx2md.js`.
+   `buildTurndown` + `expandTableToGrid` from `skills/docx/scripts/docx2md.js`
+   (KEEP the `html2md_core.js` filename — matches the docx master).
 2. **HTML-cleaning cluster — MASTER = pdf** (the exception).
    `archives.py`, `reader_mode.py`, `preprocess.py`, `dom_utils.py`,
-   `normalize_css.py` → `skills/html2md/scripts/web_clean/`. **NEVER copy
+   `normalize_css.py` → `skills/html/scripts/web_clean/`. **NEVER copy
    `render.py` / `chrome_engine.py` / package `__init__.py`** (the only
-   weasyprint/playwright carriers). html2md ships its OWN thin
+   weasyprint/playwright carriers). `html` ships its OWN thin
    `web_clean/__init__.py`. Carry the modules WHOLE (do not trim — trimming
    breaks `diff -q` and forks). A smoke-test MUST assert `weasyprint` /
    `playwright` stay out of `sys.modules` after importing `web_clean`.
 3. **Shared helpers — MASTER = docx.** `_errors.py` + `_venv_bootstrap.py`
-   extend their replication loop 4→5-skill (add html2md).
+   include `html` in their replication loop (4→5-skill).
 
 ### Anti-patterns — DO NOT
 
@@ -133,7 +141,7 @@ Forward-looking: when built, follow this topology and do NOT fork.
 - ❌ Symlink `skills/xlsx/scripts/office -> ../../docx/scripts/office`.
 - ❌ Forget to clean `__pycache__` before `diff -qr` (false positives).
 - ❌ Replicate without running tests + validator afterwards.
-- ❌ Re-point the future `html2md` `web_clean/` cluster to docx-master —
+- ❌ Re-point the `html` skill's `web_clean/` cluster to docx-master —
   its master is **pdf** (documented exception above).
 
 Full protocol with rationale:
@@ -184,10 +192,10 @@ This repository uses a **split licensing model** (effective
   files (e.g. [`skills/docx/LICENSE`](skills/docx/LICENSE)). Source
   is available for audit only; any use, execution, copying,
   modification, or distribution requires prior written permission.
-- **Planned (TASK 022):** `skills/html2md/` will **also be Proprietary,
-  All Rights Reserved** — it embeds byte-identical copies of proprietary
-  `docx`/`pdf` code and therefore **cannot** be Apache-2.0; it needs its
-  own per-skill `LICENSE`/`NOTICE` when built.
+- **`skills/html/`** (formerly `html2md`; TASK 022 / TASK 027) is **also
+  Proprietary, All Rights Reserved** — it embeds byte-identical copies of
+  proprietary `docx`/`pdf` code and therefore **cannot** be Apache-2.0; it
+  has its own per-skill `LICENSE`/`NOTICE`.
 
 All third-party material (XSD schemas from ECMA-376 / Microsoft OSP
 / W3C, runtime dependencies, external CLI tools) is attributed in
