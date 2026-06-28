@@ -109,6 +109,33 @@ LOCALLY* (any tool producing Netscape format works). Permissions must
 be `0600` and the file must not be a symlink — the loader refuses both
 with a clear error.
 
+### Single URL (X.com / Twitter — incl. Broadcast/Space)
+
+```bash
+./scripts/.venv/bin/python scripts/fetch.py \
+    "https://x.com/i/broadcasts/<id>" \
+    --out /tmp/broadcast.txt \
+    --with-description --debug
+```
+
+Fully automatic and captions-first: if the X media carries
+`subtitles`/`automatic_captions` they are used (fast, high quality,
+`transcript_origin: embedded-captions`). A Broadcast/Space normally has
+**no** captions, so the skill downloads the smallest media and
+transcribes it with the first available **ASR backend** — MacWhisper
+(`mw`), Whisper CLI, whisper.cpp, or (opt-in) a cloud API — recording
+which one in `transcript_origin` (e.g. `macwhisper`). `--debug` prints
+the pipeline stages to stderr; without it stderr is silent.
+
+Opt-in cloud ASR (audio leaves the machine — see §8):
+
+```bash
+./scripts/.venv/bin/python scripts/fetch.py "https://x.com/i/broadcasts/<id>" \
+    --out /tmp/b.txt --asr-allow-cloud --asr-model whisper-1
+# needs OPENAI_API_KEY (or a skill-local .env); works with any
+# OpenAI-compatible server via TRANSCRIPT_FETCHER_OPENAI_BASE_URL.
+```
+
 ### Description-only (skip the transcript)
 
 ```bash
@@ -132,10 +159,10 @@ emits only `<out>.description.md` + `<out>.txt.stat.json` (with
 
 `urls.txt` format: one URL per line. Blank lines and lines starting
 with `#` are ignored. URLs may mix sources — each is dispatched via
-`_detect_source` to the correct adapter (YouTube / Vimeo / Skool).
-Output naming: `<video_id>.txt` for YouTube/Vimeo, `<lesson-id>.txt`
-for Skool. Exit code `4` if any URL failed; `5` for auth errors;
-`6` for rate-limit.
+`_detect_source` to the correct adapter (YouTube / Vimeo / X / Skool).
+Output naming: `<video_id>.txt` for YouTube/Vimeo, `<status-or-broadcast-id>.txt`
+for X, `<lesson-id>.txt` for Skool. Exit code `4` if any URL failed;
+`5` for auth errors; `6` for rate-limit; `7` for a missing dependency.
 
 ### Common flags
 
@@ -146,9 +173,13 @@ for Skool. Exit code `4` if any URL failed; `5` for auth errors;
 | `--with-description` | off | Also write `<out>.description.md` (YAML frontmatter + Markdown body) and populate metadata fields in the stat sidecar. |
 | `--description-only` | off | Skip the transcript download entirely; produce only the description sidecar. Implies `--with-description`. |
 | `--cookies-file PATH` | none | Netscape `cookies.txt`. Optional for every source; Skool needs it only for private communities, yt-dlp uses it for age-gated content. |
-| `--timeout-sec` | `180` | Per-attempt yt-dlp / HTTP timeout. Worst-case wall-clock = `(ladder_steps + 1) × timeout_sec` if every attempt times out. |
+| `--timeout-sec` | `180` | Per-attempt yt-dlp / HTTP timeout. Worst-case wall-clock = `(ladder_steps + 1) × timeout_sec` if every attempt times out. For long X Broadcasts raise it (the audio download counts against it). |
 | `--on-collision error\|skip\|suffix` | `error` | Batch mode behaviour when two URLs share an output filename. |
 | `--json-errors` | off | Emit failure messages as a single JSON line on stderr (machine-readable). |
+| `--debug` | off | (X) Print pipeline stages to stderr (also `TRANSCRIPT_FETCHER_DEBUG=1`). Stdout stays pure JSON. |
+| `--asr-allow-cloud` | off | (X) Permit the opt-in cloud ASR backend (needs an API key). Audio leaves the machine. |
+| `--asr-model ID` | none | (X) Model forwarded to the chosen ASR backend (MacWhisper `engine:model-id`, whisper name, whisper.cpp ggml path, cloud model). |
+| `--asr-timeout-sec N` | `1800` | (X) Per-backend transcription timeout (also `TRANSCRIPT_FETCHER_ASR_TIMEOUT_SEC`). |
 
 ### Exit codes
 
@@ -159,8 +190,9 @@ for Skool. Exit code `4` if any URL failed; `5` for auth errors;
 | `2` | Usage error (bad flag combo, malformed URL, cookies file missing on disk, Skool URL not a lesson). |
 | `3` | `TranscriptFetchError` — no caption track in the fallback ladder (transcript path). |
 | `4` | Batch mode: at least one URL failed (partial success). |
-| `5` | `SourceAuthError` — source returned HTTP 401/403 (private Skool needs cookies; cookies expired). |
+| `5` | `SourceAuthError` — source returned HTTP 401/403 (private Skool needs cookies; X protected/suspended/age-gated; cookies expired). |
 | `6` | `SourceRateLimitError` — source returned HTTP 429. |
+| `7` | `MissingDependencyError` — a required tool is absent: yt-dlp, ffmpeg (when required), or **no ASR backend** for caption-less X media. `details.remediation` carries the fix. |
 
 ---
 
@@ -190,6 +222,29 @@ Vimeo has no `<lang>-orig` quirk; the ladder is the user's `--lang` /
 last-ditch fallback. Vimeo auto-captions are far rarer than on
 YouTube — expect `TranscriptFetchError` for many videos and use
 `--with-description` to at least save the metadata.
+
+### X / Twitter (captions-first → ASR)
+
+X has a two-stage strategy rather than a pure caption ladder:
+
+```
+1. embedded captions?  (subtitles / automatic_captions, manual:en then auto:en)
+        ├─ yes → download VTT → clean        (transcript_origin: embedded-captions)
+        └─ no  → download smallest media → ASR
+                 MacWhisper → Whisper CLI → whisper.cpp → cloud (opt-in)
+                 (transcript_origin: macwhisper | whisper-cli | whisper-cpp | openai-api)
+```
+
+Most native X video and all Broadcasts/Spaces have no captions, so they
+take the ASR branch. **ffmpeg is required** for the ASR branch on these
+HLS sources — without it the downloaded fragment-stream is not a valid
+container any ASR engine can open, so the run **fails fast with exit 7**
+(install ffmpeg) BEFORE the large download, rather than failing cryptically
+later. The ASR backend chain then stops at the first engine that is
+**available** and **succeeds**; if none is available the run also exits `7`
+(install MacWhisper or another engine, or use `--asr-allow-cloud`). See
+[`references/asr_backends.md`](../../skills/transcript-fetcher/references/asr_backends.md)
+for the backend interface, the `.env` config, and the component installer.
 
 ### Skool
 
@@ -412,6 +467,26 @@ browsers rotate session tokens every few days). Re-export.
 ### `SourceRateLimitError` (exit code 6)
 
 HTTP 429. Wait 5–10 minutes, then retry. Reduce batch concurrency.
+
+### `MissingDependencyError` (exit code 7)
+
+A required external tool is absent. The message + `details.remediation`
+(with `--json-errors`) say which:
+
+| Cause | Fix |
+|---|---|
+| yt-dlp not installed | `bash scripts/install.sh` (re-creates the venv). |
+| **No ASR backend** for caption-less X media | Install MacWhisper (`mw`), or `./scripts/.venv/bin/python scripts/install_components.py --install-whisper` (Whisper CLI + ffmpeg), or run with `--asr-allow-cloud` + an API key. Run `install_components.py` for a status report. |
+| ffmpeg required but absent | Only the Whisper/whisper.cpp backends need it; MacWhisper does not. `brew install ffmpeg` or `install_components.py --system --run`. |
+
+This is distinct from exit `3` (`TranscriptFetchError`): exit 7 means
+the toolchain is incomplete; exit 3 means the tools ran but no transcript
+could be produced.
+
+For X media specifically, see `transcript_origin` in the stat to confirm
+which path/engine produced the text. The X path is **opt-in for the
+cloud**: by default only local engines run, so no audio leaves your
+machine unless you pass `--asr-allow-cloud`.
 
 ### `quality_flag: "english_auto_translation"`
 

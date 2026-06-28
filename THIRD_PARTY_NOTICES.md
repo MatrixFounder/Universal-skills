@@ -60,6 +60,7 @@ None are bundled in this repository.
 | `httpx` | BSD-3-Clause | html (URL fetch transport) |
 | `trafilatura` | Apache-2.0 | html (lite article + title/date/author extraction) |
 | `playwright` | Apache-2.0 | html (headless Chromium engine for JS/SPA pages; **soft-optional**, installed via `scripts/requirements-chrome.txt` only with `install.sh --with-chrome`) |
+| `yt-dlp` | Unlicense (public domain) | transcript-fetcher (YouTube/Vimeo/X.com metadata + caption/audio download — the only hard runtime dependency of this skill) |
 
 ## JavaScript Libraries (runtime dependencies)
 
@@ -87,6 +88,10 @@ are bundled in this repository.
 | Tesseract OCR (`tesseract`) | Apache-2.0 | pdf (OCR engine behind `pdf_ocr.py`); pptx (OCR engine behind `pptx2md.py --ocr`, called directly per image — NOT via ocrmypdf/ghostscript). Soft-optional; needs the `eng`+`rus` language data |
 | Ghostscript (`gs`) | AGPL-3.0-or-later | pdf (PDF rasterize/repair invoked by `ocrmypdf` for `pdf_ocr.py`; soft-optional) |
 | Obsidian CLI (`obsidian`) | Proprietary freeware (Obsidian license; CLI ships with the desktop app ≥ 1.12) | obsidian-cli (drives the running Obsidian desktop app: link-safe rename/move, properties, tasks, daily notes, Bases, history) |
+| FFmpeg (`ffmpeg`) | LGPL-2.1-or-later / GPL-2.0-or-later (build-dependent) | transcript-fetcher (**required** for X Broadcast/Space ASR — extracts a clean audio-only `m4a` from the HLS stream; also used by the `whisper`/`whisper.cpp` backends to make a 16 kHz WAV). Soft-optional; detected at runtime. |
+| MacWhisper (`mw`) | Proprietary (MacWhisper app; the `mw` CLI ships with it, macOS) | transcript-fetcher (ASR backend #1 — `mw transcribe`). Soft-optional. |
+| OpenAI Whisper CLI (`whisper`) | MIT | transcript-fetcher (ASR backend #2 — needs `ffmpeg`). Soft-optional. |
+| whisper.cpp (`whisper-cli` / `main`) | MIT | transcript-fetcher (ASR backend #3 — needs `ffmpeg` + a ggml model via `--asr-model`). Soft-optional. |
 
 GPL- and AGPL-licensed tools are invoked as unmodified standalone binaries
 via `subprocess` (Ghostscript indirectly, through `ocrmypdf`); this
@@ -97,6 +102,7 @@ repository does not link against, modify, or redistribute them.
 | Service | Terms | Used by |
 |---|---|---|
 | Jina Reader (`r.jina.ai`) | Jina AI Terms of Service (external API; keyless free tier, optional `JINA_API_KEY`) | html (`--engine jina` ONLY — server-side render of a JS/anti-bot page). **Opt-in**: it is never called by the default `auto` engine. No Jina code or dependency is bundled; the skill simply makes an HTTPS request, sending the **target URL** to the service. Do not use for sensitive/internal URLs. |
+| OpenAI Whisper API (`api.openai.com`) — or any OpenAI-compatible transcription server (Groq, self-hosted, …) | OpenAI API Terms (or the configured provider's terms) | transcript-fetcher (`--asr-allow-cloud` ONLY — the lowest-priority cloud ASR backend). **Opt-in**: never called without the flag AND an API key. No OpenAI code/dependency is bundled; the skill makes an HTTPS request **sending the target audio** to the service. Endpoint is configurable (`TRANSCRIPT_FETCHER_OPENAI_BASE_URL` / `…_TRANSCRIBE_ENDPOINT`). Do not use for sensitive audio. |
 
 ## Attribution
 

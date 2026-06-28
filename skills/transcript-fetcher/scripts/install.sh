@@ -22,3 +22,14 @@ python -m pip install -r requirements.txt
 
 echo "[install.sh] OK — installed into $HERE/.venv"
 echo "[install.sh] yt-dlp version: $(python -m yt_dlp --version 2>/dev/null || echo 'unavailable')"
+
+# Skill-local config template (secrets-safe). Never overwrite an existing .env.
+if [ ! -f "$HERE/.env" ] && [ -f "$HERE/.env.example" ]; then
+    echo "[install.sh] tip: cp .env.example .env && chmod 600 .env   # optional config/secrets"
+fi
+
+# Report optional ASR components (mw / whisper / whisper.cpp / ffmpeg). This only
+# DETECTS and prints guidance — it installs nothing. Run install_components.py
+# with --install-whisper / --system --run to actually install optional pieces.
+echo ""
+python "$HERE/install_components.py" || true

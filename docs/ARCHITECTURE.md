@@ -135,7 +135,7 @@ chunk where one exists, otherwise to the skill's own `SKILL.md` / `references/`.
 | **wiki-ingest** | Ingest sources into an Obsidian-style LLM-wiki (ingest/lint/reindex/query + cross-course promotion) | [arch-015](architectures/architecture-015-wiki-ingest-skill.md) |
 | **summarizing-meetings** | Model-agnostic summarization → pyramid Markdown or note-JSON; feeds wiki-ingest | [SKILL.md](../skills/summarizing-meetings/SKILL.md) |
 | **obsidian-cli** | Drive the running Obsidian app (rename/move, properties, tasks, daily note) | [SKILL.md](../skills/obsidian-cli/SKILL.md) |
-| **transcript-fetcher** | Clean transcripts from YouTube/Vimeo/Skool; feeds summarizing-meetings | [SKILL.md](../skills/transcript-fetcher/SKILL.md) |
+| **transcript-fetcher** | Clean transcripts from YouTube/Vimeo/Skool **+ X.com (captions→ASR)**; feeds summarizing-meetings | [arch-016](architectures/architecture-016-transcript-fetcher-x-asr.md) · [SKILL.md](../skills/transcript-fetcher/SKILL.md) |
 
 ### 3.3. Authoring / content / meta skills (Apache-2.0)
 
@@ -179,6 +179,7 @@ tests green, `validate_skill` exit 0 at merge time).
 | [012](architectures/architecture-012-pdf-skill.md) | **pdf** skill · `pdf-*` (TASK 013/014/018) | `md2pdf.py`, `html2pdf.py`+`html2pdf_lib/`, `pdf_{extract,ocr,merge,split,fill_form,watermark}.py` | all 8 PDF CLIs; base/chrome/OCR optional-dep tiers; `web_clean` master for html | 353 |
 | [013](architectures/architecture-013-pptx-skill.md) | **pptx** skill · `pptx-*` (TASK 020/021) | `md2pptx.js`, `outline2pptx.js`, `pptx2md.py`+`pptx2md/`, `pptx_{clean,thumbnails,to_pdf}.py` | Markdown↔PPTX round-trip, pptx2md document-model pipeline (+OCR/denoise), SmartArt honest-scope | 510 |
 | [014](architectures/architecture-014-html-skill.md) | **html** skill · `html` (TASK 022–027) | `html` launcher, `html2md.py`, `html2md_core.js`, `web_clean/` | Web/HTML→Markdown; two-master derivation; SSRF-gated fetch; authenticated Chrome (relocated from old root) | 927 |
+| [016](architectures/architecture-016-transcript-fetcher-x-asr.md) | **transcript-fetcher** · TASK 026 | `sources/x.py`, `sources/_ytdlp_media.py`, `asr/` package, `_config.py`, `_stat.py` | X.com (status video + Broadcasts) source; caption-first→ASR; pluggable ASR backends (mw/whisper/whisper.cpp/cloud-opt-in); ffmpeg required for HLS ASR (fail-fast); `.env` config | 365 |
 | [015](architectures/architecture-015-wiki-ingest-skill.md) | **wiki-ingest** skill · `wiki-*` (TASK 015/016/017) | `wiki_ops.py`, `wiki_ingest/` package | pure-Python LLM-wiki maintenance: ingest/lint/reindex/query + cross-course promotion; v1.1 manifest contract | 518 |
 | [009](architectures/architecture-009-xlsx-9-xlsx2md.md) | xlsx · `xlsx-9` | `xlsx2md.py` | xlsx read-back → Markdown | 1232 |
 | [008](architectures/architecture-008-xlsx-8-and-8a-readback-and-hardening.md) | xlsx · `xlsx-8`/`xlsx-8a` | `xlsx2csv.py`, `xlsx2json.py` | read-back CLIs + production hardening + large-table support | 2107 |

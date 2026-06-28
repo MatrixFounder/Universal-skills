@@ -57,7 +57,11 @@ _HERE = Path(__file__).resolve().parent
 if str(_HERE) not in sys.path:
     sys.path.insert(0, str(_HERE))
 
+import _config as cfg  # noqa: E402
+from asr import DEFAULT_ASR_TIMEOUT_SEC  # noqa: E402
+from sources._log import debug_enabled  # noqa: E402
 from sources._stat import (  # noqa: E402
+    MissingDependencyError,
     SourceAuthError,
     SourceRateLimitError,
     TranscriptFetchError,
@@ -70,7 +74,13 @@ from sources.skool import (  # noqa: E402
 )
 from sources.vimeo import (  # noqa: E402
     DEFAULT_FALLBACK_VIMEO,
+    extract_vimeo_id,
     fetch_vimeo_transcript,
+)
+from sources.x import (  # noqa: E402
+    DEFAULT_FALLBACK_X,
+    extract_x_id,
+    fetch_x_transcript,
 )
 from sources.youtube import (  # noqa: E402  (after sys.path tweak)
     DEFAULT_FALLBACK_RU,
@@ -132,6 +142,15 @@ for _h in ("vimeo.com", "www.vimeo.com", "player.vimeo.com"):
     _SOURCE_BY_HOST[_h] = "vimeo"
 for _h in ("skool.com", "www.skool.com", "app.skool.com"):
     _SOURCE_BY_HOST[_h] = "skool"
+for _h in (
+    "x.com",
+    "www.x.com",
+    "mobile.x.com",
+    "twitter.com",
+    "www.twitter.com",
+    "mobile.twitter.com",
+):
+    _SOURCE_BY_HOST[_h] = "x"
 
 # Retained for backwards-compat with existing tests that imported the set.
 _YOUTUBE_HOSTS = frozenset(
@@ -198,6 +217,10 @@ def _fetch_one(
     with_description: bool = False,
     description_only: bool = False,
     cookies_file: Optional[Path] = None,
+    asr_allow_cloud: bool = False,
+    asr_model: Optional[str] = None,
+    asr_timeout_sec: int = DEFAULT_ASR_TIMEOUT_SEC,
+    debug: bool = False,
 ) -> dict:
     source = _detect_source(url)
     ladder = _build_ladder(prefer=prefer, lang=lang)
@@ -240,6 +263,27 @@ def _fetch_one(
             timeout_sec=timeout_sec,
             with_description=with_description,
             description_only=description_only,
+        )
+    elif source == "x":
+        # X media: the adapter chooses captions-first vs ASR internally. The
+        # caption ladder is X-shaped (manual/auto en first); `lang` is the ASR
+        # language hint. No special-casing of X leaks beyond this branch.
+        x_ladder = tuple(
+            (k, l) for k, l in ladder if not l.endswith("-orig")
+        ) or DEFAULT_FALLBACK_X
+        stat = fetch_x_transcript(
+            url,
+            out_path,
+            fallback_ladder=x_ladder,
+            lang=lang,
+            timeout_sec=timeout_sec,
+            cookies_file=cookies_file,
+            with_description=with_description,
+            description_only=description_only,
+            asr_allow_cloud=asr_allow_cloud,
+            asr_model=asr_model,
+            asr_timeout_sec=asr_timeout_sec,
+            debug=debug,
         )
     else:  # pragma: no cover — _detect_source guards this
         raise ValueError(f"Source {source!r} not yet implemented")
@@ -343,6 +387,35 @@ def _build_parser() -> argparse.ArgumentParser:
         "({error, code, type, details?}). Stdout stat lines are "
         "always JSON regardless of this flag.",
     )
+    p.add_argument(
+        "--debug",
+        action="store_true",
+        help="Emit stage-by-stage progress to stderr (also via "
+        "TRANSCRIPT_FETCHER_DEBUG=1). Stdout stays pure JSON. Off by default.",
+    )
+    p.add_argument(
+        "--asr-allow-cloud",
+        action="store_true",
+        help="Permit the OPT-IN cloud ASR backend (OpenAI Whisper API or any "
+        "OpenAI-compatible server). Requires an API key (OPENAI_API_KEY or "
+        ".env). The audio is uploaded to that service — off by default for "
+        "privacy. Local backends (MacWhisper/whisper/whisper.cpp) are always "
+        "tried first.",
+    )
+    p.add_argument(
+        "--asr-model",
+        default=None,
+        help="Model id forwarded to the chosen ASR backend (e.g. MacWhisper "
+        "'engine:model-id', whisper model name, whisper.cpp ggml path, or a "
+        "cloud model). Overrides any .env default.",
+    )
+    p.add_argument(
+        "--asr-timeout-sec",
+        type=int,
+        default=None,
+        help="Per-backend ASR transcription timeout in seconds. Default "
+        f"{DEFAULT_ASR_TIMEOUT_SEC} (or TRANSCRIPT_FETCHER_ASR_TIMEOUT_SEC).",
+    )
     return p
 
 
@@ -357,10 +430,23 @@ def _read_batch(path: Path) -> list[str]:
 
 
 def main(argv: Optional[list[str]] = None) -> int:
+    # Skill-local `.env` (secrets-safe) BEFORE any config read. Encapsulation:
+    # the skill's settings/secrets travel with it; opt out via
+    # TRANSCRIPT_FETCHER_NO_DOTENV=1. Process env always wins.
+    cfg.load_skill_env()
+
     parser = _build_parser()
     args = parser.parse_args(argv)
 
     json_errors = bool(args.json_errors)
+    debug = debug_enabled(args.debug)
+    asr_allow_cloud = bool(args.asr_allow_cloud) or cfg.asr_allow_cloud_default()
+    asr_model = args.asr_model or cfg.asr_model_default()
+    asr_timeout_sec = (
+        args.asr_timeout_sec
+        if args.asr_timeout_sec
+        else cfg.asr_timeout_sec(DEFAULT_ASR_TIMEOUT_SEC)
+    )
 
     # Validate mutually-exclusive modes.
     if args.batch and args.url:
@@ -381,6 +467,14 @@ def main(argv: Optional[list[str]] = None) -> int:
     if args.timeout_sec <= 0:
         return _emit_error(
             f"--timeout-sec must be positive, got {args.timeout_sec}.",
+            code=2,
+            error_type="UsageError",
+            json_mode=json_errors,
+        )
+
+    if args.asr_timeout_sec is not None and args.asr_timeout_sec <= 0:
+        return _emit_error(
+            f"--asr-timeout-sec must be positive, got {args.asr_timeout_sec}.",
             code=2,
             error_type="UsageError",
             json_mode=json_errors,
@@ -421,6 +515,24 @@ def main(argv: Optional[list[str]] = None) -> int:
                 with_description=args.with_description,
                 description_only=args.description_only,
                 cookies_file=args.cookies_file,
+                asr_allow_cloud=asr_allow_cloud,
+                asr_model=asr_model,
+                asr_timeout_sec=asr_timeout_sec,
+                debug=debug,
+            )
+        except MissingDependencyError as e:
+            # exit 7 — a required external tool is absent (yt-dlp/ffmpeg/no ASR
+            # backend). NOT a subclass of TranscriptFetchError, so this clause
+            # must precede the generic handler (else swallowed as exit 1).
+            detail = {"url": args.url}
+            if getattr(e, "remediation", None):
+                detail["remediation"] = e.remediation
+            return _emit_error(
+                str(e),
+                code=7,
+                error_type="MissingDependencyError",
+                details=detail,
+                json_mode=json_errors,
             )
         except TranscriptFetchError as e:
             return _emit_error(
@@ -519,6 +631,10 @@ def main(argv: Optional[list[str]] = None) -> int:
                 with_description=args.with_description,
                 description_only=args.description_only,
                 cookies_file=args.cookies_file,
+                asr_allow_cloud=asr_allow_cloud,
+                asr_model=asr_model,
+                asr_timeout_sec=asr_timeout_sec,
+                debug=debug,
             )
             sys.stdout.write(json.dumps(stat, ensure_ascii=False) + "\n")
         except _BatchCollisionError as e:
@@ -529,6 +645,21 @@ def main(argv: Optional[list[str]] = None) -> int:
                 "type": "BatchCollision",
                 "url": url,
             }
+            sys.stdout.write(json.dumps(err_record, ensure_ascii=False) + "\n")
+        except MissingDependencyError as e:
+            # Surface the remediation hint per-URL (arch-016 §4.3 — exit 7
+            # handling must exist in BOTH the single-URL and batch paths). The
+            # batch run still aggregates to exit 4, but the record carries the
+            # actionable type + remediation instead of a generic "Exception".
+            failures += 1
+            err_record = {
+                "v": _JSON_ERRORS_SCHEMA,
+                "error": str(e),
+                "type": "MissingDependencyError",
+                "url": url,
+            }
+            if getattr(e, "remediation", None):
+                err_record["remediation"] = e.remediation
             sys.stdout.write(json.dumps(err_record, ensure_ascii=False) + "\n")
         except Exception as e:  # noqa: BLE001
             failures += 1
@@ -573,7 +704,7 @@ def _resolve_batch_path(
     Raises :class:`_BatchCollisionError` when the policy says to error.
     Adds the chosen path to ``seen`` so subsequent URLs see the conflict.
     """
-    vid = extract_video_id(url) or _slugify(url)
+    vid = _extract_any_id(url) or _slugify(url)
     out_path = out_dir / f"{vid}.txt"
     if out_path in seen:
         if on_collision == "error":
@@ -593,6 +724,16 @@ def _resolve_batch_path(
                 n += 1
     seen.add(out_path)
     return out_path
+
+
+def _extract_any_id(url: str) -> Optional[str]:
+    """Source-aware id extraction for batch output filenames.
+
+    Tries the YouTube, Vimeo, then X extractors so an X status/broadcast URL is
+    named by its real id instead of a slugified URL. Returns ``None`` when no
+    source pattern matches (caller falls back to :func:`_slugify`).
+    """
+    return extract_video_id(url) or extract_vimeo_id(url) or extract_x_id(url)
 
 
 def _slugify(text: str) -> str:

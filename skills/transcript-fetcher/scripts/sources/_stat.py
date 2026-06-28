@@ -27,16 +27,24 @@ class TranscriptStat:
     string-keyed for easy consumption by downstream pipelines.
     """
 
-    source: str  # "youtube" | "vimeo" | "skool"
+    source: str  # "youtube" | "vimeo" | "skool" | "x"
     url: str
     video_id: Optional[str]
     output_path: str
-    chosen_track_kind: Optional[str]  # "manual" | "auto" | "skool_manual"
+    chosen_track_kind: Optional[str]  # "manual" | "auto" | "skool_manual" | "asr"
     chosen_track_lang: Optional[str]  # "ru" | "ru-orig" | "en" | "unknown" | ...
     char_count: int
     speaker_turn_count: int
     quality_flag: Optional[str] = None  # e.g. "english_auto_translation"
     notes: list[str] = field(default_factory=list)
+    # TASK 026 — transcript provenance. Lets a downstream skill know HOW the
+    # text was produced (pre-existing captions vs which ASR engine). All
+    # Optional/None-default so the schema stays backward-compatible: the
+    # youtube/vimeo/skool adapters never set them.
+    transcript_origin: Optional[str] = None  # "embedded-captions" | "macwhisper"
+    #                                          | "whisper-cli" | "whisper-cpp" | "openai-api"
+    asr_backend: Optional[str] = None  # == backend name when chosen_track_kind == "asr"
+    asr_model: Optional[str] = None  # backend-reported model id, if any
     # v1.1 — description + metadata (populated only with --with-description
     # or when the source carries metadata anyway, e.g. Skool lesson title).
     title: Optional[str] = None
@@ -75,3 +83,25 @@ class SourceAuthError(RuntimeError):
 
 class SourceRateLimitError(RuntimeError):
     """Raised when a source returns an HTTP 429 / explicit throttle."""
+
+
+class MissingDependencyError(RuntimeError):
+    """Raised when a required external tool is unavailable.
+
+    Covers: yt-dlp missing; ffmpeg required but absent; or no ASR backend
+    available (and the opt-in cloud backend was not enabled). Distinct from
+    :class:`TranscriptFetchError` (which means a transcript could not be
+    produced *despite* the toolchain being present). Maps to CLI exit code 7.
+
+    The ``remediation`` attribute carries an actionable hint surfaced to the
+    user instead of a raw traceback.
+
+    IMPORTANT: this is intentionally a direct subclass of ``RuntimeError`` and
+    **NOT** of ``TranscriptFetchError`` — ``fetch.py`` relies on that to route
+    it to exit 7 via a dedicated ``except`` clause placed before the generic
+    handler (otherwise it would be swallowed as exit 1).
+    """
+
+    def __init__(self, message: str, *, remediation: Optional[str] = None) -> None:
+        super().__init__(message)
+        self.remediation = remediation

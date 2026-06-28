@@ -2,15 +2,29 @@
 name: transcript-fetcher
 description: >-
   Use when the user wants a clean plain-text transcript of a video URL
-  (YouTube, Vimeo) or a Skool classroom lesson. Skool cookies are
-  optional (public communities work without; private ones accept
-  Netscape cookies.txt). Manual->auto language fallback, rolling
-  caption dedup, >> speaker turns preserved, JSON stat sidecar plus
-  optional .description.md sidecar.
+  (YouTube, Vimeo, X.com/Twitter incl. Broadcasts/Spaces) or a Skool
+  classroom lesson. X uses embedded captions when present and falls
+  back to ASR (MacWhisper/Whisper/whisper.cpp/cloud) automatically.
+  Skool cookies are optional (public communities work without; private
+  ones accept Netscape cookies.txt). Manual->auto language fallback,
+  rolling caption dedup, >> speaker turns preserved, JSON stat sidecar
+  plus optional .description.md sidecar.
 tier: 2
-version: 1.1
+version: 1.2
 status: active
 changelog: >-
+  v1.2 — Add X.com (Twitter) adapter: native status video + Broadcasts/
+  Spaces. Captions-first (subtitles/automatic_captions via yt-dlp) with
+  automatic ASR fallback through a pluggable backend chain (MacWhisper
+  `mw` -> Whisper CLI -> whisper.cpp -> opt-in OpenAI/compatible cloud).
+  ffmpeg is required for the ASR path on HLS sources (Broadcasts/Spaces) —
+  used to extract a clean audio-only m4a; the skill fails fast (exit 7)
+  when it is absent there. New stat field `transcript_origin`,
+  exit code 7 (MissingDependency), `--debug` stage logging, `--asr-*`
+  flags. Skill-local `.env` config (secrets-safe, 0600) +
+  install_components.py component installer. transcript-fetcher is now a
+  universal extraction layer (any future yt-dlp platform reuses the X
+  pipeline).
   v1.1 — Add Vimeo + Skool adapters; opt-in --with-description /
   --description-only producing a <out>.description.md (YAML front-
   matter + Markdown body) for YouTube & Skool. Skool delegates
@@ -36,11 +50,23 @@ first, then feed the resulting `.txt` to that skill).
 - "I'll skip writing the JSON stat sidecar, the .txt is enough" -> **WRONG**. The sidecar records WHICH track was picked. Without it, downstream cannot tell whether the transcript is high-quality manual subs or low-quality auto-translation.
 - "The transcript has weird `>>` markers, I'll strip them" -> **WRONG**. Those are speaker-turn boundaries. Removing them collapses multi-speaker meetings into a single voice and ruins downstream attribution.
 - "Auto-generated Russian (`ru-orig`) is garbage, I'll prefer `en` instead" -> **WRONG**. `ru-orig` is the actual Russian audio transcribed; `ru` (without `-orig`) is often an English auto-translation back to Russian. `ru-orig` > `ru` > `en`.
-- "I'll add `ffmpeg` to the deps just in case" -> **WRONG**. WebVTT parsing is pure Python in this skill. Do not pull in heavy dependencies.
+- "I'll add `ffmpeg` to the **pip** deps just in case" -> **WRONG**. The caption path (WebVTT parsing) is pure Python and needs nothing extra; `ffmpeg` is a soft-optional **external system tool**, never a pip dependency. It IS genuinely required for the X **ASR** path on HLS sources (Broadcasts/Spaces) — yt-dlp uses it to extract a clean audio-only `m4a`, and the skill fails fast (exit 7) when it is absent there — but it is detected at runtime (`install_components.py`), not bundled. Do not pull heavy packages into `requirements.txt`.
 
 ## 2. Capabilities
 
 - **Fetch** YouTube and Vimeo captions via `yt-dlp` (no audio download).
+- **Fetch** X.com / Twitter — native status video AND Broadcasts/Spaces.
+  The X provider is **captions-first**: it reuses embedded
+  `subtitles`/`automatic_captions` when present, and **only** when none
+  exist does it download the smallest media and **transcribe via ASR**.
+  Fully automatic — no mode switch. ASR runs through a **pluggable
+  backend chain**: MacWhisper (`mw`) → Whisper CLI → whisper.cpp →
+  opt-in OpenAI/compatible cloud. **`ffmpeg` is required for the X ASR
+  path on HLS sources** (Broadcasts/Spaces): with it the smallest media
+  is extracted to a clean audio-only `m4a`; without it the skill **fails
+  fast (exit 7)** because yt-dlp's no-ffmpeg HLS output is not a valid
+  container the ASR engine can open. (For non-HLS progressive media, or
+  when embedded captions exist, ffmpeg is not needed.)
 - **Fetch** Skool lesson pages via a stdlib HTML scrape — public
   communities work without auth; private/paid ones accept an optional
   Netscape `cookies.txt`. Then **delegate** embedded YouTube/Vimeo
@@ -49,12 +75,13 @@ first, then feed the resulting `.txt` to that skill).
 - **Fall back** through a configurable ladder (default for ru: manual ru -> auto ru-orig -> auto ru -> auto en).
 - **Clean** WebVTT to plain text: strip timestamps, inline timing tags, and rolling-caption overlap; decode HTML entities.
 - **Preserve** `>>` speaker-turn markers as paragraph breaks.
-- **Emit** a JSON stat sidecar (chosen track, char count, speaker-turn count, quality flag, plus optional title/uploader/duration metadata).
+- **Emit** a JSON stat sidecar (chosen track, char count, speaker-turn count, quality flag, plus optional title/uploader/duration metadata). For X media it also records `transcript_origin` (`embedded-captions` | `macwhisper` | `whisper-cli` | `whisper-cpp` | `openai-api`) so downstream skills know HOW the text was produced.
 - **Optionally write** `<out>.description.md` (YAML frontmatter +
   Markdown body) when `--with-description` is passed — gives you a
   ready-to-ingest description for RAG / Obsidian / human review.
 - **Batch** mode for processing multiple URLs from a text file.
-- **Source-agnostic** architecture: each platform is one file under `scripts/sources/`. Zoom and podcast slots remain reserved.
+- **Source-agnostic** architecture: each platform is one file under `scripts/sources/`. The yt-dlp + ASR pipeline is shared (`sources/_ytdlp_media.py` + `asr/`), so a future TikTok/Twitch/Vimeo-ASR provider is one new file + one host entry — no pipeline changes. Zoom and podcast slots remain reserved.
+- **Configurable + secrets-safe**: a skill-local `.env` (see `scripts/.env.example`) externalises every endpoint, model, and tool path. The cloud ASR endpoint works with any OpenAI-compatible server (Groq, self-hosted whisper). A `.env` holding an API key is **refused unless `chmod 600`** (and not a symlink); the key is sent only in an HTTP header, never on argv or in logs.
 
 ## 3. Execution Mode
 
@@ -63,16 +90,31 @@ first, then feed the resulting `.txt` to that skill).
 
 ## 4. Script Contract
 
-- **Install** (one-time):
+- **Install** (one-time): creates the venv + yt-dlp, then reports which optional ASR components are present:
   ```bash
   bash skills/transcript-fetcher/scripts/install.sh
+  # Optional ASR engines (for caption-less X media) — detect / install:
+  ./scripts/.venv/bin/python scripts/install_components.py            # status report
+  ./scripts/.venv/bin/python scripts/install_components.py --install-whisper   # pip openai-whisper into the venv
+  ./scripts/.venv/bin/python scripts/install_components.py --system --run      # brew/apt ffmpeg + whisper.cpp
   ```
 - **Single URL**:
   ```bash
   cd skills/transcript-fetcher
   ./scripts/.venv/bin/python scripts/fetch.py <URL> --out <path/to/output.txt>
   ```
-  Optional flags: `--lang ru` (default), `--prefer manual|auto` (default `manual`), `--with-description`, `--description-only`, `--cookies-file PATH`, `--json-errors`.
+  Optional flags: `--lang ru` (default), `--prefer manual|auto` (default `manual`), `--with-description`, `--description-only`, `--cookies-file PATH`, `--json-errors`, `--debug` (stage logging to stderr), `--asr-allow-cloud` (opt-in cloud ASR), `--asr-model <id>`, `--asr-timeout-sec N`.
+- **X.com / Twitter** (captions-first, automatic ASR fallback; no mode switch). A Broadcast/Space usually has no captions → ASR via the first available local backend (MacWhisper, etc.):
+  ```bash
+  cd skills/transcript-fetcher
+  ./scripts/.venv/bin/python scripts/fetch.py \
+      "https://x.com/i/broadcasts/<id>" \
+      --out broadcast.txt --with-description --debug
+  # → broadcast.txt + .stat.json (source="x", transcript_origin="macwhisper",
+  #   chosen_track_kind="asr"). A status video WITH captions skips ASR
+  #   (transcript_origin="embedded-captions"). Use --cookies-file for
+  #   protected/age-gated media.
+  ```
 - **Skool lesson** (cookies needed ONLY for private / paid communities — public ones work without):
   ```bash
   ./scripts/.venv/bin/python scripts/fetch.py \
@@ -90,7 +132,7 @@ first, then feed the resulting `.txt` to that skill).
   - `<out>.txt.stat.json` — sidecar with the chosen track, quality flag, plus optional title / uploader / upload_date / duration_sec / embed_source / embed_url metadata.
   - `<out>.description.md` — only when `--with-description` is passed; YAML frontmatter + Markdown body.
   - One JSON stat record per URL on stdout.
-- **Failure semantics**: Non-zero exit. With `--json-errors`, stderr carries a single JSON line `{v, error, code, type, details?}`. Exit codes: `2` usage error (incl. malformed Skool URL, cookies file path missing on disk), `3` no caption track in fallback ladder, `4` partial batch failure, `5` source-auth error (HTTP 401/403 — private Skool community needs cookies, or supplied cookies expired), `6` source rate-limit (HTTP 429), `1` unexpected.
+- **Failure semantics**: Non-zero exit. With `--json-errors`, stderr carries a single JSON line `{v, error, code, type, details?}`. Exit codes: `2` usage error (incl. malformed Skool URL, cookies file path missing on disk), `3` no transcript producible (no caption track in the ladder AND — for X — ASR produced nothing / every available backend failed), `4` partial batch failure, `5` source-auth error (HTTP 401/403 — private Skool community needs cookies, X protected/suspended/age-gated media, or supplied cookies expired), `6` source rate-limit (HTTP 429), `7` missing dependency (yt-dlp absent, ffmpeg required-but-absent, or **no ASR backend available** for caption-less media — `details.remediation` carries the hint), `1` unexpected.
 - **Idempotency**: Re-running overwrites the output file and sidecar. yt-dlp itself caches nothing the skill depends on; behaviour is reproducible given network availability.
 - **Dry-run support**: Not currently exposed as a flag. Inspect the fallback ladder via `_build_ladder` if needed.
 
@@ -103,8 +145,13 @@ first, then feed the resulting `.txt` to that skill).
 - **URL allowlist**: Source dispatch is hostname-based against an explicit allowlist:
   - YouTube — `youtu.be`, `youtube.com`, `m.youtube.com`, `music.youtube.com`, `youtube-nocookie.com` (plus `www.` variants).
   - Vimeo — `vimeo.com`, `www.vimeo.com`, `player.vimeo.com`.
+  - X / Twitter — `x.com`, `www.x.com`, `mobile.x.com`, `twitter.com`, `www.twitter.com`, `mobile.twitter.com` (status `…/status/<id>` and `…/i/broadcasts/<id>`).
   - Skool — `skool.com`, `www.skool.com`, `app.skool.com`; additionally URLs must match `/<community>/classroom/<id>?md=<lesson-id>`. Landing / `/about` / `/calendar` pages are rejected.
   URLs that merely contain a supported host as a substring elsewhere are rejected.
+- **ASR backends (external, optional)**: For caption-less X media the skill shells out (argv arrays, never a shell string) to whichever local engine is present — MacWhisper `mw`, Whisper CLI, or whisper.cpp. None is a pip dependency; all are probed at runtime. **ffmpeg** (also external) is required to turn an X Broadcast's HLS stream into a valid audio file; the skill **fails fast with exit 7** (clear remediation, before any large download) when ffmpeg is absent for an HLS source. `bash scripts/install.sh` reports which engines are available; `scripts/install_components.py` guides/installs them (incl. ffmpeg). If no ASR backend is available (and cloud is not opted in), the run also fails cleanly with exit 7, never a traceback.
+- **Cloud ASR egress (opt-in only)**: The OpenAI/compatible cloud backend is used **only** with `--asr-allow-cloud` (or `TRANSCRIPT_FETCHER_ASR_ALLOW_CLOUD=1`) AND an API key present. When used, the **audio leaves the machine** to the configured endpoint — disclosed here and in the stat notes. Local backends are always tried first; cloud is the last resort.
+- **Secrets**: The API key is read from `OPENAI_API_KEY` / `TRANSCRIPT_FETCHER_OPENAI_API_KEY` or a skill-local `.env`. A `.env` is loaded **only** at the CLI entry point and is **refused** if it is a symlink or not `chmod 600` (group/world-readable). The key is sent **only** in an HTTP `Authorization` header — never on a command line, never logged. `.env` is git-ignored; only `scripts/.env.example` (placeholders) is committed.
+- **Temp-file hygiene**: For X media, all intermediates (audio, VTT, info.json, `.part`, `.m3u8`, fragments) live under one tempdir removed in a `finally` block even on error — nothing is left behind.
 - **Auth credentials**: `--cookies-file <path>` accepts a Netscape `cookies.txt` and is **ALWAYS OPTIONAL** for every source. The file is read once at startup, never copied or re-emitted. For Skool, public communities (e.g. `zero-one`) serve lessons without auth; private / paid communities respond with HTTP 401/403 and the user then needs to supply cookies. YouTube/Vimeo optionally forward the file to yt-dlp's `--cookies` for age-gated or unlisted videos. The skill **never blocks on missing cookies up-front** — it tries the fetch and surfaces a `SourceAuthError` (exit 5) only if the source returns 401/403.
 
 ## 6. Validation Evidence
@@ -223,6 +270,13 @@ See `examples/`:
 - `scripts/fetch.py` — CLI entry point.
 - `scripts/sources/youtube.py` — YouTube adapter (yt-dlp orchestration + fallback ladder + description path).
 - `scripts/sources/vimeo.py` — minimal Vimeo adapter (yt-dlp).
+- `scripts/sources/x.py` — X.com / Twitter adapter (captions-first → ASR; the `XTranscriptProvider`).
+- `scripts/sources/_ytdlp_media.py` — shared yt-dlp plumbing (metadata probe, caption inspection, audio-minimal download, failure classifier) reused by X and any future yt-dlp source.
+- `scripts/sources/_log.py` — debug-only stage logger (stderr, gated on `--debug`).
+- `scripts/asr/` — pluggable ASR backend package: `_base.py` (the `ASRBackend` interface), `macwhisper.py`, `whisper_cli.py`, `whisper_cpp.py`, `openai_api.py` (opt-in cloud), `__init__.py` (priority registry + fallback chain).
+- `scripts/_config.py` — skill-local `.env` loader (secrets-safe) + typed config accessors (endpoints/models/tool paths).
+- `scripts/.env.example` — config/secret template (copy to `.env`, `chmod 600`).
+- `scripts/install_components.py` — detect / guide / install the optional ASR components.
 - `scripts/sources/skool.py` — Skool lesson adapter (cookies.txt + Next.js scrape + embed delegation).
 - `scripts/sources/_vtt_to_text.py` — pure-Python WebVTT cleaner.
 - `scripts/sources/_stat.py` — shared `TranscriptStat` + sidecar writer + error classes.

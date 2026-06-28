@@ -10,6 +10,7 @@ new file plus one extra entry in `_SOURCE_BY_HOST` in `fetch.py`.
 | --- | --- | --- | --- |
 | YouTube | `scripts/sources/youtube.py` | Active | yt-dlp; ladder default `manual:ru -> auto:ru-orig -> auto:ru -> auto:en`. Supports `--with-description` via `--write-info-json`. |
 | Vimeo | `scripts/sources/vimeo.py` | Active | yt-dlp; minimal ladder `manual:en -> auto:en` by default. Vimeo auto-captions are rare — expect `no_caption_track` for some videos. |
+| X / Twitter | `scripts/sources/x.py` | Active | yt-dlp; native status video **and** Broadcasts/Spaces. **Captions-first**: uses `subtitles`/`automatic_captions` when present, else downloads the smallest media and **transcribes via the `asr/` backend chain** (MacWhisper → Whisper CLI → whisper.cpp → opt-in cloud). `ffmpeg`-optional. Records `transcript_origin` in the stat. `--cookies-file` optional (protected/age-gated media). The first source to consume the ASR layer. |
 | Skool | `scripts/sources/skool.py` | Active | `--cookies-file` is OPTIONAL — public communities (e.g. `zero-one`) serve lesson HTML without auth; private/paid communities respond with HTTP 401/403 and need a Netscape `cookies.txt`. Parses `__NEXT_DATA__`, picks lesson by `?md=<lesson-id>`, then either uses the author-uploaded transcript or delegates the embedded YouTube/Vimeo URL to the corresponding adapter. |
 
 ## 2. Planned slots (not implemented)
@@ -47,6 +48,19 @@ And reuse the common helpers:
 - `_stat.write_stat_sidecar` for the `.stat.json` writer.
 - `_description.write_description_md` for the `.description.md` writer
   (skip when `with_description=False`).
+
+A yt-dlp-backed source may additionally reuse the **shared media core**
+(`_ytdlp_media.py`) for `probe_metadata`, `caption_langs` / `pick_caption`,
+`download_subtitle`, `download_audio` (ffmpeg-aware: extracts a clean m4a when
+ffmpeg is present; HLS sources require it) and `classify_failure`,
+and — when no captions exist — the **ASR layer** (`asr.transcribe_with_fallback`)
+to transcribe the downloaded audio. The X adapter (`x.py`) is the reference
+implementation of this captions-first → ASR pattern. See
+[`asr_backends.md`](asr_backends.md) for the ASR backend interface, the
+fallback chain, the `.env` config, and the component installer. A transcript's
+provenance is recorded in `TranscriptStat.transcript_origin`
+(`embedded-captions` | `macwhisper` | `whisper-cli` | `whisper-cpp` |
+`openai-api`).
 
 ## 4. URL detection
 

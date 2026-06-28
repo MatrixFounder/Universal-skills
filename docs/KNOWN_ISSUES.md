@@ -546,6 +546,82 @@ beyond the standard de-automation flag to chase Google's check (arms race — co
 
 ---
 
+## TRANSCRIPT-FETCHER-X (TASK 026) — honest-scope limitations
+
+All deferred-by-design for the X.com + ASR feature. Architecture:
+[`docs/architectures/architecture-016-transcript-fetcher-x-asr.md`](architectures/architecture-016-transcript-fetcher-x-asr.md) §7.
+None is a blocker; the chain ships with 213 offline tests green +
+`validate_skill` exit 0.
+
+### TF-X-1 — youtube/vimeo not retrofitted onto the shared `_ytdlp_media.py`
+**Status:** open (by design) • **Severity:** LOW • **Location:**
+`sources/youtube.py`, `sources/vimeo.py`.
+The shared media core (`_ytdlp_media.py`) is the **forward** extension surface
+(X uses it; future TikTok/Twitch will). The two pre-existing adapters keep their
+own copies of the yt-dlp helpers to avoid regressing three tested adapters in one
+task. `classify_failure` in the shared module **imports** youtube's base pattern
+tuples (no fork). **Fix path:** a future `transcript-fetcher-Nb` can converge
+youtube/vimeo onto the shared core. **Do-not:** treat the duplication as a fork —
+the base failure patterns have one source of truth.
+
+### TF-X-2 — ffmpeg is required for the X ASR path on HLS sources (Broadcasts/Spaces)
+**Status:** handled (fail-fast) • **Severity:** MEDIUM • **Location:**
+`sources/x.py` (fail-fast), `_ytdlp_media.{is_hls_only,download_audio}`.
+**Live-E2E finding (supersedes the original "ffmpeg-optional" design assumption):**
+yt-dlp's native HLS downloader runs without ffmpeg, but the file it produces by
+concatenating fragments is **not a valid playable container** — MacWhisper/
+AVFoundation rejects it (`Error: cannot open (mp4)`). X Broadcasts/Spaces are
+always HLS, so **ffmpeg is required** there (to extract a clean `m4a`). The
+adapter probes `is_hls_only(info)` and, when ffmpeg is absent, **fails fast with
+`MissingDependencyError` (exit 7)** + a "install ffmpeg" remediation, BEFORE the
+~200 MB download — instead of failing cryptically at the ASR step. ffmpeg stays
+optional for non-HLS progressive media and the caption path. **Do-not:** re-assert
+"MacWhisper reads video so ffmpeg is optional" — true only for a *valid* container,
+which the no-ffmpeg HLS output is not.
+Separately, **whisper.cpp** needs ffmpeg (to make a 16 kHz WAV) **and**
+`--asr-model <ggml.bin>`; without either its `available()` returns False and it is
+cleanly skipped — never a mid-run crash.
+
+### TF-X-6 — ASR engines can hallucinate filler on leading silence/music
+**Status:** open (engine-level, honest-scope) • **Severity:** LOW • **Location:**
+the ASR engine, not the skill. Whisper-family models (incl. MacWhisper) commonly
+emit repeated training-data filler — e.g. `"Продолжение следует..."`,
+`"Thanks for watching"` — over **silent or music-only** lead-in/out segments. The
+live broadcast transcript opened with ~14 such lines before the real speech. The
+skill faithfully records whatever the engine returns; it does not post-filter
+(that would risk deleting real content). **Workaround:** trim obvious filler
+downstream, or use a model/engine config with VAD / `condition_on_previous_text=false`.
+**Do-not:** add a blanket dedup that could strip legitimately-repeated speech.
+
+### TF-X-3 — cloud ASR egresses audio (opt-in)
+**Status:** open (by design) • **Severity:** LOW • **Location:**
+`asr/openai_api.py`. The cloud backend is used **only** with `--asr-allow-cloud`
+(or `TRANSCRIPT_FETCHER_ASR_ALLOW_CLOUD=1`) AND a key present; the audio leaves
+the machine to the configured endpoint. Disclosed in SKILL.md §5 + `.env.example`.
+Local backends are always tried first. **Do-not:** use `--asr-allow-cloud` for
+sensitive audio without accepting the egress.
+
+### TF-X-4 — captions taken as WebVTT only (no bespoke TTML/SRT parser)
+**Status:** open (honest-scope) • **Severity:** LOW • **Location:**
+`_ytdlp_media.download_subtitle`. yt-dlp is asked for `--sub-format vtt`; where a
+source offers only TTML/SRT and yt-dlp cannot convert, the track is treated as
+absent → ASR path. No standalone TTML parser is shipped.
+
+### TF-X-5 — X login walls need `--cookies-file`; large broadcasts download in full
+**Status:** open (honest-scope) • **Severity:** LOW • **Location:** `sources/x.py`,
+`_ytdlp_media.download_audio`. Protected/age-gated/some-Broadcast media needs a
+Netscape `cookies.txt` (existing mechanism) → otherwise `SourceAuthError` (exit 5);
+the skill does not mint sessions (that is the `html` skill's job). For ASR, the
+**smallest** muxed variant is downloaded, but a long Broadcast/Space is still a
+large download with no aggregate wall-clock deadline (bounded only by
+`--timeout-sec`). **Do-not:** treat a slow large-broadcast download as a hang.
+**Note:** MacWhisper auto-detects language; the `--lang` hint is not forwarded to
+`mw` (it is forwarded to whisper/whisper.cpp/cloud). Broadcast `duration` may be
+`None` in yt-dlp metadata → `stat.duration_sec` is then `None` (not derived from
+the media, to avoid an ffprobe dependency).
+
+---
+
 ## How to add a new entry
 
 1. Append below the relevant category (or create a new top-level

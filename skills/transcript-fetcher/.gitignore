@@ -1,0 +1,11 @@
+# Skill-local secrets — NEVER commit a real .env (it may hold an API key).
+# Both candidate locations are ignored; the committed template is .env.example.
+.env
+scripts/.env
+!.env.example
+!scripts/.env.example
+
+# Per-skill virtualenv / caches (repo policy: never committed).
+scripts/.venv/
+**/__pycache__/
+*.pyc
