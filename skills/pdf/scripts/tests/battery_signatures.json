@@ -2,22 +2,22 @@
   "API Reference - Documentation - Discord.webarchive": {
     "platform": "discord",
     "regular": {
-      "min_pages": 27,
-      "max_pages": 29,
-      "min_size_kb": 266,
-      "max_size_kb": 326,
+      "min_pages": 28,
+      "max_pages": 30,
+      "min_size_kb": 283,
+      "max_size_kb": 347,
       "required_needles": [
         "The file upload size limit applies to each file in a request.",
-        "parent’s ID. Because Snowflake IDs are up to 64 bits in size",
-        "Discord’s Gateway API is used for maintaining persistent, stateful"
+        "ignore rate limits will have their API keys revoked, and be blocked",
+        "Discord, except in some unique scenarios in which child objects"
       ],
       "forbidden_needles": []
     },
     "reader": {
       "min_pages": 19,
       "max_pages": 21,
-      "min_size_kb": 229,
-      "max_size_kb": 279,
+      "min_size_kb": 232,
+      "max_size_kb": 284,
       "required_needles": [
         "The file upload size limit applies to each file in a request.",
         "with RFC 6585. API users that regularly hit and ignore rate limits",
@@ -58,8 +58,8 @@
     "regular": {
       "min_pages": 48,
       "max_pages": 52,
-      "min_size_kb": 8524,
-      "max_size_kb": 10418,
+      "min_size_kb": 8528,
+      "max_size_kb": 10424,
       "required_needles": [
         "Give your teams and agents the context they need to take meaningful",
         "requests manually or from workflows and sync exemption certificate",
@@ -70,8 +70,8 @@
     "reader": {
       "min_pages": 48,
       "max_pages": 54,
-      "min_size_kb": 3290,
-      "max_size_kb": 4022,
+      "min_size_kb": 3295,
+      "max_size_kb": 4027,
       "required_needles": [
         "Access your HubSpot context in Claude to get personalized insights,",
         "Assists with domain-related queries, domain setup processes,",
@@ -202,12 +202,12 @@
     "regular": {
       "min_pages": 5,
       "max_pages": 7,
-      "min_size_kb": 75,
-      "max_size_kb": 91,
+      "min_size_kb": 87,
+      "max_size_kb": 107,
       "required_needles": [
-        "the OAuth2 authorization flow and must be declared in the Developer",
-        "Use this file to discover all available pages before exploring",
-        "Scopes define what your app is allowed to do. They are requested"
+        "Discord uses OAuth2 as the standard authorization framework for",
+        "bot token. Your code uses this token to authenticate as the bot",
+        "When you need to act on behalf of a user, you use OAuth2 to get"
       ],
       "forbidden_needles": []
     },
@@ -229,8 +229,8 @@
     "regular": {
       "min_pages": 5,
       "max_pages": 7,
-      "min_size_kb": 76,
-      "max_size_kb": 92,
+      "min_size_kb": 50,
+      "max_size_kb": 62,
       "required_needles": [
         "For AI agents: a documentation index is available at the root",
         "OpenAPI spec, and zero boilerplate. It is intentionally lean",
@@ -373,7 +373,7 @@
       "required_needles": [
         "Continuation SetupPrice is forming a shortterm bullish structure",
         "preparing for further growth... Bitcoin is in a",
-        "Structure: Gold is currently trapped in a large"
+        "thoughts on Bitcoin ? Bitcoin, after its recent"
       ],
       "forbidden_needles": []
     },
@@ -396,17 +396,12 @@
     "regular": {
       "min_pages": 1,
       "max_pages": 2,
-      "min_size_kb": 1,
-      "max_size_kb": 60,
+      "min_size_kb": 26,
+      "max_size_kb": 36,
       "required_needles": [
-        "Управление версиями",
-        "Версия",
-        "Дата",
-        "Автор",
-        "V0.01",
-        "V0.02",
-        "Демидова Татьяна",
-        "1. Ограничения"
+        "Документ содержит описание методов модуля интеграции в рамках",
+        "функциональности работы с телефонией ELMA365.",
+        "Интеграция ELMA365 с телефонией 3CX"
       ],
       "forbidden_needles": [
         "Копировать ссылку"
@@ -415,15 +410,12 @@
     "reader": {
       "min_pages": 1,
       "max_pages": 2,
-      "min_size_kb": 1,
-      "max_size_kb": 60,
+      "min_size_kb": 26,
+      "max_size_kb": 36,
       "required_needles": [
-        "Управление версиями",
-        "Версия",
-        "Дата",
-        "Автор",
-        "V0.01",
-        "Демидова Татьяна"
+        "Документ содержит описание методов модуля интеграции в рамках",
+        "функциональности работы с телефонией ELMA365.",
+        "Интеграция ELMA365 с телефонией 3CX"
       ],
       "forbidden_needles": [
         "Копировать ссылку"
@@ -468,25 +460,24 @@
     "regular": {
       "min_pages": 1,
       "max_pages": 2,
-      "min_size_kb": 1,
-      "max_size_kb": 50,
+      "min_size_kb": 16,
+      "max_size_kb": 26,
       "required_needles": [
-        "import requests",
-        "openai/gpt-5.2",
-        "What is the meaning of life?",
-        "url=\"https://openrouter.ai/api/v1/chat/completions\""
+        "The most direct way to use OpenRouter. Send standard HTTP requests",
+        "url=\"https://openrouter.ai/api/v1/chat/completions\",",
+        "The API also supports streaming."
       ],
       "forbidden_needles": []
     },
     "reader": {
       "min_pages": 1,
       "max_pages": 2,
-      "min_size_kb": 1,
-      "max_size_kb": 50,
+      "min_size_kb": 16,
+      "max_size_kb": 26,
       "required_needles": [
-        "import requests",
-        "openai/gpt-5.2",
-        "What is the meaning of life?"
+        "The most direct way to use OpenRouter. Send standard HTTP requests",
+        "url=\"https://openrouter.ai/api/v1/chat/completions\",",
+        "The API also supports streaming."
       ],
       "forbidden_needles": []
     }
@@ -497,26 +488,24 @@
     "regular": {
       "min_pages": 1,
       "max_pages": 2,
-      "min_size_kb": 1,
-      "max_size_kb": 60,
+      "min_size_kb": 24,
+      "max_size_kb": 34,
       "required_needles": [
-        "Retrieve mids for all coins",
-        "https://api.hyperliquid.xyz/info",
-        "Content-Type",
-        "application/json",
-        "allMids"
+        "Note that if the book is empty, the last trade price will be",
+        "Perp dex name. Defaults to the empty string which represents",
+        "https://api.hyperliquid.xyz/info"
       ],
       "forbidden_needles": []
     },
     "reader": {
       "min_pages": 1,
       "max_pages": 2,
-      "min_size_kb": 1,
-      "max_size_kb": 60,
+      "min_size_kb": 24,
+      "max_size_kb": 34,
       "required_needles": [
-        "Retrieve mids for all coins",
-        "Content-Type",
-        "application/json"
+        "Note that if the book is empty, the last trade price will be",
+        "Perp dex name. Defaults to the empty string which represents",
+        "https://api.hyperliquid.xyz/info"
       ],
       "forbidden_needles": []
     }
@@ -526,8 +515,8 @@
     "regular": {
       "min_pages": 1,
       "max_pages": 2,
-      "min_size_kb": 54,
-      "max_size_kb": 66,
+      "min_size_kb": 55,
+      "max_size_kb": 67,
       "required_needles": [
         "Circle introduces cirBTC to expand BTC's DeFi role",
         "Разрешите уведомления Gmail на рабочем столе."
@@ -552,14 +541,13 @@
     "source": "platform",
     "regular": {
       "min_pages": 1,
-      "max_pages": 3,
-      "min_size_kb": 1,
-      "max_size_kb": 60,
+      "max_pages": 2,
+      "min_size_kb": 19,
+      "max_size_kb": 29,
       "required_needles": [
-        "Представлен трекер Claude Code",
-        "Йенс Ларссон",
-        "Демон запускается локально",
-        "Cloudflare"
+        "«Демон запускается локально и предоставляет вашему ноутбуку доступ",
+        "Разработчик Йенс Ларссон представил открытый проект фитнес-трекер",
+        "аутентифицируемым с помощью созданного вами ключа на предъявителя."
       ],
       "forbidden_needles": [
         "ИНН 7705756279",
@@ -569,13 +557,13 @@
     },
     "reader": {
       "min_pages": 1,
-      "max_pages": 3,
-      "min_size_kb": 1,
-      "max_size_kb": 60,
+      "max_pages": 2,
+      "min_size_kb": 19,
+      "max_size_kb": 29,
       "required_needles": [
-        "Представлен трекер Claude Code",
-        "Йенс Ларссон",
-        "Демон запускается локально"
+        "«Демон запускается локально и предоставляет вашему ноутбуку доступ",
+        "Разработчик Йенс Ларссон представил открытый проект фитнес-трекер",
+        "аутентифицируемым с помощью созданного вами ключа на предъявителя."
       ],
       "forbidden_needles": [
         "ИНН 7705756279",
@@ -591,26 +579,24 @@
     "regular": {
       "min_pages": 1,
       "max_pages": 2,
-      "min_size_kb": 1,
-      "max_size_kb": 50,
+      "min_size_kb": 15,
+      "max_size_kb": 25,
       "required_needles": [
-        "Supported IDEs",
-        "Claude Code integrates with JetBrains IDEs",
-        "IntelliJ IDEA",
-        "PyCharm",
-        "After installing the plugin"
+        "After installing the plugin, you may need to restart your IDE",
+        "Claude Code integrates with JetBrains IDEs through a dedicated",
+        "The Claude Code plugin works with most JetBrains IDEs,"
       ],
       "forbidden_needles": []
     },
     "reader": {
       "min_pages": 1,
       "max_pages": 2,
-      "min_size_kb": 1,
-      "max_size_kb": 50,
+      "min_size_kb": 15,
+      "max_size_kb": 25,
       "required_needles": [
-        "Supported IDEs",
-        "Claude Code integrates with JetBrains IDEs",
-        "IntelliJ IDEA"
+        "After installing the plugin, you may need to restart your IDE",
+        "Claude Code integrates with JetBrains IDEs through a dedicated",
+        "The Claude Code plugin works with most JetBrains IDEs,"
       ],
       "forbidden_needles": []
     }
@@ -621,22 +607,24 @@
     "regular": {
       "min_pages": 1,
       "max_pages": 2,
-      "min_size_kb": 1,
-      "max_size_kb": 50,
+      "min_size_kb": 15,
+      "max_size_kb": 25,
       "required_needles": [
-        "BROKEN_CSS_HEADER",
-        "BROKEN_CSS_BODY"
+        "font preload point to an unresolvable host. The render relies",
+        "BROKEN_CSS_BODY — this paragraph must render even though the",
+        "URL fetcher refusing remote fetches with no network"
       ],
       "forbidden_needles": []
     },
     "reader": {
       "min_pages": 1,
       "max_pages": 2,
-      "min_size_kb": 1,
-      "max_size_kb": 50,
+      "min_size_kb": 15,
+      "max_size_kb": 25,
       "required_needles": [
-        "BROKEN_CSS_HEADER",
-        "BROKEN_CSS_BODY"
+        "font preload point to an unresolvable host. The render relies",
+        "BROKEN_CSS_BODY — this paragraph must render even though the",
+        "URL fetcher refusing remote fetches with no network"
       ],
       "forbidden_needles": []
     }
@@ -646,23 +634,23 @@
     "source": "synthetic",
     "regular": {
       "min_pages": 1,
-      "max_pages": 3,
-      "min_size_kb": 1,
-      "max_size_kb": 50,
+      "max_pages": 2,
+      "min_size_kb": 5,
+      "max_size_kb": 15,
       "required_needles": [
-        "PERF_NEEDLE",
-        "PERF_NEEDLE_END"
+        "PERF_NEEDLE — start of body",
+        "PERF_NEEDLE_END — finished"
       ],
       "forbidden_needles": []
     },
     "reader": {
       "min_pages": 1,
-      "max_pages": 3,
-      "min_size_kb": 1,
-      "max_size_kb": 50,
+      "max_pages": 2,
+      "min_size_kb": 5,
+      "max_size_kb": 15,
       "required_needles": [
-        "PERF_NEEDLE",
-        "PERF_NEEDLE_END"
+        "PERF_NEEDLE — start of body",
+        "PERF_NEEDLE_END — finished"
       ],
       "forbidden_needles": []
     }
@@ -673,24 +661,20 @@
     "regular": {
       "min_pages": 1,
       "max_pages": 2,
-      "min_size_kb": 1,
-      "max_size_kb": 30,
+      "min_size_kb": 5,
+      "max_size_kb": 15,
       "required_needles": [
-        "OUTER_X",
-        "INNER_Y",
-        "TAIL_Z"
+        "This document tests the nested-button unwrap."
       ],
       "forbidden_needles": []
     },
     "reader": {
       "min_pages": 1,
       "max_pages": 2,
-      "min_size_kb": 1,
-      "max_size_kb": 30,
+      "min_size_kb": 5,
+      "max_size_kb": 15,
       "required_needles": [
-        "OUTER_X",
-        "INNER_Y",
-        "TAIL_Z"
+        "This document tests the nested-button unwrap."
       ],
       "forbidden_needles": []
     }
@@ -701,21 +685,24 @@
     "regular": {
       "min_pages": 1,
       "max_pages": 2,
-      "min_size_kb": 1,
-      "max_size_kb": 50,
+      "min_size_kb": 14,
+      "max_size_kb": 24,
       "required_needles": [
-        "HEADER_X",
-        "REAL_CONTENT_NEEDLE"
+        "REAL_CONTENT_NEEDLE — this is the legitimate article body that",
+        "consectetur adipiscing elit, sed do eiusmod tempor incididunt",
+        "exceed the 500-char threshold for the .entry candidate tier."
       ],
       "forbidden_needles": []
     },
     "reader": {
       "min_pages": 1,
       "max_pages": 2,
-      "min_size_kb": 1,
-      "max_size_kb": 30,
+      "min_size_kb": 7,
+      "max_size_kb": 17,
       "required_needles": [
-        "REAL_CONTENT_NEEDLE"
+        "REAL_CONTENT_NEEDLE — this is the legitimate article body that",
+        "consectetur adipiscing elit, sed do eiusmod tempor incididunt",
+        "exceed the 500-char threshold for the .entry candidate tier."
       ],
       "forbidden_needles": [
         "HEADER_X",
@@ -729,25 +716,17 @@
     "regular": {
       "min_pages": 1,
       "max_pages": 2,
-      "min_size_kb": 1,
-      "max_size_kb": 30,
-      "required_needles": [
-        "BEFORE_NEEDLE",
-        "MIDDLE_NEEDLE",
-        "AFTER_NEEDLE"
-      ],
+      "min_size_kb": 4,
+      "max_size_kb": 14,
+      "required_needles": [],
       "forbidden_needles": []
     },
     "reader": {
       "min_pages": 1,
       "max_pages": 2,
-      "min_size_kb": 1,
-      "max_size_kb": 30,
-      "required_needles": [
-        "BEFORE_NEEDLE",
-        "MIDDLE_NEEDLE",
-        "AFTER_NEEDLE"
-      ],
+      "min_size_kb": 4,
+      "max_size_kb": 14,
+      "required_needles": [],
       "forbidden_needles": []
     }
   },
@@ -757,29 +736,17 @@
     "regular": {
       "min_pages": 1,
       "max_pages": 2,
-      "min_size_kb": 1,
-      "max_size_kb": 30,
-      "required_needles": [
-        "VERTICAL_NEEDLE_TOP",
-        "VERTICAL_NEEDLE_MID",
-        "VERTICAL_NEEDLE_BOT",
-        "HEADER_LINE",
-        "FOOTER_LINE"
-      ],
+      "min_size_kb": 12,
+      "max_size_kb": 22,
+      "required_needles": [],
       "forbidden_needles": []
     },
     "reader": {
       "min_pages": 1,
       "max_pages": 2,
-      "min_size_kb": 1,
-      "max_size_kb": 30,
-      "required_needles": [
-        "VERTICAL_NEEDLE_TOP",
-        "VERTICAL_NEEDLE_MID",
-        "VERTICAL_NEEDLE_BOT",
-        "HEADER_LINE",
-        "FOOTER_LINE"
-      ],
+      "min_size_kb": 12,
+      "max_size_kb": 22,
+      "required_needles": [],
       "forbidden_needles": []
     }
   },
@@ -792,7 +759,7 @@
       "max_size_kb": 50,
       "required_needles": [
         "replyОтветитьlong_arrow_rightПереслатьenvelope Не прочитано trashУдалитьplusСвязать",
-        "скачайте приложение для рабочего стола",
+        "скачайте приложение для рабочего стола.",
         "Почта Mail info@e.mail.ru"
       ],
       "forbidden_needles": []
@@ -814,24 +781,25 @@
     "source": "platform",
     "regular": {
       "min_pages": 1,
-      "max_pages": 3,
-      "min_size_kb": 1,
-      "max_size_kb": 400,
+      "max_pages": 2,
+      "min_size_kb": 239,
+      "max_size_kb": 293,
       "required_needles": [
-        "R&D – это не бэкстейдж",
-        "Anton Bushkov",
-        "исследовательская функция"
+        "Когда я говорю «исследования и разработки», большинство собеседников",
+        "Но на самом деле R&D — это часть продукта. И вот почему.",
+        "SHOULD_NOT_APPEAR_IN_READER_MODE_comment_one"
       ],
       "forbidden_needles": []
     },
     "reader": {
       "min_pages": 1,
       "max_pages": 2,
-      "min_size_kb": 1,
-      "max_size_kb": 60,
+      "min_size_kb": 17,
+      "max_size_kb": 27,
       "required_needles": [
-        "R&D – это не бэкстейдж",
-        "исследовательская функция"
+        "Когда я говорю «исследования и разработки», большинство собеседников",
+        "Главная мысль: исследовательская функция должна быть встроена",
+        "разработку, а не существовать в параллельном измерении."
       ],
       "forbidden_needles": [
         "SHOULD_NOT_APPEAR_IN_READER_MODE_comment_one",
@@ -1094,13 +1062,40 @@
       "forbidden_needles": []
     }
   },
+  "Платежная система Stripe — Сервисы на vc.ru.webarchive": {
+    "platform": "vcru",
+    "regular": {
+      "min_pages": 20,
+      "max_pages": 22,
+      "min_size_kb": 1441,
+      "max_size_kb": 1761,
+      "required_needles": [
+        "Коуч по здоровью неделю одновременно носил Apple Watch, Whoop,",
+        "Как открыть криптосчет: виды кошельков, рекомендации по выбору",
+        "В статье разберем, какие возможности дает Stripe, почему подключить"
+      ],
+      "forbidden_needles": []
+    },
+    "reader": {
+      "min_pages": 5,
+      "max_pages": 7,
+      "min_size_kb": 143,
+      "max_size_kb": 175,
+      "required_needles": [
+        "В статье разберем, какие возможности дает Stripe, почему подключить",
+        "недоступен, слишком дорог или не подходит под модель бизнеса,",
+        "в криптовалюте, подключается проще, предлагает комиссию от 0,4%"
+      ],
+      "forbidden_needles": []
+    }
+  },
   "Представлен трекер Claude Code для умных часов Garmin : Хабр.webarchive": {
     "platform": "habr",
     "regular": {
       "min_pages": 7,
       "max_pages": 9,
-      "min_size_kb": 464,
-      "max_size_kb": 568,
+      "min_size_kb": 469,
+      "max_size_kb": 573,
       "required_needles": [
         "— средняя зарплата во всех IT-специализациях по данным из 33",
         "Claude Code, он не использует API‑интерфейс прокси. Если что‑то",

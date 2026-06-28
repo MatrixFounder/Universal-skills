@@ -323,6 +323,11 @@ def main(argv: list[str] | None = None) -> int:
         # `_*` annotations across --refresh (HIGH-4 fix).
         prev_full = existing.get(f.name) or {}
         sig: dict = {"platform": prev_full.get("platform", _platform_guess(f.name))}
+        # Preserve the `source` hint (synthetic / platform) so the test can
+        # still resolve non-tmp fixtures; without it _resolve_source falls
+        # back to tmp/ and silently skips synthetic + platform fixtures.
+        if "source" in prev_full:
+            sig["source"] = prev_full["source"]
         for key, val in prev_full.items():
             if key.startswith("_"):
                 sig[key] = val
