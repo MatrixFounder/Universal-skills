@@ -565,6 +565,20 @@ else
     nok "battery" "$(_parse_unittest_failure "$out")"
 fi
 
+# --- capture_signatures guard: committed bands stay cross-platform --------
+# Locks the fix for the 1f55847 footgun: a macOS `--refresh` must not re-bake
+# the committed synthetic/platform size bands to single-platform values.
+set +e
+out=$("$PY" -m unittest tests.test_capture_guard 2>&1)
+rc=$?
+set -e
+if [ "$rc" -eq 0 ]; then
+    n=$(echo "$out" | awk '/^Ran [0-9]+ tests/ {print $2}')
+    ok "capture guard (${n} cases — cross-platform refresh footgun)"
+else
+    nok "capture guard" "$(_parse_unittest_failure "$out")"
+fi
+
 # --- pdf_extract: PDF → structured JSON dump + scan detection -------------
 # Fixtures are built at runtime (skill .gitignore ignores *.pdf, same as the
 # _acroform_fixture pattern) — the builder is the committed provenance.

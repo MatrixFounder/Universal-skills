@@ -73,6 +73,52 @@ SIZE_TOLERANCE_PCT = 0.10
 REQUIRED_NEEDLE_COUNT = 3
 
 
+def _on_linux() -> bool:
+    """True on Linux (CI). The committed synthetic/platform battery bands are
+    Ubuntu-derived; the guards below only let ``--refresh`` regenerate them
+    here, never on a macOS/other dev box."""
+    return sys.platform.startswith("linux")
+
+
+def _source_of(path: Path, synthetic_dir: Path, platform_dir: Path) -> str:
+    """Classify a fixture by the directory it lives in:
+
+      * ``synthetic`` — examples/regression/ (committed micro-fixtures)
+      * ``platform``  — tests/fixtures/platforms/ (committed real slices)
+      * ``tmp``       — anything else (gitignored, dev-only, skipped in CI)
+
+    The first two are *committed* and consumed by CI on Ubuntu; ``tmp`` only
+    ever runs on the dev's own machine.
+    """
+    parent = path.parent
+    if parent == synthetic_dir:
+        return "synthetic"
+    if parent == platform_dir:
+        return "platform"
+    return "tmp"
+
+
+def _should_capture(*, source: str, in_existing: bool, refresh: bool,
+                    on_linux: bool) -> "tuple[bool, str]":
+    """Decide whether to (re)generate a fixture's bands now. Pure / testable.
+
+    Guard rationale: a committed synthetic/platform baseline is the
+    *cross-platform* size band CI consumes on Ubuntu. A ``--refresh`` on a
+    non-Linux dev box (macOS) re-bakes it with CoreText sizes that Ubuntu's
+    freetype/fontconfig render can't satisfy — the exact regression that
+    turned CI red in 1f55847. So off-Linux we KEEP the committed band; it is
+    only refreshed on Linux (the ``update_goldens`` workflow_dispatch).
+
+    Returns ``(capture?, skip_reason)``; ``skip_reason`` is "" when capturing.
+    """
+    if in_existing and not refresh:
+        return False, "already in baseline"
+    if (refresh and in_existing and source in ("synthetic", "platform")
+            and not on_linux):
+        return False, f"committed {source} baseline — refresh on Linux CI only"
+    return True, ""
+
+
 def _platform_guess(fixture_name: str) -> str:
     """Crude platform inference from filename — set once, then user edits."""
     n = fixture_name.lower()
@@ -306,12 +352,34 @@ def main(argv: list[str] | None = None) -> int:
     if args.refresh:
         print("--refresh: ALL existing entries will be regenerated")
 
+    on_linux = _on_linux()
     new_or_refresh: list[Path] = []
+    kept_committed = 0
     for f in fixtures:
-        if f.name in existing and not args.refresh:
-            print(f"skip   {f.name} (already in baseline)")
+        src = _source_of(f, SYNTHETIC_DIR, PLATFORM_DIR)
+        do_capture, reason = _should_capture(
+            source=src,
+            in_existing=f.name in existing,
+            refresh=args.refresh,
+            on_linux=on_linux,
+        )
+        if not do_capture:
+            committed = reason.startswith("committed")
+            print(f"{'keep' if committed else 'skip'}   {f.name} ({reason})")
+            if committed:
+                kept_committed += 1
             continue
         new_or_refresh.append(f)
+
+    if kept_committed:
+        print(
+            f"\nNOTE: kept {kept_committed} committed synthetic/platform "
+            f"baseline(s) untouched — refreshing them off-Linux ({sys.platform}) "
+            "would bake platform-specific sizes Ubuntu CI can't satisfy (the "
+            "regression in 1f55847). Regenerate via the `update_goldens` "
+            "workflow_dispatch on the office-skills CI (Ubuntu).",
+            file=sys.stderr,
+        )
 
     if not new_or_refresh:
         print("Nothing to capture.")
@@ -319,14 +387,18 @@ def main(argv: list[str] | None = None) -> int:
 
     for f in new_or_refresh:
         print(f"capture {f.name}")
+        src = _source_of(f, SYNTHETIC_DIR, PLATFORM_DIR)
         # Preserve previous platform field + any user-added top-level
         # `_*` annotations across --refresh (HIGH-4 fix).
         prev_full = existing.get(f.name) or {}
         sig: dict = {"platform": prev_full.get("platform", _platform_guess(f.name))}
-        # Preserve the `source` hint (synthetic / platform) so the test can
-        # still resolve non-tmp fixtures; without it _resolve_source falls
-        # back to tmp/ and silently skips synthetic + platform fixtures.
-        if "source" in prev_full:
+        # Record the `source` hint from the on-disk directory (ground truth) so
+        # the battery can resolve synthetic / platform fixtures; without it
+        # _resolve_source falls back to tmp/ and silently skips them. tmp/
+        # fixtures keep their historical no-`source` shape.
+        if src != "tmp":
+            sig["source"] = src
+        elif "source" in prev_full:
             sig["source"] = prev_full["source"]
         for key, val in prev_full.items():
             if key.startswith("_"):
@@ -339,6 +411,17 @@ def main(argv: list[str] | None = None) -> int:
                       file=sys.stderr)
                 sig[mode] = None
             else:
+                # A *new* committed (synthetic/platform) fixture captured
+                # off-Linux: drop the size floor to 1kB so the band cannot be
+                # tighter than CI's (smaller) Ubuntu render. macOS renders
+                # larger, so the captured max already covers Ubuntu. (Existing
+                # committed baselines never reach here — `_should_capture`
+                # keeps them untouched off-Linux.) Finalise/tighten on Ubuntu.
+                if src in ("synthetic", "platform") and not on_linux:
+                    entry["min_size_kb"] = 1
+                    print(f"  ! {mode}: new committed {src} captured off-Linux "
+                          "— forced min_size_kb=1; finalise on Ubuntu CI",
+                          file=sys.stderr)
                 sig[mode] = entry
                 forbidden_n = len(entry.get("forbidden_needles", []))
                 print(
