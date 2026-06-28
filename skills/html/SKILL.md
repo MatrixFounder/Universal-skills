@@ -1,6 +1,6 @@
 ---
 name: html
-description: Use to fetch a web page/URL or a saved .html/.htm/.mhtml/.webarchive and convert it to clean Markdown — an Obsidian web-clipper and a universal HTML acquisition + HTML→Markdown step that also feeds the pdf and docx skills. Triggers include "html to markdown", "url to markdown", "download this page", "save the html", "web page to obsidian", "webarchive/mhtml to markdown", "clip this article".
+description: Use when fetching a web page/URL or converting a saved .html/.htm/.mhtml/.webarchive to clean Markdown — an Obsidian web-clipper and a universal HTML acquisition + HTML→Markdown step that also feeds the pdf and docx skills. Triggers include "html to markdown", "url to markdown", "download this page", "save the html", "web page to obsidian", "webarchive/mhtml to markdown", "clip this article".
 tier: 2
 version: 1.1
 license: LicenseRef-Proprietary
