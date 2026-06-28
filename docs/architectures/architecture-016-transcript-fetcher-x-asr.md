@@ -362,4 +362,23 @@ Stage strings exactly as the spec lists them. Pure stderr — stdout JSON contra
   (that's the html skill's job).
 - **OQ-1 — duration on Broadcasts.** yt-dlp may report `duration: None` for replays; the stat's
   `duration_sec` is then `None` (acceptable; not derived from the media to avoid an ffprobe dep).
+
+## 8. Follow-up additions (TF-X-5 handled)
+
+Three additions closed most of honest-scope TF-X-5 (see `docs/KNOWN_ISSUES.md`):
+
+- **`--max-duration-min N`** — clips the ASR download to the first N minutes via yt-dlp
+  `--download-sections "*0-<N*60>"` (inside the ffmpeg branch of `download_audio`). Bounds a
+  long Broadcast/Space in both bytes and ASR time. Live-proven: a 1-min clip ran in ~19 s.
+- **`~/.transcript-fetcher/` per-host cookies** (`sources/_auth.py`) — mirrors the `html`
+  skill's `~/.html` auth-map: a hardened (0600 / symlink-reject) `auth-map.json`
+  (host → `{cookies_file}`, label-boundary match) or the `~/.transcript-fetcher/<host>-cookies.txt`
+  convention; resolved in `_fetch_one` (source-agnostic) → feeds yt-dlp `--cookies`. Plus
+  `--cookies-from-browser BROWSER` (yt-dlp native, X path).
+- **ffprobe duration fill** (`_ytdlp_media.probe_media_duration`) — when the media is downloaded
+  for ASR and ffmpeg is present, `stat.duration_sec` is derived via ffprobe (ships with ffmpeg —
+  no new dep). Live-proven (`duration_sec: 59` on a 1-min clip).
+
+Residual (not fixable here): MacWhisper's `mw transcribe` has no language flag — `--lang` is
+forwarded only to whisper/whisper.cpp/cloud.
 ```

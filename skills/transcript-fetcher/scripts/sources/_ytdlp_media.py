@@ -16,6 +16,7 @@ subprocess only when a function runs.
 """
 from __future__ import annotations
 
+import functools
 import json
 import re
 import shutil
@@ -90,7 +91,11 @@ def classify_failure(stderr: str) -> Optional[str]:
     return None
 
 
+@functools.cache
 def ffmpeg_available() -> bool:
+    # Cached: ffmpeg presence is fixed for a process (config is set once at the
+    # CLI entry point), so a batch run does not re-probe $PATH per URL. Tests that
+    # need a different result patch this function object directly (bypasses cache).
     import _config as cfg  # local import to keep module import light
 
     return shutil.which(cfg.ffmpeg_bin()) is not None
@@ -135,6 +140,7 @@ def probe_metadata(
     *,
     timeout_sec: int = DEFAULT_TIMEOUT_SEC,
     cookies_file: Optional[Path] = None,
+    cookies_from_browser: Optional[str] = None,
     yt_dlp_bin: Optional[str] = None,
 ) -> tuple[Optional[dict], Optional[str]]:
     """Run ``yt-dlp -J --skip-download`` once. Returns ``(info, stderr)``.
@@ -152,6 +158,8 @@ def probe_metadata(
     ]
     if cookies_file is not None:
         args += ["--cookies", str(cookies_file)]
+    if cookies_from_browser:
+        args += ["--cookies-from-browser", cookies_from_browser]
     args += ["--", url]
     try:
         proc = subprocess.run(
@@ -197,7 +205,9 @@ def download_audio(
     *,
     timeout_sec: int = DEFAULT_TIMEOUT_SEC,
     cookies_file: Optional[Path] = None,
+    cookies_from_browser: Optional[str] = None,
     yt_dlp_bin: Optional[str] = None,
+    max_duration_min: Optional[float] = None,
 ) -> tuple[Optional[Path], Optional[str]]:
     """Download the minimal media needed for ASR. Returns ``(media_path, stderr)``.
 
@@ -231,8 +241,15 @@ def download_audio(
         # Spaces) this remux is also what makes the output a VALID container an
         # ASR engine can open — see is_hls_only() / the fail-fast in x.py.
         args += ["-x", "--audio-format", "m4a"]
+        # Clip to the first N minutes — bounds BOTH the download bytes and the
+        # ASR time for a long Broadcast/Space. Needs ffmpeg (already required
+        # for the HLS path); a `*START-END` section is a time range in seconds.
+        if max_duration_min and max_duration_min > 0:
+            args += ["--download-sections", f"*0-{int(max_duration_min * 60)}"]
     if cookies_file is not None:
         args += ["--cookies", str(cookies_file)]
+    if cookies_from_browser:
+        args += ["--cookies-from-browser", cookies_from_browser]
     args += ["--", url]
 
     try:
@@ -254,6 +271,37 @@ def download_audio(
             return None, f"refusing media outside workdir: {media}"
         return media, (proc.stderr if proc.returncode != 0 else None)
     return None, proc.stderr or f"no media produced (rc={proc.returncode})"
+
+
+def probe_media_duration(media: Path, *, timeout_sec: int = 60) -> Optional[int]:
+    """Return the media duration in whole seconds via ffprobe, or ``None``.
+
+    Used to fill ``stat.duration_sec`` when yt-dlp metadata reports ``None``
+    (common for X Broadcasts/Spaces). ffprobe ships with ffmpeg, which is already
+    required for the HLS ASR path, so this adds no new dependency. Never raises —
+    a missing/failing ffprobe just yields ``None``.
+    """
+    import _config as cfg  # local import to keep module import light
+
+    try:
+        proc = subprocess.run(
+            [
+                cfg.ffprobe_bin(), "-v", "quiet",
+                "-show_entries", "format=duration",
+                "-of", "default=nokey=1:noprint_wrappers=1",
+                str(media),
+            ],
+            check=False, capture_output=True, text=True, timeout=timeout_sec,
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+        return None
+    if proc.returncode != 0:
+        return None
+    raw = (proc.stdout or "").strip()
+    try:
+        return int(float(raw)) if raw else None
+    except ValueError:
+        return None
 
 
 def find_downloaded_media(workdir: Path) -> Optional[Path]:
@@ -286,6 +334,7 @@ __all__ = (
     "find_downloaded_media",
     "is_hls_only",
     "pick_caption",
+    "probe_media_duration",
     "probe_metadata",
     "yt_dlp_argv",
 )

@@ -137,6 +137,27 @@ class TestASRPath(unittest.TestCase):
             self.assertEqual(out.read_text(encoding="utf-8"), result.text)
 
 
+class TestDurationFill(unittest.TestCase):
+    def test_asr_fills_duration_via_ffprobe_when_metadata_none(self) -> None:
+        def fake_download_audio(url, workdir, **kw):
+            p = Path(workdir) / "media.m4a"
+            p.write_bytes(b"x")
+            return p, None
+
+        result = asr.ASRResult(text="hello world body", backend_name="macwhisper")
+        with tempfile.TemporaryDirectory() as d:
+            out = Path(d) / "out.txt"
+            with mock.patch.object(ytm, "probe_metadata",
+                                   return_value=(_INFO_NO_CAPTIONS, None)), \
+                 mock.patch.object(ytm, "download_audio", side_effect=fake_download_audio), \
+                 mock.patch.object(ytm, "ffmpeg_available", return_value=True), \
+                 mock.patch.object(ytm, "probe_media_duration", return_value=1834), \
+                 mock.patch.object(asr, "transcribe_with_fallback", return_value=result):
+                stat = xmod.fetch_x_transcript("https://x.com/i/broadcasts/z", out)
+            self.assertEqual(stat.duration_sec, 1834)
+            self.assertTrue(any("ffprobe" in n for n in stat.notes))
+
+
 class TestCleanup(unittest.TestCase):
     def test_tempdir_removed_even_on_success(self) -> None:
         created: list[str] = []
@@ -337,6 +358,29 @@ class TestBatchExit7(unittest.TestCase):
         rec = json.loads(out_buf.getvalue().strip().splitlines()[-1])
         self.assertEqual(rec["type"], "MissingDependencyError")
         self.assertEqual(rec["remediation"], "Install MacWhisper.")
+
+
+class TestAuthMapCLI(unittest.TestCase):
+    def test_bad_auth_map_fails_fast_exit_2(self) -> None:
+        # A malformed auth-map must fail BEFORE any fetch (exit 2 UsageError),
+        # not be re-parsed per URL — in both single-URL and batch modes.
+        buf = io.StringIO()
+        with tempfile.TemporaryDirectory() as d:
+            bad = Path(d) / "auth-map.json"
+            bad.write_text("{ not valid json", encoding="utf-8")
+            os.chmod(bad, 0o600)
+            out = Path(d) / "o.txt"
+            with mock.patch.object(fetch, "_fetch_one") as fetch_one, \
+                 contextlib.redirect_stderr(buf):
+                rc = fetch.main([
+                    "https://x.com/i/broadcasts/z", "--out", str(out),
+                    "--auth-map", str(bad), "--json-errors",
+                ])
+            fetch_one.assert_not_called()  # failed before dispatch
+        self.assertEqual(rc, 2)
+        env = json.loads(buf.getvalue().strip())
+        self.assertEqual(env["code"], 2)
+        self.assertEqual(env["type"], "UsageError")
 
 
 if __name__ == "__main__":

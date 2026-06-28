@@ -178,6 +178,10 @@ def ffmpeg_bin() -> str:
     return tool_bin("FFMPEG", "ffmpeg")
 
 
+def ffprobe_bin() -> str:
+    return tool_bin("FFPROBE", "ffprobe")
+
+
 def asr_timeout_sec(default: int) -> int:
     raw = env("ASR_TIMEOUT_SEC")
     return int(raw) if raw and raw.strip().isdigit() else default

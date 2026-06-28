@@ -59,6 +59,7 @@ if str(_HERE) not in sys.path:
 
 import _config as cfg  # noqa: E402
 from asr import DEFAULT_ASR_TIMEOUT_SEC  # noqa: E402
+from sources import _auth  # noqa: E402
 from sources._log import debug_enabled  # noqa: E402
 from sources._stat import (  # noqa: E402
     MissingDependencyError,
@@ -217,13 +218,23 @@ def _fetch_one(
     with_description: bool = False,
     description_only: bool = False,
     cookies_file: Optional[Path] = None,
+    auth_map: Optional[dict] = None,
+    cookies_from_browser: Optional[str] = None,
     asr_allow_cloud: bool = False,
     asr_model: Optional[str] = None,
     asr_timeout_sec: int = DEFAULT_ASR_TIMEOUT_SEC,
+    max_duration_min: Optional[float] = None,
     debug: bool = False,
 ) -> dict:
     source = _detect_source(url)
     ladder = _build_ladder(prefer=prefer, lang=lang)
+    # Resolve the effective cookies file: explicit --cookies-file wins; else the
+    # ~/.transcript-fetcher auth-map (pre-loaded once by the caller) / convention
+    # for this URL's host (source-agnostic — the resolved Netscape file feeds
+    # yt-dlp --cookies / Skool's opener).
+    cookies_file = _auth.resolve_cookies_file(
+        url, explicit_cookies_file=cookies_file, auth_map=auth_map
+    )
 
     if source == "youtube":
         stat = fetch_youtube_transcript(
@@ -278,11 +289,13 @@ def _fetch_one(
             lang=lang,
             timeout_sec=timeout_sec,
             cookies_file=cookies_file,
+            cookies_from_browser=cookies_from_browser,
             with_description=with_description,
             description_only=description_only,
             asr_allow_cloud=asr_allow_cloud,
             asr_model=asr_model,
             asr_timeout_sec=asr_timeout_sec,
+            max_duration_min=max_duration_min,
             debug=debug,
         )
     else:  # pragma: no cover — _detect_source guards this
@@ -416,6 +429,33 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Per-backend ASR transcription timeout in seconds. Default "
         f"{DEFAULT_ASR_TIMEOUT_SEC} (or TRANSCRIPT_FETCHER_ASR_TIMEOUT_SEC).",
     )
+    p.add_argument(
+        "--max-duration-min",
+        type=float,
+        default=None,
+        help="(X ASR) Transcribe only the first N minutes — clips the download "
+        "(yt-dlp --download-sections, needs ffmpeg) so a long Broadcast/Space "
+        "bounds both bytes and ASR time. Default: whole media.",
+    )
+    p.add_argument(
+        "--auth-map",
+        type=str,
+        default=None,
+        help="Path to a JSON host->{cookies_file} auth-map. Default: "
+        "TRANSCRIPT_FETCHER_AUTH_MAP or ~/.transcript-fetcher/auth-map.json. "
+        "Per-host cookies for any source; the convention "
+        "~/.transcript-fetcher/<host>-cookies.txt also works without a map. "
+        "Files must be 0600 (not a symlink).",
+    )
+    p.add_argument(
+        "--cookies-from-browser",
+        type=str,
+        default=None,
+        metavar="BROWSER",
+        help="(X) Load cookies directly from a local browser via yt-dlp "
+        "(e.g. chrome, safari, firefox[:PROFILE]). Reads the browser's cookie "
+        "store — opt-in. Alternative to --cookies-file for protected/age-gated media.",
+    )
     return p
 
 
@@ -480,6 +520,14 @@ def main(argv: Optional[list[str]] = None) -> int:
             json_mode=json_errors,
         )
 
+    if args.max_duration_min is not None and args.max_duration_min <= 0:
+        return _emit_error(
+            f"--max-duration-min must be positive, got {args.max_duration_min}.",
+            code=2,
+            error_type="UsageError",
+            json_mode=json_errors,
+        )
+
     if args.description_only and not args.with_description:
         return _emit_error(
             "--description-only requires --with-description.",
@@ -494,6 +542,16 @@ def main(argv: Optional[list[str]] = None) -> int:
             code=2,
             error_type="UsageError",
             json_mode=json_errors,
+        )
+
+    # Load the ~/.transcript-fetcher auth-map ONCE (not per URL) so a malformed /
+    # insecure map fails fast with exit 2 — in BOTH single-URL and batch modes —
+    # instead of being re-parsed and mis-mapped per URL.
+    try:
+        resolved_auth_map = _auth.load_configured_auth_map(args.auth_map)
+    except _auth.AuthMapError as e:
+        return _emit_error(
+            str(e), code=2, error_type="UsageError", json_mode=json_errors
         )
 
     # Single-URL mode
@@ -515,9 +573,12 @@ def main(argv: Optional[list[str]] = None) -> int:
                 with_description=args.with_description,
                 description_only=args.description_only,
                 cookies_file=args.cookies_file,
+                auth_map=resolved_auth_map,
+                cookies_from_browser=args.cookies_from_browser,
                 asr_allow_cloud=asr_allow_cloud,
                 asr_model=asr_model,
                 asr_timeout_sec=asr_timeout_sec,
+                max_duration_min=args.max_duration_min,
                 debug=debug,
             )
         except MissingDependencyError as e:
@@ -631,9 +692,12 @@ def main(argv: Optional[list[str]] = None) -> int:
                 with_description=args.with_description,
                 description_only=args.description_only,
                 cookies_file=args.cookies_file,
+                auth_map=resolved_auth_map,
+                cookies_from_browser=args.cookies_from_browser,
                 asr_allow_cloud=asr_allow_cloud,
                 asr_model=asr_model,
                 asr_timeout_sec=asr_timeout_sec,
+                max_duration_min=args.max_duration_min,
                 debug=debug,
             )
             sys.stdout.write(json.dumps(stat, ensure_ascii=False) + "\n")
@@ -660,6 +724,19 @@ def main(argv: Optional[list[str]] = None) -> int:
             }
             if getattr(e, "remediation", None):
                 err_record["remediation"] = e.remediation
+            sys.stdout.write(json.dumps(err_record, ensure_ascii=False) + "\n")
+        except ValueError as e:
+            # Mirror the single-URL path: a usage-class error (bad URL, or a
+            # per-host convention cookies file that fails the 0600/symlink gate
+            # -> AuthMapError, a ValueError subclass) is labelled UsageError, not
+            # a generic "Exception". (A bad auth-MAP already fails fast pre-loop.)
+            failures += 1
+            err_record = {
+                "v": _JSON_ERRORS_SCHEMA,
+                "error": str(e),
+                "type": "UsageError",
+                "url": url,
+            }
             sys.stdout.write(json.dumps(err_record, ensure_ascii=False) + "\n")
         except Exception as e:  # noqa: BLE001
             failures += 1

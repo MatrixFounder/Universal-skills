@@ -63,11 +63,13 @@ def fetch_x_transcript(
     workdir: Optional[Path] = None,
     timeout_sec: int = DEFAULT_TIMEOUT_SEC,
     cookies_file: Optional[Path] = None,
+    cookies_from_browser: Optional[str] = None,
     with_description: bool = False,
     description_only: bool = False,
     asr_allow_cloud: bool = False,
     asr_model: Optional[str] = None,
     asr_timeout_sec: int = DEFAULT_ASR_TIMEOUT_SEC,
+    max_duration_min: Optional[float] = None,
     debug: bool = False,
 ) -> TranscriptStat:
     """Fetch an X.com transcript (captions if present, else ASR).
@@ -102,6 +104,7 @@ def fetch_x_transcript(
             url,
             timeout_sec=timeout_sec,
             cookies_file=cookies_file,
+            cookies_from_browser=cookies_from_browser,
             yt_dlp_bin=yt_dlp_bin,
         )
         if info is None:
@@ -115,6 +118,7 @@ def fetch_x_transcript(
         transcript_origin: Optional[str] = None
         asr_backend: Optional[str] = None
         asr_model_used: Optional[str] = None
+        media_path: Optional[Path] = None
         plain = ""
         codec_used = "utf-8"
 
@@ -172,11 +176,14 @@ def fetch_x_transcript(
                     workdir,
                     timeout_sec=timeout_sec,
                     cookies_file=cookies_file,
+                    cookies_from_browser=cookies_from_browser,
                     yt_dlp_bin=yt_dlp_bin,
+                    max_duration_min=max_duration_min,
                 )
                 if media is None:
                     _raise_for_failure(derr, url, default_msg="audio download failed")
                     raise TranscriptFetchError(f"audio download failed for {url}")
+                media_path = media
 
                 from asr import transcribe_with_fallback
 
@@ -242,6 +249,20 @@ def fetch_x_transcript(
             desc_path = _write_x_description(info=info, url=url, out_path=out_path)
             stat.description_path = str(desc_path)
             stat.notes.append("description: wrote .description.md")
+
+        # ---- 5. fill duration from the media if metadata lacked it ---- #
+        # X Broadcasts/Spaces often report duration=None in yt-dlp metadata.
+        # When we downloaded the media for ASR and ffmpeg is present, derive
+        # the real duration via ffprobe (ships with ffmpeg — no new dep).
+        if (
+            stat.duration_sec is None
+            and media_path is not None
+            and ytm.ffmpeg_available()
+        ):
+            probed = ytm.probe_media_duration(media_path)
+            if probed is not None:
+                stat.duration_sec = probed
+                stat.notes.append("duration: derived via ffprobe")
 
         return stat
     finally:

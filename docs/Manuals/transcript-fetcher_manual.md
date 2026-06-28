@@ -180,6 +180,9 @@ for X, `<lesson-id>.txt` for Skool. Exit code `4` if any URL failed;
 | `--asr-allow-cloud` | off | (X) Permit the opt-in cloud ASR backend (needs an API key). Audio leaves the machine. |
 | `--asr-model ID` | none | (X) Model forwarded to the chosen ASR backend (MacWhisper `engine:model-id`, whisper name, whisper.cpp ggml path, cloud model). |
 | `--asr-timeout-sec N` | `1800` | (X) Per-backend transcription timeout (also `TRANSCRIPT_FETCHER_ASR_TIMEOUT_SEC`). |
+| `--max-duration-min N` | whole | (X) Transcribe only the first N minutes — clips the download (yt-dlp `--download-sections`, needs ffmpeg). Bounds a long Broadcast/Space in both bytes and time (e.g. `--max-duration-min 30`). |
+| `--auth-map PATH` | `~/.transcript-fetcher/auth-map.json` | Per-host cookies map (`{host: {cookies_file}}`). Any source. Also honours the convention `~/.transcript-fetcher/<host>-cookies.txt`. Files must be `0600`. |
+| `--cookies-from-browser BROWSER` | none | (X) Load cookies straight from a local browser via yt-dlp (`chrome`, `safari`, `firefox[:PROFILE]`). Opt-in — reads the browser's cookie store. |
 
 ### Exit codes
 
