@@ -26,6 +26,7 @@ from typing import Iterable, Optional
 from asr._base import DEFAULT_ASR_TIMEOUT_SEC
 
 from . import _ytdlp_media as ytm
+from ._captions import captions_file_to_plain_meta
 from ._description import write_description_md
 from ._log import make_logger
 from ._stat import (
@@ -35,7 +36,7 @@ from ._stat import (
     TranscriptFetchError,
     TranscriptStat,
 )
-from ._vtt_to_text import count_speaker_turns, vtt_file_to_plain_meta
+from ._vtt_to_text import count_speaker_turns
 from .youtube import (
     DEFAULT_TIMEOUT_SEC,
     _coerce_int,
@@ -70,6 +71,7 @@ def fetch_x_transcript(
     asr_model: Optional[str] = None,
     asr_timeout_sec: int = DEFAULT_ASR_TIMEOUT_SEC,
     max_duration_min: Optional[float] = None,
+    remove_silence: bool = True,
     debug: bool = False,
 ) -> TranscriptStat:
     """Fetch an X.com transcript (captions if present, else ASR).
@@ -124,14 +126,27 @@ def fetch_x_transcript(
 
         if not description_only:
             picked = ytm.pick_caption(info, ladder)
+            if picked is None:
+                # The language-specific ladder matched nothing — but if the media
+                # DOES carry any caption track, prefer it over ASR (captions-first
+                # is the skill's ethos; the creator's own text beats a slow,
+                # lower-fidelity transcription). The transcript language then
+                # follows the available track, not --lang.
+                fallback = ytm.pick_any_caption(info)
+                if fallback is not None:
+                    picked = fallback
+                    notes.append(
+                        f"no caption matched the requested ladder; using the "
+                        f"available {fallback[0]}:{fallback[1]} track"
+                    )
 
             # ---- 2a. caption path ------------------------------------- #
             if picked is not None:
                 kind, clang = picked
                 log("Embedded captions found")
                 log("Downloading captions")
-                pre_existing = {p.resolve() for p in workdir.glob("*.vtt")}
-                ok, vtt_path, msg = ytm.download_subtitle(
+                pre_existing = ytm.existing_caption_files(workdir)
+                ok, cap_path, cap_fmt, msg = ytm.download_captions(
                     url=url,
                     lang=clang,
                     kind=kind,
@@ -140,14 +155,38 @@ def fetch_x_transcript(
                     yt_dlp_bin=yt_dlp_bin,
                     timeout_sec=timeout_sec,
                     cookies_file=cookies_file,
-                    with_info_json=False,
+                    cookies_from_browser=cookies_from_browser,
                 )
                 if msg:
                     notes.append(msg)
-                if ok and vtt_path is not None:
-                    plain, codec_used = vtt_file_to_plain_meta(vtt_path)
-                    chosen_kind, chosen_lang = kind, clang
-                    transcript_origin = "embedded-captions"
+                if ok and cap_path is not None:
+                    # Format-aware: VTT / SRT / TTML all collapse to the same clean
+                    # prose (closes TF-X-4). Parse into LOCALS first — only commit
+                    # (set transcript_origin / codec_used) if the result is
+                    # non-empty, so a parse error OR an empty/whitespace caption
+                    # falls through to ASR instead of silently writing an empty
+                    # "embedded-captions" transcript.
+                    try:
+                        parsed, parsed_codec = captions_file_to_plain_meta(
+                            cap_path, cap_fmt
+                        )
+                    except (ValueError, OSError) as e:
+                        # ValueError: TTML refused (DTD/XXE guard) / malformed XML /
+                        # undecodable bytes. OSError: the just-downloaded file became
+                        # unreadable (vanished / permission). Either way fall through
+                        # to ASR rather than crash — "never a crash, never empty".
+                        parsed, parsed_codec = "", "utf-8"
+                        notes.append(f"caption parse failed ({cap_fmt}): {e}")
+                    if parsed.strip():
+                        plain, codec_used = parsed, parsed_codec
+                        chosen_kind, chosen_lang = kind, clang
+                        transcript_origin = "embedded-captions"
+                        if cap_fmt and cap_fmt != "vtt":
+                            notes.append(f"captions parsed from {cap_fmt} format")
+                    else:
+                        notes.append(
+                            f"captions ({cap_fmt}) yielded no text — falling back to ASR"
+                        )
                 else:
                     notes.append(
                         "captions advertised but download failed — falling back to ASR"
@@ -185,11 +224,26 @@ def fetch_x_transcript(
                     raise TranscriptFetchError(f"audio download failed for {url}")
                 media_path = media
 
+                # Pre-process: strip long silences so a Whisper-family engine is
+                # less likely to hallucinate filler over dead air (TF-X-6). Never
+                # fatal — on any problem we fall back to the original media. The
+                # ORIGINAL `media_path` is kept for the ffprobe duration fill so
+                # duration_sec reflects the real media, not the de-silenced clip.
+                media_for_asr = media
+                if remove_silence:
+                    log("Removing long silences")
+                    desilenced, snote = ytm.remove_silence(
+                        media, workdir, timeout_sec=asr_timeout_sec or 900
+                    )
+                    notes.append(snote)
+                    if desilenced is not None:
+                        media_for_asr = desilenced
+
                 from asr import transcribe_with_fallback
 
                 try:
                     result = transcribe_with_fallback(
-                        media,
+                        media_for_asr,
                         lang=lang,
                         allow_cloud=asr_allow_cloud,
                         model=asr_model,

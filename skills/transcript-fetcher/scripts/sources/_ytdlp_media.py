@@ -24,6 +24,7 @@ import subprocess
 from pathlib import Path
 from typing import Iterable, Optional
 
+from ._captions import SUPPORTED_CAPTION_EXTS
 from ._stat import MissingDependencyError
 from .youtube import (
     DEFAULT_TIMEOUT_SEC,
@@ -199,6 +200,147 @@ def pick_caption(
     return None
 
 
+def pick_any_caption(info: dict) -> Optional[tuple[str, str]]:
+    """Last-resort caption pick: ANY available track, **manual preferred over auto**.
+
+    Used by the X adapter as a fallback when the language-specific ladder matched
+    nothing but the media DOES carry captions (e.g. the user kept the default
+    ``--lang ru`` yet the post only has a ``manual en`` track). Using an
+    out-of-ladder caption — the creator's own text — is faster and more accurate
+    than dropping to ASR. Returns ``(kind, lang)`` or ``None`` when there are no
+    captions at all. Caller should surface a note (the transcript language then
+    differs from the requested ``--lang``).
+    """
+    cap = caption_langs(info)
+    if cap["manual"]:
+        return ("manual", cap["manual"][0])
+    if cap["auto"]:
+        return ("auto", cap["auto"][0])
+    return None
+
+
+def _stderr_tail(stderr: Optional[str], n: int = 3) -> str:
+    if not stderr:
+        return ""
+    lines = [ln.strip() for ln in stderr.splitlines() if ln.strip()]
+    return " | ".join(lines[-n:])
+
+
+def existing_caption_files(workdir: Path) -> set:
+    """Snapshot resolved paths of caption files already in ``workdir``.
+
+    Passed as ``pre_existing`` to :func:`download_captions` so a ladder step
+    never re-claims a file an earlier step downloaded. Covers every supported
+    caption extension (not just ``.vtt``).
+    """
+    out: set = set()
+    for ext in SUPPORTED_CAPTION_EXTS:
+        for p in workdir.glob(f"*.{ext}"):
+            out.add(p.resolve())
+    return out
+
+
+def _find_new_caption(workdir: Path, lang: str, pre_existing: set) -> Optional[Path]:
+    """Find a freshly-downloaded ``<id>.<lang>.<ext>`` caption file (any supported
+    text format) not present before the call. Prefers vtt > srt > ttml on a tie,
+    then most-recent mtime."""
+    pref = {ext: i for i, ext in enumerate(SUPPORTED_CAPTION_EXTS)}
+    candidates = []
+    for ext in SUPPORTED_CAPTION_EXTS:
+        needle = f".{lang}.{ext}"
+        for p in workdir.glob(f"*.{ext}"):
+            if p.name.endswith(needle) and p.resolve() not in pre_existing:
+                candidates.append(p)
+    if not candidates:
+        return None
+    candidates.sort(
+        key=lambda p: (pref.get(p.suffix.lower().lstrip("."), 99), -p.stat().st_mtime)
+    )
+    return candidates[0]
+
+
+def download_captions(
+    *,
+    url: str,
+    lang: str,
+    kind: str,
+    workdir: Path,
+    pre_existing: set,
+    yt_dlp_bin: Optional[str] = None,
+    timeout_sec: int = DEFAULT_TIMEOUT_SEC,
+    cookies_file: Optional[Path] = None,
+    cookies_from_browser: Optional[str] = None,
+    sub_format: str = "vtt/srt/ttml/best",
+) -> tuple[bool, Optional[Path], Optional[str], Optional[str]]:
+    """Download one ``(kind, lang)`` caption track in ANY supported text format.
+
+    The multi-format forward-surface counterpart to youtube's VTT-only
+    ``download_subtitle`` (closes TF-X-4): yt-dlp is handed a format *preference
+    list* (``vtt/srt/ttml/best``) so a source that serves only SRT or TTML still
+    yields a parseable track instead of being treated as caption-less and pushed
+    to ASR.
+
+    Returns ``(ok, path, fmt, note)`` where ``fmt`` is the downloaded file's
+    lowercased extension (``vtt``/``srt``/``ttml``/…) and ``note`` is a
+    human-readable transparency line. ``ok`` is False (with ``path``/``fmt``
+    None) when nothing parseable arrived.
+    """
+    out_tmpl = str(workdir / "%(id)s.%(ext)s")
+    args = [
+        *yt_dlp_argv(yt_dlp_bin),
+        "--skip-download",
+        "--sub-format", sub_format,
+        "--sub-langs", lang,
+        "--output", out_tmpl,
+    ]
+    if cookies_file is not None:
+        args += ["--cookies", str(cookies_file)]
+    if cookies_from_browser:
+        args += ["--cookies-from-browser", cookies_from_browser]
+    if kind == "manual":
+        args.append("--write-subs")
+    elif kind == "auto":
+        args.append("--write-auto-subs")
+    else:
+        return False, None, None, f"unknown kind={kind!r}"
+    # `--` terminates flag parsing so a `-`-leading URL is a positional.
+    args += ["--", url]
+
+    try:
+        proc = subprocess.run(
+            args, check=False, capture_output=True, text=True, timeout=timeout_sec
+        )
+    except FileNotFoundError as e:
+        return False, None, None, f"yt-dlp not found: {e}"
+    except subprocess.TimeoutExpired:
+        return False, None, None, f"timeout fetching {kind}:{lang} (>{timeout_sec}s)"
+
+    cat = classify_failure(proc.stderr or "")
+    if proc.returncode != 0 and cat:
+        tail = _stderr_tail(proc.stderr)
+        return False, None, None, (
+            f"{kind}:{lang} {cat}: {tail}" if tail else f"{kind}:{lang} {cat}"
+        )
+
+    found = _find_new_caption(workdir, lang, pre_existing)
+    if found is not None:
+        # Containment: the yt-dlp-authored name must stay inside workdir.
+        if found.resolve().parent != workdir.resolve():
+            return False, None, None, f"refusing caption outside workdir: {found.name}"
+        pre_existing.add(found.resolve())
+        fmt = found.suffix.lower().lstrip(".")
+        return True, found, fmt, f"got {kind}:{lang} -> {found.name}"
+
+    if proc.returncode != 0:
+        tail = _stderr_tail(proc.stderr)
+        return False, None, None, (
+            f"{kind}:{lang} yt-dlp rc={proc.returncode}: {tail}"
+            if tail
+            else f"{kind}:{lang} yt-dlp rc={proc.returncode}"
+        )
+    return False, None, None, f"no subtitle returned for {kind}:{lang}"
+
+
 def download_audio(
     url: str,
     workdir: Path,
@@ -304,6 +446,84 @@ def probe_media_duration(media: Path, *, timeout_sec: int = 60) -> Optional[int]
         return None
 
 
+def remove_silence(
+    media: Path,
+    workdir: Path,
+    *,
+    threshold_db: Optional[str] = None,
+    min_silence_sec: Optional[float] = None,
+    keep_silence_sec: Optional[float] = None,
+    timeout_sec: int = 900,
+) -> tuple[Optional[Path], str]:
+    """Strip long silences from ``media`` via ffmpeg's ``silenceremove`` filter.
+
+    Returns ``(desilenced_path, note)`` on success, or ``(None, note)`` when
+    ffmpeg is absent / the filter removed nothing / the output is empty — the
+    caller then transcribes the ORIGINAL ``media``. **Never raises**: a
+    preprocessing failure must not break the ASR pipeline.
+
+    Mitigates Whisper-family hallucinated filler on silent lead-in/out/gaps
+    (TF-X-6, the user's "analyse audio and remove large silences" approach) by
+    collapsing dead air longer than ``min_silence_sec`` down to
+    ``keep_silence_sec``, gated at ``threshold_db``. Because the threshold treats
+    only true silence as removable, **music and speech (which carry energy above
+    the threshold) survive** — so this helps the silent-lead-in case but not a
+    music-only intro (see TF-X-6 residual). Timestamps shift, but the ASR path
+    emits no timecodes, so the text output stays faithful.
+    """
+    import _config as cfg  # local import to keep module import light
+
+    if not ffmpeg_available():
+        return None, "silence-removal skipped: ffmpeg not available"
+
+    thr = cfg.silence_threshold_db() if threshold_db is None else threshold_db
+    gap = cfg.silence_min_gap_sec() if min_silence_sec is None else min_silence_sec
+    keep = cfg.silence_keep_sec() if keep_silence_sec is None else keep_silence_sec
+    out = workdir / "media.desilenced.m4a"
+    # Trim leading silence (start_*) AND collapse every interior/trailing silence
+    # longer than `gap` to `keep` seconds (stop_periods=-1). detection=peak is the
+    # conservative choice (less likely to clip quiet speech than rms).
+    # `*_threshold` takes a dB-suffixed value natively (silenceremove parses "dB");
+    # do NOT convert to a bare linear number — ffmpeg reads a bare negative as a huge
+    # amplitude ratio and errors ("Result too large"). Durations carry an explicit
+    # `s` unit for clarity/forward-compat (bare floats also parse as seconds).
+    af = (
+        f"silenceremove=start_periods=1:start_duration=0:start_threshold={thr}"
+        f":detection=peak:stop_periods=-1:stop_duration={gap}s"
+        f":stop_threshold={thr}:stop_silence={keep}s"
+    )
+    argv = [
+        cfg.ffmpeg_bin(), "-nostdin", "-y", "-i", str(media),
+        "-af", af, "-c:a", "aac", "-b:a", "96k", str(out),
+    ]
+    try:
+        proc = subprocess.run(
+            argv, check=False, capture_output=True, text=True, timeout=timeout_sec
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired, OSError) as e:
+        return None, f"silence-removal skipped: ffmpeg failed ({type(e).__name__})"
+
+    if proc.returncode != 0 or not out.exists() or out.stat().st_size == 0:
+        return None, "silence-removal skipped: ffmpeg produced no usable output"
+
+    before = probe_media_duration(media)
+    after = probe_media_duration(out)
+    if before is not None and after is not None:
+        removed = before - after
+        if removed <= 0:
+            # Nothing meaningfully removed — drop the re-encode, keep original.
+            try:
+                out.unlink()
+            except OSError:
+                pass
+            return None, "silence-removal: no long silence found (using original)"
+        return out, (
+            f"silence-removal: stripped ~{removed}s of silence "
+            f"({before}s → {after}s)"
+        )
+    return out, "silence-removal: applied (duration delta unknown)"
+
+
 def find_downloaded_media(workdir: Path) -> Optional[Path]:
     """Find the downloaded ``media.*`` file, ignoring sidecars/partials."""
     # ``.info.json`` / ``.description`` end in ``.json`` / ``.description`` so the
@@ -315,6 +535,10 @@ def find_downloaded_media(workdir: Path) -> Optional[Path]:
         if p.is_dir():
             continue
         if p.suffix.lower() in ignore_suffixes:
+            continue
+        # The silence-removal output (`media.desilenced.m4a`) is a derived file,
+        # not the yt-dlp download — never mistake it for the source media.
+        if ".desilenced." in p.name:
             continue
         candidates.append(p)
     if not candidates:
@@ -328,13 +552,17 @@ __all__ = (
     "caption_langs",
     "classify_failure",
     "download_audio",
+    "download_captions",
     "download_subtitle",
+    "existing_caption_files",
     "extract_x_id",
     "ffmpeg_available",
     "find_downloaded_media",
     "is_hls_only",
+    "pick_any_caption",
     "pick_caption",
     "probe_media_duration",
     "probe_metadata",
+    "remove_silence",
     "yt_dlp_argv",
 )

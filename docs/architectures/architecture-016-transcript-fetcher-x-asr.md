@@ -354,9 +354,11 @@ Stage strings exactly as the spec lists them. Pure stderr — stdout JSON contra
   auto-selected. (Mirrors the html skill's remote-tier privacy posture.)
 - **HS-4 — `mw` model is the user's MacWhisper-selected default** unless `--asr-model` is
   passed. We do not enumerate or validate models (MacWhisper owns that).
-- **HS-5 — caption SRT/TTML.** yt-dlp is asked for `--sub-format vtt`; when a source only
-  offers TTML/SRT, yt-dlp converts to VTT where it can. If conversion is unavailable the track
-  is treated as absent → ASR path. No bespoke TTML parser.
+- **HS-5 — caption SRT/TTML → HANDLED (TF-X-4).** The X path now asks yt-dlp for a *preference
+  list* `vtt/srt/ttml/best` and parses the result format-aware (`sources/_captions.py`): SRT is
+  normalised into the VTT machinery (comma→dot; all dedup/`>>` handling reused), TTML/DFXP via
+  stdlib `ElementTree` with a DTD/entity-declaration refusal (XXE / billion-laughs guard) and a
+  size cap. Exotic YouTube `srv*` XML is still unparsed → ASR (residual).
 - **HS-6 — X login walls.** Protected/age-gated/some-Broadcast media needs `--cookies-file`
   (existing mechanism); without it → `SourceAuthError` (exit 5). We do not mint sessions
   (that's the html skill's job).
@@ -381,4 +383,28 @@ Three additions closed most of honest-scope TF-X-5 (see `docs/KNOWN_ISSUES.md`):
 
 Residual (not fixable here): MacWhisper's `mw transcribe` has no language flag — `--lang` is
 forwarded only to whisper/whisper.cpp/cloud.
-```
+
+## 9. Follow-up additions (TF-X-4 + TF-X-6 handled)
+
+- **Multi-format captions (TF-X-4)** — `_ytdlp_media.download_captions` requests the format
+  preference list `vtt/srt/ttml/best` (vs VTT-only) and `sources/_captions.py` converts whichever
+  text track arrived: SRT is normalised into the VTT cleaner (comma→dot timestamps; all
+  rolling-caption dedup + `>>`-turn handling reused), TTML/DFXP via stdlib `ElementTree`. The TTML
+  path **refuses a `<!DOCTYPE`/`<!ENTITY` declaration before parse** (XXE / billion-laughs guard,
+  no `defusedxml` dep) and is size-capped; a refusal/parse error is a note + fall-through to ASR,
+  never a crash or silent empty. The new caption path runs in the shared forward-surface module
+  (youtube/vimeo untouched — preserves HS-1). **Language-robust:** when the `--lang`-derived
+  ladder matches no track but the post carries captions in another language, the X adapter falls
+  back to `pick_any_caption` (manual preferred over auto) before ASR, with a note — so a post
+  whose only track is `manual en` is used under the default `--lang ru` (live-proven on
+  `x.com/Av1dlive/status/2070507527213871594`).
+- **Silence-removal preprocessing (TF-X-6)** — `_ytdlp_media.remove_silence` runs ffmpeg
+  `silenceremove` on the downloaded media before ASR (trim leading silence; collapse interior/
+  trailing gaps > `min_gap` to `keep`, gated at `threshold`). This removes the dead air where
+  Whisper-family filler hallucination originates. ON by default (`--keep-silence` /
+  `TRANSCRIPT_FETCHER_SILENCE_REMOVAL=0` opts out; `_THRESHOLD`/`_MIN_GAP_SEC`/`_KEEP_SEC` tune).
+  Never fatal: ffmpeg-absent / filter failure / "no silence found" all fall back to the original
+  media; the original is also what feeds the ffprobe duration fill. **Residual:** only true
+  silence is removed — a *music-only* intro survives and can still trigger filler (engine-level).
+  Verified by a gated real-ffmpeg test (`test_real_ffmpeg_strips_silence`: 10 s synthetic
+  silence+tone+silence collapses to ≤ 5 s).

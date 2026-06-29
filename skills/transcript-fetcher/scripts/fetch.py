@@ -224,6 +224,7 @@ def _fetch_one(
     asr_model: Optional[str] = None,
     asr_timeout_sec: int = DEFAULT_ASR_TIMEOUT_SEC,
     max_duration_min: Optional[float] = None,
+    remove_silence: bool = True,
     debug: bool = False,
 ) -> dict:
     source = _detect_source(url)
@@ -296,6 +297,7 @@ def _fetch_one(
             asr_model=asr_model,
             asr_timeout_sec=asr_timeout_sec,
             max_duration_min=max_duration_min,
+            remove_silence=remove_silence,
             debug=debug,
         )
     else:  # pragma: no cover — _detect_source guards this
@@ -438,6 +440,15 @@ def _build_parser() -> argparse.ArgumentParser:
         "bounds both bytes and ASR time. Default: whole media.",
     )
     p.add_argument(
+        "--keep-silence",
+        action="store_true",
+        help="(X ASR) Do NOT strip long silences before transcription. By "
+        "default the X ASR path removes dead air (ffmpeg silenceremove) to cut "
+        "Whisper hallucinated filler on silent lead-in/out; pass this to keep "
+        "the audio untouched. Also configurable via "
+        "TRANSCRIPT_FETCHER_SILENCE_REMOVAL/_THRESHOLD/_MIN_GAP_SEC/_KEEP_SEC.",
+    )
+    p.add_argument(
         "--auth-map",
         type=str,
         default=None,
@@ -482,6 +493,9 @@ def main(argv: Optional[list[str]] = None) -> int:
     debug = debug_enabled(args.debug)
     asr_allow_cloud = bool(args.asr_allow_cloud) or cfg.asr_allow_cloud_default()
     asr_model = args.asr_model or cfg.asr_model_default()
+    # Silence removal (X ASR) is ON by default; --keep-silence or the config
+    # default switches it off.
+    remove_silence = (not args.keep_silence) and cfg.silence_removal_default()
     asr_timeout_sec = (
         args.asr_timeout_sec
         if args.asr_timeout_sec
@@ -579,6 +593,7 @@ def main(argv: Optional[list[str]] = None) -> int:
                 asr_model=asr_model,
                 asr_timeout_sec=asr_timeout_sec,
                 max_duration_min=args.max_duration_min,
+                remove_silence=remove_silence,
                 debug=debug,
             )
         except MissingDependencyError as e:
@@ -698,6 +713,7 @@ def main(argv: Optional[list[str]] = None) -> int:
                 asr_model=asr_model,
                 asr_timeout_sec=asr_timeout_sec,
                 max_duration_min=args.max_duration_min,
+                remove_silence=remove_silence,
                 debug=debug,
             )
             sys.stdout.write(json.dumps(stat, ensure_ascii=False) + "\n")

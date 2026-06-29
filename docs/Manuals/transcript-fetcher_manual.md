@@ -181,6 +181,7 @@ for X, `<lesson-id>.txt` for Skool. Exit code `4` if any URL failed;
 | `--asr-model ID` | none | (X) Model forwarded to the chosen ASR backend (MacWhisper `engine:model-id`, whisper name, whisper.cpp ggml path, cloud model). |
 | `--asr-timeout-sec N` | `1800` | (X) Per-backend transcription timeout (also `TRANSCRIPT_FETCHER_ASR_TIMEOUT_SEC`). |
 | `--max-duration-min N` | whole | (X) Transcribe only the first N minutes — clips the download (yt-dlp `--download-sections`, needs ffmpeg). Bounds a long Broadcast/Space in both bytes and time (e.g. `--max-duration-min 30`). |
+| `--keep-silence` | off (removal ON) | (X ASR) Do **not** strip long silences before transcription. By default the X ASR path runs ffmpeg `silenceremove` to trim dead air, which cuts Whisper hallucinated filler on silent lead-in/out. Tune via `TRANSCRIPT_FETCHER_SILENCE_{REMOVAL,THRESHOLD,MIN_GAP_SEC,KEEP_SEC}`. Note: only true silence is removed — a music-only intro can still trigger filler. |
 | `--auth-map PATH` | `~/.transcript-fetcher/auth-map.json` | Per-host cookies map (`{host: {cookies_file}}`). Any source. Also honours the convention `~/.transcript-fetcher/<host>-cookies.txt`. Files must be `0600`. |
 | `--cookies-from-browser BROWSER` | none | (X) Load cookies straight from a local browser via yt-dlp (`chrome`, `safari`, `firefox[:PROFILE]`). Opt-in — reads the browser's cookie store. |
 
@@ -248,6 +249,14 @@ later. The ASR backend chain then stops at the first engine that is
 (install MacWhisper or another engine, or use `--asr-allow-cloud`). See
 [`references/asr_backends.md`](../../skills/transcript-fetcher/references/asr_backends.md)
 for the backend interface, the `.env` config, and the component installer.
+
+When the X media **does** carry captions, the adapter accepts **WebVTT, SRT,
+and TTML/DFXP** (yt-dlp is asked for `vtt/srt/ttml/best`), so a non-VTT track is
+no longer skipped to ASR. Before ASR runs, the audio is passed through ffmpeg
+`silenceremove` (ON by default) to strip dead air — this cuts Whisper-family
+hallucinated filler (e.g. `"Продолжение следует..."`) on silent lead-in/out.
+Pass `--keep-silence` to disable it. Only *true silence* is removed, so a
+music-only intro can still produce filler (trim it downstream).
 
 ### Skool
 
@@ -586,6 +595,7 @@ serve a large body).
 - [scripts/sources/vimeo.py](../../skills/transcript-fetcher/scripts/sources/vimeo.py) — minimal Vimeo adapter (shares helpers with YouTube).
 - [scripts/sources/skool.py](../../skills/transcript-fetcher/scripts/sources/skool.py) — Skool lesson adapter (HTML scrape + ProseMirror render + embed delegation).
 - [scripts/sources/_vtt_to_text.py](../../skills/transcript-fetcher/scripts/sources/_vtt_to_text.py) — pure-Python WebVTT cleaner.
+- [scripts/sources/_captions.py](../../skills/transcript-fetcher/scripts/sources/_captions.py) — multi-format caption → text (SRT/TTML/DFXP build on the VTT cleaner; TTML XXE guard).
 - [scripts/sources/_stat.py](../../skills/transcript-fetcher/scripts/sources/_stat.py) — shared `TranscriptStat` dataclass + sidecar writer + error classes.
 - [scripts/sources/_description.py](../../skills/transcript-fetcher/scripts/sources/_description.py) — `.description.md` writer (YAML frontmatter + Markdown body).
 - [scripts/sources/_cookies.py](../../skills/transcript-fetcher/scripts/sources/_cookies.py) — Netscape cookies.txt loader + restricted-redirect opener.

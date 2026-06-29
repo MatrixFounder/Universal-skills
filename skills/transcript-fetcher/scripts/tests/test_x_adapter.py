@@ -86,17 +86,17 @@ class TestXDetect(unittest.TestCase):
 
 class TestCaptionPath(unittest.TestCase):
     def test_uses_embedded_captions_no_asr(self) -> None:
-        def fake_download_subtitle(*, workdir, lang, **kw):
+        def fake_download_captions(*, workdir, lang, **kw):
             p = Path(workdir) / f"media.{lang}.vtt"
             p.write_text(_VTT, encoding="utf-8")
-            return True, p, f"got auto:{lang}"
+            return True, p, "vtt", f"got auto:{lang}"
 
         with tempfile.TemporaryDirectory() as d:
             out = Path(d) / "out.txt"
             with mock.patch.object(ytm, "probe_metadata",
                                    return_value=(_INFO_WITH_CAPTIONS, None)), \
-                 mock.patch.object(ytm, "download_subtitle",
-                                   side_effect=fake_download_subtitle), \
+                 mock.patch.object(ytm, "download_captions",
+                                   side_effect=fake_download_captions), \
                  mock.patch.object(asr, "transcribe_with_fallback") as asr_mock:
                 stat = xmod.fetch_x_transcript(
                     "https://twitter.com/jack/status/20", out
@@ -107,6 +107,107 @@ class TestCaptionPath(unittest.TestCase):
             self.assertEqual(stat.chosen_track_kind, "auto")
             self.assertEqual(stat.chosen_track_lang, "en")
             self.assertIn("Hello", out.read_text(encoding="utf-8"))
+
+    def test_any_caption_fallback_when_ladder_misses_language(self) -> None:
+        # Media has only a `manual en` track, but the ladder is ru-only (the
+        # default --lang ru case). Captions-first must still win over ASR.
+        info = {"id": "20", "subtitles": {"en": [{"ext": "vtt"}]},
+                "automatic_captions": {}}
+
+        def fake_download_captions(*, workdir, lang, **kw):
+            p = Path(workdir) / f"media.{lang}.vtt"
+            p.write_text(_VTT, encoding="utf-8")
+            return True, p, "vtt", f"got manual:{lang}"
+
+        with tempfile.TemporaryDirectory() as d:
+            out = Path(d) / "o.txt"
+            with mock.patch.object(ytm, "probe_metadata",
+                                   return_value=(info, None)), \
+                 mock.patch.object(ytm, "download_captions",
+                                   side_effect=fake_download_captions), \
+                 mock.patch.object(asr, "transcribe_with_fallback") as asr_mock:
+                stat = xmod.fetch_x_transcript(
+                    "https://twitter.com/jack/status/20", out,
+                    fallback_ladder=(("manual", "ru"), ("auto", "ru")),
+                )
+            asr_mock.assert_not_called()
+            self.assertEqual(stat.transcript_origin, "embedded-captions")
+            self.assertEqual(stat.chosen_track_kind, "manual")
+            self.assertEqual(stat.chosen_track_lang, "en")
+            self.assertTrue(any("using the available" in n for n in stat.notes))
+
+    def test_empty_caption_falls_through_to_asr(self) -> None:
+        # A downloaded caption that parses to no text must NOT be written as a
+        # silent-empty "embedded-captions" transcript — it falls through to ASR.
+        def fake_download_captions(*, workdir, lang, **kw):
+            p = Path(workdir) / f"media.{lang}.vtt"
+            p.write_text("WEBVTT\n\n", encoding="utf-8")  # header only → empty text
+            return True, p, "vtt", f"got auto:{lang}"
+
+        def fake_download_audio(url, workdir, **kw):
+            p = Path(workdir) / "media.m4a"
+            p.write_bytes(b"x")
+            return p, None
+
+        result = asr.ASRResult(text="asr body text", backend_name="macwhisper")
+        with tempfile.TemporaryDirectory() as d:
+            out = Path(d) / "out.txt"
+            with mock.patch.object(ytm, "probe_metadata",
+                                   return_value=(_INFO_WITH_CAPTIONS, None)), \
+                 mock.patch.object(ytm, "download_captions",
+                                   side_effect=fake_download_captions), \
+                 mock.patch.object(ytm, "download_audio",
+                                   side_effect=fake_download_audio), \
+                 mock.patch.object(ytm, "ffmpeg_available", return_value=True), \
+                 mock.patch.object(ytm, "remove_silence",
+                                   return_value=(None, "off")), \
+                 mock.patch.object(asr, "transcribe_with_fallback",
+                                   return_value=result) as asr_mock:
+                stat = xmod.fetch_x_transcript(
+                    "https://twitter.com/jack/status/20", out
+                )
+            asr_mock.assert_called_once()
+            self.assertEqual(stat.transcript_origin, "macwhisper")
+            self.assertEqual(out.read_text(encoding="utf-8"), "asr body text")
+            self.assertTrue(any("no text" in n for n in stat.notes))
+
+    def test_malicious_ttml_caption_refused_falls_through(self) -> None:
+        billion = (
+            '<?xml version="1.0"?>\n<!DOCTYPE lolz [<!ENTITY a "x">]>\n'
+            '<tt xmlns="http://www.w3.org/ns/ttml"><body><div>'
+            "<p>&a;</p></div></body></tt>"
+        )
+
+        def fake_download_captions(*, workdir, lang, **kw):
+            p = Path(workdir) / f"media.{lang}.ttml"
+            p.write_text(billion, encoding="utf-8")
+            return True, p, "ttml", f"got auto:{lang}"
+
+        def fake_download_audio(url, workdir, **kw):
+            p = Path(workdir) / "media.m4a"
+            p.write_bytes(b"x")
+            return p, None
+
+        result = asr.ASRResult(text="safe asr text", backend_name="macwhisper")
+        with tempfile.TemporaryDirectory() as d:
+            out = Path(d) / "out.txt"
+            with mock.patch.object(ytm, "probe_metadata",
+                                   return_value=(_INFO_WITH_CAPTIONS, None)), \
+                 mock.patch.object(ytm, "download_captions",
+                                   side_effect=fake_download_captions), \
+                 mock.patch.object(ytm, "download_audio",
+                                   side_effect=fake_download_audio), \
+                 mock.patch.object(ytm, "ffmpeg_available", return_value=True), \
+                 mock.patch.object(ytm, "remove_silence",
+                                   return_value=(None, "off")), \
+                 mock.patch.object(asr, "transcribe_with_fallback",
+                                   return_value=result) as asr_mock:
+                stat = xmod.fetch_x_transcript(
+                    "https://twitter.com/jack/status/20", out
+                )
+            asr_mock.assert_called_once()
+            self.assertEqual(stat.transcript_origin, "macwhisper")
+            self.assertTrue(any("parse failed" in n for n in stat.notes))
 
 
 class TestASRPath(unittest.TestCase):
@@ -125,6 +226,8 @@ class TestASRPath(unittest.TestCase):
                                    return_value=(_INFO_NO_CAPTIONS, None)), \
                  mock.patch.object(ytm, "download_audio",
                                    side_effect=fake_download_audio), \
+                 mock.patch.object(ytm, "remove_silence",
+                                   return_value=(None, "test: silence-removal off")), \
                  mock.patch.object(asr, "transcribe_with_fallback",
                                    return_value=result) as asr_mock:
                 stat = xmod.fetch_x_transcript(
@@ -151,6 +254,8 @@ class TestDurationFill(unittest.TestCase):
                                    return_value=(_INFO_NO_CAPTIONS, None)), \
                  mock.patch.object(ytm, "download_audio", side_effect=fake_download_audio), \
                  mock.patch.object(ytm, "ffmpeg_available", return_value=True), \
+                 mock.patch.object(ytm, "remove_silence",
+                                   return_value=(None, "test: silence-removal off")), \
                  mock.patch.object(ytm, "probe_media_duration", return_value=1834), \
                  mock.patch.object(asr, "transcribe_with_fallback", return_value=result):
                 stat = xmod.fetch_x_transcript("https://x.com/i/broadcasts/z", out)
@@ -182,6 +287,8 @@ class TestCleanup(unittest.TestCase):
                                    return_value=(_INFO_NO_CAPTIONS, None)), \
                  mock.patch.object(ytm, "download_audio",
                                    side_effect=fake_download_audio), \
+                 mock.patch.object(ytm, "remove_silence",
+                                   return_value=(None, "test: silence-removal off")), \
                  mock.patch.object(asr, "transcribe_with_fallback",
                                    return_value=result):
                 xmod.fetch_x_transcript("https://x.com/i/broadcasts/z", out)
@@ -247,6 +354,8 @@ class TestDebugLogging(unittest.TestCase):
                                    return_value=(_INFO_NO_CAPTIONS, None)), \
                  mock.patch.object(ytm, "download_audio",
                                    side_effect=fake_download_audio), \
+                 mock.patch.object(ytm, "remove_silence",
+                                   return_value=(None, "test: silence-removal off")), \
                  mock.patch.object(asr, "transcribe_with_fallback",
                                    return_value=result):
                 xmod.fetch_x_transcript(
@@ -323,6 +432,8 @@ class TestHLSFailFast(unittest.TestCase):
                                    return_value=(self._HLS_INFO, None)), \
                  mock.patch.object(ytm, "ffmpeg_available", return_value=True), \
                  mock.patch.object(ytm, "download_audio", side_effect=fake_dl), \
+                 mock.patch.object(ytm, "remove_silence",
+                                   return_value=(None, "test: silence-removal off")), \
                  mock.patch.object(asr, "transcribe_with_fallback",
                                    return_value=result):
                 stat = xmod.fetch_x_transcript("https://x.com/i/broadcasts/z", out)

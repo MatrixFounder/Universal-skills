@@ -194,3 +194,60 @@ def asr_allow_cloud_default() -> bool:
 
 def asr_model_default() -> Optional[str]:
     return env("ASR_MODEL")
+
+
+# --------------------------------------------------------------------- #
+# Silence-removal pre-processing (TF-X-6) — ffmpeg `silenceremove` knobs
+# --------------------------------------------------------------------- #
+def silence_removal_default() -> bool:
+    """Whether to strip long silences before ASR (CLI ``--keep-silence`` overrides).
+
+    Defaults **ON** (the user's preferred mitigation for hallucinated filler on
+    silent lead-in/out). Set ``TRANSCRIPT_FETCHER_SILENCE_REMOVAL=0`` to default
+    it off.
+    """
+    raw = env("SILENCE_REMOVAL")
+    return True if raw is None else _is_truthy(raw)
+
+
+def silence_threshold_db() -> str:
+    """Loudness gate below which audio counts as silence, e.g. ``"-45dB"``.
+
+    Music/speech carry energy above this, so only true silence is removed.
+    ``TRANSCRIPT_FETCHER_SILENCE_THRESHOLD`` accepts ``"-40dB"`` or a bare
+    number (``"-40"`` → ``"-40dB"``); a malformed value falls back to the
+    default. Validated to a numeric dB token so it is safe in the ffmpeg
+    filter string.
+    """
+    raw = (env("SILENCE_THRESHOLD") or "").strip()
+    if raw:
+        token = raw[:-2].strip() if raw[-2:].lower() == "db" else raw
+        try:
+            float(token)
+            return f"{token}dB"
+        except ValueError:
+            pass
+    return "-45dB"
+
+
+def _silence_float(suffix: str, default: float) -> float:
+    raw = (env(suffix) or "").strip()
+    try:
+        val = float(raw)
+        return val if val >= 0 else default
+    except ValueError:
+        return default
+
+
+def silence_min_gap_sec() -> float:
+    """Minimum silence length (seconds) to act on — shorter pauses are kept.
+
+    ``TRANSCRIPT_FETCHER_SILENCE_MIN_GAP_SEC`` (default ``1.0``)."""
+    return _silence_float("SILENCE_MIN_GAP_SEC", 1.0)
+
+
+def silence_keep_sec() -> float:
+    """Silence (seconds) to leave in place where a long gap is collapsed —
+    preserves a natural sentence break. ``TRANSCRIPT_FETCHER_SILENCE_KEEP_SEC``
+    (default ``0.3``)."""
+    return _silence_float("SILENCE_KEEP_SEC", 0.3)

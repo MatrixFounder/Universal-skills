@@ -81,6 +81,42 @@ class TestTypedAccessors(unittest.TestCase):
             self.assertEqual(cfg.openai_api_key(), "prefixed")
 
 
+class TestSilenceConfig(unittest.TestCase):
+    def test_defaults(self) -> None:
+        with mock.patch.dict(os.environ, {}, clear=True):
+            self.assertTrue(cfg.silence_removal_default())   # ON by default
+            self.assertEqual(cfg.silence_threshold_db(), "-45dB")
+            self.assertEqual(cfg.silence_min_gap_sec(), 1.0)
+            self.assertEqual(cfg.silence_keep_sec(), 0.3)
+
+    def test_removal_opt_out(self) -> None:
+        with mock.patch.dict(os.environ, {P + "SILENCE_REMOVAL": "0"}, clear=True):
+            self.assertFalse(cfg.silence_removal_default())
+
+    def test_threshold_normalises_and_validates(self) -> None:
+        with mock.patch.dict(os.environ, {P + "SILENCE_THRESHOLD": "-40"}, clear=True):
+            self.assertEqual(cfg.silence_threshold_db(), "-40dB")
+        with mock.patch.dict(os.environ, {P + "SILENCE_THRESHOLD": "-30dB"}, clear=True):
+            self.assertEqual(cfg.silence_threshold_db(), "-30dB")
+        # garbage → default (never an injection vector in the filter string)
+        with mock.patch.dict(os.environ, {P + "SILENCE_THRESHOLD": "evil;rm"}, clear=True):
+            self.assertEqual(cfg.silence_threshold_db(), "-45dB")
+
+    def test_numeric_knobs_validate(self) -> None:
+        with mock.patch.dict(os.environ, {
+            P + "SILENCE_MIN_GAP_SEC": "2.5",
+            P + "SILENCE_KEEP_SEC": "0.5",
+        }, clear=True):
+            self.assertEqual(cfg.silence_min_gap_sec(), 2.5)
+            self.assertEqual(cfg.silence_keep_sec(), 0.5)
+        with mock.patch.dict(os.environ, {
+            P + "SILENCE_MIN_GAP_SEC": "nope",
+            P + "SILENCE_KEEP_SEC": "-1",
+        }, clear=True):
+            self.assertEqual(cfg.silence_min_gap_sec(), 1.0)   # bad → default
+            self.assertEqual(cfg.silence_keep_sec(), 0.3)      # negative → default
+
+
 class TestLoadSkillEnvSecurity(unittest.TestCase):
     @staticmethod
     def _write_env(d: str, body: str, mode: int = 0o600) -> Path:
