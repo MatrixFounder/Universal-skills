@@ -11,7 +11,8 @@
 //   • Leaf chrome buttons ("Copy", "Ask AI", "Copy page", …) whose label text otherwise
 //     leaks into the Markdown above code blocks.
 //   • Inline-collapsed links (block-content nav anchors) + dropped icon/zero-width anchors.
-//   • `data:` URI images/links dropped (base64 blobs that otherwise dump KBs into the MD).
+//   • `data:` URI links dropped (→ plain text); `data:` URI images kept when content-sized
+//     (≥ DATA_URI_MIN_LEN, localized to _attachments/ by emit.py), tiny icon blobs dropped.
 //   • arXiv/LaTeXML (ar5iv) `div.ltx_listing` code listings → fenced code blocks, dropping
 //     the line-number gutter span (mirrors docx `_html2docx_walker.emitLatexmlListing`).
 //
@@ -19,6 +20,12 @@
 // (core_bridge.py) spawns THIS file.
 
 const { buildTurndown } = require("./html2md_core");
+
+// Min length (chars) of a `data:` image URI to treat it as CONTENT (kept) rather than a
+// tiny icon/mascot/tracking-pixel blob (dropped). ~1 KB of URI ≈ ≥0.7 KB decoded — well
+// below any real diagram, well above a 1px PNG (~70 chars). Keep in sync with emit.py's
+// _DATA_URI_MIN_LEN.
+const DATA_URI_MIN_LEN = 1024;
 
 const _getAttr = (node, name) =>
     (typeof node.getAttribute === "function" ? node.getAttribute(name) : null) || "";
@@ -130,13 +137,52 @@ function buildConverter() {
             }
         },
     });
-    // Drop `data:` URI images — base64 icon/mascot blobs that otherwise dump kilobytes
-    // of base64 into the Markdown. Keep real images with a resolvable src.
+    // MathJax/Pandoc math → Obsidian/KaTeX `$…$` (inline) / `$$…$$` (display).
+    // Pandoc & friends emit `<span class="math inline">\(TeX\)</span>` and
+    // `class="math display">\[TeX\]`. With no rule, turndown markdown-escapes the TeX
+    // (`\_` `\*` `\[` → broken subscripts/operators) AND leaves the `\(…\)` delimiters that
+    // Obsidian can't render. We take the RAW textContent (turndown does NOT re-escape a
+    // rule's return value), strip the wrapping delimiters, and re-emit `$`-delimited — which
+    // renders natively in Obsidian and VS Code's built-in Markdown preview, no extension.
+    td.addRule("htmlMath", {
+        // Require the Pandoc pairing `math` + (`inline`|`display`). Matching bare `math`
+        // would false-positive on classes like `not-math` / `post-math` (\bmath\b treats
+        // `-` as a boundary), wrapping non-TeX text in `$…$`.
+        filter: (node) =>
+            (node.nodeName === "SPAN" || node.nodeName === "DIV") &&
+            _hasClass(node, "math") &&
+            (_hasClass(node, "inline") || _hasClass(node, "display")),
+        replacement: (_content, node) => {
+            let tex = (node.textContent || "").replace(/[​‌‍﻿]/g, "").trim();
+            tex = tex
+                .replace(/^\\\(([\s\S]*)\\\)$/, "$1")   // \( … \)
+                .replace(/^\\\[([\s\S]*)\\\]$/, "$1")   // \[ … \]
+                .replace(/^\$\$([\s\S]*)\$\$$/, "$1")    // $$ … $$
+                .replace(/^\$([\s\S]*)\$$/, "$1")        // $ … $
+                .trim();
+            if (!tex) return "";
+            return _hasClass(node, "display") ? "\n\n$$\n" + tex + "\n$$\n\n" : "$" + tex + "$";
+        },
+    });
+    // `data:` URI images: keep CONTENT-sized blobs (real diagrams are often inlined as
+    // base64, e.g. static blogs / ENS `.eth.limo` / Notion exports), drop only tiny
+    // icon/mascot/tracking-pixel blobs. Downstream (emit.py): --download-images (default)
+    // decodes a surviving data: URI → `_attachments/`; --no-download (file mode) keeps it as
+    // a self-contained inline link; --stdout strips it (no localization → would be base64
+    // bloat in the agent stream). The length gate here governs ALL modes, so tiny icons
+    // never reach the Markdown. Keep this threshold in sync with emit.py's _DATA_URI_MIN_LEN.
     td.addRule("htmlImage", {
         filter: "img",
         replacement: (_content, node) => {
-            const src = _getAttr(node, "src");
-            if (!src || /^data:/i.test(src)) return "";
+            let src = _getAttr(node, "src");
+            if (!src) return "";
+            if (/^data:/i.test(src)) {
+                // Collapse any internal whitespace (HTML attributes may wrap a long base64
+                // payload across lines) so the single-line Markdown link stays parseable by
+                // emit.py's _IMG_RE, which stops at whitespace.
+                src = src.replace(/\s+/g, "");
+                if (src.length < DATA_URI_MIN_LEN) return "";  // tiny icon blob
+            }
             const alt = _getAttr(node, "alt");
             const title = _getAttr(node, "title");
             return `![${alt}](${src}${title ? ` "${title}"` : ""})`;

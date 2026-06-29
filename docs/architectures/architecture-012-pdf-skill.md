@@ -31,7 +31,7 @@ The skill deliberately does NOT ship:
 
 | Capability | Entry-point script | Runtime dependencies | Notes |
 |---|---|---|---|
-| Markdown → PDF | `scripts/md2pdf.py` | weasyprint, markdown2, (mmdc optional) | Mermaid blocks pre-rendered to PNG via `mmdc` (Node); SHA1 cache per diagram + config; bundled `mermaid-config.json` for Cyrillic-capable font stack. PDF carries navigable outline from h1–h6 headings. |
+| Markdown → PDF | `scripts/md2pdf.py` | weasyprint, markdown2, (mmdc + katex optional) | Mermaid blocks pre-rendered to PNG via `mmdc` (Node); SHA1 cache per diagram + config; bundled `mermaid-config.json` for Cyrillic-capable font stack. Inline `$…$` / display `$$…$$` math pre-rendered to MathML via the bundled KaTeX (`katex_render.js`, one Node batch; weasyprint typesets MathML natively, runs no JS) — currency/`$`-in-code untouched; `--no-math`/`--strict-math`; both Node tools degrade gracefully when absent. PDF carries navigable outline from h1–h6 headings. |
 | HTML / web-archive → PDF | `scripts/html2pdf.py` | weasyprint OR playwright (opt-in), html2pdf_lib/ | Handles `.html`, `.mhtml`/`.mht`, `.webarchive`. 13-pass preprocessing pipeline; reader-mode; archive subframe selection (`--archive-frame main/N/all/auto`); SIGALRM watchdog (default 180 s); `--engine chrome` opt-in for SPA/Material3/heavy-CSS. PDF carries outline from headings. |
 | Merge PDFs | `scripts/pdf_merge.py` | pypdf | Bookmark-preserving; each source is nested under a top-level entry named after the source's stem. |
 | Split PDF | `scripts/pdf_split.py` | pypdf | Three modes: named ranges (`--ranges`), one-per-page (`--each-page`), fixed-size chunks (`--every N`); 1-indexed pages. |
@@ -64,6 +64,7 @@ skills/pdf/
     _errors.py                      # --json-errors envelope helper (replicated, docx master)
     _venv_bootstrap.py              # re-exec into scripts/.venv (replicated, docx master)
     mermaid-config.json             # bundled Mermaid theme (Cyrillic-capable font stack)
+    katex_render.js                 # batch TeX → MathML for md2pdf math (Node, trust:false)
     requirements.txt                # base deps: pypdf, pdfplumber, weasyprint, markdown2, reportlab, Pillow
     requirements-chrome.txt         # opt-in: playwright>=1.42,<2.0
     requirements-ocr.txt            # opt-in: ocrmypdf>=16

@@ -134,15 +134,60 @@ class TestAriaTableAndChrome(unittest.TestCase):
         self.assertNotRegex(md, r"(?m)^\s*[123]\s*$")  # bare gutter numbers dropped
 
     def test_data_uri_image_and_link_dropped(self):
-        """base64 data: images/links don't dump blobs; real images survive."""
+        """Sub-threshold base64 data: images + data: links don't dump blobs; real images
+        survive. (Content-sized data: images are kept — see test_data_uri_content_image_kept.)"""
         md = core_bridge.html_to_markdown(
             '<p>keep</p>'
-            '<img src="data:image/png;base64,AAAABBBBCCCC">'
+            '<img src="data:image/png;base64,AAAABBBBCCCC">'   # tiny → dropped
             '<img src="https://x/real.png" alt="r">'
             '<a href="data:text/plain;base64,ZZZZ">dl</a>')
         self.assertNotIn("data:", md)
         self.assertIn("![r](https://x/real.png)", md)
         self.assertIn("keep", md)
+
+    def test_data_uri_content_image_kept(self):
+        """A CONTENT-sized data: image (>= DATA_URI_MIN_LEN) survives conversion as an
+        ![](data:…) link (emit.py localizes it later); the tiny one beside it is dropped."""
+        big = "data:image/png;base64," + "A" * 1100
+        tiny = "data:image/png;base64,AAAABBBBCCCC"
+        md = core_bridge.html_to_markdown(
+            f'<p>keep</p><img src="{tiny}" alt="icon"><img src="{big}" alt="diagram">')
+        self.assertIn(big, md, "content-sized data: image must be preserved")
+        self.assertNotIn("icon", md, "tiny icon blob must be dropped")
+
+    def test_mathjax_pandoc_spans_to_dollar(self):
+        """MathJax/Pandoc `class=math inline|display` spans → `$…$`/`$$…$$` with RAW TeX
+        (no markdown-escaping of `_ * [ ]`, no leftover `\\(…\\)`). Regression for the
+        vitalik.eth.limo article whose 562 inline formulas were being escaped/corrupted."""
+        md = core_bridge.html_to_markdown(
+            '<p>see <span data-evaluate="no"><span class="math inline">'
+            '\\(C_1 + C_2\\)</span></span> and</p>'
+            '<p><span class="math display">\\[\\sum_{i=1}^n x_i \\approx m_1\\]</span></p>')
+        self.assertIn("$C_1 + C_2$", md)            # real subscripts/operator, $-delimited
+        self.assertNotIn("\\(", md)                  # no leftover MathJax delimiter
+        self.assertNotIn("\\_", md)                  # subscripts not markdown-escaped
+        self.assertNotIn("\\*", md)                  # operator not escaped
+        self.assertRegex(md, r"\$\$\s*\\sum_\{i=1\}\^n x_i \\approx m_1\s*\$\$")  # display block
+
+    def test_math_filter_no_false_positive(self):
+        """Adversarial C: a class merely CONTAINING the token `math` (e.g. `not-math`,
+        `math-box`) but lacking inline|display must NOT be treated as math — its text
+        passes through normally, never wrapped in `$…$`."""
+        for cls in ("not-math", "math-box", "aftermath"):
+            md = core_bridge.html_to_markdown(f'<p>x</p><span class="{cls}">hello world</span>')
+            self.assertNotIn("$hello world$", md, f"class={cls} wrongly treated as math")
+            self.assertIn("hello world", md)
+
+    def test_data_uri_newline_in_src_collapsed(self):
+        """Adversarial D: a data: src whose base64 wraps across lines is collapsed to one
+        line, so the emitted Markdown image link is single-line + parseable downstream."""
+        b = "A" * 1100
+        md = core_bridge.html_to_markdown(
+            f'<p>x</p><img src="data:image/png;base64,{b[:500]}\n{b[500:]}" alt="d">')
+        # No newline inside the data: URI, and the whole link is on one line.
+        img_line = [ln for ln in md.splitlines() if "data:image" in ln]
+        self.assertEqual(len(img_line), 1, "data: image link must be on exactly one line")
+        self.assertRegex(img_line[0], r'!\[d\]\(data:image/png;base64,A+\)')
 
     def test_plain_table_still_works(self):
         """A real <table> still converts (core path unaffected by the ARIA rule)."""

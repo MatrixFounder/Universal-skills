@@ -63,9 +63,15 @@ for two consumers: (1) an **Obsidian web-clipper** (self-contained note), and
 - **Archive → Markdown**: Safari `.webarchive` + Chrome `.mhtml` (subframe-aware) +
   plain `.html`/`.htm`, fully offline.
 - **Obsidian emit**: YAML frontmatter; `--download-images` → `_attachments/`
-  (sha1-dedup, relative links); **dual-output** (`<slug>.md` + `<slug>.reader.md`); `--reader-only` emits a SINGLE
+  (sha1-dedup, relative links) — covers remote `http(s)` **and content-sized inline `data:`**
+  images (base64/percent-encoded decoded to files; tiny icon blobs dropped); **dual-output**
+  (`<slug>.md` + `<slug>.reader.md`); `--reader-only` emits a SINGLE
   `<slug>.md` = the reader extraction (whole-page fallback if empty) — for note pipelines.
-- **Agent step**: `--stdout` (Markdown to stdout) + `--json-errors` envelope.
+- **Math → Obsidian-native**: Pandoc/MathJax `\(…\)` / `\[…\]` (and `class="math"` spans)
+  → `$…$` / `$$…$$` with raw, un-escaped TeX, so formulas render in Obsidian/KaTeX. Escaped
+  plain-text brackets (`[word]`, citations) and code spans are left untouched.
+- **Agent step**: `--stdout` (Markdown to stdout — inline `data:` blobs stripped to keep the
+  stream clean) + `--json-errors` envelope.
 
 ## 3. Execution Mode
 - **Mode**: `script-first`.
@@ -100,7 +106,7 @@ for two consumers: (1) an **Obsidian web-clipper** (self-contained note), and
   - `python3 scripts/html INPUT [OUTPUT_DIR] [--engine lite|chrome|auto|jina|remote] [--no-remote] [--remote-format html|markdown] [--target-selector SEL] [--chrome-storage-state PATH | --chrome-cookies-file PATH | --chrome-user-data-dir DIR] [--chrome-scroll] [--chrome-scroll-passes N] [--reader-mode|--no-reader|--reader-only] [--download-images|--no-download-images] [--attachments-dir _attachments] [--archive-frame main|N|all|auto] [--max-bytes N] [--max-images N] [--retries N] [--rate-limit REQS_PER_SEC] [--stdout] [--json-errors]`
   - Search: `python3 scripts/html search "QUERY" [OUTPUT_DIR] [--max-results N] [...]` (or the legacy `--search "QUERY"`).
   - Login (mint a session, headful): `python3 scripts/html login URL [--save-state state.json]`.
-- **Environment (optional):** `HTML_READER_URL` / `HTML_READER_PROVIDERS` (remote reader base(s)), `HTML_READER_TOKEN` (generic reader auth), `JINA_API_KEY` (jina quota), `HTML_SEARCH_URL` / `HTML_SEARCH_PROVIDERS` (search provider base(s)), `HTML_CHROME_STORAGE_STATE` / `HTML_CHROME_COOKIES_FILE` / `HTML_CHROME_USER_DATA_DIR` (Chrome auth — server-deployable secrets). All optional; see [`.env.example`](.env.example) for a documented template (read from the process env; not auto-loaded).
+- **Environment (optional):** `HTML_READER_URL` / `HTML_READER_PROVIDERS` (remote reader base(s)), `HTML_READER_TOKEN` (generic reader auth), `JINA_API_KEY` (jina quota), `HTML_SEARCH_URL` / `HTML_SEARCH_PROVIDERS` (search provider base(s)), `HTML_CHROME_STORAGE_STATE` / `HTML_CHROME_COOKIES_FILE` / `HTML_CHROME_USER_DATA_DIR` (Chrome auth — server-deployable secrets), `HTML_SSRF_ALLOW_NETS` (SSRF carve-out CIDR list — **no code default**; unset/empty → none; `.env.example` ships `198.18.0.0/15` for RFC-2544/`.eth.limo` mappings; `0.0.0.0/0` disables IPv4 protection). All optional; the CLI **auto-loads `<skill>/.env`** at startup (an in-process `import` caller does not — call `_load_skill_env()` yourself). See [`.env.example`](.env.example).
 - **INPUT**: a `http(s)` URL, or a local `.html`/`.htm`/`.mhtml`/`.mht`/`.webarchive`.
 - **OUTPUT_DIR**: directory to write `<slug>.md` (+ `<slug>.reader.md` by default) and
   `_attachments/` into. **Omit → defaults to `./tmp/html_out/`** (created on demand,
@@ -153,9 +159,10 @@ for two consumers: (1) an **Obsidian web-clipper** (self-contained note), and
   session is never carried to another site. Session files (`storage_state`/`cookies.txt`) are
   **bearer credentials**: passed by **path only** (never argv), required mode **0600** (group+world
   rejected), symlinks refused, values never logged/redacted. The target + session stay **local**.
-- **Honest-scope residuals**: DNS-rebinding (resolve-then-connect TOCTOU) is inherited (lite +
-  chrome); `storage_state` localStorage is origin-restored (readable by same-origin scripts the
-  page loads); the login-wall heuristic is best-effort/per-site; `_registrable` is last-2-labels
+- **Honest-scope residuals**: DNS-rebinding (resolve-then-connect TOCTOU) is **closed on the lite
+  path** (the connection is pinned to the validated IP), but **remains on the Chrome tier**
+  (Playwright manages its own sockets); `storage_state` localStorage is origin-restored (readable
+  by same-origin scripts the page loads); the login-wall heuristic is best-effort/per-site; `_registrable` is last-2-labels
   (multi-level suffixes like `co.uk` over-match); a reader follows its own server-side redirects.
   Run untrusted conversions in an egress-restricted sandbox. See `references/html-to-markdown.md`
   and `docs/KNOWN_ISSUES.md` (HTML2MD-10).

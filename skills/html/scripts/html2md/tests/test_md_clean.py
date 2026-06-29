@@ -89,5 +89,62 @@ class TestTidyMarkdown(unittest.TestCase):
         self.assertIn('The role="main" wrapper holds the article.', out)
 
 
+class TestMathNormalization(unittest.TestCase):
+    """`\\(…\\)` / `\\[…\\]` → Obsidian `$…$` / `$$…$$` (remote-reader path + defense-in-depth)."""
+
+    def test_jina_inline_and_display(self):
+        out = tidy_markdown(r"see \(x_1 + y\) and" + "\n\n" + r"\[\sum_{i=1}^n x_i \approx m\]" + "\n")
+        self.assertIn("$x_1 + y$", out)
+        self.assertIn(r"$$\sum_{i=1}^n x_i \approx m$$", out)
+        self.assertNotIn(r"\(", out)
+        self.assertNotIn(r"\[", out)
+
+    def test_turndown_escaped_form_unescaped(self):
+        # raw \(C_1 + C_2\) text that turndown double-escaped → clean $C_1 + C_2$
+        out = tidy_markdown(r"eq \\(C\_1 + C\_2\\) end" + "\n")
+        self.assertIn("$C_1 + C_2$", out)
+        self.assertNotIn(r"\_", out)
+
+    def test_latex_commands_preserved(self):
+        out = tidy_markdown(r"\(a \approx b \cdot c\)" + "\n")
+        self.assertIn(r"$a \approx b \cdot c$", out)  # backslash+letter commands untouched
+
+    def test_code_span_and_fence_not_touched(self):
+        self.assertIn(r"`\(raw\)`", tidy_markdown(r"use `\(raw\)` here" + "\n"))
+        fenced = "```\n" + r"\(not math\)" + "\n```\n"
+        self.assertIn(r"\(not math\)", tidy_markdown(fenced))
+
+    def test_currency_and_existing_dollar_untouched(self):
+        out = tidy_markdown("costs $5 and $10; keep $x$ and $$y$$\n")
+        self.assertIn("$5 and $10", out)
+        self.assertIn("$x$", out)
+
+    def test_unclosed_delimiter_left_alone(self):
+        # no matching \) → not math → not converted (avoids false-positive on stray escapes)
+        self.assertIn(r"\(", tidy_markdown(r"a lone \( paren with no close" + "\n"))
+
+    def test_escaped_plaintext_brackets_not_math(self):
+        # vdd-multi regression: turndown escapes plain `[word]`/`[1]` to `\[word\]`/`\[1\]`.
+        # The normalizer must NOT turn ordinary bracketed prose / citations into display math.
+        out = tidy_markdown(r"I want \[recipient\] to see \[message\]; ref \[1\] and \[a, b\]" + "\n")
+        self.assertNotIn("$$recipient$$", out)
+        self.assertNotIn("$$message$$", out)
+        self.assertNotIn("$$1$$", out)
+        self.assertNotIn("$$", out)            # nothing here is math → no display math at all
+        self.assertIn(r"\[recipient\]", out)   # left as escaped brackets
+
+    def test_mathy_brackets_still_convert(self):
+        # A `\[…\]` whose body has a math signal IS real display math → convert.
+        out = tidy_markdown(r"\[E = mc^2\]" + "\n")
+        self.assertIn("$$E = mc^2$$", out)
+
+    def test_latex_double_backslash_linebreak_preserved(self):
+        # `_MD_UNESCAPE` must NOT collapse `\\` (LaTeX matrix/align row separator) to `\`.
+        # turndown double-escapes a raw \(…\) body; a TeX `\\` line-break appears as `\\\\`.
+        out = tidy_markdown(r"eq \\(a + b\\\\c + d\\)" + "\n")
+        self.assertIn("$", out)
+        self.assertNotIn(r"a + b\c + d", out)  # the row-break must not be merged away
+
+
 if __name__ == "__main__":
     unittest.main()

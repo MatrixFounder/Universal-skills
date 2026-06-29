@@ -42,6 +42,11 @@ A Markdown summary following `assets/template_article.md`, depth chosen by `mode
 
 ### 3. Fidelity
 - PRESERVE all specific numbers, dates, named entities, technical terms, equations, tickers.
+- **Math notation (Obsidian/KaTeX):** write inline math as `$ … $` and display/block math as
+  `$$ … $$`. Do **NOT** use `\( … \)` / `\[ … \]` (Obsidian doesn't render them) and do **NOT**
+  markdown-escape inside a formula (`x_1` not `x\_1`, `a*b` not `a\*b`). If the source already
+  uses `$…$`, keep it; if it uses `\(…\)`/`\[…\]` (e.g. a Pandoc/MathJax article), convert the
+  delimiters and unescape the body.
 - Strip conversion noise (LaTeXML junk like `11institutetext`, `%percent`, stray `\\`, image MD5
   placeholders, raw citation brackets) — summarize the *content*, not the artifacts.
 - If something is genuinely unclear, mark `[UNCLEAR]`; if a figure can't be read, say so. Do NOT

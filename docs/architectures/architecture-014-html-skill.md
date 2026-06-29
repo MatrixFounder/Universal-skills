@@ -266,12 +266,14 @@ commit.
   the instant it passes `--max-bytes`** (no full-buffer OOM); `--max-images` bounds
   the number of remote image *fetches*, not just writes; request timeout; no
   credential forwarding; error envelopes redact userinfo + query (`_redact`).
-  **Honest-scope residuals (§10):** (a) the public-IP check is resolve-then-connect,
-  so a DNS-rebinding attacker controlling authoritative DNS can still flip the
-  address in the TOCTOU window — run untrusted conversions in an egress-restricted
-  sandbox; (b) the **Chrome engine is NOT network-hardened** — it is a basic
-  `launch + goto` that follows redirects (incl. to internal hosts) without the
-  public-IP gate and does not block beacons; full hardening is deferred.
+  **Honest-scope residuals (§10):** (a) DNS-rebinding is **closed on the lite path** —
+  the connection is pinned to the validated IP (`_resolve_validated_addrs` +
+  `_pin_host_addrs`), so httpx cannot connect to a re-resolved private address; it
+  **remains on the Chrome tier** (Playwright owns its sockets) — run untrusted Chrome
+  conversions in an egress-restricted sandbox; (b) the **Chrome engine** is SSRF-gated as
+  of TASK 024 (`_assert_public_http` before goto + a context-level route guard that aborts
+  non-public sub-resources/`fetch`/`beacon` + off-target-redirect refusal), but does not
+  IP-pin, so it keeps the rebinding residual noted in (a).
 - **Archive parsing (inherited).** `web_clean/archives.py` uses stdlib
   `plistlib`/`email` (no XML entity expansion surface); path-traversal in
   sub-resource names is sanitised before writing to the temp dir.
@@ -356,12 +358,18 @@ A few KB of unused code is the correct price for fork-freedom.
   JS/SPA pages only convert via the Chrome fallback (lite path returns the
   pre-hydration shell). `robots.txt` / rate-limiting / ToS compliance is the
   **caller's** responsibility — the tool does not police them.
-- **SSRF residuals (lite path is hardened; two gaps remain).** The lite path
-  blocks private/loopback/link-local/metadata targets on every redirect hop and
-  streams with a `--max-bytes` cap (§7). NOT covered: (a) **DNS rebinding** — the
-  public-IP check is resolve-then-connect (TOCTOU); (b) the **Chrome engine** does
-  NO SSRF/network hardening (basic `launch + goto`, follows internal redirects).
-  Convert untrusted input in a network-egress-restricted sandbox.
+- **SSRF residuals (lite + Chrome hardened; gaps remain).** The lite path blocks
+  private/loopback/link-local/metadata/reserved targets on every redirect hop and
+  streams with a `--max-bytes` cap (§7); the SSRF gate keeps Python's `ip.is_private`
+  and only subtracts an explicit carve-out (`HTML_SSRF_ALLOW_NETS`, NO code default —
+  unset/empty → none; shipped `.env.example` sets `198.18.0.0/15` RFC 2544 — see
+  KNOWN_ISSUES HTML2MD-4), unwrapping IPv4-mapped/
+  translated IPv6 first. NOT covered: (a) **DNS rebinding** — closed on the lite path
+  (the connection is pinned to the validated IP), still open on the Chrome tier; (b) a
+  carve-out you configure is reachable by design (trusted-local-config; `0.0.0.0/0`
+  disables IPv4 protection). The **Chrome engine is
+  now SSRF-gated** (TASK 024: `_assert_public_http` + context route-guard + off-target
+  redirect refusal). Convert untrusted input in a network-egress-restricted sandbox.
 - **Reader extraction is best-effort.** the pdf-9 SPA-chrome heuristic
   gracefully degrades on landmark-free DOM (`ya_browser`-class) — sidebar text
   may leak into `reader.md`; the whole-page `.md` is always available as the

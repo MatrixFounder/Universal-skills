@@ -56,6 +56,81 @@ _WIDGET_ATTR = re.compile(
 )
 _FENCE = re.compile(r"^[ \t]*(?:```|~~~)")
 
+# --------------------------------------------------------------------------- #
+# Math-delimiter normalization → Obsidian/KaTeX `$…$` / `$$…$$`
+# --------------------------------------------------------------------------- #
+# Defense-in-depth + the remote-reader 'trust markdown' path (jina), which bypasses the
+# DOM math rule in html_convert.js: a reader may emit MathJax/Pandoc `\(…\)` / `\[…\]`
+# that Obsidian can't render. We normalize the delimiters here, on EVERY produced
+# Markdown (turndown output is already `$`-delimited by the DOM rule, so this is a no-op
+# there). Code spans / fenced blocks are protected (a `\(` in a code sample is not math).
+#
+# Two source forms:
+#   • single backslash  \( … \)  — a reader's raw MathJax; body is clean LaTeX, kept as-is.
+#   • double backslash  \\( … \\) — turndown-escaped raw `\(…\)` text; the body was also
+#     md-escaped, so we additionally reverse turndown's escaping of NON-letter specials
+#     (`\_`→`_`, `\*`→`*`, …) — never touching LaTeX commands (`\approx`, `\sum`, which are
+#     backslash+LETTER and were never escaped) and NOT `\\` (a LaTeX line-break / matrix-row
+#     separator: turndown-escaping it to `\\\\` then collapsing to `\` would corrupt the math).
+#
+# Bracket forms gate on `_looks_like_math`: turndown escapes plain-text `[recipient]` /
+# `[1]` to `\[recipient\]` / `\[1\]`, so an unconditional `\[…\]`→`$$…$$` would turn ordinary
+# bracketed prose and citations into display math. Real display math from the lite path comes
+# via the DOM rule (already `$`-delimited), so the only `\[…\]` reaching here are escaped
+# brackets (skip unless mathy) or a remote reader's raw MathJax (mathy → convert). Paren forms
+# are NOT gated: turndown does not escape `(`/`)` in prose, so `\(…\)` is always real math.
+_CODE_SPLIT = re.compile(r"(```[\s\S]*?```|~~~[\s\S]*?~~~|`[^`\n]*`)")
+_MATH_DISPLAY_ESC = re.compile(r"\\\\\[([\s\S]+?)\\\\\]")        # \\[ … \\]  (turndown)
+_MATH_INLINE_ESC = re.compile(r"\\\\\((.+?)\\\\\)")              # \\( … \\)  (turndown)
+_MATH_DISPLAY = re.compile(r"(?<!\\)\\\[([\s\S]+?)(?<!\\)\\\]")  # \[ … \]   (raw/jina)
+_MATH_INLINE = re.compile(r"(?<!\\)\\\((.+?)(?<!\\)\\\)")        # \( … \)   (raw/jina)
+_MD_UNESCAPE = re.compile(r"\\([_*\[\]()#+\-.!~`>])")            # reverse turndown md-escape (NOT \\)
+# A delimited body is treated as math only with a positive signal: a LaTeX command, a
+# sub/superscript/brace, a binary operator between operands, or a math/greek glyph. Plain
+# words ("recipient"), citations ("1"), and lists ("a, b, c") have none → left untouched.
+_MATH_SIGNAL = re.compile(
+    r"\\[a-zA-Z]"                                    # \command  (\sum \frac \approx)
+    r"|[\^_{}]"                                       # ^  _  {  }
+    r"|(?<=[\w)\]])\s*[=+*/<>|]\s*(?=[\w(\\])"         # binary operator between operands
+    r"|[←-⇿∀-⋿⨀-⫿]"      # arrows + mathematical operators
+    r"|[Α-Ωα-ω]"                   # Greek letters
+)
+# Pathological-input guard: O(n²) worst case scales with delimiter count (each opener may
+# scan to EOF). A doc with thousands of `\(`/`\[` is not real math → skip (degraded, not hung).
+_MATH_DELIM_CAP = 5000
+
+
+def _looks_like_math(s: str) -> bool:
+    return bool(_MATH_SIGNAL.search(s))
+
+
+def _normalize_math(md: str) -> str:
+    """Convert surviving ``\\(…\\)`` / ``\\[…\\]`` math delimiters to ``$…$`` / ``$$…$$``,
+    skipping code spans and fenced blocks. Bracket forms convert only when the body looks
+    like math (escaped plain-text brackets are left alone). Idempotent; no ``\\(``/``\\[`` → no-op."""
+    if "\\(" not in md and "\\[" not in md:
+        return md  # fast path: no MathJax delimiters at all
+    if md.count("\\(") + md.count("\\[") > _MATH_DELIM_CAP:
+        return md  # pathological delimiter density → skip rather than risk an O(n²) scan
+
+    def _disp_esc(m):
+        tex = _MD_UNESCAPE.sub(r"\1", m.group(1)).strip()
+        return f"$${tex}$$" if _looks_like_math(tex) else m.group(0)
+
+    def _disp(m):
+        tex = m.group(1).strip()
+        return f"$${tex}$$" if _looks_like_math(tex) else m.group(0)
+
+    parts = _CODE_SPLIT.split(md)
+    for i in range(0, len(parts), 2):  # even = prose; odd = code (kept verbatim)
+        seg = parts[i]
+        seg = _MATH_DISPLAY_ESC.sub(_disp_esc, seg)                                       # \\[ … \\]  (gated)
+        seg = _MATH_INLINE_ESC.sub(lambda m: "$" + _MD_UNESCAPE.sub(r"\1", m.group(1)).strip() + "$", seg)
+        seg = _MATH_DISPLAY.sub(_disp, seg)                                               # \[ … \]   (gated)
+        seg = _MATH_INLINE.sub(lambda m: "$" + m.group(1).strip() + "$", seg)
+        parts[i] = seg
+    return "".join(parts)
+
 
 def _is_chrome(line: str) -> bool:
     s = line.strip().lower()
@@ -108,5 +183,6 @@ def tidy_markdown(md: str) -> str:
             continue
         out.append(line)
         i += 1
-    text = re.sub(r"\n{3,}", "\n\n", "\n".join(out))
+    text = _normalize_math("\n".join(out))
+    text = re.sub(r"\n{3,}", "\n\n", text)
     return text.strip() + "\n"

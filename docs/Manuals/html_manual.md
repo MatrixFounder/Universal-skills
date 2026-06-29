@@ -451,8 +451,9 @@ than crashing (add `--rate-limit 2` to be a polite citizen on a long list).
 - **PDF / binary guard.** A URL that returns a PDF (`%PDF` magic) or binary
   payload fails with a clear `FetchFailed` (exit 10) instead of feeding garbage to
   turndown — html is HTML→Markdown only.
-- **Honest-scope residuals.** DNS-rebinding (resolve-then-connect TOCTOU) is inherited by
-  both the lite and chrome tiers; `storage_state` localStorage is origin-restored; Chromium's
+- **Honest-scope residuals.** DNS-rebinding (resolve-then-connect TOCTOU) is **closed on the lite
+  tier** (the connection is pinned to the validated IP) but **remains on the chrome tier**
+  (Playwright owns its sockets); `storage_state` localStorage is origin-restored; Chromium's
   in-render DOM memory is uncapped (the `--max-bytes` cap is post-render); the login-wall
   heuristic is best-effort/per-site; the ladder has no aggregate `--deadline` and `--max-bytes`
   defaults unbounded (KNOWN_ISSUES HTML2MD-9, HTML2MD-10). Run untrusted conversions in an

@@ -12,6 +12,8 @@ Offline determinism (I-3): the file/archive branches make ZERO network calls.
 from __future__ import annotations
 
 import atexit
+import contextlib
+import functools
 import html as _html
 import ipaddress
 import json
@@ -314,6 +316,84 @@ def _redact(url: str) -> str:
     return out
 
 
+# SSRF carve-out — ranges that Python's ``ip.is_private`` flags as non-public but
+# that the operator deliberately allows.  We KEEP ``ip.is_private`` (Python-maintained:
+# it auto-tracks new reserved ranges across versions) and only SUBTRACT this set, so we
+# never silently drop the dozen+ internal ranges (RFC 1918 / loopback / link-local /
+# metadata / TEST-NET / documentation / 6to4 / Teredo …) it already covers.
+#
+# The carve-out is **always explicit** — there is NO built-in code default that could
+# silently widen SSRF. It is read ONLY from the ``HTML_SSRF_ALLOW_NETS`` env var
+# (comma/space CIDR list):
+#   • UNSET / "" / whitespace → NO carve-out (every non-public range stays blocked).
+#                               This is the fail-safe default for a bare environment.
+#   • a CIDR list             → exactly those ranges are allowed (nothing implicit added).
+# The shipped ``<skill>/.env.example`` sets ``HTML_SSRF_ALLOW_NETS=198.18.0.0/15`` (RFC
+# 2544 benchmarking) — IANA marks it non-global, but local resolvers (ENS / `.limo`
+# gateways, some VPNs) map real public hostnames into it (e.g. vitalik.eth.limo), so the
+# auto-loaded ``.env`` re-allows it. A host without that ``.env`` value simply refuses it.
+# Trade-off (honest scope): a range you allow here becomes reachable from this host;
+# ``0.0.0.0/0`` deliberately disables IPv4 SSRF protection. Trusted local config only;
+# for untrusted conversions use ``--no-remote`` + an egress-restricted sandbox.
+_SSRF_ALLOW_ENV = "HTML_SSRF_ALLOW_NETS"
+# IPv4-translated address block (RFC 2765 §2.1, SIIT).  getaddrinfo on some
+# platforms (macOS dual-stack) returns IPv4-translated forms (::ffff:0:x/96)
+# alongside plain IPv4 entries.  Python marks the whole block as is_reserved,
+# which would incorrectly block public addresses embedded in it — so we unwrap to
+# the embedded IPv4 and evaluate with IPv4 semantics (incl. the carve-out above).
+_IPV4_TRANSLATED_NET = ipaddress.ip_network("::ffff:0:0:0/96")
+
+
+@functools.lru_cache(maxsize=8)
+def _parse_allowed_nets(raw: str | None):
+    """Parse the carve-out CIDR list (pure + memoized by raw string).
+
+    ``None`` / ``""`` / whitespace → empty (NO carve-out — strict, fail-safe default);
+    otherwise a comma/space-separated CIDR list (host bits tolerated, ``strict=False``).
+    There is no built-in default: an absent env var widens nothing. A malformed entry is
+    SKIPPED with a stderr warning — fail-safe: the range simply stays blocked rather than
+    silently widening (or crashing) the SSRF gate.
+    """
+    tokens = tuple(t for t in re.split(r"[,\s]+", (raw or "").strip()) if t)
+    nets = []
+    for tok in tokens:
+        try:
+            nets.append(ipaddress.ip_network(tok, strict=False))
+        except ValueError:
+            sys.stderr.write(
+                f"html: ignoring invalid CIDR in {_SSRF_ALLOW_ENV}: {tok!r}\n")
+    return tuple(nets)
+
+
+def _ssrf_allowed_nets():
+    """Current carve-out networks.  Read LAZILY from the env on each call (NOT at
+    import) because the skill-local ``.env`` is loaded by the shim AFTER this module
+    is imported; a module-level constant would miss it (parse is lru_cached)."""
+    return _parse_allowed_nets(os.environ.get(_SSRF_ALLOW_ENV))
+
+
+def _is_ssrf_blocked(ip: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
+    """Return True if *ip* must be blocked for SSRF.
+
+    Built on Python's maintained ``ip.is_private`` predicate minus the
+    :func:`_ssrf_allowed_nets` carve-out.  IPv4-mapped (``::ffff:x/96``) and
+    IPv4-translated (``::ffff:0:x/96``) IPv6 addresses are unwrapped to their IPv4
+    equivalent first, so they are evaluated with IPv4 semantics and the carve-out
+    (which may itself contain IPv4 or IPv6 nets) applies to them too.
+    """
+    if isinstance(ip, ipaddress.IPv6Address):
+        v4 = ip.ipv4_mapped
+        if v4 is None and ip in _IPV4_TRANSLATED_NET:
+            v4 = ipaddress.IPv4Address(ip.packed[-4:])
+        if v4 is not None:
+            return _is_ssrf_blocked(v4)
+    # Family-matched carve-out: ``ip in net`` raises across families, so gate on version.
+    if any(ip in net for net in _ssrf_allowed_nets() if net.version == ip.version):
+        return False
+    return (ip.is_private or ip.is_loopback or ip.is_link_local
+            or ip.is_reserved or ip.is_multicast or ip.is_unspecified)
+
+
 def _host_is_public(host: str) -> bool:
     """True only if EVERY resolved address of ``host`` is a public, routable IP.
 
@@ -321,10 +401,10 @@ def _host_is_public(host: str) -> bool:
     metadata) / reserved / multicast targets. Conservative: an unresolvable host, or a
     host that resolves to *any* non-public address, is rejected.
 
-    Residual (honest scope, ARCH §10): this is a resolve-then-connect check, so a
-    determined DNS-rebinding attacker controlling the authoritative DNS could still
-    flip the address between this lookup and httpx's own connect. Run untrusted
-    conversions in a network-egress-restricted sandbox for full assurance.
+    This is the gate predicate (tests monkeypatch it). The lite fetch path additionally
+    **pins** the connection to the validated addresses (:func:`_resolve_validated_addrs`
+    + :func:`_pin_host_addrs`), closing the resolve-then-connect TOCTOU (DNS rebinding) so
+    httpx cannot connect to a re-resolved private address.
     """
     if not host:
         return False
@@ -339,10 +419,89 @@ def _host_is_public(host: str) -> bool:
             ip = ipaddress.ip_address(info[4][0])
         except ValueError:
             return False
-        if (ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved
-                or ip.is_multicast or ip.is_unspecified):
+        if _is_ssrf_blocked(ip):
             return False
     return True
+
+
+def _resolve_validated_addrs(host: str):
+    """Resolve ``host`` and return ``[(ip_str, family)]`` of its addresses — **this is the
+    authoritative SSRF check** for the lite path and it FAILS CLOSED:
+
+    - every resolved address is public → return the list (the EXACT addresses the connection
+      is then pinned to via :func:`_pin_host_addrs`, so the IP that was security-validated is
+      the IP httpx connects to — no second, unguarded resolution closes the rebinding TOCTOU);
+    - **any** resolved address is non-public (or unparseable) → raise :class:`FetchFailed`
+      (``kind=refused``). It must NOT return ``None`` here: ``None`` makes the caller skip the
+      pin and do a plain (unpinned) connect, which a rebinding attacker — gate sees public,
+      this lookup sees private, httpx's own connect-time lookup sees private — would ride
+      straight to the internal IP. Failing closed is the whole point of the pin;
+    - the host does not resolve here (``OSError``/empty) → return ``None`` (caller skips the
+      pin; an unresolvable host can't be connected to anyway, and this keeps offline/mocked-
+      ``httpx`` tests working).
+    """
+    if not host:
+        return None
+    try:
+        infos = socket.getaddrinfo(host, None, type=socket.SOCK_STREAM)
+    except OSError:
+        return None
+    addrs: list[tuple[str, int]] = []
+    seen: set[tuple[str, int]] = set()
+    for info in infos:
+        family, sockaddr = info[0], info[4]
+        try:
+            blocked = _is_ssrf_blocked(ipaddress.ip_address(sockaddr[0]))
+        except ValueError:
+            blocked = True
+        if blocked:
+            raise FetchFailed(
+                f"refused private/internal target (post-resolution): {host}",
+                details={"url": host, "kind": "refused"},
+            )
+        key = (sockaddr[0], family)
+        if key not in seen:
+            seen.add(key)
+            addrs.append(key)
+    return addrs or None
+
+
+@contextlib.contextmanager
+def _pin_host_addrs(host: str, addrs):
+    """Force ``socket.getaddrinfo`` to return ONLY ``addrs`` for ``host`` (rewritten to the
+    requested port) for the duration of the block, so the HTTP client connects to the exact
+    IP(s) validated by :func:`_resolve_validated_addrs` — not a re-resolved (possibly
+    rebinding) answer. TLS SNI, the ``Host`` header, and cert verification still use ``host``.
+
+    Honest scope: the patch is **process-global** — correct because the lite fetch path is
+    single-threaded per request (CLI). A concurrent fetch of a different host in the same
+    process during the (sub-millisecond) connect window would see the override; do not share
+    the process across threads doing simultaneous fetches.
+    """
+    real = socket.getaddrinfo
+    hl = host.lower()
+
+    def patched(h, port, *args, **kwargs):
+        name = h.decode() if isinstance(h, (bytes, bytearray)) else h
+        if name and name.lower() == hl:
+            family = args[0] if args else kwargs.get("family", 0)
+            socktype = args[1] if len(args) > 1 else kwargs.get("type", 0)
+            proto = args[2] if len(args) > 2 else kwargs.get("proto", 0)
+            out = []
+            for ip, fam in addrs:
+                if family and family != fam:
+                    continue
+                sockaddr = (ip, port) if fam == socket.AF_INET else (ip, port, 0, 0)
+                out.append((fam, socktype or socket.SOCK_STREAM, proto, "", sockaddr))
+            if out:
+                return out
+        return real(h, port, *args, **kwargs)
+
+    socket.getaddrinfo = patched
+    try:
+        yield
+    finally:
+        socket.getaddrinfo = real
 
 
 def _assert_public_http(url: str) -> None:
@@ -392,8 +551,16 @@ def _http_get_bytes(url: str, *, max_bytes: int | None, timeout: float = 20.0,
         current = url
         with httpx.Client(follow_redirects=False, timeout=timeout, headers=headers) as client:
             for _ in range(max_redirects + 1):
-                _assert_public_http(current)  # re-checked on every hop (anti-SSRF)
-                with client.stream("GET", current) as resp:
+                _assert_public_http(current)  # scheme + fast pre-check (anti-SSRF)
+                # Authoritative SSRF check + pin: resolve once, validate, and connect to the
+                # EXACT validated IP so httpx cannot reach a re-resolved (DNS-rebinding) private
+                # address. Raises FetchFailed if the host resolves to anything non-public (fail
+                # closed). None only when the host doesn't resolve here (offline/mocked tests) →
+                # plain connect, which is safe because an unresolvable host can't be connected to.
+                host = urlparse(current).hostname or ""
+                pinned = _resolve_validated_addrs(host)
+                pin_cm = _pin_host_addrs(host, pinned) if pinned else contextlib.nullcontext()
+                with pin_cm, client.stream("GET", current) as resp:
                     if resp.is_redirect and "location" in resp.headers:
                         current = urljoin(current, resp.headers["location"])
                         continue

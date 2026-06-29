@@ -2,19 +2,26 @@
 """Render Markdown to a well-typeset PDF via weasyprint.
 
 Pipeline:
-    Markdown --(mmdc, optional)--> SVG diagrams
+    Markdown --(katex, optional)--> MathML  ($…$ / $$…$$)
+    Markdown --(mmdc, optional)--> PNG diagrams
     Markdown --(markdown2)--> HTML --(weasyprint)--> PDF
 
 Supports GFM tables, fenced code blocks with basic styling, and
 custom CSS via `--css`. A sensible default stylesheet handles
 page size, margins, typography, code blocks, and tables. Fenced
-```mermaid blocks are pre-rendered to SVG via mmdc when available;
-without mmdc they degrade to a code block (no error).
+```mermaid blocks are pre-rendered to PNG via mmdc when available;
+without mmdc they degrade to a code block (no error). Inline `$…$`
+and display `$$…$$` math are pre-rendered to MathML via the bundled
+KaTeX (weasyprint typesets MathML natively — it runs no JS, so
+client-side KaTeX/MathJax is impossible); without node/KaTeX they
+degrade to literal text. Currency ("$5") and `$` inside code are
+left untouched.
 
 Usage:
     python3 md2pdf.py INPUT.md OUTPUT.pdf
         [--css EXTRA.css] [--page-size letter|a4|legal]
         [--base-url DIR] [--no-mermaid] [--strict-mermaid]
+        [--no-math] [--strict-math]
 
 `--base-url DIR` controls how relative image paths resolve. Defaults
 to the directory containing the input Markdown file.
@@ -24,6 +31,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import json
 import os
 import re
 import shutil
@@ -166,6 +174,146 @@ def preprocess_mermaid(
     return out
 
 
+KATEX_RENDER_JS = SCRIPT_DIR / "katex_render.js"
+KATEX_TIMEOUT = 60  # seconds for the whole-document batch render
+
+# Math delimiters. Display `$$…$$` is unambiguous. Inline `$…$` uses the pandoc heuristic
+# to avoid eating currency ("$5 and $10"): the opening `$` is not followed by whitespace,
+# the closing `$` is not preceded by whitespace, and an escaped `\$` is never a delimiter.
+_MATH_DISPLAY_RE = re.compile(r"(?<!\\)\$\$(?!\$)(.+?)(?<!\\)\$\$", re.DOTALL)
+_MATH_INLINE_RE = re.compile(r"(?<![\\$])\$(?!\s)((?:\\.|[^$\\])+?)(?<![\s\\])\$(?!\$)")
+# Fenced blocks + inline code spans are passed through verbatim (a `$x` in a shell snippet
+# is not math).
+_CODE_SPLIT_RE = re.compile(r"(```[\s\S]*?```|~~~[\s\S]*?~~~|`[^`\n]*`)")
+# Above this many `$` chars, treat the doc as currency/noise and skip math preprocessing
+# (guards the O(n²) inline scan on pathological `$`-dense input, before any Node timeout).
+_MATH_DOLLAR_CAP = 10000
+
+
+def _node_path() -> Path | None:
+    """Resolve the `node` binary (PATH). Returns None when unavailable."""
+    found = shutil.which("node")
+    return Path(found) if found else None
+
+
+def preprocess_math(md_text: str, *, strict: bool = False) -> str:
+    """Render inline `$…$` / display `$$…$$` TeX to MathML (via the bundled KaTeX), which
+    weasyprint typesets natively. One Node batch for the whole doc. Code spans/fences are
+    skipped. Degrades to the literal `$…$` (with a warning) when node/KaTeX is missing or a
+    formula fails to parse — never aborts the render unless `strict`."""
+    if "$" not in md_text:
+        return md_text
+    # Pathological-input guard: the inline scan is O(n²) on `$`-dense input (each `$` is a
+    # candidate opener that may scan far before failing), and this runs BEFORE the Node
+    # timeout protects anything. A doc with thousands of `$` is currency/noise, not math →
+    # skip math preprocessing (degraded to literal, never a multi-second Python-side hang).
+    if md_text.count("$") > _MATH_DOLLAR_CAP:
+        if strict:
+            raise RuntimeError(f"too many '$' ({md_text.count('$')}) — refusing math preprocessing")
+        print(f"[md2pdf] WARN: {md_text.count('$')} '$' chars exceed the math cap "
+              f"({_MATH_DOLLAR_CAP}) — skipping math (kept as literal text).", file=sys.stderr)
+        return md_text
+
+    # Collect formulas from non-code segments only.
+    segments = _CODE_SPLIT_RE.split(md_text)
+    formulas: list[dict] = []          # [{tex, display}]
+    index: dict[tuple[str, bool], int] = {}
+
+    def _collect(tex: str, display: bool) -> None:
+        key = (tex, display)
+        if key not in index:
+            index[key] = len(formulas)
+            formulas.append({"tex": tex, "display": display})
+
+    for s_i in range(0, len(segments), 2):  # even = prose; odd = code
+        seg = segments[s_i]
+        if "$$" in seg:
+            for m in _MATH_DISPLAY_RE.finditer(seg):
+                _collect(m.group(1).strip(), True)
+            # Strip display spans before scanning inline so `$$…$$` isn't seen as two `$…$`.
+            # (Only allocate the stripped copy when display math is actually present.)
+            inline_basis = _MATH_DISPLAY_RE.sub("", seg)
+        else:
+            inline_basis = seg
+        for m in _MATH_INLINE_RE.finditer(inline_basis):
+            _collect(m.group(1).strip(), False)
+
+    if not formulas:
+        return md_text
+
+    node = _node_path()
+    if node is None or not KATEX_RENDER_JS.exists():
+        msg = ("math ($…$) found but the KaTeX renderer is unavailable "
+               "(need node + scripts/node_modules/katex — run scripts/install.sh)")
+        if strict:
+            raise RuntimeError(msg)
+        print(f"[md2pdf] WARN: {msg} — formulas kept as literal text.", file=sys.stderr)
+        return md_text
+
+    try:
+        proc = subprocess.run(
+            [str(node), str(KATEX_RENDER_JS)],
+            input=json.dumps(formulas), capture_output=True, text=True,
+            timeout=KATEX_TIMEOUT, cwd=str(SCRIPT_DIR),
+        )
+        if proc.returncode != 0:
+            raise RuntimeError(proc.stderr.strip() or f"katex_render exit {proc.returncode}")
+        results = json.loads(proc.stdout)
+    except (subprocess.SubprocessError, ValueError, RuntimeError) as exc:
+        if strict:
+            raise RuntimeError(f"KaTeX render failed: {exc}") from exc
+        print(f"[md2pdf] WARN: KaTeX render failed ({exc}) — formulas kept as literal text.",
+              file=sys.stderr)
+        return md_text
+
+    rendered = 0
+    failures = 0
+
+    failed_display: list[str] = []  # un-rendered $$…$$ stashed behind a $-free sentinel
+
+    def _mathml(tex: str, display: bool) -> str | None:
+        nonlocal failures
+        # Defensive .get: the inline pass can encounter a `$…$` inside an un-rendered
+        # display block that was never collected (collection scanned display-stripped
+        # text). A missing key is a render-failure, not a crash.
+        idx = index.get((tex, display))
+        if idx is not None and results[idx].get("mathml"):
+            return results[idx]["mathml"]
+        failures += 1
+        return None
+
+    def _sub_display(m: re.Match) -> str:
+        nonlocal rendered
+        ml = _mathml(m.group(1).strip(), True)
+        if ml is None:
+            # Stash the un-rendered display verbatim behind a NUL-delimited, $-free
+            # sentinel so the following inline pass cannot match a `$` inside it
+            # (prevents both the KeyError crash and inline-mangling the literal).
+            failed_display.append(m.group(0))
+            return f"\x00MD{len(failed_display) - 1}\x00"
+        rendered += 1
+        return f'<div class="math-display">{ml}</div>'
+
+    def _sub_inline(m: re.Match) -> str:
+        nonlocal rendered
+        ml = _mathml(m.group(1).strip(), False)
+        if ml is None:
+            return m.group(0)
+        rendered += 1
+        return f'<span class="math-inline">{ml}</span>'
+
+    _sentinel = re.compile(r"\x00MD(\d+)\x00")
+    for s_i in range(0, len(segments), 2):
+        seg = _MATH_DISPLAY_RE.sub(_sub_display, segments[s_i])
+        seg = _MATH_INLINE_RE.sub(_sub_inline, seg)
+        segments[s_i] = _sentinel.sub(lambda mm: failed_display[int(mm.group(1))], seg)
+
+    if rendered:
+        note = f" ({failures} failed → kept as text)" if failures else ""
+        print(f"[md2pdf] Rendered {rendered} math formula(s) via KaTeX{note}.")
+    return "".join(segments)
+
+
 DEFAULT_CSS = """
 @page {
     size: {page_size};
@@ -249,6 +397,16 @@ img { max-width: 100%; height: auto; }
 
 a { color: #2563eb; text-decoration: none; }
 a:hover { text-decoration: underline; }
+
+/* Math (KaTeX → MathML, typeset by weasyprint). Inline flows with the text; display
+   math is centred on its own line and kept off page breaks. */
+.math-inline { white-space: nowrap; }
+.math-display {
+    text-align: center;
+    margin: 0.8em 0;
+    page-break-inside: avoid;
+}
+math { font-size: 1em; }
 """
 
 PAGE_SIZES = {"letter": "letter", "a4": "A4", "legal": "legal"}
@@ -264,8 +422,14 @@ def convert(
     use_mermaid: bool = True,
     strict_mermaid: bool = False,
     mermaid_config: Path | None = None,
+    use_math: bool = True,
+    strict_math: bool = False,
 ) -> None:
     md_text = input_path.read_text(encoding="utf-8")
+    if use_math:
+        # TeX → MathML before markdown2 so the inline/block HTML passes through (same model
+        # as mermaid). weasyprint typesets the MathML; no JS runs at render time.
+        md_text = preprocess_math(md_text, strict=strict_math)
     if use_mermaid:
         # Diagrams live next to the INPUT in <output_stem>_assets/ so the
         # relative path emitted by preprocess_mermaid resolves against the
@@ -320,6 +484,10 @@ def main(argv: list[str] | None = None) -> int:
                         help="Skip mermaid preprocessing (diagrams stay as code blocks).")
     parser.add_argument("--strict-mermaid", action="store_true",
                         help="Fail (exit 4) if any mermaid block can't be rendered.")
+    parser.add_argument("--no-math", action="store_true",
+                        help="Skip math preprocessing ($…$/$$…$$ stay as literal text).")
+    parser.add_argument("--strict-math", action="store_true",
+                        help="Fail if KaTeX is unavailable or any formula can't be rendered.")
     cfg_group = parser.add_mutually_exclusive_group()
     cfg_group.add_argument("--mermaid-config", type=Path, default=None,
                            help="JSON config passed to mmdc -c (theme, fontFamily, etc.). "
@@ -351,6 +519,8 @@ def main(argv: list[str] | None = None) -> int:
             # interprets that as "skip the bundled default and let
             # mmdc use its built-in config".
             mermaid_config=False if args.no_mermaid_config else args.mermaid_config,
+            use_math=not args.no_math,
+            strict_math=args.strict_math,
         )
     except Exception as exc:
         return report_error(

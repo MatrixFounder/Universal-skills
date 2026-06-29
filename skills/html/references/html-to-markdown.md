@@ -175,8 +175,9 @@ Forwarding a live session **to** Jina (`x-set-cookie`) is intentionally **not** 
   before any request and on every redirect hop (Chrome via a context-level route guard that
   aborts non-public navigation/sub-resource/`fetch`/`beacon`, plus an off-target-public-redirect
   refusal); the lite path streams with a `--max-bytes` cap (Chrome bounds the rendered body
-  post-render). **NOT** fully covered: (a) DNS rebinding (resolve-then-connect TOCTOU, both
-  tiers); (b) `storage_state` localStorage is origin-restored; (c) Chromium's own in-render DOM
+  post-render). **NOT** fully covered: (a) DNS rebinding — closed on the lite tier (the connection
+  is pinned to the validated IP), still open on the chrome tier (Playwright owns its sockets);
+  (b) `storage_state` localStorage is origin-restored; (c) Chromium's own in-render DOM
   memory is uncapped. **Run fully-untrusted conversions in a network-egress-restricted sandbox.**
 - **Local image reads** are confined to the input's base directory — a crafted
   `<img src="../../secret">` cannot exfiltrate off-disk files into the vault.

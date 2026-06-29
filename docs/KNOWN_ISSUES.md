@@ -456,11 +456,34 @@ loose lines. **Workaround:** none for Markdown; this is the wrong *kind* of page
 the pdf-10 "data-heavy SPA" note.
 
 ### HTML2MD-4 — SSRF residuals (lite path hardened)
-**Status:** open (honest-scope) • **Severity:** LOW • **Location:** `acquire._host_is_public`
-+ `_fetch_chrome_html`. The lite path blocks private/loopback/link-local/metadata on every
-redirect hop and streams with `--max-bytes`. **NOT covered:** (a) DNS-rebinding (resolve-
-then-connect TOCTOU); (b) the opt-in Chrome engine does NO network hardening. **Workaround:**
-run untrusted conversions in an egress-restricted sandbox.
+**Status:** open (honest-scope) • **Severity:** LOW • **Location:** `acquire._is_ssrf_blocked`
+/ `_host_is_public` + `_fetch_chrome_html`. The lite path blocks private/loopback/link-local/
+metadata/reserved on every redirect hop and streams with `--max-bytes`. The gate keeps Python's
+maintained `ip.is_private` (a superset of the old behaviour) and only **subtracts an explicit
+carve-out** (`HTML_SSRF_ALLOW_NETS`) — there is **no built-in code default**, so an absent var
+widens nothing: unset **or** `""` → NO carve-out (strict, fail-safe); a CIDR list → exactly
+those ranges. The shipped `<skill>/.env.example` sets `HTML_SSRF_ALLOW_NETS=198.18.0.0/15` (RFC
+2544 benchmarking — some local resolvers, e.g. ENS/`.eth.limo` gateways, map real public
+hostnames into that range), so the auto-loaded `.env` re-allows it; a host without that value
+refuses it. IPv4-mapped (`::ffff:x`) and IPv4-translated (`::ffff:0:x`) IPv6 are unwrapped to
+IPv4 before the family-matched check, so `::ffff:169.254.169.254` is still blocked.
+
+**Caveats / NOT covered:**
+- **(a) DNS-rebinding (resolve-then-connect TOCTOU) — ✅ CLOSED on the lite path.** Implemented
+  fix (1) **IP-pinning**: `_resolve_validated_addrs` resolves + validates the host ONCE, then
+  `_pin_host_addrs` forces `socket.getaddrinfo` to return exactly those validated IP(s) for the
+  duration of the connect, so httpx connects to the IP that was security-checked (TLS SNI / `Host`
+  / cert verification still use the hostname). An attacker who flips the authoritative answer to a
+  private IP after validation can no longer be reached — the pinned address holds. *Residual:* the
+  pin is process-global (correct for the single-threaded CLI fetch); and the **Chrome engine does
+  NOT pin** (Playwright manages its own sockets — its context route-guard re-validates each
+  request's host but is itself resolve-then-connect), so chrome retains the TOCTOU. Mitigation for
+  chrome: egress-restricted sandbox.
+- **(b)** a carve-out you configure is reachable from the host by design — `0.0.0.0/0` disables
+  IPv4 protection entirely; trusted-local-config only.
+- **(c)** the opt-in Chrome engine is now SSRF-gated (see HTML2MD-10).
+
+**Strictest local posture:** `--no-remote` + leave `HTML_SSRF_ALLOW_NETS` unset/empty.
 
 ### HTML2MD-5 — cosmetic conversion quirks
 **Status:** open (low-priority) • **Severity:** LOW.
@@ -469,7 +492,19 @@ run untrusted conversions in an egress-restricted sandbox.
 is not always the bare stem. (b) **Empty-heading merge** (`md_clean`) re-levels the line
 after an empty heading into that heading — for the targeted GitBook/Mintlify pattern this is
 correct, but a body paragraph directly after an empty heading would be mis-leveled (never
-deleted). **Related:** `docs/office-skills-backlog.md` §2 «html».
+deleted). (c) **Math-signal heuristic** (`md_clean._normalize_math`) — bracket forms `\[…\]`
+convert to `$$…$$` only when the body looks mathy (LaTeX command / sub-superscript / operator
+between operands), so turndown-escaped plain `[word]`/`[1]` are NOT mangled into math; the
+trade-off is a bare single-variable display like `\[x\]` from the remote-reader path is left
+as-is. Real `class="math"` spans (the lite path) are unaffected — they convert via the DOM rule.
+(d) **Inline `data:` images** — content-sized blobs are localized to `_attachments/` (decoded
+to files); the icon-vs-content cut is a **dual floor**: ≥1024-char encoded URI *and* ≥512
+decoded bytes, so a percent-encoded icon that clears the encoded floor but is tiny decoded is
+still dropped (the decoded floor is the load-bearing one). An SVG `data:` image is written
+verbatim — Obsidian/weasyprint render it without executing embedded JS, so a `<script>` in it is
+inert, but it is not sanitized. In `--no-download-images` file mode a `data:` image stays inline
+(self-contained note); `--stdout` strips it (no localization there → would be base64 bloat).
+**Related:** `docs/office-skills-backlog.md` §2 «html».
 
 ### HTML2MD-7 — clean-source host variants (Wikipedia REST, arXiv /html)
 **Status:** handled • **Severity:** LOW (residual) • **Location:** `acquire._mediawiki_rest_variant`

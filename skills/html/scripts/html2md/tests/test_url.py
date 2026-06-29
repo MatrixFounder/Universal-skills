@@ -130,6 +130,11 @@ class _patch_httpx:
         self._saved_httpx = sys.modules.get("httpx")
         sys.modules["httpx"] = self._fake
         self._saved_pub = acquire._host_is_public
+        # Skip the connection-pin's real getaddrinfo for the (non-resolving) fake test hosts
+        # — keeps the suite offline + fast. The pin itself is covered by the dedicated
+        # test_resolve_validated_addrs / test_pin_host_addrs_closes_rebinding tests.
+        self._saved_pin = acquire._resolve_validated_addrs
+        acquire._resolve_validated_addrs = lambda host: None
         if self._public:
             acquire._host_is_public = lambda h: True
         return self
@@ -140,6 +145,7 @@ class _patch_httpx:
         else:
             sys.modules.pop("httpx", None)
         acquire._host_is_public = self._saved_pub
+        acquire._resolve_validated_addrs = self._saved_pin
         return False
 
 
@@ -247,6 +253,130 @@ class TestSsrfAndErrors(unittest.TestCase):
             with self.assertRaises(FetchFailed, msg=u):
                 acquire._assert_public_http(u)
         acquire._assert_public_http("http://8.8.8.8/")  # public IP → no raise
+
+    def test_ssrf_rfc2544_and_ipv4_translated(self):
+        """TC-06-SSRF-2: with the carve-out set to 198.18.0.0/15, that range (RFC 2544
+        benchmarking — used by real public sites e.g. vitalik.eth.limo on ENS gateways) is
+        allowed, while IPv4-translated (::ffff:0:x/96) forms are unwrapped correctly and
+        every OTHER non-public range stays blocked. The carve-out is explicit (no code default).
+        """
+        import ipaddress as _ia
+        from unittest import mock
+
+        with mock.patch.dict(os.environ, {"HTML_SSRF_ALLOW_NETS": "198.18.0.0/15"}):
+            acquire._parse_allowed_nets.cache_clear()
+            # RFC 2544 benchmarking — allowed because it is in the configured carve-out
+            self.assertFalse(acquire._is_ssrf_blocked(_ia.ip_address("198.18.0.207")),
+                             "198.18.0.207 must be allowed under the 198.18/15 carve-out")
+            self.assertFalse(acquire._is_ssrf_blocked(_ia.ip_address("198.19.255.1")),
+                             "198.19.255.1 must be allowed (top of RFC 2544 range)")
+            # IPv4-translated form of a public RFC 2544 address (::ffff:0:c612:cf == 198.18.0.207)
+            self.assertFalse(acquire._is_ssrf_blocked(_ia.ip_address("::ffff:0:c612:cf")),
+                             "IPv4-translated form of 198.18.0.207 must be allowed under the carve-out")
+            # IPv4-translated form of a private address (::ffff:0:a00:5 == 10.0.0.5) — still blocked
+            self.assertTrue(acquire._is_ssrf_blocked(_ia.ip_address("::ffff:0:a00:5")),
+                            "IPv4-translated form of 10.0.0.5 must still be blocked")
+            # IPv4-mapped public address (::ffff:8.8.8.8) — public regardless of carve-out
+            self.assertFalse(acquire._is_ssrf_blocked(_ia.ip_address("::ffff:808:808")),
+                             "IPv4-mapped 8.8.8.8 must not be SSRF-blocked")
+            # The carve-out subtracts ONLY 198.18/15 — every other is_private range stays blocked.
+            for s in ("192.0.0.170", "2001:db8::1", "2002::1", "2001::1", "255.255.255.255"):
+                self.assertTrue(acquire._is_ssrf_blocked(_ia.ip_address(s)),
+                                f"{s} must remain SSRF-blocked (not in the 198.18/15 carve-out)")
+
+    def test_ssrf_carveout_env_configurable(self):
+        """TC-06-SSRF-3: the carve-out is driven SOLELY by HTML_SSRF_ALLOW_NETS — NO code
+        default. UNSET and "" both mean NO carve-out (strict); a CIDR list allows exactly
+        those ranges (IPv4 + IPv6); invalid entries are skipped fail-safe, never crash."""
+        import ipaddress as _ia
+        from unittest import mock
+
+        v4_2544 = _ia.ip_address("198.18.0.207")
+        v4_internal = _ia.ip_address("10.0.0.5")
+
+        # UNSET → NO carve-out (fail-safe): 198.18 is blocked, like every other is_private range.
+        with mock.patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("HTML_SSRF_ALLOW_NETS", None)
+            acquire._parse_allowed_nets.cache_clear()
+            self.assertTrue(acquire._is_ssrf_blocked(v4_2544),
+                            "UNSET HTML_SSRF_ALLOW_NETS must mean NO carve-out (198.18 blocked)")
+            self.assertTrue(acquire._is_ssrf_blocked(v4_internal))
+
+        # "" → also NO carve-out (strict).
+        with mock.patch.dict(os.environ, {"HTML_SSRF_ALLOW_NETS": ""}):
+            acquire._parse_allowed_nets.cache_clear()
+            self.assertTrue(acquire._is_ssrf_blocked(v4_2544),
+                            "empty HTML_SSRF_ALLOW_NETS must mean NO carve-out (strict)")
+
+        # Explicit 198.18/15 → that range is allowed (the shipped .env default).
+        with mock.patch.dict(os.environ, {"HTML_SSRF_ALLOW_NETS": "198.18.0.0/15"}):
+            acquire._parse_allowed_nets.cache_clear()
+            self.assertFalse(acquire._is_ssrf_blocked(v4_2544),
+                             "explicit 198.18/15 must allow the RFC 2544 range")
+
+        # Custom list REPLACES default: allow 10.0.0.0/8, and 198.18 reverts to blocked.
+        with mock.patch.dict(os.environ, {"HTML_SSRF_ALLOW_NETS": "10.0.0.0/8"}):
+            self.assertFalse(acquire._is_ssrf_blocked(v4_internal),
+                             "custom carve-out must allow the listed range")
+            self.assertTrue(acquire._is_ssrf_blocked(v4_2544),
+                            "custom list REPLACES the default → 198.18 blocked again")
+
+        # Comma/space mix + IPv6 carve-out + an invalid token (skipped, not fatal).
+        # Clear the lru_cache so the warning side-effect fires deterministically here
+        # regardless of any prior call with the same raw string.
+        acquire._parse_allowed_nets.cache_clear()
+        buf = io.StringIO()
+        with mock.patch.dict(os.environ,
+                             {"HTML_SSRF_ALLOW_NETS": "198.18.0.0/15, fc00::/7  not-a-cidr"}):
+            with redirect_stderr(buf):
+                self.assertFalse(acquire._is_ssrf_blocked(v4_2544))
+                self.assertFalse(acquire._is_ssrf_blocked(_ia.ip_address("fd00::1")),
+                                 "IPv6 carve-out entry must apply to IPv6 addresses")
+        self.assertIn("not-a-cidr", buf.getvalue(),
+                      "an invalid CIDR token must warn (and be skipped), not crash")
+
+    def test_resolve_validated_addrs(self):
+        """TC-06-SSRF-4: resolve+validate returns the exact addresses iff all are public; a
+        host that RESOLVES to a non-public address FAILS CLOSED (raises — must NOT return None,
+        else the caller would skip the pin and connect unpinned to the internal IP); an
+        UNRESOLVABLE host returns None (no pin → plain connect, which can't reach anything)."""
+        import socket as _s
+        from unittest import mock
+
+        def fake_gai(public):
+            ip = "93.184.216.34" if public else "169.254.169.254"
+            return lambda *a, **k: [(_s.AF_INET, _s.SOCK_STREAM, 6, "", (ip, 0))]
+
+        with mock.patch.object(acquire.socket, "getaddrinfo", fake_gai(True)):
+            self.assertEqual(acquire._resolve_validated_addrs("ex.test"),
+                             [("93.184.216.34", _s.AF_INET)])
+        # rebinding hole regression: a resolved private/metadata IP must REFUSE, not fall through
+        with mock.patch.object(acquire.socket, "getaddrinfo", fake_gai(False)):
+            with self.assertRaises(FetchFailed):
+                acquire._resolve_validated_addrs("ex.test")
+        # unresolvable → None (safe: an un-resolvable host can't be connected to either)
+        with mock.patch.object(acquire.socket, "getaddrinfo",
+                               mock.Mock(side_effect=OSError("nxdomain"))):
+            self.assertIsNone(acquire._resolve_validated_addrs("ex.test"))
+
+    def test_pin_host_addrs_closes_rebinding(self):
+        """TC-06-SSRF-5: while pinned, getaddrinfo for the host returns ONLY the validated
+        IP (rewritten to the requested port) even if the underlying resolver would flip to a
+        private address (DNS rebinding) — and other hosts + post-context state are unaffected."""
+        import socket as _s
+        from unittest import mock
+
+        # Simulate an attacker resolver that ALWAYS answers 10.0.0.5 (the rebind target).
+        rebind = mock.Mock(return_value=[(_s.AF_INET, _s.SOCK_STREAM, 6, "", ("10.0.0.5", 0))])
+        with mock.patch.object(acquire.socket, "getaddrinfo", rebind):
+            with acquire._pin_host_addrs("evil.test", [("93.184.216.34", _s.AF_INET)]):
+                got = acquire.socket.getaddrinfo("evil.test", 443)
+                self.assertEqual([g[4] for g in got], [("93.184.216.34", 443)],
+                                 "pinned host must connect to the validated IP, not the rebind")
+                # a different host is NOT pinned → falls through to the (mocked) resolver
+                self.assertEqual(acquire.socket.getaddrinfo("other.test", 80)[0][4][0], "10.0.0.5")
+            # restored after the context
+            self.assertIs(acquire.socket.getaddrinfo, rebind)
 
     def test_maxbytes_exceeded_streaming(self):
         """TC-06-04: streamed body over --max-bytes → FetchFailed (aborts mid-stream)."""

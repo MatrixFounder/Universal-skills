@@ -77,6 +77,7 @@ are bundled in this repository.
 | `image-size` | MIT | docx/md2docx.js |
 | `pptxgenjs` | MIT | pptx/md2pptx.js |
 | `@mermaid-js/mermaid-cli` | MIT | docx/md2docx.js (optional mermaid rendering) |
+| `katex` | MIT | pdf/katex_render.js (optional `$…$`/`$$…$$` → MathML for weasyprint) |
 
 ## External Command-Line Tools (not bundled, invoked via PATH)
 

@@ -11,9 +11,12 @@ names. Remote (http/https) image download is wired via
 """
 from __future__ import annotations
 
+import base64
+import binascii
 import hashlib
 import re
 import sys
+import urllib.parse
 from pathlib import Path
 
 from .exceptions import SelfOverwriteRefused
@@ -29,8 +32,62 @@ from .naming import (  # shared with serialize (OP1) — re-aliased to the histo
     src_marker as _src_marker,
 )
 
-# Markdown image syntax: ![alt](src "optional title")
+# Markdown image syntax: ![alt](src "optional title"). A data: URI src has no ')' or
+# whitespace (base64 alphabet + the mime prefix exclude both), so it is captured whole.
 _IMG_RE = re.compile(r'!\[([^\]]*)\]\(\s*<?([^)\s>]+)>?(\s+"[^"]*")?\s*\)')
+
+# data:[<mediatype>][;base64],<payload>  (RFC 2397). <mediatype> = mime *(";" param), so
+# the metadata segment is everything up to the FIRST comma; ``;base64`` (if present) is its
+# last token. We split on that comma rather than a fixed ``;base64`` slot so media-type
+# parameters (e.g. ``image/svg+xml;charset=utf-8;base64``) are tolerated.
+_DATA_URI_RE = re.compile(r'(?i)^data:([^,]*),(.*)$', re.DOTALL)
+# Kept in sync with html_convert.js DATA_URI_MIN_LEN — the JS converter already drops
+# sub-threshold data: images, so this is a defense-in-depth floor for the file/round-trip
+# path (a fetched artifact whose <img> still carries an inline data: URI).
+_DATA_URI_MIN_LEN = 1024          # min ENCODED URI length (fast reject)
+_DATA_URI_MIN_DECODED = 512       # min DECODED bytes (icon-vs-content; catches percent-encoded)
+
+
+def _strip_data_images(md: str | None) -> str | None:
+    """Drop inline ``![](data:…)`` images from Markdown. Used when we will NOT localize
+    them (stdout mode) so a content-sized data: image does not dump a multi-KB base64 blob
+    into the stream — restoring the clean-text guarantee of the universal agent step
+    (SKILL §7.3). Non-data images are left untouched."""
+    if md is None:
+        return None
+    return _IMG_RE.sub(
+        lambda m: "" if m.group(2)[:5].lower() == "data:" else m.group(0), md)
+
+
+def _decode_data_uri(src: str) -> bytes | None:
+    """Decode a ``data:`` image URI → raw bytes (``None`` if not a usable data: image).
+
+    Handles base64 and percent-encoded payloads, with or without media-type parameters.
+    Sub-threshold blobs (tiny icons) and non-image / malformed URIs return ``None`` so they
+    are left untouched, never written."""
+    if len(src) < _DATA_URI_MIN_LEN:
+        return None
+    m = _DATA_URI_RE.match(src)
+    if not m:
+        return None
+    meta, payload = m.group(1).strip(), m.group(2)
+    is_b64 = meta.lower().endswith(";base64")
+    mime = meta.split(";", 1)[0].strip().lower()
+    if mime and not mime.startswith("image/"):
+        return None  # only localize images (svg/png/jpeg/…); skip data:text/* etc.
+    try:
+        raw = (base64.b64decode(payload, validate=False) if is_b64
+               else urllib.parse.unquote_to_bytes(payload))
+    except (binascii.Error, ValueError):
+        return None
+    if not raw:
+        return None  # all-garbage base64 decodes to b"" under validate=False → drop
+    # The encoded-length floor above is a fast reject, but percent-encoding expands ~3× so a
+    # tiny icon can clear it; re-check the DECODED size (the quantity the "drop tiny icons"
+    # intent is really about). Real content diagrams are multi-KB; sub-512-byte blobs are icons.
+    if len(raw) < _DATA_URI_MIN_DECODED:
+        return None
+    return raw
 
 # --reader-only fallback: a reader extraction whose body is shorter than this is treated as
 # empty/over-stripped → fall back to the faithful whole page (mirrors wiki-import's heuristic).
@@ -99,7 +156,12 @@ def _download_and_rewrite(
             alt, src, title = m.group(1), m.group(2), m.group(3) or ""
             if src in src_to_link:
                 return f"![{alt}]({src_to_link[src]}{title})"
-            data = _resolve_local_image(src, base)
+            # Inline data: image → decode to bytes (offline; no network, no base_dir read).
+            # Identical URIs hit src_to_link below; identical decoded bytes from different
+            # URIs still collapse to one file via the sha1 map.
+            data = _decode_data_uri(src) if src[:5].lower() == "data:" else None
+            if data is None:
+                data = _resolve_local_image(src, base)
             if data is None and remote_resolver is not None:
                 # Gate the REMOTE fetch by --max-images BEFORE issuing it, so the cap
                 # bounds outbound network requests (SSRF amplification), not just disk
@@ -156,8 +218,10 @@ def emit(
         md_reader = None
 
     # stdout mode: single Markdown body to stdout, no files, no image download (ARCH §5.1).
+    # Strip inline data: images — they can't be localized here and a content-sized blob
+    # would dump KBs of base64 into the stream (agent-step bloat).
     if stdout_mode:
-        sys.stdout.write(front + md_whole.strip() + "\n")
+        sys.stdout.write(front + (_strip_data_images(md_whole) or "").strip() + "\n")
         return
 
     assert output_dir is not None
