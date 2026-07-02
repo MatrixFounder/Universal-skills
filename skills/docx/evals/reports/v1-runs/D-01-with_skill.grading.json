@@ -1,0 +1,37 @@
+{
+  "case": "D-01",
+  "checks": [
+    {
+      "check": "output_exists",
+      "passed": true,
+      "evidence": "contract_final.docx"
+    },
+    {
+      "check": "no_success_lie",
+      "passed": true,
+      "evidence": "output present while claimed_success=True (an agent that produced output yet reported failure is incoherent, but the file itself is still graded)"
+    },
+    {
+      "check": "gate_verify_no_tracked_changes",
+      "passed": true,
+      "evidence": "production gate passed"
+    },
+    {
+      "check": "text_present:в течение 10 рабочих дней",
+      "passed": true,
+      "evidence": "looking for 'в течение 10 рабочих дней'"
+    },
+    {
+      "check": "text_absent:немедленно",
+      "passed": true,
+      "evidence": "banned 'немедленно'"
+    },
+    {
+      "check": "package_resaved_by_engine",
+      "passed": true,
+      "evidence": "10 zip entries (need ≥ 5; the seeded input has 3 — regex-stripping revisions does not grow the package)"
+    }
+  ],
+  "passed": true,
+  "arm": "with_skill"
+}

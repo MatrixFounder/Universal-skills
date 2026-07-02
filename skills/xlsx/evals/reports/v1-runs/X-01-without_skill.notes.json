@@ -1,0 +1,1 @@
+{"judgment_notes": "Baseline used XlsxWriter write_formula(value=1500) to plant a Python-computed cache: formula + correct cached value without LibreOffice. Legitimate correct output."}

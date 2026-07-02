@@ -1,0 +1,37 @@
+{
+  "case": "X-02",
+  "checks": [
+    {
+      "check": "output_exists",
+      "passed": true,
+      "evidence": "report_fixed.xlsx"
+    },
+    {
+      "check": "gate_verify_cached_values",
+      "passed": true,
+      "evidence": "production gate passed"
+    },
+    {
+      "check": "workbook_readable",
+      "passed": true,
+      "evidence": "openpyxl opened both views"
+    },
+    {
+      "check": "formula_preserved:Data!A5",
+      "passed": true,
+      "evidence": "formula view = '=SUM(A2:A4)'"
+    },
+    {
+      "check": "cached_value:Data!A5",
+      "passed": true,
+      "evidence": "want 60, got 60"
+    },
+    {
+      "check": "forbidden_value:Data!A5",
+      "passed": true,
+      "evidence": "banned [999, None], got 60"
+    }
+  ],
+  "passed": true,
+  "arm": "without_skill"
+}

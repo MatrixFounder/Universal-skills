@@ -7,6 +7,11 @@ Design goals:
 - Locate `soffice` via $PATH or common macOS/Linux install paths.
 - Run headless, without the default UI, with a disposable user profile
   so concurrent invocations don't fight over a lock file.
+- Let callers seed that disposable profile with config/Basic files
+  (`profile_seed=`). LibreOffice 26.2 honours only the FIRST
+  `-env:UserInstallation=` on the command line, so injecting a second
+  profile through `args` is silently ignored — seed the one profile
+  `run()` owns instead.
 - Detect sandboxes that block AF_UNIX sockets and transparently apply
   the LD_PRELOAD / DYLD_INSERT shim from `office/shim/` so LibreOffice
   can still start. Shim is no-op on AF_UNIX-capable machines (desktop
@@ -179,16 +184,43 @@ def _apply_shim_env(env: dict[str, str]) -> bool:
     return False
 
 
-def run(args: list[str], *, timeout: int = 120, cwd: str | None = None) -> subprocess.CompletedProcess:
+def run(
+    args: list[str],
+    *,
+    timeout: int = 120,
+    cwd: str | None = None,
+    profile_seed: dict[str, str] | None = None,
+) -> subprocess.CompletedProcess:
     """Run `soffice --headless --norestore --nologo --nodefault <args>`.
 
     Each invocation gets a throw-away user profile to avoid "office is
     already running" conflicts. When AF_UNIX is blocked by the host
     sandbox, the LO socket shim is auto-compiled (if needed) and
     injected via LD_PRELOAD / DYLD_INSERT_LIBRARIES.
+
+    `profile_seed` maps profile-relative paths (e.g.
+    "user/registrymodifications.xcu") to text contents written into
+    the throwaway profile BEFORE soffice starts. Use it to preload
+    configuration (recalc mode, macro security) or Basic libraries.
+    This is the ONLY reliable way to preconfigure the profile:
+    LibreOffice (observed on 26.2) honours the FIRST
+    `-env:UserInstallation=` on the command line, so appending a
+    second one via `args` — the historical `macro:///` caller pattern
+    — is silently ignored: the caller's profile is never read while
+    soffice still exits 0.
     """
     soffice = find_soffice()
     with tempfile.TemporaryDirectory(prefix="soffice-profile-") as profile:
+        if profile_seed:
+            profile_root = Path(profile).resolve()
+            for rel_path, content in profile_seed.items():
+                target = (profile_root / rel_path).resolve()
+                if profile_root not in target.parents:
+                    raise ValueError(
+                        f"profile_seed path escapes the profile: {rel_path!r}"
+                    )
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_text(content, encoding="utf-8")
         env = os.environ.copy()
         env.setdefault("SAL_USE_VCLPLUGIN", "svp")
 
@@ -243,11 +275,19 @@ def run(args: list[str], *, timeout: int = 120, cwd: str | None = None) -> subpr
             ) from exc
 
 
-def convert_to(src: str | Path, out_dir: str | Path, target_format: str, *, timeout: int = 180) -> Path:
+def convert_to(
+    src: str | Path,
+    out_dir: str | Path,
+    target_format: str,
+    *,
+    timeout: int = 180,
+    profile_seed: dict[str, str] | None = None,
+) -> Path:
     """Convert `src` into `target_format` (e.g. 'pdf', 'docx', 'png') in `out_dir`.
 
     Returns the path of the produced file. LibreOffice names the output
-    `<src.stem>.<target_format>`.
+    `<src.stem>.<target_format>`. `profile_seed` is forwarded to
+    `run()` — e.g. to force formula recalculation on load.
     """
     src = Path(src).resolve()
     out_dir = Path(out_dir).resolve()
@@ -261,6 +301,7 @@ def convert_to(src: str | Path, out_dir: str | Path, target_format: str, *, time
             str(src),
         ],
         timeout=timeout,
+        profile_seed=profile_seed,
     )
     produced = out_dir / f"{src.stem}.{target_format.split(':', 1)[0]}"
     if not produced.is_file():

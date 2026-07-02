@@ -236,19 +236,70 @@ wb.save('$TMP/sum.xlsx')
     "$PY" xlsx_recalc.py "$TMP/sum.xlsx" --output "$TMP/sum_recalc.xlsx" >/dev/null 2>&1 \
         && [ -s "$TMP/sum_recalc.xlsx" ] && ok "recalc produced output" \
         || nok "recalc" "missing output"
-    # The macro `oDoc.calculateAll()` may or may not persist cached
-    # values to the saved file depending on LO version (some versions
-    # only update calc-on-open dirty markers). Assert only that the
-    # formula survived the round-trip — that's the user-facing
-    # contract: "I gave you formulas, you didn't drop them."
+    # HARD contract: the cached value must be present AND correct.
+    # Regression for LibreOffice 26.2, where the legacy macro:///
+    # dispatch was silently dropped (soffice exited 0, the script
+    # printed "Recalculated.", and every formula cell stayed None).
+    # xlsx_recalc.py now recalculates via --convert-to and verifies
+    # cached values itself, so a green run can never be a silent no-op.
+    value=$("$PY" -c "
+import openpyxl
+wb = openpyxl.load_workbook('$TMP/sum_recalc.xlsx', data_only=True)
+print(wb.active['D1'].value)
+" 2>/dev/null || echo "READ-FAILED")
+    [ "$value" = "6" ] \
+        && ok "recalc cached value D1 == 6" \
+        || nok "recalc cached value" "got '$value' (silent no-op regression)"
     formula=$("$PY" -c "
 import openpyxl
 wb = openpyxl.load_workbook('$TMP/sum_recalc.xlsx')
 print(wb.active['D1'].value)
-")
+" 2>/dev/null || echo "READ-FAILED")
     [ "$formula" = "=SUM(A1:C1)" ] \
         && ok "recalc preserves formula in D1" \
         || nok "recalc preserve formula" "got '$formula'"
+    # Stale-cache regression: a wrong cached <v> must be recomputed.
+    # Plain `--convert-to xlsx` keeps stale caches (LO's default
+    # OOXMLRecalcMode never recalculates on load); xlsx_recalc.py
+    # seeds OOXMLRecalcMode=0 into the throwaway profile to force it.
+    "$PY" -c "
+import zipfile
+zin = zipfile.ZipFile('$TMP/sum.xlsx')
+with zipfile.ZipFile('$TMP/stale.xlsx', 'w', zipfile.ZIP_DEFLATED) as zout:
+    for item in zin.infolist():
+        data = zin.read(item.filename)
+        if item.filename == 'xl/worksheets/sheet1.xml':
+            data = data.decode().replace(
+                '<f>SUM(A1:C1)</f><v></v>',
+                '<f>SUM(A1:C1)</f><v>999</v>').encode()
+        zout.writestr(item, data)
+# sanity: the injected wrong cache must be visible before recalc
+import openpyxl
+wb = openpyxl.load_workbook('$TMP/stale.xlsx', data_only=True)
+assert wb.active['D1'].value == 999, wb.active['D1'].value
+"
+    "$PY" xlsx_recalc.py "$TMP/stale.xlsx" --output "$TMP/stale_recalc.xlsx" >/dev/null 2>&1 \
+        || nok "stale recalc run" "exit $?"
+    value=$("$PY" -c "
+import openpyxl
+wb = openpyxl.load_workbook('$TMP/stale_recalc.xlsx', data_only=True)
+print(wb.active['D1'].value)
+" 2>/dev/null || echo "READ-FAILED")
+    [ "$value" = "6" ] \
+        && ok "stale cached value recomputed (999 → 6)" \
+        || nok "stale cache recompute" "got '$value'"
+    # In-place mode (no --output) must recalculate too.
+    cp "$TMP/sum.xlsx" "$TMP/inplace.xlsx"
+    "$PY" xlsx_recalc.py "$TMP/inplace.xlsx" >/dev/null 2>&1 \
+        || nok "in-place recalc run" "exit $?"
+    value=$("$PY" -c "
+import openpyxl
+wb = openpyxl.load_workbook('$TMP/inplace.xlsx', data_only=True)
+print(wb.active['D1'].value)
+" 2>/dev/null || echo "READ-FAILED")
+    [ "$value" = "6" ] \
+        && ok "in-place recalc cached D1 == 6" \
+        || nok "in-place recalc" "got '$value'"
 else
     echo "xlsx_recalc: skipped (soffice not on PATH)"
 fi

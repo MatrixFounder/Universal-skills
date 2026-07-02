@@ -1,0 +1,1 @@
+{"judgment_notes": "Built via openpyxl + xlsx_recalc.py --scan-errors; pandas sees TOTAL 1500; formula preserved; validations OK."}

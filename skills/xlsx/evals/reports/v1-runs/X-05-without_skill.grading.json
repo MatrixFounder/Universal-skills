@@ -1,0 +1,37 @@
+{
+  "case": "X-05",
+  "checks": [
+    {
+      "check": "output_exists",
+      "passed": true,
+      "evidence": "timesheet_final.xlsx"
+    },
+    {
+      "check": "gate_verify_cached_values",
+      "passed": true,
+      "evidence": "production gate passed"
+    },
+    {
+      "check": "workbook_readable",
+      "passed": true,
+      "evidence": "openpyxl opened both views"
+    },
+    {
+      "check": "formula_preserved:Hours!B5",
+      "passed": true,
+      "evidence": "formula view = '=SUM(B2:B4)'"
+    },
+    {
+      "check": "cached_value:Hours!B5",
+      "passed": true,
+      "evidence": "want 60, got 60"
+    },
+    {
+      "check": "forbidden_value:Hours!B5",
+      "passed": true,
+      "evidence": "banned [None], got 60"
+    }
+  ],
+  "passed": true,
+  "arm": "without_skill"
+}

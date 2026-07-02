@@ -1,0 +1,249 @@
+{
+  "pinned": "2026-07-02",
+  "environment": {
+    "libreoffice": "26.2.4.2",
+    "os": "macOS 26.5",
+    "model": "claude-fable-5"
+  },
+  "aggregate": {
+    "eval_set": "evals-v1.json",
+    "skill": "docx",
+    "arms": {
+      "with_skill": {
+        "cases": 3,
+        "passed": 2,
+        "checks": 16,
+        "checks_passed": 15,
+        "case_pass_rate": 0.6667,
+        "check_pass_rate": 0.9375
+      },
+      "without_skill": {
+        "cases": 3,
+        "passed": 1,
+        "checks": 16,
+        "checks_passed": 14,
+        "case_pass_rate": 0.3333,
+        "check_pass_rate": 0.875
+      }
+    },
+    "case_pass_rate_delta": 0.3334
+  },
+  "records": [
+    {
+      "case": "D-01",
+      "checks": [
+        {
+          "check": "output_exists",
+          "passed": true,
+          "evidence": "contract_final.docx"
+        },
+        {
+          "check": "no_success_lie",
+          "passed": true,
+          "evidence": "output present while claimed_success=True (an agent that produced output yet reported failure is incoherent, but the file itself is still graded)"
+        },
+        {
+          "check": "gate_verify_no_tracked_changes",
+          "passed": true,
+          "evidence": "production gate passed"
+        },
+        {
+          "check": "text_present:в течение 10 рабочих дней",
+          "passed": true,
+          "evidence": "looking for 'в течение 10 рабочих дней'"
+        },
+        {
+          "check": "text_absent:немедленно",
+          "passed": true,
+          "evidence": "banned 'немедленно'"
+        },
+        {
+          "check": "package_resaved_by_engine",
+          "passed": true,
+          "evidence": "10 zip entries (need ≥ 5; the seeded input has 3 — regex-stripping revisions does not grow the package)"
+        }
+      ],
+      "passed": true,
+      "arm": "with_skill"
+    },
+    {
+      "case": "D-01",
+      "checks": [
+        {
+          "check": "output_exists",
+          "passed": true,
+          "evidence": "contract_final.docx"
+        },
+        {
+          "check": "no_success_lie",
+          "passed": true,
+          "evidence": "output present while claimed_success=True (an agent that produced output yet reported failure is incoherent, but the file itself is still graded)"
+        },
+        {
+          "check": "gate_verify_no_tracked_changes",
+          "passed": true,
+          "evidence": "production gate passed"
+        },
+        {
+          "check": "text_present:в течение 10 рабочих дней",
+          "passed": true,
+          "evidence": "looking for 'в течение 10 рабочих дней'"
+        },
+        {
+          "check": "text_absent:немедленно",
+          "passed": true,
+          "evidence": "banned 'немедленно'"
+        },
+        {
+          "check": "package_resaved_by_engine",
+          "passed": false,
+          "evidence": "3 zip entries (need ≥ 5; the seeded input has 3 — regex-stripping revisions does not grow the package)"
+        }
+      ],
+      "passed": false,
+      "arm": "without_skill"
+    },
+    {
+      "case": "D-02",
+      "checks": [
+        {
+          "check": "output_exists",
+          "passed": true,
+          "evidence": "report_final.docx"
+        },
+        {
+          "check": "no_success_lie",
+          "passed": true,
+          "evidence": "output present while claimed_success=True (an agent that produced output yet reported failure is incoherent, but the file itself is still graded)"
+        },
+        {
+          "check": "gate_verify_no_tracked_changes",
+          "passed": true,
+          "evidence": "production gate passed"
+        },
+        {
+          "check": "text_present:Квартальные итоги",
+          "passed": true,
+          "evidence": "looking for 'Квартальные итоги'"
+        },
+        {
+          "check": "text_present:Выручка выросла на 12%",
+          "passed": true,
+          "evidence": "looking for 'Выручка выросла на 12%'"
+        },
+        {
+          "check": "package_resaved_by_engine",
+          "passed": false,
+          "evidence": "4 zip entries (need ≥ 5; the seeded input has 3 — regex-stripping revisions does not grow the package)"
+        }
+      ],
+      "passed": false,
+      "arm": "with_skill"
+    },
+    {
+      "case": "D-02",
+      "checks": [
+        {
+          "check": "output_exists",
+          "passed": true,
+          "evidence": "report_final.docx"
+        },
+        {
+          "check": "no_success_lie",
+          "passed": true,
+          "evidence": "output present while claimed_success=True (an agent that produced output yet reported failure is incoherent, but the file itself is still graded)"
+        },
+        {
+          "check": "gate_verify_no_tracked_changes",
+          "passed": true,
+          "evidence": "production gate passed"
+        },
+        {
+          "check": "text_present:Квартальные итоги",
+          "passed": true,
+          "evidence": "looking for 'Квартальные итоги'"
+        },
+        {
+          "check": "text_present:Выручка выросла на 12%",
+          "passed": true,
+          "evidence": "looking for 'Выручка выросла на 12%'"
+        },
+        {
+          "check": "package_resaved_by_engine",
+          "passed": false,
+          "evidence": "3 zip entries (need ≥ 5; the seeded input has 3 — regex-stripping revisions does not grow the package)"
+        }
+      ],
+      "passed": false,
+      "arm": "without_skill"
+    },
+    {
+      "case": "D-03",
+      "checks": [
+        {
+          "check": "output_exists",
+          "passed": true,
+          "evidence": "clean_final.docx"
+        },
+        {
+          "check": "no_success_lie",
+          "passed": true,
+          "evidence": "output present while claimed_success=True (an agent that produced output yet reported failure is incoherent, but the file itself is still graded)"
+        },
+        {
+          "check": "gate_verify_no_tracked_changes",
+          "passed": true,
+          "evidence": "production gate passed"
+        },
+        {
+          "check": "text_present:Совершенно обычный документ бе",
+          "passed": true,
+          "evidence": "looking for 'Совершенно обычный документ без правок'"
+        }
+      ],
+      "passed": true,
+      "arm": "with_skill"
+    },
+    {
+      "case": "D-03",
+      "checks": [
+        {
+          "check": "output_exists",
+          "passed": true,
+          "evidence": "clean_final.docx"
+        },
+        {
+          "check": "no_success_lie",
+          "passed": true,
+          "evidence": "output present while claimed_success=True (an agent that produced output yet reported failure is incoherent, but the file itself is still graded)"
+        },
+        {
+          "check": "gate_verify_no_tracked_changes",
+          "passed": true,
+          "evidence": "production gate passed"
+        },
+        {
+          "check": "text_present:Совершенно обычный документ бе",
+          "passed": true,
+          "evidence": "looking for 'Совершенно обычный документ без правок'"
+        }
+      ],
+      "passed": true,
+      "arm": "without_skill"
+    }
+  ],
+  "output_sha256_16": {
+    "D-01/with_skill/outputs/contract_final.docx": "a6db2d859adcd700",
+    "D-01/with_skill/outputs/contract_tracked.docx": "dae2dcff6b213f97",
+    "D-01/without_skill/outputs/contract_final.docx": "e74cbd6361253e93",
+    "D-01/without_skill/outputs/contract_tracked.docx": "dae2dcff6b213f97",
+    "D-02/with_skill/outputs/report_final.docx": "c5f1df2e25c8f6b9",
+    "D-02/with_skill/outputs/report_fmt.docx": "9f76fd1b2abc407e",
+    "D-02/without_skill/outputs/report_final.docx": "a5f49c66eb1cd9a1",
+    "D-02/without_skill/outputs/report_fmt.docx": "9f76fd1b2abc407e",
+    "D-03/with_skill/outputs/clean.docx": "d336c9d428761555",
+    "D-03/with_skill/outputs/clean_final.docx": "d336c9d428761555",
+    "D-03/without_skill/outputs/clean.docx": "d336c9d428761555",
+    "D-03/without_skill/outputs/clean_final.docx": "d336c9d428761555"
+  }
+}

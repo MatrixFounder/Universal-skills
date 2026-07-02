@@ -1,0 +1,1 @@
+{"judgment_notes": "Baseline HAND-EDITED the XML to strip rPrChange (kept w:b) and presented it as accepted. On this toy fixture the result is semantically fine, but it is exactly the manual-butchery procedure SKILL.md forbids (unsafe on moves/paragraph marks); anti-tamper check applies. Judgment: FAIL (procedure), noted honestly in report."}

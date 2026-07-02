@@ -1,0 +1,52 @@
+{
+  "case": "X-04",
+  "checks": [
+    {
+      "check": "output_exists",
+      "passed": true,
+      "evidence": "model_checked.xlsx"
+    },
+    {
+      "check": "gate_verify_cached_values",
+      "passed": true,
+      "evidence": "production gate passed"
+    },
+    {
+      "check": "workbook_readable",
+      "passed": true,
+      "evidence": "openpyxl opened both views"
+    },
+    {
+      "check": "formula_preserved:Model!B2",
+      "passed": true,
+      "evidence": "formula view = '=A2/0'"
+    },
+    {
+      "check": "formula_preserved:Model!B3",
+      "passed": true,
+      "evidence": "formula view = '=missing!a1'"
+    },
+    {
+      "check": "formula_preserved:Model!B4",
+      "passed": true,
+      "evidence": "formula view = '=A2*2'"
+    },
+    {
+      "check": "cached_value:Model!B4",
+      "passed": true,
+      "evidence": "want 200, got 200"
+    },
+    {
+      "check": "error_cell:Model!B2",
+      "passed": true,
+      "evidence": "want one of ['#DIV/0!'], got '#DIV/0!' (type e)"
+    },
+    {
+      "check": "error_cell:Model!B3",
+      "passed": true,
+      "evidence": "want one of ['#REF!', '#NAME?'], got '#NAME?' (type e)"
+    }
+  ],
+  "passed": true,
+  "arm": "without_skill"
+}

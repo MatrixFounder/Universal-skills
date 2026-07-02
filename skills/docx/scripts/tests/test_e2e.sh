@@ -538,6 +538,58 @@ if command -v soffice >/dev/null 2>&1; then
     [ "$rc" -eq 3 ] && echo "$err" | grep -q "CFB\|password-protected" \
         && ok "docx_accept_changes also refuses CFB with exit 3" \
         || nok "encrypted rejection (accept_changes)" "exit $rc / msg: $err"
+
+    # Functional contract (LibreOffice 26.2 regression): the script
+    # must either really accept the tracked changes (exit 0, no
+    # <w:ins>/<w:del> left) or fail LOUDLY (non-zero exit). Exit 0
+    # with revision marks still present is the one forbidden outcome —
+    # the old macro:/// dispatch silently did nothing on LO 26.2 and
+    # returned an unmodified copy with exit 0.
+    "$PY" -c "
+import zipfile
+CT = '''<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>
+<Types xmlns=\"http://schemas.openxmlformats.org/package/2006/content-types\">
+  <Default Extension=\"rels\" ContentType=\"application/vnd.openxmlformats-package.relationships+xml\"/>
+  <Default Extension=\"xml\" ContentType=\"application/xml\"/>
+  <Override PartName=\"/word/document.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml\"/>
+</Types>'''
+RELS = '''<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>
+<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\">
+  <Relationship Id=\"rId1\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument\" Target=\"word/document.xml\"/>
+</Relationships>'''
+DOC = '''<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>
+<w:document xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\"><w:body>
+<w:p><w:r><w:t xml:space=\"preserve\">Hello </w:t></w:r>
+<w:ins w:id=\"1\" w:author=\"Alice\" w:date=\"2026-04-24T09:00:00Z\"><w:r><w:t xml:space=\"preserve\">INSERTEDTOKEN </w:t></w:r></w:ins>
+<w:del w:id=\"2\" w:author=\"Alice\" w:date=\"2026-04-24T09:00:00Z\"><w:r><w:delText xml:space=\"preserve\">DELETEDTOKEN </w:delText></w:r></w:del>
+<w:r><w:t>world.</w:t></w:r></w:p>
+</w:body></w:document>'''
+with zipfile.ZipFile('$TMP/tracked.docx', 'w', zipfile.ZIP_DEFLATED) as z:
+    z.writestr('[Content_Types].xml', CT)
+    z.writestr('_rels/.rels', RELS)
+    z.writestr('word/document.xml', DOC)
+"
+    set +e
+    "$PY" docx_accept_changes.py "$TMP/tracked.docx" "$TMP/accepted.docx" >/dev/null 2>&1
+    rc=$?
+    set -e
+    if [ "$rc" -eq 0 ]; then
+        "$PY" -c "
+import re, zipfile
+xml = zipfile.ZipFile('$TMP/accepted.docx').read('word/document.xml').decode()
+assert not re.search(r'<w:(ins|del)[ >/]', xml), 'revision marks remain'
+assert 'INSERTEDTOKEN' in xml, 'inserted text lost'
+assert 'DELETEDTOKEN' not in xml, 'deleted text still present'
+" \
+            && ok "accept_changes: exit 0 and changes really accepted" \
+            || nok "accept_changes SILENT NO-OP" "exit 0 but tracked changes were not accepted"
+    else
+        # Loud failure is acceptable (macro:/// is unreliable on LO
+        # 26.2) — but it must not have left a bogus output behind.
+        [ ! -f "$TMP/accepted.docx" ] \
+            && ok "accept_changes: failed loudly (exit $rc), no bogus output left" \
+            || nok "accept_changes loud-failure cleanup" "exit $rc but accepted.docx exists"
+    fi
 fi
 
 # --- cross-5: --json-errors envelope --------------------------------------

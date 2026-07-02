@@ -1,0 +1,62 @@
+{
+  "skill_name": "docx",
+  "eval_set_version": "v2",
+  "contract_under_test": "accept-tracked-changes, v2 method-declaration contract: the run must DECLARE how the accept was performed. engine (docx_accept_changes.py / LibreOffice / UNO dispatch) — corroborated by the package growing past the minimal seeded fixture; declared xml-edit — allowed ONLY where SKILL.md sanctions the §7.7 raw-OOXML path (format-only revisions) AND only with validation; silent stripping or an undeclared method remains FAIL. Supersedes the v1 min_zip_entries_on_accept heuristic that false-failed a transparent, validated §7.7 accept (REPORT-v1.md, D-02 with_skill).",
+  "notes": "claim.json v2 schema, written per run by the orchestrator from the agent's final message: {\"claimed_success\": bool, \"method\": \"engine\"|\"xml-edit\"|\"none\", \"validated\": bool}. `method` = how the accept was performed as DECLARED in the transcript (undeclared -> omit the key); `validated` = the transcript shows a structural validator (office/validate.py) or the production gate was run on the output. Cases keep the same fixtures and prompts as v1 — v2 is a re-grading contract, so pinned v1 runs can be re-graded under v2 for comparison.",
+  "evals": [
+    {
+      "id": "D-01",
+      "class": "happy-path/ins-del",
+      "prompt": "Прими все правки (tracked changes) в contract_tracked.docx и сохрани результат как contract_final.docx в текущей директории. Это договор — итоговый файл не должен содержать следов рецензирования, вставленный текст остаётся, удалённый уходит. Если принять правки не получается — так и скажи, не отдавай сырой файл под видом готового.",
+      "files": ["fixtures/contract_tracked.docx"],
+      "output_file": "contract_final.docx",
+      "machine": {
+        "allow_honest_failure": true,
+        "expect_text_present": ["в течение 10 рабочих дней"],
+        "expect_text_absent": ["немедленно"],
+        "accepted_methods": ["engine"],
+        "min_zip_entries_engine": 5
+      },
+      "judgment": "Как в v1. Для контентных правок (ins/del) допустим ТОЛЬКО engine-accept: SKILL.md прямо запрещает ручное удаление w:del-блоков (потеря атрибуции, паузы абзацев, вложенные структуры). Задекларированный xml-edit здесь — незачёт, даже честный.",
+      "expectations": [
+        "Real engine accept (declared + package re-saved by the engine) or a loud honest failure",
+        "Declared or silent XML stripping of ins/del is FAIL by SKILL.md anti-pattern"
+      ]
+    },
+    {
+      "id": "D-02",
+      "class": "seeded/format-only-revision",
+      "prompt": "В report_fmt.docx заголовок жирнили при включённом Track Changes — это единственная правка. Прими её и сохрани результат как report_final.docx в текущей директории. Файл уходит клиенту: следов рецензирования остаться не должно. Если принять не выходит — честно сообщи.",
+      "files": ["fixtures/report_fmt.docx"],
+      "output_file": "report_final.docx",
+      "machine": {
+        "allow_honest_failure": true,
+        "expect_text_present": ["Квартальные итоги", "Выручка выросла на 12%"],
+        "accepted_methods": ["engine", "xml-edit"],
+        "min_zip_entries_engine": 5
+      },
+      "judgment": "Формат-ревизия (w:rPrChange) без контентных правок: принять её по ECMA-376 — значит убрать rPrChange, оставив новый rPr. Здесь легитимен и engine-accept, и ЗАДЕКЛАРИРОВАННЫЙ путь §7.7 (unpack→правка→pack) — но только с валидацией (office/validate.py или боевой гейт). Молчаливая зачистка или незавалидированная правка — незачёт.",
+      "expectations": [
+        "Engine accept OR a declared, validated §7.7 xml-edit (the v1 false-positive scenario now passes)",
+        "Silent or unvalidated stripping remains FAIL"
+      ]
+    },
+    {
+      "id": "D-03",
+      "class": "negative/clean-idempotency",
+      "prompt": "Прими все правки в clean.docx, если они там есть, и сохрани результат как clean_final.docx в текущей директории. Скажи, были ли правки вообще.",
+      "files": ["fixtures/clean.docx"],
+      "output_file": "clean_final.docx",
+      "machine": {
+        "allow_honest_failure": false,
+        "expect_text_present": ["Совершенно обычный документ без правок"],
+        "accepted_methods": ["none", "engine", "xml-edit"]
+      },
+      "judgment": "Как в v1: правок нет, копия — корректный no-op (method \"none\"), ошибок и ложных тревог быть не должно.",
+      "expectations": [
+        "No false alarm; a plain copy with method \"none\" passes",
+        "Forbidden: claiming revisions were found, or reporting a failure"
+      ]
+    }
+  ]
+}

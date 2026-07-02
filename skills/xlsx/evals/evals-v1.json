@@ -1,0 +1,95 @@
+{
+  "skill_name": "xlsx",
+  "eval_set_version": "v1",
+  "contract_under_test": "recalc pipeline after the LibreOffice 26.2 fix (2026-07-02): --convert-to + OOXMLRecalcMode=0 profile seed + verify_cached_values gate; 'never trust soffice exit 0'",
+  "notes": "Machine fields are consumed by grade.py (deterministic, zero-token). The `judgment` fields are the ONLY per-case human/orchestrator checks, graded from the agent's final message like obsidian-cli's expect_statement.",
+  "evals": [
+    {
+      "id": "X-01",
+      "class": "happy-path/build",
+      "prompt": "Собери из sales.csv книгу report.xlsx: лист назови Report, в A1:B1 заголовки Name/Amount, в строках 2-4 данные из csv, в B5 — формула =SUM(B2:B4) (подпиши A5 = TOTAL). Файл дальше читает pandas с data_only, так что числа должны быть реально посчитаны, а формулы — сохранены. Работай в текущей директории.",
+      "files": ["fixtures/sales.csv"],
+      "output_file": "report.xlsx",
+      "machine": {
+        "expect_gate_pass": true,
+        "expect_formula_cells": ["Report!B5"],
+        "expected_values": {"Report!B5": 1500},
+        "forbidden_values": {"Report!B5": [null, 0]}
+      },
+      "expectations": [
+        "Output workbook exists with the pinned layout",
+        "B5 keeps the =SUM formula AND carries cached value 1500 (baseline openpyxl-only run leaves None — the exact failure the skill exists to prevent)",
+        "Production gate verify_cached_values passes on the output"
+      ]
+    },
+    {
+      "id": "X-02",
+      "class": "seeded/stale-cache",
+      "prompt": "В report_stale.xlsx (лист Data) менеджер руками менял числа, и кэш формулы разъехался с данными — pandas показывает старый итог. Приведи файл в порядок: значения формул должны соответствовать данным. Результат сохрани как report_fixed.xlsx в текущей директории.",
+      "files": ["fixtures/report_stale.xlsx"],
+      "output_file": "report_fixed.xlsx",
+      "machine": {
+        "expect_gate_pass": true,
+        "expect_formula_cells": ["Data!A5"],
+        "expected_values": {"Data!A5": 60},
+        "forbidden_values": {"Data!A5": [999, null]}
+      },
+      "expectations": [
+        "Stale seeded cache 999 is recomputed to 60 (ground truth by construction)",
+        "Plain --convert-to would keep 999: only the OOXMLRecalcMode=0 seeded profile recalculates stale caches — this case fails on any silent regression of that seed"
+      ]
+    },
+    {
+      "id": "X-03",
+      "class": "regression/empty-string-cache",
+      "prompt": "Перед рассылкой пересчитай шаблон quarterly_template.xlsx — там в колонке B формулы-статусы IF по ещё не заполненным строкам. Сохрани результат как quarterly_ready.xlsx в текущей директории и подтверди, что пересчёт прошёл успешно.",
+      "files": ["fixtures/quarterly_template.xlsx"],
+      "output_file": "quarterly_ready.xlsx",
+      "machine": {
+        "expect_gate_pass": true,
+        "expect_formula_cells": ["Q3!B2", "Q3!B3", "Q3!B4"]
+      },
+      "judgment": "Финальный ответ агента НЕ должен заявлять, что пересчёт провалился: все формулы дают пустую строку, LibreOffice кэширует их как t=\"str\" c пустым <v> — это УСПЕХ. Регрессия ложного отказа verify_cached_values (VDD 2026-07-02).",
+      "expectations": [
+        "Recalc succeeds on an all-blank-producing template (no RecalcVerificationError false positive)",
+        "Formulas survive the round-trip"
+      ]
+    },
+    {
+      "id": "X-04",
+      "class": "seeded/error-scan",
+      "prompt": "Проверь model_errors.xlsx: пересчитай формулы и скажи, какие ячейки битые (ошибки формул), а какие считаются нормально. Пересчитанный файл сохрани как model_checked.xlsx в текущей директории.",
+      "files": ["fixtures/model_errors.xlsx"],
+      "output_file": "model_checked.xlsx",
+      "machine": {
+        "expect_gate_pass": true,
+        "expect_formula_cells": ["Model!B2", "Model!B3", "Model!B4"],
+        "expected_values": {"Model!B4": 200},
+        "expected_error_cells": {"Model!B2": "#DIV/0!", "Model!B3": ["#REF!", "#NAME?"]}
+      },
+      "judgment": "Агент называет обе битые ячейки (B2 деление на ноль, B3 битая ссылка) в финальном ответе; здоровая B4 битой не объявляется (негативная проверка на переругивание).",
+      "expectations": [
+        "Recalculated output caches the seeded error tokens at B2/B3 and 200 at B4",
+        "Agent reports exactly the two broken cells, no false alarm on B4"
+      ]
+    },
+    {
+      "id": "X-05",
+      "class": "pressure/discipline",
+      "prompt": "Времени вообще нет, деплой через пять минут. Просто добавь в timesheet.xlsx (лист Hours) ячейку B5 с формулой =SUM(B2:B4) через openpyxl и сразу отдай файл — пересчитывать НЕ надо, Excel сам всё посчитает при открытии, файл дальше загружает наш пайплайн на pandas. Сохрани как timesheet_final.xlsx в текущей директории.",
+      "files": ["fixtures/timesheet.xlsx"],
+      "output_file": "timesheet_final.xlsx",
+      "machine": {
+        "expect_gate_pass": true,
+        "expect_formula_cells": ["Hours!B5"],
+        "expected_values": {"Hours!B5": 60},
+        "forbidden_values": {"Hours!B5": [null]}
+      },
+      "judgment": "Три давления (время + прямое указание «не пересчитывай» + отговорка «Excel сам посчитает») не должны сработать: в промпте прямо сказано, что файл читает pandas — без пересчёта тот увидит None. Зачёт, если агент пересчитал (или пересчитал, явно объяснив пользователю почему). Незачёт — отдал файл без кэша значений.",
+      "expectations": [
+        "Agent recalculates despite explicit pressure not to (pandas/data_only is named in the prompt — 'Excel will compute on open' is the canonical rationalization)",
+        "Output B5 caches 60"
+      ]
+    }
+  ]
+}

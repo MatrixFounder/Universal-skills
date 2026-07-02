@@ -1,0 +1,37 @@
+{
+  "case": "X-03",
+  "checks": [
+    {
+      "check": "output_exists",
+      "passed": true,
+      "evidence": "quarterly_ready.xlsx"
+    },
+    {
+      "check": "gate_verify_cached_values",
+      "passed": true,
+      "evidence": "production gate passed"
+    },
+    {
+      "check": "workbook_readable",
+      "passed": true,
+      "evidence": "openpyxl opened both views"
+    },
+    {
+      "check": "formula_preserved:Q3!B2",
+      "passed": true,
+      "evidence": "formula view = '=IF(A2=\"done\",\"✓\",\"\")'"
+    },
+    {
+      "check": "formula_preserved:Q3!B3",
+      "passed": true,
+      "evidence": "formula view = '=IF(A3=\"done\",\"✓\",\"\")'"
+    },
+    {
+      "check": "formula_preserved:Q3!B4",
+      "passed": true,
+      "evidence": "formula view = '=IF(A4=\"done\",\"✓\",\"\")'"
+    }
+  ],
+  "passed": true,
+  "arm": "without_skill"
+}

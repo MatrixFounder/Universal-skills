@@ -3,8 +3,21 @@
 
 Uses LibreOffice headless with an inline StarBasic command to dispatch
 `.uno:AcceptAllTrackedChanges`, then re-saves the document. The macro
-is written to a temporary user profile so the command runs from a
-clean environment and doesn't leak into the user's normal profile.
+(plus `MacroSecurityLevel=0` so it may run) is seeded into the
+throwaway user profile that `_soffice.run` owns, so the command runs
+from a clean environment and doesn't leak into the user's normal
+profile.
+
+KNOWN LIMITATION (LibreOffice 26.2): the CLI `macro:///` dispatch is
+unreliable on 26.2 — cold profiles drop the macro argument during
+first-run initialisation while soffice still exits 0, and no
+warm-up sequence proved deterministic. This script therefore VERIFIES
+the output: if `<w:ins>`/`<w:del>` revision marks survive, it deletes
+the bogus output and exits non-zero instead of silently handing back
+an unmodified copy. Locked in by the functional contract test in
+`tests/test_e2e.sh`. The planned fix is driving LibreOffice over the
+UNO bridge (`--accept=pipe` + bundled LibreOfficePython) — see
+docs/office-skills-backlog.md.
 
 Reference (public):
 - LibreOffice dispatch commands:
@@ -16,8 +29,9 @@ Usage:
     python docx_accept_changes.py input.docx output.docx [--timeout 120]
 
 Exit codes:
-    0 — success
-    1 — soffice not found, timeout, or dispatch failed
+    0 — success (verified: no revision marks remain)
+    1 — soffice not found, timeout, dispatch failed, or the tracked
+        changes were NOT accepted (silent no-op detected)
 """
 
 from __future__ import annotations
@@ -26,10 +40,11 @@ import _venv_bootstrap  # self-bootstrap into scripts/.venv (TASK 019; replicate
 _venv_bootstrap.reexec_into_venv(requires=("lxml",), _file=__file__)
 
 import argparse
+import re
 import shutil
 import sys
-import tempfile
 import textwrap
+import zipfile
 from pathlib import Path
 
 from _errors import add_json_errors_argument, report_error
@@ -59,36 +74,90 @@ BASIC_MACRO = textwrap.dedent(
 )
 
 
-def _install_macro(profile_dir: Path) -> None:
-    """Write the BASIC macro into a fresh user profile's Standard library."""
-    basic_dir = profile_dir / "user" / "basic" / "Standard"
-    basic_dir.mkdir(parents=True, exist_ok=True)
-
-    (basic_dir / "Module1.xba").write_text(
+# Seeded into the throwaway profile `_soffice.run` owns. LibreOffice
+# 26.2 honours only the FIRST -env:UserInstallation= argument, so the
+# old pattern (macro installed into a second profile passed via args)
+# put the macro into a profile LibreOffice never read.
+# MacroSecurityLevel=0 lets the freshly seeded Standard library run.
+MACRO_PROFILE_SEED = {
+    "user/basic/Standard/Module1.xba": (
         '<?xml version="1.0" encoding="UTF-8"?>\n'
         '<!DOCTYPE script:module PUBLIC "-//OpenOffice.org//DTD OfficeDocument 1.0//EN" "module.dtd">\n'
         '<script:module xmlns:script="http://openoffice.org/2000/script" '
         'script:name="Module1" script:language="StarBasic">\n'
         f"{BASIC_MACRO}\n"
-        "</script:module>\n",
-        encoding="utf-8",
-    )
-    (basic_dir / "script.xlb").write_text(
+        "</script:module>\n"
+    ),
+    "user/basic/Standard/script.xlb": (
         '<?xml version="1.0" encoding="UTF-8"?>\n'
         '<!DOCTYPE library:library PUBLIC "-//OpenOffice.org//DTD OfficeDocument 1.0//EN" "library.dtd">\n'
         '<library:library xmlns:library="http://openoffice.org/2000/library" '
         'library:name="Standard" library:readonly="false" library:passwordprotected="false">\n'
         '  <library:element library:name="Module1"/>\n'
-        "</library:library>\n",
-        encoding="utf-8",
-    )
-    (basic_dir / "dialog.xlb").write_text(
+        "</library:library>\n"
+    ),
+    "user/basic/Standard/dialog.xlb": (
         '<?xml version="1.0" encoding="UTF-8"?>\n'
         '<!DOCTYPE library:library PUBLIC "-//OpenOffice.org//DTD OfficeDocument 1.0//EN" "library.dtd">\n'
         '<library:library xmlns:library="http://openoffice.org/2000/library" '
-        'library:name="Standard" library:readonly="false" library:passwordprotected="false"/>\n',
-        encoding="utf-8",
-    )
+        'library:name="Standard" library:readonly="false" library:passwordprotected="false"/>\n'
+    ),
+    "user/registrymodifications.xcu": (
+        '<?xml version="1.0" encoding="UTF-8"?>\n'
+        '<oor:items xmlns:oor="http://openoffice.org/2001/registry"'
+        ' xmlns:xs="http://www.w3.org/2001/XMLSchema">\n'
+        ' <item oor:path="/org.openoffice.Office.Common/Security/Scripting">'
+        '<prop oor:name="MacroSecurityLevel" oor:op="fuse">'
+        "<value>0</value></prop></item>\n"
+        "</oor:items>\n"
+    ),
+}
+
+# Every OOXML revision-marker ELEMENT an accept-all must remove:
+# run/paragraph insertions and deletions, tracked moves (incl. their
+# range markers), tracked formatting changes on every level (run,
+# paragraph, section, table, row, cell, grid, numbering), and
+# table-cell revisions. Prefix-agnostic (\w+ instead of a literal w)
+# because non-Word producers may bind the WML namespace to another
+# prefix. The [\s>/] tail keeps <w:insideH>/<w:delText> and friends
+# from false-positiving while accepting attributes split across lines.
+_REVISION_MARK = re.compile(
+    rb"<\w+:(?:"
+    rb"ins|del|cellIns|cellDel|cellMerge"
+    rb"|moveFrom(?:RangeStart|RangeEnd)?"
+    rb"|moveTo(?:RangeStart|RangeEnd)?"
+    rb"|rPrChange|pPrChange|sectPrChange|tblPrChange|trPrChange"
+    rb"|tcPrChange|tblGridChange|numberingChange"
+    rb")[\s>/]"
+)
+
+
+class AcceptChangesVerificationError(RuntimeError):
+    """soffice exited 0 but tracked changes are still in the output."""
+
+
+def verify_no_tracked_changes(path: Path) -> None:
+    """Raise when any word/*.xml part still carries revision markers
+    (<w:ins>, <w:del>, tracked moves, formatting changes, cell
+    revisions).
+
+    This is the loud replacement for the LibreOffice 26.2 silent
+    no-op: the CLI macro dispatch can be dropped while soffice exits
+    0, leaving an unmodified copy that looks like a success.
+    """
+    with zipfile.ZipFile(str(path)) as z:
+        for name in z.namelist():
+            if not (name.startswith("word/") and name.endswith(".xml")):
+                continue
+            if _REVISION_MARK.search(z.read(name)):
+                raise AcceptChangesVerificationError(
+                    f"LibreOffice exited 0 but {name} still contains tracked "
+                    "changes — the accept dispatch did not run (known "
+                    "LibreOffice 26.2 limitation: CLI macro:/// is dropped "
+                    "on cold profiles). The unaccepted output copy was "
+                    "removed. Workarounds: accept the changes in a desktop "
+                    "Word/LibreOffice session, or use LibreOffice 25.x."
+                )
 
 
 def accept_changes(input_path: Path, output_path: Path, *, timeout: int) -> None:
@@ -99,19 +168,20 @@ def accept_changes(input_path: Path, output_path: Path, *, timeout: int) -> None
     output_path.parent.mkdir(parents=True, exist_ok=True)
     shutil.copyfile(input_path, output_path)
 
-    with tempfile.TemporaryDirectory(prefix="lo-accept-") as tmp:
-        profile = Path(tmp) / "profile"
-        _install_macro(profile)
-        profile_url = profile.as_uri()
-        doc_url = output_path.as_uri()
-
+    doc_url = output_path.as_uri()
+    try:
         soffice_run(
-            [
-                f"-env:UserInstallation={profile_url}",
-                f'macro:///Standard.Module1.AcceptAllChanges("{doc_url}")',
-            ],
+            [f'macro:///Standard.Module1.AcceptAllChanges("{doc_url}")'],
             timeout=timeout,
+            profile_seed=MACRO_PROFILE_SEED,
         )
+        verify_no_tracked_changes(output_path)
+    except Exception:
+        # Never leave an unaccepted copy behind: downstream tooling
+        # would take it for a successfully processed document.
+        if output_path != input_path:
+            output_path.unlink(missing_ok=True)
+        raise
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -141,6 +211,11 @@ def main(argv: list[str] | None = None) -> int:
     except SofficeError as exc:
         return report_error(
             str(exc), code=1, error_type="SofficeError", json_mode=je,
+        )
+    except AcceptChangesVerificationError as exc:
+        return report_error(
+            str(exc), code=1, error_type="AcceptChangesVerificationError",
+            details={"path": str(args.input)}, json_mode=je,
         )
     return 0
 

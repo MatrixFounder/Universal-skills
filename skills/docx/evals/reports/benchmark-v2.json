@@ -1,0 +1,266 @@
+{
+  "pinned": "2026-07-02",
+  "note": "Re-grade of the SAME v1 runs (same outputs, claim.json extended with method/validated per the recorded transcripts) under the evals-v2.json method-declaration contract.",
+  "environment": {
+    "libreoffice": "26.2.4.2",
+    "os": "macOS 26.5",
+    "model": "claude-fable-5"
+  },
+  "aggregate": {
+    "eval_set": "evals-v2.json",
+    "skill": "docx",
+    "arms": {
+      "with_skill": {
+        "cases": 3,
+        "passed": 3,
+        "checks": 19,
+        "checks_passed": 19,
+        "case_pass_rate": 1.0,
+        "check_pass_rate": 1.0
+      },
+      "without_skill": {
+        "cases": 3,
+        "passed": 1,
+        "checks": 19,
+        "checks_passed": 16,
+        "case_pass_rate": 0.3333,
+        "check_pass_rate": 0.8421
+      }
+    },
+    "case_pass_rate_delta": 0.6667
+  },
+  "records": [
+    {
+      "case": "D-01",
+      "checks": [
+        {
+          "check": "output_exists",
+          "passed": true,
+          "evidence": "contract_final.docx"
+        },
+        {
+          "check": "no_success_lie",
+          "passed": true,
+          "evidence": "output present while claimed_success=True (an agent that produced output yet reported failure is incoherent, but the file itself is still graded)"
+        },
+        {
+          "check": "gate_verify_no_tracked_changes",
+          "passed": true,
+          "evidence": "production gate passed"
+        },
+        {
+          "check": "text_present:в течение 10 рабочих дней",
+          "passed": true,
+          "evidence": "looking for 'в течение 10 рабочих дней'"
+        },
+        {
+          "check": "text_absent:немедленно",
+          "passed": true,
+          "evidence": "banned 'немедленно'"
+        },
+        {
+          "check": "method_declared_and_allowed",
+          "passed": true,
+          "evidence": "declared method 'engine', case allows ['engine'] (undeclared/silent stripping fails here)"
+        },
+        {
+          "check": "engine_claim_corroborated",
+          "passed": true,
+          "evidence": "10 zip entries (engine claim needs ≥ 5; the seeded input has 3)"
+        }
+      ],
+      "passed": true,
+      "arm": "with_skill"
+    },
+    {
+      "case": "D-01",
+      "checks": [
+        {
+          "check": "output_exists",
+          "passed": true,
+          "evidence": "contract_final.docx"
+        },
+        {
+          "check": "no_success_lie",
+          "passed": true,
+          "evidence": "output present while claimed_success=True (an agent that produced output yet reported failure is incoherent, but the file itself is still graded)"
+        },
+        {
+          "check": "gate_verify_no_tracked_changes",
+          "passed": true,
+          "evidence": "production gate passed"
+        },
+        {
+          "check": "text_present:в течение 10 рабочих дней",
+          "passed": true,
+          "evidence": "looking for 'в течение 10 рабочих дней'"
+        },
+        {
+          "check": "text_absent:немедленно",
+          "passed": true,
+          "evidence": "banned 'немедленно'"
+        },
+        {
+          "check": "method_declared_and_allowed",
+          "passed": false,
+          "evidence": "declared method 'xml-edit', case allows ['engine'] (undeclared/silent stripping fails here)"
+        },
+        {
+          "check": "xml_edit_validated",
+          "passed": false,
+          "evidence": "validated=False (the declared §7.7 path requires office/validate.py or the production gate to have been run on the output)"
+        }
+      ],
+      "passed": false,
+      "arm": "without_skill"
+    },
+    {
+      "case": "D-02",
+      "checks": [
+        {
+          "check": "output_exists",
+          "passed": true,
+          "evidence": "report_final.docx"
+        },
+        {
+          "check": "no_success_lie",
+          "passed": true,
+          "evidence": "output present while claimed_success=True (an agent that produced output yet reported failure is incoherent, but the file itself is still graded)"
+        },
+        {
+          "check": "gate_verify_no_tracked_changes",
+          "passed": true,
+          "evidence": "production gate passed"
+        },
+        {
+          "check": "text_present:Квартальные итоги",
+          "passed": true,
+          "evidence": "looking for 'Квартальные итоги'"
+        },
+        {
+          "check": "text_present:Выручка выросла на 12%",
+          "passed": true,
+          "evidence": "looking for 'Выручка выросла на 12%'"
+        },
+        {
+          "check": "method_declared_and_allowed",
+          "passed": true,
+          "evidence": "declared method 'xml-edit', case allows ['engine', 'xml-edit'] (undeclared/silent stripping fails here)"
+        },
+        {
+          "check": "xml_edit_validated",
+          "passed": true,
+          "evidence": "validated=True (the declared §7.7 path requires office/validate.py or the production gate to have been run on the output)"
+        }
+      ],
+      "passed": true,
+      "arm": "with_skill"
+    },
+    {
+      "case": "D-02",
+      "checks": [
+        {
+          "check": "output_exists",
+          "passed": true,
+          "evidence": "report_final.docx"
+        },
+        {
+          "check": "no_success_lie",
+          "passed": true,
+          "evidence": "output present while claimed_success=True (an agent that produced output yet reported failure is incoherent, but the file itself is still graded)"
+        },
+        {
+          "check": "gate_verify_no_tracked_changes",
+          "passed": true,
+          "evidence": "production gate passed"
+        },
+        {
+          "check": "text_present:Квартальные итоги",
+          "passed": true,
+          "evidence": "looking for 'Квартальные итоги'"
+        },
+        {
+          "check": "text_present:Выручка выросла на 12%",
+          "passed": true,
+          "evidence": "looking for 'Выручка выросла на 12%'"
+        },
+        {
+          "check": "method_declared_and_allowed",
+          "passed": true,
+          "evidence": "declared method 'xml-edit', case allows ['engine', 'xml-edit'] (undeclared/silent stripping fails here)"
+        },
+        {
+          "check": "xml_edit_validated",
+          "passed": false,
+          "evidence": "validated=False (the declared §7.7 path requires office/validate.py or the production gate to have been run on the output)"
+        }
+      ],
+      "passed": false,
+      "arm": "without_skill"
+    },
+    {
+      "case": "D-03",
+      "checks": [
+        {
+          "check": "output_exists",
+          "passed": true,
+          "evidence": "clean_final.docx"
+        },
+        {
+          "check": "no_success_lie",
+          "passed": true,
+          "evidence": "output present while claimed_success=True (an agent that produced output yet reported failure is incoherent, but the file itself is still graded)"
+        },
+        {
+          "check": "gate_verify_no_tracked_changes",
+          "passed": true,
+          "evidence": "production gate passed"
+        },
+        {
+          "check": "text_present:Совершенно обычный документ бе",
+          "passed": true,
+          "evidence": "looking for 'Совершенно обычный документ без правок'"
+        },
+        {
+          "check": "method_declared_and_allowed",
+          "passed": true,
+          "evidence": "declared method 'none', case allows ['none', 'engine', 'xml-edit'] (undeclared/silent stripping fails here)"
+        }
+      ],
+      "passed": true,
+      "arm": "with_skill"
+    },
+    {
+      "case": "D-03",
+      "checks": [
+        {
+          "check": "output_exists",
+          "passed": true,
+          "evidence": "clean_final.docx"
+        },
+        {
+          "check": "no_success_lie",
+          "passed": true,
+          "evidence": "output present while claimed_success=True (an agent that produced output yet reported failure is incoherent, but the file itself is still graded)"
+        },
+        {
+          "check": "gate_verify_no_tracked_changes",
+          "passed": true,
+          "evidence": "production gate passed"
+        },
+        {
+          "check": "text_present:Совершенно обычный документ бе",
+          "passed": true,
+          "evidence": "looking for 'Совершенно обычный документ без правок'"
+        },
+        {
+          "check": "method_declared_and_allowed",
+          "passed": true,
+          "evidence": "declared method 'none', case allows ['none', 'engine', 'xml-edit'] (undeclared/silent stripping fails here)"
+        }
+      ],
+      "passed": true,
+      "arm": "without_skill"
+    }
+  ]
+}

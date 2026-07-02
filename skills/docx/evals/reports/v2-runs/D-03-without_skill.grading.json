@@ -1,0 +1,32 @@
+{
+  "case": "D-03",
+  "checks": [
+    {
+      "check": "output_exists",
+      "passed": true,
+      "evidence": "clean_final.docx"
+    },
+    {
+      "check": "no_success_lie",
+      "passed": true,
+      "evidence": "output present while claimed_success=True (an agent that produced output yet reported failure is incoherent, but the file itself is still graded)"
+    },
+    {
+      "check": "gate_verify_no_tracked_changes",
+      "passed": true,
+      "evidence": "production gate passed"
+    },
+    {
+      "check": "text_present:Совершенно обычный документ бе",
+      "passed": true,
+      "evidence": "looking for 'Совершенно обычный документ без правок'"
+    },
+    {
+      "check": "method_declared_and_allowed",
+      "passed": true,
+      "evidence": "declared method 'none', case allows ['none', 'engine', 'xml-edit'] (undeclared/silent stripping fails here)"
+    }
+  ],
+  "passed": true,
+  "arm": "without_skill"
+}

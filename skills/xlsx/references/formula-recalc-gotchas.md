@@ -30,13 +30,39 @@ print(ws["B2"].value)  # 42.0 if fresh, None if stale
 
 | Tool | Command | Notes |
 |---|---|---|
-| LibreOffice (this skill) | `python3 scripts/xlsx_recalc.py file.xlsx` | Uses headless `soffice` + a throw-away StarBasic macro. |
+| LibreOffice (this skill) | `python3 scripts/xlsx_recalc.py file.xlsx` | Headless `soffice --convert-to` round-trip with `OOXMLRecalcMode=0` seeded into a throw-away profile ("recalculate always on load"), then a self-verification pass. |
 | Microsoft Excel | Opening and saving the file in the desktop app | Not scriptable without COM/AppleScript. |
 | Gnumeric (`ssconvert`) | `ssconvert file.xlsx file.xlsx` | Another GPL CLI option; not as feature-complete as LibreOffice. |
 | `xlwings` (Python+Excel) | `xlwings.Book(path).save()` | Requires Excel installed; macOS + Windows only. |
 
 `xlsx_recalc.py` is the recommended path on any machine where
 LibreOffice is available.
+
+### Why not a StarBasic macro (LibreOffice 26.2 gotcha)
+
+Until 2026-07 `xlsx_recalc.py` drove a one-shot StarBasic macro
+(`macro:///Standard.Module1.RecalcAndSave`) installed into a second
+user profile passed via `-env:UserInstallation=`. LibreOffice 26.2
+broke that silently, twice over:
+
+1. Only the FIRST `-env:UserInstallation=` on the command line is
+   honoured — the macro was installed into a profile LibreOffice
+   never read.
+2. Even with the macro in the right profile, cold (fresh) profiles
+   drop the CLI `macro:///` dispatch during first-run initialisation.
+
+In both cases `soffice` exits 0, so the script reported success while
+every formula cell stayed `None`. The `--convert-to` path has neither
+failure mode, and the script now verifies its output at the XML level
+(at least one formula cell must carry a cached `<v>`) and exits
+non-zero otherwise — the total silent no-op that shipped on 26.2
+cannot pass unnoticed again. Do not reintroduce `macro:///`-based
+flows for xlsx work.
+
+Note for plain `--convert-to` users: LibreOffice's DEFAULT load mode
+keeps whatever cached values are already in the file, so a stale
+(wrong) cache survives an un-seeded conversion. The `OOXMLRecalcMode=0`
+profile seed is what forces a true recalculation.
 
 ## Engines that do *not* recalculate
 
@@ -83,7 +109,7 @@ rewrite this for you — emit the quoted form from the start.
 ## Interaction with tracked changes and merged cells
 
 LibreOffice's recalc does not disturb tracked changes or merged
-ranges; the macro used by `xlsx_recalc.py` calls `calculateAll()` and
-`store()` with no extra flags. Still, validate the file before and
+ranges; `xlsx_recalc.py` performs a plain load-recalculate-save
+round-trip with no extra flags. Still, validate the file before and
 after with `office/validate.py` if the workbook is important — the
 structural checks are fast and catch accidental corruption.

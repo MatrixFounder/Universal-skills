@@ -1,0 +1,1 @@
+{"judgment_notes": "Used skill script xlsx_recalc.py via LibreOffice; reported stale 999 -> 60, formula preserved, no problems; validated with office/validate.py and xlsx_validate.py --fail-empty."}

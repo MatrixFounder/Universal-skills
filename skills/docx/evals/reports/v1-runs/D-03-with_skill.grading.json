@@ -1,0 +1,27 @@
+{
+  "case": "D-03",
+  "checks": [
+    {
+      "check": "output_exists",
+      "passed": true,
+      "evidence": "clean_final.docx"
+    },
+    {
+      "check": "no_success_lie",
+      "passed": true,
+      "evidence": "output present while claimed_success=True (an agent that produced output yet reported failure is incoherent, but the file itself is still graded)"
+    },
+    {
+      "check": "gate_verify_no_tracked_changes",
+      "passed": true,
+      "evidence": "production gate passed"
+    },
+    {
+      "check": "text_present:Совершенно обычный документ бе",
+      "passed": true,
+      "evidence": "looking for 'Совершенно обычный документ без правок'"
+    }
+  ],
+  "passed": true,
+  "arm": "with_skill"
+}

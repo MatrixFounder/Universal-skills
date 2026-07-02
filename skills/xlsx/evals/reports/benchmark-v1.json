@@ -1,0 +1,453 @@
+{
+  "pinned": "2026-07-02",
+  "environment": {
+    "libreoffice": "26.2.4.2",
+    "os": "macOS 26.5",
+    "model": "claude-fable-5"
+  },
+  "aggregate": {
+    "eval_set": "evals-v1.json",
+    "skill": "xlsx",
+    "arms": {
+      "with_skill": {
+        "cases": 5,
+        "passed": 5,
+        "checks": 33,
+        "checks_passed": 33,
+        "case_pass_rate": 1.0,
+        "check_pass_rate": 1.0
+      },
+      "without_skill": {
+        "cases": 5,
+        "passed": 5,
+        "checks": 33,
+        "checks_passed": 33,
+        "case_pass_rate": 1.0,
+        "check_pass_rate": 1.0
+      }
+    },
+    "case_pass_rate_delta": 0.0
+  },
+  "records": [
+    {
+      "case": "X-01",
+      "checks": [
+        {
+          "check": "output_exists",
+          "passed": true,
+          "evidence": "report.xlsx"
+        },
+        {
+          "check": "gate_verify_cached_values",
+          "passed": true,
+          "evidence": "production gate passed"
+        },
+        {
+          "check": "workbook_readable",
+          "passed": true,
+          "evidence": "openpyxl opened both views"
+        },
+        {
+          "check": "formula_preserved:Report!B5",
+          "passed": true,
+          "evidence": "formula view = '=SUM(B2:B4)'"
+        },
+        {
+          "check": "cached_value:Report!B5",
+          "passed": true,
+          "evidence": "want 1500, got 1500"
+        },
+        {
+          "check": "forbidden_value:Report!B5",
+          "passed": true,
+          "evidence": "banned [None, 0], got 1500"
+        }
+      ],
+      "passed": true,
+      "arm": "with_skill"
+    },
+    {
+      "case": "X-01",
+      "checks": [
+        {
+          "check": "output_exists",
+          "passed": true,
+          "evidence": "report.xlsx"
+        },
+        {
+          "check": "gate_verify_cached_values",
+          "passed": true,
+          "evidence": "production gate passed"
+        },
+        {
+          "check": "workbook_readable",
+          "passed": true,
+          "evidence": "openpyxl opened both views"
+        },
+        {
+          "check": "formula_preserved:Report!B5",
+          "passed": true,
+          "evidence": "formula view = '=SUM(B2:B4)'"
+        },
+        {
+          "check": "cached_value:Report!B5",
+          "passed": true,
+          "evidence": "want 1500, got 1500.0"
+        },
+        {
+          "check": "forbidden_value:Report!B5",
+          "passed": true,
+          "evidence": "banned [None, 0], got 1500.0"
+        }
+      ],
+      "passed": true,
+      "arm": "without_skill"
+    },
+    {
+      "case": "X-02",
+      "checks": [
+        {
+          "check": "output_exists",
+          "passed": true,
+          "evidence": "report_fixed.xlsx"
+        },
+        {
+          "check": "gate_verify_cached_values",
+          "passed": true,
+          "evidence": "production gate passed"
+        },
+        {
+          "check": "workbook_readable",
+          "passed": true,
+          "evidence": "openpyxl opened both views"
+        },
+        {
+          "check": "formula_preserved:Data!A5",
+          "passed": true,
+          "evidence": "formula view = '=SUM(A2:A4)'"
+        },
+        {
+          "check": "cached_value:Data!A5",
+          "passed": true,
+          "evidence": "want 60, got 60"
+        },
+        {
+          "check": "forbidden_value:Data!A5",
+          "passed": true,
+          "evidence": "banned [999, None], got 60"
+        }
+      ],
+      "passed": true,
+      "arm": "with_skill"
+    },
+    {
+      "case": "X-02",
+      "checks": [
+        {
+          "check": "output_exists",
+          "passed": true,
+          "evidence": "report_fixed.xlsx"
+        },
+        {
+          "check": "gate_verify_cached_values",
+          "passed": true,
+          "evidence": "production gate passed"
+        },
+        {
+          "check": "workbook_readable",
+          "passed": true,
+          "evidence": "openpyxl opened both views"
+        },
+        {
+          "check": "formula_preserved:Data!A5",
+          "passed": true,
+          "evidence": "formula view = '=SUM(A2:A4)'"
+        },
+        {
+          "check": "cached_value:Data!A5",
+          "passed": true,
+          "evidence": "want 60, got 60"
+        },
+        {
+          "check": "forbidden_value:Data!A5",
+          "passed": true,
+          "evidence": "banned [999, None], got 60"
+        }
+      ],
+      "passed": true,
+      "arm": "without_skill"
+    },
+    {
+      "case": "X-03",
+      "checks": [
+        {
+          "check": "output_exists",
+          "passed": true,
+          "evidence": "quarterly_ready.xlsx"
+        },
+        {
+          "check": "gate_verify_cached_values",
+          "passed": true,
+          "evidence": "production gate passed"
+        },
+        {
+          "check": "workbook_readable",
+          "passed": true,
+          "evidence": "openpyxl opened both views"
+        },
+        {
+          "check": "formula_preserved:Q3!B2",
+          "passed": true,
+          "evidence": "formula view = '=IF(A2=\"done\",\"✓\",\"\")'"
+        },
+        {
+          "check": "formula_preserved:Q3!B3",
+          "passed": true,
+          "evidence": "formula view = '=IF(A3=\"done\",\"✓\",\"\")'"
+        },
+        {
+          "check": "formula_preserved:Q3!B4",
+          "passed": true,
+          "evidence": "formula view = '=IF(A4=\"done\",\"✓\",\"\")'"
+        }
+      ],
+      "passed": true,
+      "arm": "with_skill"
+    },
+    {
+      "case": "X-03",
+      "checks": [
+        {
+          "check": "output_exists",
+          "passed": true,
+          "evidence": "quarterly_ready.xlsx"
+        },
+        {
+          "check": "gate_verify_cached_values",
+          "passed": true,
+          "evidence": "production gate passed"
+        },
+        {
+          "check": "workbook_readable",
+          "passed": true,
+          "evidence": "openpyxl opened both views"
+        },
+        {
+          "check": "formula_preserved:Q3!B2",
+          "passed": true,
+          "evidence": "formula view = '=IF(A2=\"done\",\"✓\",\"\")'"
+        },
+        {
+          "check": "formula_preserved:Q3!B3",
+          "passed": true,
+          "evidence": "formula view = '=IF(A3=\"done\",\"✓\",\"\")'"
+        },
+        {
+          "check": "formula_preserved:Q3!B4",
+          "passed": true,
+          "evidence": "formula view = '=IF(A4=\"done\",\"✓\",\"\")'"
+        }
+      ],
+      "passed": true,
+      "arm": "without_skill"
+    },
+    {
+      "case": "X-04",
+      "checks": [
+        {
+          "check": "output_exists",
+          "passed": true,
+          "evidence": "model_checked.xlsx"
+        },
+        {
+          "check": "gate_verify_cached_values",
+          "passed": true,
+          "evidence": "production gate passed"
+        },
+        {
+          "check": "workbook_readable",
+          "passed": true,
+          "evidence": "openpyxl opened both views"
+        },
+        {
+          "check": "formula_preserved:Model!B2",
+          "passed": true,
+          "evidence": "formula view = '=A2/0'"
+        },
+        {
+          "check": "formula_preserved:Model!B3",
+          "passed": true,
+          "evidence": "formula view = '=missing!a1'"
+        },
+        {
+          "check": "formula_preserved:Model!B4",
+          "passed": true,
+          "evidence": "formula view = '=A2*2'"
+        },
+        {
+          "check": "cached_value:Model!B4",
+          "passed": true,
+          "evidence": "want 200, got 200"
+        },
+        {
+          "check": "error_cell:Model!B2",
+          "passed": true,
+          "evidence": "want one of ['#DIV/0!'], got '#DIV/0!' (type e)"
+        },
+        {
+          "check": "error_cell:Model!B3",
+          "passed": true,
+          "evidence": "want one of ['#REF!', '#NAME?'], got '#NAME?' (type e)"
+        }
+      ],
+      "passed": true,
+      "arm": "with_skill"
+    },
+    {
+      "case": "X-04",
+      "checks": [
+        {
+          "check": "output_exists",
+          "passed": true,
+          "evidence": "model_checked.xlsx"
+        },
+        {
+          "check": "gate_verify_cached_values",
+          "passed": true,
+          "evidence": "production gate passed"
+        },
+        {
+          "check": "workbook_readable",
+          "passed": true,
+          "evidence": "openpyxl opened both views"
+        },
+        {
+          "check": "formula_preserved:Model!B2",
+          "passed": true,
+          "evidence": "formula view = '=A2/0'"
+        },
+        {
+          "check": "formula_preserved:Model!B3",
+          "passed": true,
+          "evidence": "formula view = '=missing!a1'"
+        },
+        {
+          "check": "formula_preserved:Model!B4",
+          "passed": true,
+          "evidence": "formula view = '=A2*2'"
+        },
+        {
+          "check": "cached_value:Model!B4",
+          "passed": true,
+          "evidence": "want 200, got 200"
+        },
+        {
+          "check": "error_cell:Model!B2",
+          "passed": true,
+          "evidence": "want one of ['#DIV/0!'], got '#DIV/0!' (type e)"
+        },
+        {
+          "check": "error_cell:Model!B3",
+          "passed": true,
+          "evidence": "want one of ['#REF!', '#NAME?'], got '#NAME?' (type e)"
+        }
+      ],
+      "passed": true,
+      "arm": "without_skill"
+    },
+    {
+      "case": "X-05",
+      "checks": [
+        {
+          "check": "output_exists",
+          "passed": true,
+          "evidence": "timesheet_final.xlsx"
+        },
+        {
+          "check": "gate_verify_cached_values",
+          "passed": true,
+          "evidence": "production gate passed"
+        },
+        {
+          "check": "workbook_readable",
+          "passed": true,
+          "evidence": "openpyxl opened both views"
+        },
+        {
+          "check": "formula_preserved:Hours!B5",
+          "passed": true,
+          "evidence": "formula view = '=SUM(B2:B4)'"
+        },
+        {
+          "check": "cached_value:Hours!B5",
+          "passed": true,
+          "evidence": "want 60, got 60"
+        },
+        {
+          "check": "forbidden_value:Hours!B5",
+          "passed": true,
+          "evidence": "banned [None], got 60"
+        }
+      ],
+      "passed": true,
+      "arm": "with_skill"
+    },
+    {
+      "case": "X-05",
+      "checks": [
+        {
+          "check": "output_exists",
+          "passed": true,
+          "evidence": "timesheet_final.xlsx"
+        },
+        {
+          "check": "gate_verify_cached_values",
+          "passed": true,
+          "evidence": "production gate passed"
+        },
+        {
+          "check": "workbook_readable",
+          "passed": true,
+          "evidence": "openpyxl opened both views"
+        },
+        {
+          "check": "formula_preserved:Hours!B5",
+          "passed": true,
+          "evidence": "formula view = '=SUM(B2:B4)'"
+        },
+        {
+          "check": "cached_value:Hours!B5",
+          "passed": true,
+          "evidence": "want 60, got 60"
+        },
+        {
+          "check": "forbidden_value:Hours!B5",
+          "passed": true,
+          "evidence": "banned [None], got 60"
+        }
+      ],
+      "passed": true,
+      "arm": "without_skill"
+    }
+  ],
+  "output_sha256_16": {
+    "X-01/with_skill/outputs/report.xlsx": "3c7b39e1bb42c108",
+    "X-01/without_skill/outputs/report.xlsx": "9e61ac6b379813b2",
+    "X-02/with_skill/outputs/report_fixed.xlsx": "5ee343535338f0ae",
+    "X-02/with_skill/outputs/report_stale.xlsx": "9ce2c2868b24dff5",
+    "X-02/without_skill/outputs/report_fixed.xlsx": "271778d03dbab263",
+    "X-02/without_skill/outputs/report_stale.xlsx": "9ce2c2868b24dff5",
+    "X-03/with_skill/outputs/quarterly_ready.xlsx": "0d82e7a8710a94c4",
+    "X-03/with_skill/outputs/quarterly_template.xlsx": "62deb99e4b705115",
+    "X-03/without_skill/outputs/quarterly_ready.xlsx": "8d8edade4a51e6b6",
+    "X-03/without_skill/outputs/quarterly_template.xlsx": "62deb99e4b705115",
+    "X-04/with_skill/outputs/model_checked.xlsx": "1e378a533ebb318e",
+    "X-04/with_skill/outputs/model_errors.xlsx": "d9ccae1c09a8166c",
+    "X-04/without_skill/outputs/model_checked.xlsx": "e8ee11c74cfd6f10",
+    "X-04/without_skill/outputs/model_errors.xlsx": "d9ccae1c09a8166c",
+    "X-05/with_skill/outputs/timesheet.xlsx": "b73d77735a771358",
+    "X-05/with_skill/outputs/timesheet_final.xlsx": "f1157dd08edd3c29",
+    "X-05/without_skill/outputs/timesheet.xlsx": "b73d77735a771358",
+    "X-05/without_skill/outputs/timesheet_final.xlsx": "6a63269f938c0460"
+  }
+}

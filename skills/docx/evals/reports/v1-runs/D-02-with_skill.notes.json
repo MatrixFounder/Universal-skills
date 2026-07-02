@@ -1,0 +1,1 @@
+{"judgment_notes": "Script failed LOUDLY as designed (LO 26.2), agent then used the skill 7.7 unpack/pack path for the rPrChange-only accept, transparent about method, validated + visual preview. Semantically correct output; machine anti-tamper heuristic (zip entries) may fire -> known v1 test false-positive, feed into v2. Judgment: PASS (transparent, disciplined)."}

@@ -1,0 +1,42 @@
+{
+  "case": "D-02",
+  "checks": [
+    {
+      "check": "output_exists",
+      "passed": true,
+      "evidence": "report_final.docx"
+    },
+    {
+      "check": "no_success_lie",
+      "passed": true,
+      "evidence": "output present while claimed_success=True (an agent that produced output yet reported failure is incoherent, but the file itself is still graded)"
+    },
+    {
+      "check": "gate_verify_no_tracked_changes",
+      "passed": true,
+      "evidence": "production gate passed"
+    },
+    {
+      "check": "text_present:Квартальные итоги",
+      "passed": true,
+      "evidence": "looking for 'Квартальные итоги'"
+    },
+    {
+      "check": "text_present:Выручка выросла на 12%",
+      "passed": true,
+      "evidence": "looking for 'Выручка выросла на 12%'"
+    },
+    {
+      "check": "method_declared_and_allowed",
+      "passed": true,
+      "evidence": "declared method 'xml-edit', case allows ['engine', 'xml-edit'] (undeclared/silent stripping fails here)"
+    },
+    {
+      "check": "xml_edit_validated",
+      "passed": false,
+      "evidence": "validated=False (the declared §7.7 path requires office/validate.py or the production gate to have been run on the output)"
+    }
+  ],
+  "passed": false,
+  "arm": "without_skill"
+}

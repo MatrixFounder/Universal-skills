@@ -132,6 +132,7 @@ rest are behavioural defaults with their rationale.
 
 1. `docx_accept_changes.py` requires LibreOffice. Check `_soffice.py` locates it before telling the user it "just works" — on some CI images LibreOffice is absent.
 2. Output must be a new path; do not overwrite the input unless asked. Even then, prefer an intermediate file and move on success.
+3. **LibreOffice 26.2 limitation**: the CLI `macro:///` dispatch this script relies on is unreliable on 26.2 (dropped on cold profiles while soffice exits 0). The script self-verifies: if revision marks survive, it removes the bogus output and exits 1 with `AcceptChangesVerificationError` — tell the user to accept the changes in a desktop Word/LibreOffice session or use LibreOffice 25.x. It never silently hands back an unaccepted copy.
 
 ### 7.7 Raw OOXML editing
 
