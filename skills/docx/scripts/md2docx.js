@@ -168,37 +168,50 @@ function buildImageRun(localPath, altText) {
     });
 }
 
+// marked's inline lexer HTML-escapes the .text of text/codespan/strong/em/link
+// tokens (& < > " '). The docx TextRun layer escapes again for XML, so source
+// text like `<TBD: ФИО>` or `Q&A` rendered as literal `&lt;TBD: ФИО&gt;` /
+// `Q&amp;A` in Word (ROADMAP N21a, found by the deal-zero render QA).
+// Decode exactly once here; ampersand MUST be decoded last.
+function decodeEntities(s) {
+    if (typeof s !== 'string') return s;
+    return s
+        .replace(/&lt;/g, '<').replace(/&gt;/g, '>')
+        .replace(/&quot;/g, '"').replace(/&#0?39;/g, "'")
+        .replace(/&amp;/g, '&');
+}
+
 function parseInlineText(rawText) {
     const inlineTokens = marked.Lexer.lexInline(rawText);
     const runs = [];
     for (const t of inlineTokens) {
         if (t.type === 'strong') {
-            runs.push(new TextRun({ text: t.text, font: "Arial", size: 24, bold: true }));
+            runs.push(new TextRun({ text: decodeEntities(t.text), font: "Arial", size: 24, bold: true }));
         } else if (t.type === 'em') {
-            runs.push(new TextRun({ text: t.text, font: "Arial", size: 24, italics: true }));
+            runs.push(new TextRun({ text: decodeEntities(t.text), font: "Arial", size: 24, italics: true }));
         } else if (t.type === 'codespan') {
-            runs.push(new TextRun({ text: t.text, font: "Courier New", size: 22 }));
+            runs.push(new TextRun({ text: decodeEntities(t.text), font: "Courier New", size: 22 }));
         } else if (t.type === 'link') {
-            runs.push(new TextRun({ text: t.text, font: "Arial", size: 24, underline: true, color: "0000FF" }));
+            runs.push(new TextRun({ text: decodeEntities(t.text), font: "Arial", size: 24, underline: true, color: "0000FF" }));
         } else if (t.type === 'image') {
             const localPath = resolveLocalImagePath(t.href);
             if (localPath === null) {
                 // Keep previous permissive behavior for remote/data refs: write alt text only.
-                runs.push(new TextRun({ text: t.text || t.href, font: "Arial", size: 24 }));
+                runs.push(new TextRun({ text: decodeEntities(t.text) || t.href, font: "Arial", size: 24 }));
             } else {
-                runs.push(buildImageRun(localPath, t.text));
+                runs.push(buildImageRun(localPath, decodeEntities(t.text)));
             }
         } else if (t.type === 'text' || t.type === 'escape' || t.type === 'html') {
             if (t.raw.includes('<br>')) {
                 const parts = t.raw.split('<br>');
                 for (let i = 0; i < parts.length; i++) {
-                    runs.push(new TextRun({ text: parts[i].trim(), font: "Arial", size: 24 }));
+                    runs.push(new TextRun({ text: decodeEntities(parts[i].trim()), font: "Arial", size: 24 }));
                     if (i < parts.length - 1) {
                         runs.push(new TextRun({ text: "", break: 1 }));
                     }
                 }
             } else {
-                runs.push(new TextRun({ text: t.text || t.raw, font: "Arial", size: 24 }));
+                runs.push(new TextRun({ text: decodeEntities(t.text || t.raw), font: "Arial", size: 24 }));
             }
         }
     }
