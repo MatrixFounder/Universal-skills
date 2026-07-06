@@ -4,6 +4,7 @@ from __future__ import annotations
 import base64
 import io
 import os
+import re
 import shutil
 import sys
 import tempfile
@@ -22,6 +23,7 @@ from html2md.model import SourceMeta  # noqa: E402
 _HAVE_NODE = shutil.which("node") is not None and os.path.isdir(
     os.path.join(SCRIPTS, "node_modules", "turndown"))
 _PNG = b"\x89PNG\r\n\x1a\n" + b"fake-png-bytes-payload"
+_PNG2 = b"\x89PNG\r\n\x1a\n" + b"different-fake-png-payload"
 
 
 class TestFrontmatter(unittest.TestCase):
@@ -263,6 +265,133 @@ class TestEmitPipeline(unittest.TestCase):
             rc2 = cli.main(["nonexistent-xyz.html", "outdir", "--json-errors"])
         self.assertEqual(rc2, 1)
         self.assertIn('"type": "BadInput"', err.getvalue())
+
+
+class TestSpacedDestinations(unittest.TestCase):
+    """Srcs with spaces (decoded archive attachment names, e.g. Confluence's
+    "Снимок экрана … 12.58.03.png") flow as CommonMark <…>-wrapped destinations;
+    _IMG_RE must match both alternatives and localization must resolve them."""
+
+    def test_img_re_bracketed_and_bare(self):
+        cases = {
+            "![](<Снимок экрана в 12.58.03.png>)": "Снимок экрана в 12.58.03.png",
+            "![](<a (1).png>)": "a (1).png",
+            "![a](x.png)": "x.png",
+            '![a](x.png "t")': "x.png",
+        }
+        for md, want_src in cases.items():
+            m = emit._IMG_RE.search(md)
+            self.assertIsNotNone(m, md)
+            self.assertEqual(emit._img_src(m), want_src, md)
+        # title group survives the alternation
+        m = emit._IMG_RE.search('![a](x.png "t")')
+        self.assertEqual(m.group(4), ' "t"')
+
+    def test_strip_data_images_bracketed(self):
+        uri = "data:image/png;base64," + "A" * 2048
+        self.assertEqual(emit._strip_data_images(f"x ![]({uri}) y"), "x  y")
+        self.assertEqual(emit._strip_data_images("x ![](<a b.png>) y"),
+                         "x ![](<a b.png>) y")  # non-data untouched
+
+    @unittest.skipUnless(_HAVE_NODE, "node + turndown not installed")
+    def test_space_named_local_image_localized(self):
+        """E2E (file mode): <img src> with spaces + Cyrillic → _attachments/<sha1>.png."""
+        d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, d, ignore_errors=True)
+        name = "Снимок экрана 2021-03-10 в 12.58.03.png"
+        (Path(d) / name).write_bytes(_PNG)
+        src = Path(d) / "page.html"
+        src.write_text(f'<html><body><p>x</p><img src="{name}"></body></html>',
+                       encoding="utf-8")
+        out = Path(d) / "out"
+        rc = cli.main([str(src), str(out), "--no-reader"])
+        self.assertEqual(rc, 0)
+        md = (out / "page.md").read_text(encoding="utf-8")
+        self.assertNotIn("Снимок", md.replace("![](_attachments/", ""))
+        self.assertIn("](_attachments/", md)
+        (link,) = re.findall(r"!\[\]\((_attachments/[^)]+)\)", md)
+        self.assertTrue((out / link).is_file(), link)
+        self.assertTrue(link.endswith(".png"))
+
+    @unittest.skipUnless(_HAVE_NODE, "node + turndown not installed")
+    def test_bracketed_invalid_host_does_not_abort(self):
+        """Regression: a src like https://[cdn host]/x (bracketed placeholder,
+        not IPv6) is now regex-matchable — urlparse raises ValueError on it,
+        which must resolve to 'image left as-is', never abort the conversion."""
+        d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, d, ignore_errors=True)
+        src = Path(d) / "page.html"
+        src.write_text('<html><body><p>x</p>'
+                       '<img src="https://[cdn host]/logo.png"></body></html>',
+                       encoding="utf-8")
+        out = Path(d) / "out"
+        rc = cli.main([str(src), str(out), "--no-reader"])
+        self.assertEqual(rc, 0)
+        md = (out / "page.md").read_text(encoding="utf-8")
+        self.assertIn("[cdn host]", md)  # untouched, not localized, not crashed
+
+    @unittest.skipUnless(_HAVE_NODE, "node + turndown not installed")
+    def test_webarchive_spaced_attachment_and_pseudo_ext(self):
+        """E2E (archive mode): a webarchive whose subresource URL is percent-encoded
+        Cyrillic-with-spaces + query (Confluence shape) localizes to _attachments/,
+        and a pseudo-extension resource (atl.site.logo, PNG bytes) gets .png."""
+        import plistlib
+        origin = "https://wiki.example.com"
+        img_url = (origin + "/download/attachments/6037496/"
+                   + urllib_quote("Снимок экрана 2021-03-10 в 12.58.03.png")
+                   + "?version=1&modificationDate=1615381100002&api=v2")
+        logo_url = origin + "/download/attachments/393218/atl.site.logo?version=2&api=v2"
+        html = ("<html><body><p>Пример расчета ниже:</p>"
+                f'<img src="{img_url.replace("&", "&amp;")}">'
+                f'<img src="{logo_url.replace("&", "&amp;")}">'
+                "</body></html>")
+        plist = {
+            "WebMainResource": {
+                "WebResourceData": html.encode("utf-8"),
+                "WebResourceMIMEType": "text/html",
+                "WebResourceTextEncodingName": "UTF-8",
+                "WebResourceURL": origin + "/spaces/PMO/pages/6037496",
+            },
+            "WebSubresources": [
+                {"WebResourceData": _PNG, "WebResourceMIMEType": "image/png",
+                 "WebResourceURL": img_url},
+                {"WebResourceData": _PNG2, "WebResourceMIMEType": "image/png",
+                 "WebResourceURL": logo_url},
+            ],
+        }
+        d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, d, ignore_errors=True)
+        wa = Path(d) / "page.webarchive"
+        wa.write_bytes(plistlib.dumps(plist, fmt=plistlib.FMT_BINARY))
+        out = Path(d) / "out"
+        rc = cli.main([str(wa), str(out), "--no-reader"])
+        self.assertEqual(rc, 0)
+        md = (out / "page.md").read_text(encoding="utf-8")
+        links = re.findall(r"!\[[^\]]*\]\(([^)]+)\)", md)
+        self.assertEqual(len(links), 2, md)
+        for link in links:
+            self.assertTrue(link.startswith("_attachments/"), f"not localized: {link}")
+            self.assertTrue(link.endswith(".png"), f"wrong ext: {link}")
+            self.assertTrue((out / link).is_file(), link)
+
+
+class TestSniffExt(unittest.TestCase):
+    def test_pseudo_extension_defers_to_magic(self):
+        """Confluence "atl.site.logo" (PNG bytes) → .png, not .logo."""
+        self.assertEqual(
+            emit._sniff_ext("https://x/download/attachments/393218/atl.site.logo?v=2",
+                            _PNG), ".png")
+
+    def test_known_ext_trusted(self):
+        self.assertEqual(emit._sniff_ext("https://x/a.png", b"whatever"), ".png")
+        self.assertEqual(emit._sniff_ext("https://x/b.jpeg", b""), ".jpeg")
+
+    def test_unknown_ext_unknown_bytes_lax_fallback(self):
+        self.assertEqual(emit._sniff_ext("https://x/global.logo", b"unknown"), ".logo")
+
+    def test_no_ext_magic_and_neutral(self):
+        self.assertEqual(emit._sniff_ext("https://x/noext", _PNG), ".png")
+        self.assertEqual(emit._sniff_ext("https://x/noext", b"unknown"), ".img")
 
 
 _TMP = Path("/Users/sergey/dev-projects/Universal-skills/tmp")

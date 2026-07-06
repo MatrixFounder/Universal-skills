@@ -1313,7 +1313,11 @@ def _absolutize_links(html: str, page_url: str) -> str:
 def _resolve_url_image(src: str, opts) -> bytes | None:
     """Fetch a remote image (for emit's url-mode download). None on any failure —
     a broken image must never abort the conversion. Bounded by ``--max-bytes``."""
-    if urlparse(src).scheme not in ("http", "https"):
+    try:
+        scheme = urlparse(src).scheme
+    except ValueError:
+        return None  # e.g. "https://[cdn host]/x" — bracketed non-IPv6 netloc
+    if scheme not in ("http", "https"):
         return None
     try:
         return _http_get_bytes(src, max_bytes=getattr(opts, "max_bytes", None),

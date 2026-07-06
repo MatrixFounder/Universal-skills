@@ -92,9 +92,18 @@ def base_dir(base_url: str) -> Path:
     return Path(base_url)
 
 
+# URL suffixes trusted as-is. Anything else (e.g. Confluence's pseudo-names
+# "atl.site.logo" / "global.logo") defers to content sniffing first — a URL-path
+# suffix is a claim, not evidence, and a wrong one breaks rendering downstream.
+_KNOWN_IMAGE_EXTS = frozenset({
+    ".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg", ".avif",
+    ".bmp", ".ico", ".tif", ".tiff", ".jxl", ".heic", ".heif",
+})
+
+
 def sniff_ext(src: str, data: bytes) -> str:
     ext = Path(urlparse(src).path).suffix.lower()
-    if ext and len(ext) <= 5 and re.fullmatch(r"\.[a-z0-9]+", ext):
+    if ext in _KNOWN_IMAGE_EXTS:
         return ext
     if data[:8].startswith(b"\x89PNG"):
         return ".png"
@@ -106,6 +115,10 @@ def sniff_ext(src: str, data: bytes) -> str:
         return ".webp"
     if data.lstrip()[:5].lower().startswith(_SVG_HEAD):
         return ".svg"
+    # Unrecognized bytes: fall back to a plausible short URL suffix (unknown-but-real
+    # formats sniffing doesn't cover), else the neutral marker.
+    if ext and len(ext) <= 5 and re.fullmatch(r"\.[a-z0-9]+", ext):
+        return ext
     return ".img"
 
 
@@ -118,7 +131,10 @@ def resolve_local_image(src: str, base: Path) -> bytes | None:
     read arbitrary off-disk files. Legitimate archive/file images are always bare names
     inside ``base`` (``web_clean`` localizes them), so confinement breaks no real input.
     """
-    parsed = urlparse(src)
+    try:
+        parsed = urlparse(src)
+    except ValueError:
+        return None  # e.g. "https://[cdn host]/x" — bracketed non-IPv6 netloc
     if parsed.scheme in ("http", "https", "data"):
         return None  # remote/data — handled by the remote resolver
     if parsed.scheme == "file":

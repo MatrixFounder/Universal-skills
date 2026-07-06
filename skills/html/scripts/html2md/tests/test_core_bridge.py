@@ -49,6 +49,43 @@ class TestCore(unittest.TestCase):
         """TC-03-04: bridge returns Markdown."""
         self.assertIn("hi", core_bridge.html_to_markdown("<p>hi</p>"))
 
+    def test_spaced_destination_wrapped_in_angle_brackets(self):
+        """A src/href containing spaces or parens must emit a CommonMark
+        angle-bracketed destination — bare it is invalid Markdown and emit.py's
+        localization regex skips it (Confluence archives localize attachments
+        to decoded filenames with spaces)."""
+        md = core_bridge.html_to_markdown(
+            '<p>x</p>'
+            '<img src="Снимок экрана 2021-03-10 в 12.58.03.png" alt="">'
+            '<img src="plain.png" alt="">'
+            '<a href="page (v2).html">doc</a>')
+        self.assertIn("![](<Снимок экрана 2021-03-10 в 12.58.03.png>)", md)
+        self.assertIn("![](plain.png)", md)          # no-space src stays bare
+        self.assertIn("[doc](<page (v2).html>)", md)
+
+    def test_destination_angle_bracket_chars_encoded(self):
+        """`<`/`>` inside a wrapped destination would terminate the bracket —
+        they must be percent-encoded; tabs/newlines are stripped (URL spec)."""
+        md = core_bridge.html_to_markdown('<img src="a &lt;b&gt; c.png" alt="">')
+        self.assertIn("![](<a %3Cb%3E c.png>)", md)
+
+    def test_destination_backslash_encoded(self):
+        """`\\` is an ESCAPE inside <…> (CommonMark): a trailing one reads as
+        `\\>` and unterminates the destination; `\\.`→`.` silently retargets.
+        It must be percent-encoded alongside the bracket chars."""
+        md = core_bridge.html_to_markdown(
+            '<img src="a b\\.png" alt="p"><a href="..\\file (2)\\">win</a>')
+        self.assertIn("![p](<a b%5C.png>)", md)
+        self.assertIn("[win](<..%5Cfile (2)%5C>)", md)
+
+    def test_destination_padding_trimmed(self):
+        """Leading/trailing whitespace in href is junk padding (URL spec trims
+        C0-control/space) — after the trim a space-free URL stays a bare
+        destination instead of being <>-wrapped with the padding inside."""
+        md = core_bridge.html_to_markdown(
+            '<a href="    /display/~user@example.com\n   ">profile</a>')
+        self.assertIn("[profile](/display/~user@example.com)", md)
+
 
 class TestBridgeErrors(unittest.TestCase):
     def test_node_error_raises_convertfailed(self):

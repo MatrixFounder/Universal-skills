@@ -32,9 +32,18 @@ from .naming import (  # shared with serialize (OP1) — re-aliased to the histo
     src_marker as _src_marker,
 )
 
-# Markdown image syntax: ![alt](src "optional title"). A data: URI src has no ')' or
-# whitespace (base64 alphabet + the mime prefix exclude both), so it is captured whole.
-_IMG_RE = re.compile(r'!\[([^\]]*)\]\(\s*<?([^)\s>]+)>?(\s+"[^"]*")?\s*\)')
+# Markdown image syntax: ![alt](src "optional title") or ![alt](<src with spaces>).
+# A bare destination has no ')' or whitespace (a data: URI is captured whole — base64
+# alphabet + the mime prefix exclude both); an angle-bracketed destination (CommonMark)
+# may contain spaces/parens — html_convert.js emits that form for localized archive
+# subresources whose decoded filenames carry spaces (e.g. Confluence attachments).
+# Groups: 1=alt, 2=bracketed src, 3=bare src, 4=title.
+_IMG_RE = re.compile(r'!\[([^\]]*)\]\(\s*(?:<([^<>\n]*)>|([^)\s>]+))(\s+"[^"]*")?\s*\)')
+
+
+def _img_src(m: re.Match) -> str:
+    """The destination of an ``_IMG_RE`` match, whichever alternative matched."""
+    return m.group(2) if m.group(2) is not None else m.group(3)
 
 # data:[<mediatype>][;base64],<payload>  (RFC 2397). <mediatype> = mime *(";" param), so
 # the metadata segment is everything up to the FIRST comma; ``;base64`` (if present) is its
@@ -56,7 +65,7 @@ def _strip_data_images(md: str | None) -> str | None:
     if md is None:
         return None
     return _IMG_RE.sub(
-        lambda m: "" if m.group(2)[:5].lower() == "data:" else m.group(0), md)
+        lambda m: "" if _img_src(m)[:5].lower() == "data:" else m.group(0), md)
 
 
 def _decode_data_uri(src: str) -> bytes | None:
@@ -153,7 +162,7 @@ def _download_and_rewrite(
 
         def _sub(m: re.Match) -> str:
             nonlocal written
-            alt, src, title = m.group(1), m.group(2), m.group(3) or ""
+            alt, src, title = m.group(1), _img_src(m), m.group(4) or ""
             if src in src_to_link:
                 return f"![{alt}]({src_to_link[src]}{title})"
             # Inline data: image → decode to bytes (offline; no network, no base_dir read).

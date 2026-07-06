@@ -31,6 +31,25 @@ const _getAttr = (node, name) =>
     (typeof node.getAttribute === "function" ? node.getAttribute(name) : null) || "";
 const _hasClass = (node, cls) => new RegExp("\\b" + cls + "\\b").test(_getAttr(node, "class"));
 
+// CommonMark-valid link/image destination. Archive extraction localizes subresources
+// to their DECODED filenames (e.g. Confluence attachments: "Снимок экрана … 12.58.03.png"),
+// so a src/href can legitimately contain spaces or parens — emitted bare, that destination
+// is invalid Markdown and downstream localization (emit.py _IMG_RE) silently skips it.
+// Wrap such destinations in <…> (percent-encoding the bracket-terminating chars). First
+// mirror the URL spec's whitespace handling: strip ALL tabs/newlines, and trim leading/
+// trailing C0-control/space (a href="  /path" is junk padding, not part of the URL).
+function _mdDest(url) {
+    const u = String(url || "")
+        .replace(/[\t\r\n]/g, "")
+        .replace(/^[\x00-\x20]+|[\x00-\x20]+$/g, "");
+    if (!/[\s()<>]/.test(u)) return u;
+    // Backslash is an ESCAPE inside <…> (CommonMark): a trailing "\" reads as "\>"
+    // and unterminates the destination (whole link lost); "\." collapses to "." in
+    // spec parsers (silent retarget). Percent-encode it with the bracket chars —
+    // emit.py's unquote() restores it for local file resolution.
+    return "<" + u.replace(/\\/g, "%5C").replace(/</g, "%3C").replace(/>/g, "%3E") + ">";
+}
+
 // Convert a cell element's inner HTML to single-line inline Markdown.
 function _cellMd(td, el) {
     const html = el && el.innerHTML ? el.innerHTML : "";
@@ -119,7 +138,7 @@ function buildConverter() {
                 .trim();
             if (!text) return "";                 // icon-only / empty anchor → drop
             if (!href || /^data:/i.test(href)) return text;  // no target / data: blob → plain text
-            return `[${text}](${href})`;
+            return `[${text}](${_mdDest(href)})`;
         },
     });
     // ARIA-role tables → GFM (the core only handles real <table>).
@@ -185,7 +204,7 @@ function buildConverter() {
             }
             const alt = _getAttr(node, "alt");
             const title = _getAttr(node, "title");
-            return `![${alt}](${src}${title ? ` "${title}"` : ""})`;
+            return `![${alt}](${_mdDest(src)}${title ? ` "${title}"` : ""})`;
         },
     });
     // arXiv / LaTeXML (ar5iv) code listings render as <div class="ltx_listing"> wrapping
