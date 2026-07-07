@@ -335,10 +335,15 @@ summarizing-meetings/
 
 ## Related workflow
 
-`workflows/generate-detailed-meeting-summary.md` **extends** this skill for educational video
-summaries (Mermaid infographics, RAG metadata). It auto-detects content class = `transcript` and
-keeps pyramid output, so it is unaffected by the universalization (its step references —
-PRE-FLIGHT Step 1, format Step 0.5, completeness Step 8 — resolve against v2.0).
+`workflows/generate-detailed-meeting-summary.md` **extends** this skill with **two profiles**
+(selected by `--profile`, default `business-discovery`):
+- **business-discovery** — 5 process-extraction registries (Roles, IT Systems, Process Steps, KPIs,
+  Risks) as a Business Process Passport dataset;
+- **educational** — 3-level pyramid with selective Mermaid infographics, speaker quotes, RAG metadata.
+
+Both profiles auto-detect content class = `transcript` and keep pyramid output, so the workflow is
+unaffected by the universalization (its step references — PRE-FLIGHT Step 1, format Step 0.5,
+completeness Step 8 — resolve against v2.0).
 
 ---
 

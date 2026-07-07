@@ -1,16 +1,41 @@
 ---
-description: Generate a highly detailed summary of educational video content with selective Mermaid infographics
+description: Generate a highly detailed summary from a meeting/lecture transcript in one of two profiles — business-discovery (5 process-extraction registries as a Business Process Passport dataset) or educational (3-level pyramid, selective Mermaid infographics, speaker quotes, RAG/agent metadata). Extends the summarizing-meetings skill.
 extends: summarizing-meetings
 meeting_type_override: discovery
 ---
 
-# Generate Detailed Educational Video Summary
+# Generate Detailed Meeting Summary (Process Discovery + Educational)
 
-**Purpose**: This workflow **extends** the standard `summarizing-meetings` skill. It adds educational-specific structure (YAML frontmatter, pyramid sections, RAG metadata, Mermaid infographics) on top of the skill's core engine. The skill handles: input validation, format detection, completeness guarantee, self-verification. This workflow handles: educational content extraction, structural enrichment, agent/RAG optimization.
+**Purpose**: This workflow **extends** the standard `summarizing-meetings` skill. It turns a raw transcript into a highly detailed summary in **one of two profiles**:
+
+- **`business-discovery`** — extracts structured business-process information (Roles, IT Systems, Process Steps, KPIs, Risks) as an ideal, rich **single source of truth** dataset for subsequently generating a formal **Business Process Passport**.
+- **`educational`** — produces a lesson/study reference with a 3-level pyramid, selective Mermaid infographics, speaker quotes, and RAG/agent metadata.
+
+Both profiles ride the SAME engine path: content class **`transcript`** → output format **pyramid Markdown** → `meeting_type: discovery`. The profile only selects which overlay (Detailed-Content shape, frontmatter, self-check, metadata) is layered on top — it does NOT change how the skill is invoked.
 
 > **Division of responsibility**:
-> - `summarizing-meetings` skill → PRE-FLIGHT, chunking, completeness guarantee, self-check, base template
-> - This workflow → YAML frontmatter extension, educational sections, Mermaid diagrams, agent metadata, RAG fields
+> - `summarizing-meetings` skill → PRE-FLIGHT, chunking, content-class/format detection, completeness guarantee, self-verification, base template.
+> - This workflow → profile selection, profile-specific Detailed-Content extraction, frontmatter shaping, structural enrichment, agent/RAG optimization.
+
+---
+
+## Profiles
+
+This workflow is parameterized by a single selector that the base skill never reads:
+
+| Selector | Values | How chosen |
+|----------|--------|-----------|
+| **`--profile`** | `business-discovery` · `educational` | **Auto-detected** (see below); override with `--profile business-discovery\|educational`. **Default: `business-discovery`.** |
+
+> **Why a new flag?** `--profile` is deliberately distinct from every flag the `summarizing-meetings` skill already consumes (`--content`, `--type`, `--mode`, `--emit`, `--contract`, `--translate`) and from its reserved enum values / injected keys — so it never collides with the engine. `--profile` selects an *overlay*, not a skill parameter.
+
+**Auto-detection** (applies only when `--profile` is absent):
+
+- → **`business-discovery`** when the input is a **multi-party** transcript (≥ 2 distinct speakers/roles) exhibiting job titles/roles, decisions/approvals, hand-offs of responsibility, IT-system mentions, KPIs, or pain-points/risks — i.e. an operational / process discovery meeting.
+- → **`educational`** when the input shows a **single-speaker teaching cadence** (one dominant voice, explanatory/lecture prose, "this is important" markers) **or** references a course/module/lesson structure (e.g. `Модуль N`, lesson numbering, a course name in the path or content).
+- **Tie or ambiguity → `business-discovery`** (the default).
+
+An explicit `--profile` **always wins** over auto-detection.
 
 ---
 
@@ -18,30 +43,97 @@ meeting_type_override: discovery
 
 ### Step 1: Input & Context
 
-1. Identify the input transcription file(s) and the target output directory specified by the user.
-2. **Multi-file handling**: If the user provides multiple transcript files for the same lesson/topic, treat them as **parts of one continuous lecture**. Concatenate logically (Part 1 → Part 2 → ...) before processing. Do NOT generate separate summaries.
+1. Identify the input transcript file(s) and the target output directory specified by the user.
+2. **Multi-file handling**: If the user provides multiple transcript files for the same lesson/topic/meeting, treat them as **parts of one continuous session**. Concatenate logically (Part 1 → Part 2 → ...) before processing. Do NOT generate separate summaries.
 
-### Step 2: Load Skill
+### Step 2: Select Profile
 
-3. Load the `summarizing-meetings` skill as the core logic engine.
-4. Set `meeting_type` to `discovery` (auto or via override).
-5. Execute the skill's PRE-FLIGHT checks (Step 1 of skill), format detection (Step 0.5), and completeness guarantee (Step 8) as normal. (Content class auto-detects as `transcript` — Step 0 — which is the path this workflow extends; output stays pyramid Markdown, not note-json.)
+3. Determine the profile: honor an explicit `--profile business-discovery|educational` if given; otherwise auto-detect per the **Profiles** section above (multi-party process meeting → `business-discovery`; single-speaker teaching / course-module cadence → `educational`). Default = `business-discovery`.
 
-### Step 3: Generate — Apply Educational Overlay
+### Step 3: Load Skill
 
-6. When generating the summary, apply **all** of the following on top of the skill's base template:
-   - Extended YAML frontmatter (§ Frontmatter Extension below)
-   - Educational pyramid structure (§ Pyramid Structure below)
-   - Content Extraction Prompt (§ Content Extraction Prompt below)
-   - Agent & RAG metadata (§ Agent & RAG Metadata below)
+4. Load the `summarizing-meetings` skill as the core logic engine.
+5. Set `meeting_type` to `discovery` (auto or via override).
+6. Execute the skill's PRE-FLIGHT checks (skill Step 1), content-class detection (skill Step 0 — auto-detects `transcript`, the path this workflow extends), input-format detection (skill Step 0.5), and completeness guarantee (skill Step 8) as normal. Output stays **pyramid Markdown** — do NOT pass `--emit note-json`, and do NOT translate (no `--translate`) unless the user explicitly asks.
 
-### Step 4: Output
+### Step 4: Generate — Apply the Selected Profile Overlay
 
-7. Save the final summary to the user-specified path.
+7. Apply the overlay for the selected profile **on top of** the skill's base template:
+   - **`business-discovery`** → apply the **Process Extraction Prompt** (§ Profile A) and **KEEP** the base meeting template blocks (Key Decisions / Action Items / Open Questions).
+   - **`educational`** → apply the Extended YAML frontmatter, 3-level Pyramid Structure, Content Extraction Prompt, Speaker Quotes, and Agent & RAG Metadata (§ Profile B).
+
+### Step 5: Output
+
+8. Save the final summary to the user-specified path.
 
 ---
 
-## Frontmatter Extension
+# Profile A — Business Discovery
+
+> Active when `--profile business-discovery` (the default). Produces a `meeting-summary` whose "Detailed Content" section is enriched with five process registries, forming the single source of truth for a Business Process Passport.
+
+## A.1 Output frontmatter (business profile)
+
+Use the skill's base meeting frontmatter. Keep `type: meeting-summary` (the skill default) and pin `meeting_type: discovery`:
+
+```yaml
+type: meeting-summary            # business-discovery keeps the skill's meeting type
+meeting_type: discovery
+# title / date / participants / duration / languages / tags / related — from the skill base template
+```
+
+Do **NOT** set `content_type`, `course`, `module`, `speaker`, `concepts`, etc. — those are **educational-only** (Profile B).
+
+## A.2 Kept base template blocks
+
+`business-discovery` **KEEPS** the base skill's meeting template blocks — **Key Decisions**, **Action Items**, and **Open Questions** tables — exactly as `generation_prompt.md` / `template_default.md` produce them. The five registries below are **ADDED** as distinct subsections **within** the "Detailed Content" section; they do not replace the meeting blocks.
+
+## A.3 Process Extraction Prompt
+
+When analyzing the transcript, you MUST inject the following exact instructions into your generation context.
+
+***
+
+```text
+CRITICAL CONTENT REQUIREMENT FOR PROCESS DOCUMENTATION:
+
+This meeting protocol will be used as the single source of truth for generating a formal Business Process Passport. In addition to the standard summary template blocks, you MUST extract and structure the following elements from the transcript. Add them as distinct, highly detailed subsections within the "Detailed Content" section:
+
+1. **Role and Actor Registry**: 
+   Extract all mentioned job titles, roles, or organizational units (e.g., Key Account Manager, Operator, Supervisor, External Client, Financial Controller). Provide a bulleted list describing the specific responsibilities and actions of each role within the discussed process.
+
+2. **IT Landscape and Artifacts**: 
+   Compile a comprehensive list of all technical systems and documents mentioned in the flow.
+   - *Systems*: List any software, platforms, or tools mentioned (e.g., ERP, CRM, B2B portals, mobile applications, reporting cubes).
+   - *Artifacts*: List any input/output documents, forms, or data entities (e.g., specifications, contracts, invoices, Excel planning files, KPI matrices).
+
+3. **Draft Process Steps (Scenarios)**: 
+   Extract the step-by-step flow of the discussed processes. Present this as a structured list or table containing the following fields for each step:
+   - [Actor] -> [Action performed] -> [IT System used] -> [Input Artifact] -> [Output/Result]
+   *Do not omit details.* Pay special attention to conditions, approvals, manual workarounds, and points where responsibility is handed over between actors.
+
+4. **KPIs and Metrics Matrix**: 
+   Explicitly identify any metrics, targets, or performance indicators discussed (e.g., sales volume targets, profit margins, SLA compliance, defect rates, out-of-stock limits). Note how these metrics are calculated or tracked, if mentioned.
+
+5. **Risk and Bottleneck Registry**: 
+   Extract all operational pain points, delays, or inefficiencies discussed by the participants. Formulate these as specific business risks. 
+   Examples: 
+   - Operations risk: Manual data transfer between two legacy systems leading to errors.
+   - Financial risk: Delayed notifications about price changes leading to margin loss.
+   - Compliance risk: Lack of formal SLA for document approvals.
+
+Do not generalize the narrative. Ensure maximum granularity. Every detail regarding the transfer of responsibility, state changes, and software system usage MUST be preserved and structured.
+```
+
+***
+
+---
+
+# Profile B — Educational
+
+> Active when `--profile educational`. Produces a `lesson-summary` with a 3-level pyramid, selective Mermaid infographics, speaker quotes, and extended RAG/agent metadata. Everything in this profile is **scoped to Profile B** and must NOT leak into Profile A (in particular `type: lesson-summary` / `content_type: lesson-summary`).
+
+## B.1 Frontmatter Extension
 
 The skill's base template provides: `type`, `title`, `date`, `meeting_type`, `participants`, `duration`, `languages`, `tags`, `related`.
 
@@ -97,9 +189,7 @@ prerequisites:                    # what the learner should know before this les
 - `prerequisites` — infer from the speaker's references to prior knowledge. Use `[[wiki-links]]` to other lessons if identifiable. If none — omit the field.
 - `module_number` / `lesson_number` — infer from file path or content. If ambiguous — set to `⚠️ UNKNOWN`. Do NOT halt execution to ask the user.
 
----
-
-## Pyramid Structure
+## B.2 Pyramid Structure
 
 The skill mandates a two-level pyramid (TL;DR → Detailed Sections). This workflow extends it to **three levels** adapted for educational content:
 
@@ -127,10 +217,10 @@ Level 3  │  Agent Metadata       → machine-readable block for RAG / AI agent
 - **Level 1 is self-sufficient**: a reader who reads ONLY TL;DR + Takeaways must understand the lesson's essence and key takeaways.
 - **Level 2 sections** are independent: each section can be retrieved and understood in isolation (for RAG chunk retrieval).
 - **Takeaways** ("Что запомнить" / "Key Takeaways" — language-adaptive) is the LAST content section (before Agent Metadata). It synthesizes — not repeats — the most important points. Think: "if a student reads only this list before an exam, what should be there?"
-- **Key Decisions / Action Items / Open Questions** tables from the base skill template are **omitted** for educational content (they are meeting-specific, not lecture-specific). Replace with the 5 educational sections.
+- **Key Decisions / Action Items / Open Questions** tables from the base skill template are **omitted** for educational content (they are meeting-specific, not lecture-specific). Replace with the 5 educational sections. *(This OMIT applies to Profile B only — Profile A KEEPS those tables.)*
 - **Each educational section (1–5) replaces** the skill's `### Section N` structure. Use `> **Summary**:` at the top of each section. Do NOT nest the skill's `#### Discussion / Insights / Section Decisions` sub-headers inside educational sections — the educational content structure is self-contained.
 
-### HTML navigation comments
+## B.3 HTML navigation comments
 
 Add HTML comments as **section anchors** for agent navigation. Place them directly BEFORE each `##` or `###` heading. Anchor IDs are always in English (machine-readable). Heading text follows the **language-adaptive rule** from the base skill (generation_prompt.md §7): use the same language as the transcription.
 
@@ -204,9 +294,7 @@ Add HTML comments as **section anchors** for agent navigation. Place them direct
 
 **Why**: Anchor IDs (`SECTION:concepts` etc.) are language-agnostic and allow agents/RAG pipelines to jump directly to sections. Heading text adapts to the content language for human readability.
 
----
-
-## Content Extraction Prompt
+## B.4 Content Extraction Prompt
 
 When analyzing the transcript, you MUST apply the following instructions to generate the Level 2 (Detailed Content) sections.
 
@@ -267,32 +355,7 @@ Do not generalize the narrative. Ensure maximum granularity. Every concept, tech
 
 ***
 
----
-
-## Self-Check Override
-
-The base skill's self-check (`generation_prompt.md` §Self-Check) references meeting-specific tables (Key Decisions, Action Items) that are **omitted** in educational summaries. Replace the skill's 8-point checklist with the following **educational self-check**:
-
-```
-□ Every concept from the transcription is in the "Key Concepts" section
-□ Every technique/recommendation has enough context to apply independently
-□ Every example/case study has context + problem + outcome described
-□ Every section contains > **Summary**: block at the top
-□ TL;DR is self-sufficient (understandable without reading details)
-□ Takeaways section synthesizes (not repeats) the most important points
-□ All specific numbers/names/dates/formulas are preserved verbatim
-□ Tags conform to references/tag_taxonomy.md (Educational Type section)
-□ No more than 3 fields marked ⚠️ UNKNOWN (otherwise → WARN user)
-□ [[wiki-links]] are correct (if vault is accessible)
-□ Mermaid diagrams render correctly (valid syntax, 5–15 nodes each)
-□ HTML section anchors are present before every ## and ### heading
-```
-
-After this checklist, perform the skill's standard **Verification Loop**: re-read the transcription end-to-end and verify no concepts, techniques, or examples were missed.
-
----
-
-## Agent & RAG Metadata
+## B.5 Agent & RAG Metadata
 
 The skill's base template includes a generic `Agent Metadata` block. This workflow **replaces** it with an extended version optimized for educational content retrieval.
 
@@ -347,22 +410,84 @@ Place this block at the very end of the document, after the Takeaways section:
 - `Concept Definitions` table — one row per concept from the `concepts` frontmatter field. Definition must be a single sentence (for embedding). Related concepts create a graph.
 - `Chunk Boundaries` — estimate token count per section (~3 chars/token for Russian/Cyrillic, ~4 chars/token for English/Latin). This helps RAG pipelines decide chunking strategy.
 - `Content Fingerprint` — quantitative summary for pipeline validation (e.g., "did the agent actually extract enough?").
-- `Source files` — list all input transcript **basenames** (human-readable, no paths). These refer to the SAME sources as the frontmatter `sources[].file` values (§ Frontmatter Extension), which instead carry the **vault-relative path** — the body line is the human-readable view, `sources` is the machine-readable one. Keep the set consistent (same recordings, same order).
+- `Source files` — list all input transcript **basenames** (human-readable, no paths). These refer to the SAME sources as the frontmatter `sources[].file` values (§ B.1 Frontmatter Extension), which instead carry the **vault-relative path** — the body line is the human-readable view, `sources` is the machine-readable one. Keep the set consistent (same recordings, same order).
 
 ---
 
-## Usage Example
+## Self-Check (Unified)
+
+Run the shared checks, then the checklist for the **active profile**, then the skill's standard Verification Loop.
+
+### Shared checks (both profiles)
+
+```
+□ Entire transcript processed end-to-end — no truncation, no "first N%", no collapsed topics (skill Step 8 completeness guarantee)
+□ Every distinct source topic maps to a section/registry (topic count == coverage)
+□ All specific numbers / names / dates / formulas preserved verbatim
+□ No fabricated participants / roles / dates (use "Participant N" or ⚠️ UNKNOWN where unknown)
+□ Tags conform to references/tag_taxonomy.md
+□ No more than 3 fields marked ⚠️ UNKNOWN (otherwise → WARN the user; never halt to ask)
+□ Output is pyramid Markdown (not note-json); meeting_type = discovery
+```
+
+### If profile = business-discovery
+
+```
+□ All 5 registries present as subsections inside "Detailed Content": Role & Actor Registry; IT Landscape & Artifacts (Systems + Artifacts sublists); Draft Process Steps using [Actor] -> [Action performed] -> [IT System used] -> [Input Artifact] -> [Output/Result]; KPIs & Metrics Matrix; Risk & Bottleneck Registry
+□ Base meeting blocks retained: Key Decisions, Action Items, Open Questions
+□ type: meeting-summary (no lesson-summary / content_type / course / speaker / concepts fields)
+□ Responsibility hand-offs, state changes, and software usage NOT generalized away
+```
+
+### If profile = educational (replaces the skill's 8-point meeting self-check)
+
+```
+□ Every concept from the transcription is in the "Key Concepts" section
+□ Every technique/recommendation has enough context to apply independently
+□ Every example/case study has context + problem + outcome described
+□ Every section contains > **Summary**: block at the top
+□ TL;DR is self-sufficient (understandable without reading details)
+□ Takeaways section synthesizes (not repeats) the most important points
+□ All specific numbers/names/dates/formulas are preserved verbatim
+□ Tags conform to references/tag_taxonomy.md (Educational Type section)
+□ No more than 3 fields marked ⚠️ UNKNOWN (otherwise → WARN user)
+□ [[wiki-links]] are correct (if vault is accessible)
+□ Mermaid diagrams render correctly (valid syntax, 5–15 nodes each)
+□ HTML section anchors are present before every ## and ### heading
+□ type: lesson-summary; content_type: lesson-summary present
+□ sources[].file (vault-relative paths) and Content Fingerprint "Source files" (basenames) describe the SAME recordings in the SAME order
+```
+
+### Then (both profiles)
+
+Perform the skill's standard **Verification Loop**: re-read the transcription end-to-end and verify no topics / decisions / concepts / techniques / examples / registry items were missed. If gaps are found → supplement and re-check.
+
+---
+
+## Usage Examples
+
+**Business discovery (default profile):**
 
 ```
 /generate-detailed-meeting-summary on transcript [path/to/transcript.txt] output to [path/to/output_folder/]
 ```
 
-For multiple files (same lesson):
+(Add `--profile business-discovery` to force it; it is also the default.)
+
+**Educational:**
 
 ```
-/generate-detailed-meeting-summary
+/generate-detailed-meeting-summary --profile educational on transcript [path/to/lesson.txt] output to [path/to/output_folder/]
+```
+
+**Educational, multiple files (same lesson):**
+
+```
+/generate-detailed-meeting-summary --profile educational
 Module 1/Transcripts/01-1 - Topic Name.txt
 Module 1/Transcripts/01-2 - Topic Name.txt
 
 Combine all files into a single lesson summary and save to Module 1/Summary
 ```
+
+You may also ask the agent directly instead of using the slash command.
