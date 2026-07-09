@@ -76,7 +76,7 @@ class _Ladder(unittest.TestCase):
         acquire._http_get_bytes = fake
 
     def _chrome(self, action):
-        def fake(url, opts=None):
+        def fake(url, opts=None, **kw):
             if isinstance(action, Exception):
                 raise action
             return action

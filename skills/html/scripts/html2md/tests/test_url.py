@@ -182,8 +182,8 @@ class TestLite(unittest.TestCase):
         """TC-06-02: auto + JS shell (thin) → Chrome path invoked."""
         saved_lite = acquire._fetch_lite_html
         saved_chrome = acquire._fetch_chrome_html
-        acquire._fetch_lite_html = lambda url, mb, retries=2: "<html><body><div id='app'></div></body></html>"
-        acquire._fetch_chrome_html = lambda url, opts=None: "<html><body><article><p>HYDRATED CONTENT</p></article></body></html>"
+        acquire._fetch_lite_html = lambda url, mb, retries=2, **kw: "<html><body><div id='app'></div></body></html>"
+        acquire._fetch_chrome_html = lambda url, opts=None, **kw: "<html><body><article><p>HYDRATED CONTENT</p></article></body></html>"
         try:
             res = acquire.acquire("https://spa.example/app", _opts(engine="auto"))
         finally:
@@ -204,7 +204,7 @@ class TestLite(unittest.TestCase):
         """R-1: auto fetches the /lite/ variant for a known JS-gated host (not the canonical)."""
         seen: list = []
         saved_lite, saved_sub = acquire._fetch_lite_html, acquire._looks_substantial
-        acquire._fetch_lite_html = lambda url, mb, retries=2: (seen.append(url), "<html><body><article>body</article></body></html>")[1]
+        acquire._fetch_lite_html = lambda url, mb, retries=2, **kw: (seen.append(url), "<html><body><article>body</article></body></html>")[1]
         acquire._looks_substantial = lambda h: True
         try:
             res = acquire.acquire("https://hackernoon.com/some-slug", _opts(engine="auto"))
@@ -651,7 +651,7 @@ class TestProactiveVariants(unittest.TestCase):
         """R-9: auto fetches /html/<id> (not /abs/), reports engine lite+arxiv-html."""
         seen: list = []
         saved_lite, saved_sub = acquire._fetch_lite_html, acquire._looks_substantial
-        acquire._fetch_lite_html = lambda url, mb, retries=2: (
+        acquire._fetch_lite_html = lambda url, mb, retries=2, **kw: (
             seen.append(url), "<html><body><article>full text</article></body></html>")[1]
         acquire._looks_substantial = lambda h: True
         try:
@@ -665,7 +665,7 @@ class TestProactiveVariants(unittest.TestCase):
         """R-9: a 404 on the /html/ variant becomes an actionable arxiv_no_html error."""
         saved_lite = acquire._fetch_lite_html
 
-        def _raise(url, mb, retries=2):
+        def _raise(url, mb, retries=2, **kw):
             raise FetchFailed("nope", details={"url": url, "status": 404, "kind": "not_found"})
 
         acquire._fetch_lite_html = _raise
@@ -681,7 +681,7 @@ class TestProactiveVariants(unittest.TestCase):
         """R-7: a Wikipedia article fetches the REST page/html; provenance stays canonical."""
         seen: list = []
         saved_lite, saved_sub = acquire._fetch_lite_html, acquire._looks_substantial
-        acquire._fetch_lite_html = lambda url, mb, retries=2: (
+        acquire._fetch_lite_html = lambda url, mb, retries=2, **kw: (
             seen.append(url),
             '<base href="//en.wikipedia.org/wiki/"><html><body>'
             '<p>real article body text</p></body></html>')[1]
@@ -695,6 +695,192 @@ class TestProactiveVariants(unittest.TestCase):
         self.assertTrue(
             any("/api/rest_v1/page/html/Value_averaging" in u for u in seen), seen)
         self.assertEqual(res.base_url, "https://en.wikipedia.org/wiki/Value_averaging")
+
+
+class TestArxivImageResolution(unittest.TestCase):
+    """TASK 027 / HTML2MD-11: arXiv `/abs/`→`/html/` relative <img> srcs must resolve
+    against the ACTUALLY-fetched (post-redirect, trailing-slashed) URL, non-image bodies
+    must be dropped (not saved as .png), and a lossy drop must warn (no more silent
+    `images: 1`)."""
+
+    # ---- R1: post-redirect final URL is captured through the fetch seam ---------------
+    def test_http_get_bytes_reports_final_url(self):
+        """R1: `_http_get_bytes` populates `final_url_out` with the post-redirect URL so a
+        variant fetch (/abs→/html) can absolutize figures against the page arXiv served."""
+        script = [
+            (301, b"", {"location": "https://arxiv.org/html/2510.08369v2/"}),
+            (200, b"<html><body><img src='x1.png'></body></html>", {}),
+        ]
+        holder: list = []
+        with _patch_httpx(responses=script), _no_backoff():
+            data = acquire._http_get_bytes(
+                "https://arxiv.org/html/2510.08369", max_bytes=None, final_url_out=holder)
+        self.assertIn(b"x1.png", data)
+        self.assertEqual(holder, ["https://arxiv.org/html/2510.08369v2/"])
+
+    def test_http_get_bytes_final_url_no_redirect(self):
+        """R1: no redirect → final URL == requested URL (common case unchanged)."""
+        holder: list = []
+        with _patch_httpx(content=b"<html>ok</html>"):
+            acquire._http_get_bytes("https://site.test/a", max_bytes=None, final_url_out=holder)
+        self.assertEqual(holder, ["https://site.test/a"])
+
+    # ---- R2: absolutization base is universal (no per-site logic) ----------------------
+    def test_absolutize_base_universal(self):
+        """R2: the base is just the fetched URL, or the post-redirect final URL when present
+        — NO per-site normalization. RFC-3986 §5.1.3 (base = retrieval URI)."""
+        A = acquire._absolutize_base
+        # no redirect → the requested fetch URL is the base, verbatim (any host)
+        self.assertEqual(A("https://arxiv.org/html/2510.08369", None),
+                         "https://arxiv.org/html/2510.08369")
+        self.assertEqual(A("https://site.test/docs/page", None),
+                         "https://site.test/docs/page")
+        # redirect → the post-redirect final URL wins (what the server actually served)
+        self.assertEqual(A("https://site.test/a", "https://site.test/a/"),
+                         "https://site.test/a/")
+        self.assertEqual(A("http://x.test/p", "https://x.test/p"),
+                         "https://x.test/p")
+
+    def test_arxiv_abs_figures_resolve_against_html_dir(self):
+        """R1 end-to-end (real arXiv shape): `/abs/<id>` is fetched as `/html/<id>` (200, no
+        redirect, no <base>), whose figure srcs are `<id>vN/xK.png` RELATIVE to `/html/`.
+        Absolutizing against the fetched `/html/<id>` URL (not `/abs/<id>`) yields the correct
+        versioned figure URL. This is the exact HTML2MD-11 dogfood case."""
+        body = (b"<html><body>"
+                b"<img src='2510.08369v2/x1.png'>"
+                b"<img src='2510.08369v2/figures/appendix/text.png'>"
+                b"<p>" + b"A substantial arXiv paragraph. " * 12 + b"</p></body></html>")
+        with _patch_httpx(content=body), _no_backoff():
+            res = acquire.acquire("https://arxiv.org/abs/2510.08369", _opts(engine="lite"))
+        self.assertEqual(res.engine, "lite+arxiv-html")
+        # quote-agnostic: _absolutize_img_srcs preserves the source's quote char
+        self.assertIn("https://arxiv.org/html/2510.08369v2/x1.png", res.html)
+        self.assertIn(
+            "https://arxiv.org/html/2510.08369v2/figures/appendix/text.png", res.html)
+        self.assertNotIn("arxiv.org/abs/2510.08369v2/x1.png", res.html)  # the reported bug
+        # provenance base_url stays the canonical /abs/ URL (unchanged)
+        self.assertEqual(res.base_url, "https://arxiv.org/abs/2510.08369")
+
+    def test_redirect_base_is_final_url_universal(self):
+        """R1 (universal): ANY site that redirects to a directory resolves relative images
+        against the post-redirect URL — not the pre-redirect one. No arXiv involved."""
+        body = b"<html><body><img src='pic.png'><p>" + b"words " * 40 + b"</p></body></html>"
+        script = [
+            (301, b"", {"location": "https://blog.test/post/"}),
+            (200, body, {}),
+        ]
+        with _patch_httpx(responses=script), _no_backoff():
+            res = acquire.acquire("https://blog.test/post", _opts(engine="lite"))
+        self.assertIn("https://blog.test/post/pic.png", res.html)      # post-redirect dir
+        self.assertNotIn("https://blog.test/pic.png", res.html)        # pre-redirect base
+
+    # ---- R3: image magic-byte validation ----------------------------------------------
+    def test_looks_like_image_matrix(self):
+        """R3: real image magics + <svg> accepted; HTML / text / short buffers rejected."""
+        ok = {
+            "png4": b"\x89PNGdata",                       # 4-byte prefix (test fixture form)
+            "png8": b"\x89PNG\r\n\x1a\n\x00\x00",
+            "jpeg": b"\xff\xd8\xff\xe0\x00\x10JFIF",
+            "gif87": b"GIF87a\x01\x00",
+            "gif89": b"GIF89a\x01\x00",
+            "bmp": b"BM\x36\x00",
+            "tiff_le": b"II*\x00\x08",
+            "tiff_be": b"MM\x00*\x00\x08",
+            "ico": b"\x00\x00\x01\x00\x01",
+            "webp": b"RIFF\x24\x00\x00\x00WEBPVP8 ",
+            # modern ISOBMFF / JXL formats (must NOT be silently dropped — logic-critic MED)
+            "avif": b"\x00\x00\x00\x1cftypavif\x00\x00\x00\x00",
+            "heic": b"\x00\x00\x00\x18ftypheic\x00\x00\x00\x00",
+            "heif": b"\x00\x00\x00\x18ftypmif1\x00\x00\x00\x00",
+            "jxl_codestream": b"\xff\x0a\x00\x00",
+            "jxl_container": b"\x00\x00\x00\x0cJXL \r\n\x87\n",
+            # JPEG 2000 + extra HEIC/HEIF brands (logic-critic LOW, 2026-07-09: valid images
+            # must not be dropped as false negatives)
+            "jp2": b"\x00\x00\x00\x0cjP  \r\n\x87\n",
+            "heic_heim": b"\x00\x00\x00\x18ftypheim\x00\x00\x00\x00",
+            "heic_hevs": b"\x00\x00\x00\x18ftyphevs\x00\x00\x00\x00",
+            "heif_miaf": b"\x00\x00\x00\x18ftypmiaf\x00\x00\x00\x00",
+            "svg": b"<svg xmlns='http://www.w3.org/2000/svg'></svg>",
+            "svg_xml": b"<?xml version='1.0'?>\n<svg></svg>",
+            "svg_bom": b"\xef\xbb\xbf<svg></svg>",
+            # Illustrator-style long prolog pushing <svg past 512B (logic-critic LOW)
+            "svg_long_prolog": (b"<?xml version='1.0'?>\n<!-- " + b"x" * 900
+                                + b" -->\n<!DOCTYPE svg>\n<svg></svg>"),
+            # real SVG whose <foreignObject> embeds XHTML — <svg precedes <html, so it is a
+            # valid image, not an error page (logic-critic LOW, 2026-07-09)
+            "svg_foreignobject": (b"<svg xmlns='http://www.w3.org/2000/svg'>"
+                                  b"<foreignObject><html><p>hi</p></html>"
+                                  b"</foreignObject></svg>"),
+        }
+        for name, blob in ok.items():
+            self.assertTrue(acquire._looks_like_image(blob), name)
+        bad = {
+            "html_doctype": b"<!doctype html><html><head><title>404</title></head></html>",
+            "html_bare": b"<html><body>Not Found</body></html>",
+            "xml_notsvg": b"<?xml version='1.0'?><rss><channel></channel></rss>",
+            # XHTML error page that embeds an inline <svg> icon must NOT pass (logic-critic LOW)
+            "xhtml_inline_svg": (b"<?xml version='1.0'?><html><head>"
+                                 b"<svg class='logo'></svg></head><body>404</body></html>"),
+            "text": b"Not Found\n",
+            "empty": b"",
+            "short": b"ab",
+            "json": b'{"error":"not found"}',
+        }
+        for name, blob in bad.items():
+            self.assertFalse(acquire._looks_like_image(blob), name)
+
+    def test_redact_strips_control_chars(self):
+        """SEC-1: a sub-resource URL reaches `_redact` without `_assert_safe_target`; a
+        terminal/ANSI escape or CR/LF embedded in it must NOT survive into a message.
+        C1 controls (U+0080–U+009F; U+009B is the 8-bit CSI some UTF-8 terminals honor)
+        are stripped too (security-critic LOW, 2026-07-09)."""
+        red = acquire._redact("https://x.test/a\x1b[2J\x07\r\n\x7f\x9b\x85b.png")
+        for ch in ("\x1b", "\x07", "\r", "\n", "\x7f", "\x9b", "\x85"):
+            self.assertNotIn(ch, red)
+        self.assertIn("x.test", red)   # the useful part survives
+
+    def test_tier_chrome_base_is_final_url(self):
+        """Logic-critic MED: the chrome tier absolutizes against the post-navigation final
+        URL (page.content() serializes relative srcs), not the pre-redirect target."""
+        saved = acquire._fetch_chrome_html
+
+        def fake(url, opts=None, final_url_out=None):
+            if final_url_out is not None:
+                final_url_out[:] = ["https://ex.test/2024/a/"]   # same-site redirect landing
+            return "<html><body><img src='hero.png'></body></html>"
+
+        acquire._fetch_chrome_html = fake
+        try:
+            html, label, base = acquire._tier_chrome("https://ex.test/a", _opts())
+        finally:
+            acquire._fetch_chrome_html = saved
+        self.assertEqual(label, "chrome")
+        self.assertEqual(base, "https://ex.test/2024/a/")
+
+    def test_resolve_url_image_rejects_html(self):
+        """R3: a 200 whose body is an HTML error page is DROPPED (returns None) — never
+        written verbatim as a .png. A real PNG still passes."""
+        html_404 = b"<!doctype html><html><body>404 Not Found</body></html>"
+        with _patch_httpx(content=html_404):
+            self.assertIsNone(acquire._resolve_url_image("https://arxiv.org/abs/x1.png", _opts()))
+        with _patch_httpx(content=b"\x89PNGrealbytes"):
+            self.assertEqual(
+                acquire._resolve_url_image("https://arxiv.org/html/2510v2/x1.png", _opts()),
+                b"\x89PNGrealbytes")
+
+    # ---- R4: degradation signal (no more silent images:1) -----------------------------
+    def test_resolve_url_image_warns_on_drop(self):
+        """R4: dropping a non-image body emits a concise stderr warning (redacted url), so a
+        lossy localization is visible instead of silently succeeding."""
+        err = io.StringIO()
+        html_404 = b"<html><body>404</body></html>"
+        with _patch_httpx(content=html_404), redirect_stderr(err):
+            got = acquire._resolve_url_image(
+                "https://arxiv.org/abs/x1.png?token=SECRET", _opts())
+        self.assertIsNone(got)
+        msg = err.getvalue()
+        self.assertIn("non-image", msg.lower())
+        self.assertNotIn("SECRET", msg)                 # redaction holds in the warning
 
 
 class TestEmptyExtractionGuard(unittest.TestCase):

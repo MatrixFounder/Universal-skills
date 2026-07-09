@@ -295,6 +295,12 @@ _SENSITIVE_QS = re.compile(
     r"(?i)(token|key|secret|password|passwd|pwd|auth|sig|signature|"
     r"access[_-]?token|api[_-]?key|session|bearer)")
 
+# C0 control chars (0x00–0x1F), DEL (0x7F) AND C1 controls (0x80–0x9F — U+009B is the 8-bit
+# CSI escape-introducer some UTF-8 terminals honor) → dropped from any redacted URL before it
+# lands in an error message / stderr warning (terminal-escape + CR/LF log-injection guard,
+# TASK 027; C1 range added per adversarial security finding 2026-07-09).
+_CTRL_CHAR_STRIP = {c: None for c in list(range(0x20)) + list(range(0x7F, 0xA0))}
+
 
 def _redact(url: str) -> str:
     """For error messages: drop userinfo and redact only SENSITIVE query params, while
@@ -313,7 +319,10 @@ def _redact(url: str) -> str:
                 for k, v in parse_qsl(p.query, keep_blank_values=True)]
         if kept:
             out += "?" + urlencode(kept)
-    return out
+    # Strip C0 control chars + DEL so a redacted URL can never carry a terminal/ANSI-escape or
+    # CR/LF into an error message or stderr warning (a sub-resource <img src> reaches _redact
+    # without passing _assert_safe_target — TASK 027 SEC-1 / mirrors Sec-LOW-5 log-injection).
+    return out.translate(_CTRL_CHAR_STRIP)
 
 
 # SSRF carve-out — ranges that Python's ``ip.is_private`` flags as non-public but
@@ -521,8 +530,15 @@ def _assert_public_http(url: str) -> None:
 
 def _http_get_bytes(url: str, *, max_bytes: int | None, timeout: float = 20.0,
                     max_redirects: int = 5, retries: int = 2, ua: str = _UA,
-                    extra_headers: dict | None = None) -> bytes:
+                    extra_headers: dict | None = None,
+                    final_url_out: "list[str] | None" = None) -> bytes:
     """Fetch ``url`` over HTTP(S) → bytes. SSRF-safe, streaming, bounded, retrying.
+
+    ``final_url_out`` (optional out-param): when a list is passed, it is populated with the
+    **post-redirect final URL** actually served (``[url]`` when there was no redirect). This
+    is the RFC-3986 §5.1.3 base for resolving a page's relative links/images — a variant
+    fetch (arXiv ``/abs/``→``/html/`` or a redirect to a versioned dir) MUST absolutize
+    against the URL it landed on, not the URL the caller asked for (TASK 027 / HTML2MD-11).
 
     SSRF/DoS posture (§7): http(s) only; **every** hop (initial + each redirect) is
     re-checked against :func:`_host_is_public`; redirects are followed manually (cap
@@ -576,6 +592,8 @@ def _http_get_bytes(url: str, *, max_bytes: int | None, timeout: float = 20.0,
                                 details={"url": _redact(current), "max_bytes": max_bytes},
                             )
                         chunks.append(chunk)
+                    if final_url_out is not None:
+                        final_url_out[:] = [current]  # post-redirect base for absolutization
                     return b"".join(chunks)
         raise FetchFailed(
             f"too many redirects (> {max_redirects}) for {_redact(url)}",
@@ -655,13 +673,17 @@ def _trafilatura_meta(page_html: str, url: str) -> SourceMeta:
     return _meta_from_html(page_html, url=url)
 
 
-def _fetch_lite_html(url: str, max_bytes: int | None, retries: int = 2) -> str:
+def _fetch_lite_html(url: str, max_bytes: int | None, retries: int = 2,
+                     final_url_out: "list[str] | None" = None) -> str:
     """httpx GET → decoded raw page HTML (offline cleaning is done later by web_clean).
 
     Guards against non-HTML payloads: a PDF or other binary blob must fail with a clear
     message — NOT be fed to turndown (which blows the Node call stack on binary input).
+
+    ``final_url_out`` is forwarded to :func:`_http_get_bytes` (post-redirect base capture).
     """
-    raw = _http_get_bytes(url, max_bytes=max_bytes, retries=retries)
+    raw = _http_get_bytes(url, max_bytes=max_bytes, retries=retries,
+                          final_url_out=final_url_out)
     head = raw[:1024]
     if head[:5] == b"%PDF-":
         raise FetchFailed(
@@ -815,8 +837,13 @@ def _chrome_scroll(page, passes: int) -> None:
             break
 
 
-def _fetch_chrome_html(url: str, opts=None) -> str:
+def _fetch_chrome_html(url: str, opts=None, final_url_out: "list[str] | None" = None) -> str:
     """Render ``url`` via headless Chromium (Playwright) → hydrated DOM HTML.
+
+    ``final_url_out`` (optional out-param, TASK 027): populated with the post-navigation
+    final URL (``page.url``) — the RFC-3986 base for absolutizing the DOM's relative
+    ``<img>``/``<a>`` (``page.content()`` serializes them verbatim), same contract as the
+    lite tier's ``_http_get_bytes``.
 
     Soft-optional: missing Playwright → :class:`EngineNotInstalled` (exit 3) with
     remediation. ``opts`` (TASK 024) carries the authenticated-context source + scroll
@@ -893,6 +920,8 @@ def _fetch_chrome_html(url: str, opts=None) -> str:
             f"chrome landed on a login wall for {_redact(url)} (stale/expired session — re-mint)",
             details={"url": _redact(url), "kind": "auth_required"},
         )
+    if final_url_out is not None:
+        final_url_out[:] = [final_url]  # post-navigation base for absolutization (TASK 027)
     return html
 
 
@@ -1282,6 +1311,16 @@ def _arxiv_html_variant(url: str) -> str | None:
     return f"https://arxiv.org/html/{m.group(1)}"
 
 
+def _absolutize_base(fetch_url: str, final_url: str | None) -> str:
+    """The RFC-3986 §5.1.3 base for resolving a fetched page's relative links/images: the URL
+    the page was actually retrieved from (TASK 027 / HTML2MD-11) — the **post-redirect final
+    URL** when the fetch redirected, else the requested fetch URL. Universal, per-site-free:
+    a variant/redirect fetch (arXiv ``/abs/``→``/html/<id>``, any http→https or add-slash
+    redirect) resolves relative srcs against the document it landed on, not the caller's URL.
+    An in-document ``<base href>`` (when present) still overrides this downstream."""
+    return final_url or fetch_url
+
+
 # The (?<![\w-]) lookbehind keeps this from matching an attribute-PREFIXED href (e.g.
 # data-href / x-href): \b alone treats the `-` as a boundary, so it would otherwise hijack
 # the match from the real href on the same tag and leave that one un-absolutized.
@@ -1310,9 +1349,61 @@ def _absolutize_links(html: str, page_url: str) -> str:
     return _A_HREF_RE.sub(_sub, html)
 
 
+def _looks_like_image(data: bytes) -> bool:
+    """True iff ``data`` starts with a recognised raster/vector image signature. Guards the
+    url-mode localizer against saving a non-image HTTP body (e.g. a 404 HTML error page from
+    a mis-resolved figure URL) verbatim as a ``.png`` (TASK 027 / HTML2MD-11 defect #3)."""
+    if len(data) < 4:
+        return False
+    if data[:4] == b"\x89PNG":                       # PNG
+        return True
+    if data[:2] == b"\xff\xd8":                       # JPEG (SOI)
+        return True
+    if data[:4] == b"GIF8":                           # GIF87a / GIF89a
+        return True
+    if data[:2] == b"BM":                             # BMP
+        return True
+    if data[:4] in (b"II*\x00", b"MM\x00*"):          # TIFF (little / big endian)
+        return True
+    if data[:4] == b"\x00\x00\x01\x00":               # ICO
+        return True
+    if data[:4] == b"RIFF" and data[8:12] == b"WEBP":  # WEBP (RIFF container)
+        return True
+    if data[4:8] == b"ftyp" and data[8:12] in (       # ISOBMFF: AVIF / HEIC / HEIF
+            b"avif", b"avis", b"heic", b"heix", b"heif", b"hevc", b"mif1", b"msf1",
+            b"heim", b"heis", b"hevm", b"hevs", b"mif2", b"miaf"):
+        return True
+    if data[:2] == b"\xff\x0a" or \
+            data[:12] == b"\x00\x00\x00\x0cJXL \r\n\x87\n":  # JPEG XL (codestream / container)
+        return True
+    if data[:4] == b"\x00\x00\x00\x0c" and data[4:8] == b"jP  ":  # JPEG 2000 (JP2 signature box)
+        return True
+    # SVG / XML-wrapped SVG (leading BOM + whitespace tolerated). Scan a wide head because an
+    # Illustrator/Inkscape prolog (`<?xml…?>` + `<!-- Generator… -->` + `<!DOCTYPE svg…>`) can
+    # push `<svg` well past 512B. Reject an (X)HTML document that merely embeds an inline
+    # `<svg>` icon so a markup error page can never masquerade as an image — but ORDER matters:
+    # a real SVG whose `<foreignObject>` embeds XHTML has `<svg` BEFORE `<html` and is a valid
+    # image (adversarial logic finding 2026-07-09: the bare `b"<html" in head` substring test
+    # rejected it). Reject only when the `<html` tag precedes any `<svg`.
+    head = data[:4096].lstrip(b"\xef\xbb\xbf \t\r\n").lower()
+    svg_pos = head.find(b"<svg")
+    html_pos = head.find(b"<html")
+    if head.startswith(b"<!doctype html") or (
+            html_pos != -1 and (svg_pos == -1 or html_pos < svg_pos)):
+        return False
+    if svg_pos != -1 and (head.startswith(b"<svg") or head.startswith(b"<?xml")):
+        return True
+    return False
+
+
 def _resolve_url_image(src: str, opts) -> bytes | None:
     """Fetch a remote image (for emit's url-mode download). None on any failure —
-    a broken image must never abort the conversion. Bounded by ``--max-bytes``."""
+    a broken image must never abort the conversion. Bounded by ``--max-bytes``.
+
+    A 200 response whose bytes are NOT a recognised image (``_looks_like_image``) is dropped
+    with a stderr warning rather than localized as a fake ``.png`` — so a mis-resolved figure
+    URL that returns an HTML error page can never masquerade as a figure, and the lossy
+    localization is visible instead of silently reported as success (TASK 027 / HTML2MD-11)."""
     try:
         scheme = urlparse(src).scheme
     except ValueError:
@@ -1320,10 +1411,16 @@ def _resolve_url_image(src: str, opts) -> bytes | None:
     if scheme not in ("http", "https"):
         return None
     try:
-        return _http_get_bytes(src, max_bytes=getattr(opts, "max_bytes", None),
+        data = _http_get_bytes(src, max_bytes=getattr(opts, "max_bytes", None),
                                retries=getattr(opts, "retries", 2))
     except FetchFailed:
         return None
+    if not _looks_like_image(data):
+        sys.stderr.write(
+            f"html: dropped non-image response for {_redact(src)} "
+            f"({len(data)} bytes, not a recognised image) — figure not localized\n")
+        return None
+    return data
 
 
 _IMG_SRC_RE = re.compile(r'(<img\b[^>]*?\bsrc=["\'])([^"\']+)(["\'])', re.IGNORECASE)
@@ -1387,20 +1484,26 @@ def _assert_safe_target(target: str) -> None:
 # Fetch tiers (TASK 023 R1/R3) — each returns (html, engine_label) or raises
 # _TierUnavailable (escalate) / FetchFailed (terminal target) / EngineNotInstalled.
 # --------------------------------------------------------------------------- #
-def _tier_lite(target: str, opts) -> "tuple[str, str]":
+def _tier_lite(target: str, opts) -> "tuple[str, str, str]":
     """Local lite tier: httpx + trafilatura, with proactive clean-source site-variant
     rewrites (arXiv/Wikipedia/HackerNoon) preserved. In ``auto`` a thin/JS-shell body
     escalates (raise _TierUnavailable("thin")). Terminal target conditions (arXiv-no-html /
     pdf / binary / 404 / auth) raise FetchFailed; provider/transient blocks (403/429/5xx/
-    transport) raise _TierUnavailable for the ladder to fall through."""
+    transport) raise _TierUnavailable for the ladder to fall through.
+
+    Returns ``(html, engine_label, base_url)`` where ``base_url`` is the RFC-3986 base for
+    resolving the page's relative links/images — the post-redirect URL the variant fetch
+    actually landed on (arXiv ``/abs/``→``/html/<id>vN/``), NOT ``target`` (TASK 027)."""
     max_bytes = getattr(opts, "max_bytes", None)
     retries = getattr(opts, "retries", 2)
     arxiv_v = _arxiv_html_variant(target)
     mw_v = _mediawiki_rest_variant(target)
     nojs_v = _nojs_variant(target)
     fetch_url = arxiv_v or mw_v or nojs_v or target
+    final_url_out: list[str] = []
     try:
-        page_html = _fetch_lite_html(fetch_url, max_bytes, retries=retries)
+        page_html = _fetch_lite_html(fetch_url, max_bytes, retries=retries,
+                                     final_url_out=final_url_out)
     except FetchFailed as exc:
         status = exc.details.get("status")
         kind = exc.details.get("kind")
@@ -1418,25 +1521,31 @@ def _tier_lite(target: str, opts) -> "tuple[str, str]":
     if (getattr(opts, "engine", "auto") or "auto").lower() == "auto" \
             and not _looks_substantial(page_html):
         raise _TierUnavailable("thin")  # JS shell → escalate
-    return page_html, label
+    base_url = _absolutize_base(fetch_url, final_url_out[0] if final_url_out else None)
+    return page_html, label, base_url
 
 
-def _tier_chrome(target: str, opts) -> "tuple[str, str]":
+def _tier_chrome(target: str, opts) -> "tuple[str, str, str]":
     """Headless-Chrome tier. EngineNotInstalled propagates (the ladder makes it terminal for
     explicit ``--engine chrome``, fall-through otherwise); a render error becomes
-    _TierUnavailable."""
+    _TierUnavailable. Base for absolutization is the **post-navigation final URL** —
+    ``page.content()`` serializes relative ``<img>``/``<a>`` verbatim, so a same-site redirect
+    must resolve them against where the browser landed, not ``target`` (TASK 027)."""
+    final_url_out: list[str] = []
     try:
-        page_html = _fetch_chrome_html(target, opts)
+        page_html = _fetch_chrome_html(target, opts, final_url_out=final_url_out)
     except FetchFailed as exc:
         raise _TierUnavailable(exc.details.get("kind") or "chrome_failed",
                                exc.details.get("status")) from exc
-    return page_html, "chrome"
+    return page_html, "chrome", (final_url_out[0] if final_url_out else target)
 
 
-def _tier_remote(target: str, opts) -> "tuple[str, str]":
+def _tier_remote(target: str, opts) -> "tuple[str, str, str]":
     """Remote-reader tier (vendor-agnostic; jina default). Delegates to
-    :func:`_fetch_remote_html` (provider loop + classification)."""
-    return _fetch_remote_html(target, opts)
+    :func:`_fetch_remote_html` (provider loop + classification). Base for absolutization is
+    ``target`` — remote readers emit absolute URLs / clean Markdown."""
+    html, label = _fetch_remote_html(target, opts)
+    return html, label, target
 
 
 def _url_tiers(engine: str, allow_chrome: bool = True):
@@ -1476,7 +1585,7 @@ def _acquire_url(input_ref: str, opts, *, allow_chrome: bool = True) -> AcquireR
 
     for name, tier_fn in _url_tiers(engine, allow_chrome):
         try:
-            page_html, label = tier_fn(input_ref, opts)
+            page_html, label, fetch_base = tier_fn(input_ref, opts)
         except _TierUnavailable as tu:
             _record(name, tu.kind, tu.status)
             continue
@@ -1500,7 +1609,11 @@ def _acquire_url(input_ref: str, opts, *, allow_chrome: bool = True) -> AcquireR
                 html="", base_url=input_ref, mode="url", engine=label,
                 content_kind="markdown", markdown=body, source_meta=meta, images={},
             )
-        page_html = _absolutize_links(_absolutize_img_srcs(page_html, input_ref), input_ref)
+        # Absolutize relative <img>/<a> against the URL the page was FETCHED from (post-redirect
+        # / variant), not input_ref — a `/abs/`→`/html/` variant or any redirect resolves
+        # figures against the document it landed on (TASK 027 / HTML2MD-11). `base_url` stays
+        # the canonical input_ref for provenance; an in-document <base href> still overrides.
+        page_html = _absolutize_links(_absolutize_img_srcs(page_html, fetch_base), fetch_base)
         return AcquireResult(
             html=page_html, base_url=input_ref, mode="url", engine=label,
             source_meta=_trafilatura_meta(page_html, input_ref), images={},
