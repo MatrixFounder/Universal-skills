@@ -1,4 +1,20 @@
+---
+id: HTML2MD-11-BUG
+type: known-issue
+status: fixed
+opened_at: 2026-07-09
+resolved_at: 2026-07-09
+resolved_by: TASK 027
+category: correctness
+severity: SEV-2
+component: html
+slug: html-arxiv-image-resolution-bug
+related: html2md-11-rewritten-fetch-relative-img-base
+---
+
 # html skill — arXiv (and any rewritten-fetch) relative `<img>` srcs resolve against the wrong base → broken images
+
+> Deep-dive root-cause write-up for [HTML2MD-11](./html2md-11-rewritten-fetch-relative-img-base.md).
 
 - **Reported**: 2026-07-09 (real-vault dogfood: importing `https://arxiv.org/abs/2510.08369` via `wiki-import`, which calls the `html` skill with `--reader-only`)
 - **Severity**: SEV-2 (silent data loss — the note/raw looks fine but carries **zero** real figures; envelope reports success)
@@ -15,7 +31,8 @@
 > appending a trailing slash would have *broken* it (doubled the path). Fixes #1 (fetched-URL
 > base) and #3 (image magic-byte validation) landed; #4 shipped as a stderr drop-warning (no new
 > machine-readable envelope field — see TASK 027 scope). Full detail: `docs/KNOWN_ISSUES.md`
-> HTML2MD-11 (RESOLVED) + `docs/tasks/task-027-html-arxiv-image-resolution.md`.
+> [HTML2MD-11 (RESOLVED)](./html2md-11-rewritten-fetch-relative-img-base.md) +
+> [`docs/tasks/task-027-html-arxiv-image-resolution.md`](../tasks/task-027-html-arxiv-image-resolution.md).
 
 ## Symptom
 

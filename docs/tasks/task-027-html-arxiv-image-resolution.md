@@ -4,7 +4,7 @@
 **Skill:** `html` (Proprietary — embeds docx/pdf code; NOT Apache-2.0).
 **Mode:** VDD (Verification-Driven, adversarial gate).
 **Origin:** external-agent feedback + real-vault dogfood
-([`docs/html-arxiv-image-resolution-bug.md`](html-arxiv-image-resolution-bug.md)),
+([`docs/issues/html-arxiv-image-resolution-bug.md`](issues/html-arxiv-image-resolution-bug.md)),
 catalogued as **HTML2MD-11** in
 [`docs/KNOWN_ISSUES.md`](KNOWN_ISSUES.md) (OPEN BUG, not honest-scope).
 
@@ -70,6 +70,6 @@ Three compounding defects (all on the lite fetch path), plus one observability g
 1. All R1–R5 verifications green (new regression tests + full suite).
 2. `python3 .claude/skills/skill-creator/scripts/validate_skill.py skills/html` → exit 0.
 3. `docs/KNOWN_ISSUES.md` HTML2MD-11 moved to **Resolved** (deleted with a resolution
-   note per the file's lifecycle rule); `docs/html-arxiv-image-resolution-bug.md` status
+   note per the file's lifecycle rule); `docs/issues/html-arxiv-image-resolution-bug.md` status
    flipped to **resolved** with the fix commit reference.
 4. Adversarial review converges (0 CRITICAL, no legitimate logic/security findings).
