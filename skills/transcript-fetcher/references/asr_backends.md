@@ -39,6 +39,11 @@ to the next backend). External tools are always invoked via **argv arrays**
   on `ASRError` it falls through to the next. If **none** is available →
   `MissingDependencyError` (CLI exit 7, with a remediation hint). If all
   available ones fail → `TranscriptFetchError` (exit 3).
+- **Check readiness before a long fetch:** `scripts/fetch.py doctor` (import-free,
+  no network) reports which of these four backends resolve on the current
+  machine — plus ffmpeg and the cloud opt-in state — so a caption-less
+  Broadcast/Space's exit-7 risk is visible up front instead of after a large
+  download. `--json` emits a machine-readable envelope.
 
 **Add a backend:** drop a `scripts/asr/<engine>.py` implementing `ASRBackend`,
 append its class to `REGISTRY`. No change to the X provider or the CLI core.

@@ -10,28 +10,8 @@ description: >-
   rolling caption dedup, >> speaker turns preserved, JSON stat sidecar
   plus optional .description.md sidecar.
 tier: 2
-version: 1.2
+version: 1.3
 status: active
-changelog: >-
-  v1.2 — Add X.com (Twitter) adapter: native status video + Broadcasts/
-  Spaces. Captions-first (subtitles/automatic_captions via yt-dlp) with
-  automatic ASR fallback through a pluggable backend chain (MacWhisper
-  `mw` -> Whisper CLI -> whisper.cpp -> opt-in OpenAI/compatible cloud).
-  ffmpeg is required for the ASR path on HLS sources (Broadcasts/Spaces) —
-  used to extract a clean audio-only m4a; the skill fails fast (exit 7)
-  when it is absent there. New stat field `transcript_origin`,
-  exit code 7 (MissingDependency), `--debug` stage logging, `--asr-*`
-  flags. Skill-local `.env` config (secrets-safe, 0600) +
-  install_components.py component installer. transcript-fetcher is now a
-  universal extraction layer (any future yt-dlp platform reuses the X
-  pipeline).
-  v1.1 — Add Vimeo + Skool adapters; opt-in --with-description /
-  --description-only producing a <out>.description.md (YAML front-
-  matter + Markdown body) for YouTube & Skool. Skool delegates
-  embedded YouTube/Vimeo to those adapters automatically and uses
-  cookies.txt for private/paid communities; public ones work without.
-  v1.0 — Initial release — YouTube adapter, ru/ru-orig/en fallback
-  ladder, offline tests.
 ---
 
 # Transcript Fetcher
@@ -40,6 +20,19 @@ changelog: >-
 ready for downstream summarization or analysis. Single responsibility:
 fetch + clean. Composes well with `summarizing-meetings` (run this
 first, then feed the resulting `.txt` to that skill).
+
+**Dependencies**: `yt-dlp` is **vendored in `scripts/.venv`** (installed
+by `scripts/install.sh`) — it is **NOT on `$PATH`** and never will be. Do
+**NOT** `which yt-dlp`, `pip install yt-dlp`, or `brew install yt-dlp`
+globally — a missing `$PATH` entry does not mean yt-dlp is absent, it
+means the check was wrong; this exact false-negative once caused a
+manual out-of-skill workaround. The two canonical readiness probes are
+`scripts/.venv/bin/python -m yt_dlp --version` and
+`scripts/.venv/bin/python scripts/fetch.py doctor` (§4 Script Contract;
+the latter also reports ffmpeg + ASR backends — see the ASR portability
+note under §5 Safety Boundaries). Callers that shell in (e.g. a
+downstream integrator) MUST invoke the **venv interpreter** directly
+(`scripts/.venv/bin/python`), never a `$PATH` `python`.
 
 ## 1. Red Flags (Anti-Rationalization)
 
@@ -98,12 +91,18 @@ first, then feed the resulting `.txt` to that skill).
   ./scripts/.venv/bin/python scripts/install_components.py --install-whisper   # pip openai-whisper into the venv
   ./scripts/.venv/bin/python scripts/install_components.py --system --run      # brew/apt ffmpeg + whisper.cpp
   ```
+- **Readiness check** (`doctor`, no network, import-free): answers "is this skill ready?" without `$PATH` guessing — the canonical replacement for `which yt-dlp`:
+  ```bash
+  ./scripts/.venv/bin/python scripts/fetch.py doctor           # human-readable report
+  ./scripts/.venv/bin/python scripts/fetch.py doctor --json    # {v, interpreter, in_venv, ready, components, remediation}
+  ```
+  Reports the resolved interpreter, in-venv flag, yt-dlp version, ffmpeg, each ASR backend, and cloud opt-in state (key presence only, never the key). `remediation` names a flow-blocking gap for EVERY such gap — yt-dlp missing, ffmpeg missing (it back-stops X Broadcast/Space HLS ASR and whisper/whisper.cpp at runtime even though it is itself optional), or no ASR capability at all (no local backend AND no fully-configured cloud) — but never an individual missing ALTERNATIVE local ASR engine while ASR capability already resolves elsewhere (mw present, another local engine present, or cloud configured); those show only as informational `→` install-hint lines in the human report. A fully-configured cloud backend (`--asr-allow-cloud` + key) genuinely suppresses the no-local-ASR hint — it never appears in `remediation`, and the human report gets one informational note instead of a demand to install a local engine it does not need. Exit `0` when yt-dlp is present (regardless of `remediation`), `7` when it is not.
 - **Single URL**:
   ```bash
   cd skills/transcript-fetcher
   ./scripts/.venv/bin/python scripts/fetch.py <URL> --out <path/to/output.txt>
   ```
-  Optional flags: `--lang ru` (default), `--prefer manual|auto` (default `manual`), `--with-description`, `--description-only`, `--cookies-file PATH`, `--json-errors`, `--debug` (stage logging to stderr), `--asr-allow-cloud` (opt-in cloud ASR), `--asr-model <id>`, `--asr-timeout-sec N`, `--max-duration-min N` (X: transcribe only the first N minutes — clips the download), `--keep-silence` (X ASR: do NOT strip long silences before transcription — silence removal is ON by default to cut Whisper hallucinated filler on silent lead-in/out), `--auth-map PATH` (per-host cookies), `--cookies-from-browser BROWSER` (X: load cookies from a local browser via yt-dlp).
+  Optional flags: `--lang ru` (default), `--prefer manual|auto` (default `manual`), `--with-description`, `--description-only`, `--cookies-file PATH`, `--json-errors`, `--debug` (stage logging to stderr), `--asr-allow-cloud` (opt-in cloud ASR), `--asr-model <id>`, `--asr-timeout-sec N`, `--max-duration-min N` (X: transcribe only the first N minutes — clips the download when ffmpeg is present, the only case where the download itself is clipped; also clips the media-timeout floor below in that case), `--keep-silence` (X ASR: do NOT strip long silences before transcription — silence removal is ON by default to cut Whisper hallucinated filler on silent lead-in/out), `--auth-map PATH` (per-host cookies), `--cookies-from-browser BROWSER` (X: load cookies from a local browser via yt-dlp), `--concurrent-fragments N` (X: parallel HLS fragment downloads for the media, default 8; `1` = serial; values above 32 are capped at 32; CLI rejects `<= 0` with exit 2; env `TRANSCRIPT_FETCHER_CONCURRENT_FRAGMENTS` non-positive/malformed falls back to 8 — these are three DISTINCT layers, not one shared clamp), `--media-timeout-sec N` (X: per-attempt budget for the media download only, separate from the probe's `--timeout-sec`; default duration-derived `min(21600, max(600, duration*4))`s — capped at 6h, and derived from the `--max-duration-min`-clipped duration when that flag is set AND ffmpeg is present (the only case where the download itself is clipped) — else `1800`s).
 - **X.com / Twitter** (captions-first, automatic ASR fallback; no mode switch). A Broadcast/Space usually has no captions → ASR via the first available local backend (MacWhisper, etc.):
   ```bash
   cd skills/transcript-fetcher
@@ -113,7 +112,9 @@ first, then feed the resulting `.txt` to that skill).
   # → broadcast.txt + .stat.json (source="x", transcript_origin="macwhisper",
   #   chosen_track_kind="asr"). A status video WITH captions skips ASR
   #   (transcript_origin="embedded-captions"). Use --cookies-file for
-  #   protected/age-gated media.
+  #   protected/age-gated media, or drop a Netscape cookies.txt at
+  #   ~/.transcript-fetcher/x.com-cookies.txt for zero-flag auth
+  #   (see the X cookie contract in §5 Safety Boundaries).
   ```
 - **Skool lesson** (cookies needed ONLY for private / paid communities — public ones work without):
   ```bash
@@ -132,7 +133,7 @@ first, then feed the resulting `.txt` to that skill).
   - `<out>.txt.stat.json` — sidecar with the chosen track, quality flag, plus optional title / uploader / upload_date / duration_sec / embed_source / embed_url metadata.
   - `<out>.description.md` — only when `--with-description` is passed; YAML frontmatter + Markdown body.
   - One JSON stat record per URL on stdout.
-- **Failure semantics**: Non-zero exit. With `--json-errors`, stderr carries a single JSON line `{v, error, code, type, details?}`. Exit codes: `2` usage error (incl. malformed Skool URL, cookies file path missing on disk), `3` no transcript producible (no caption track in the ladder AND — for X — ASR produced nothing / every available backend failed), `4` partial batch failure, `5` source-auth error (HTTP 401/403 — private Skool community needs cookies, X protected/suspended/age-gated media, or supplied cookies expired), `6` source rate-limit (HTTP 429), `7` missing dependency (yt-dlp absent, ffmpeg required-but-absent, or **no ASR backend available** for caption-less media — `details.remediation` carries the hint), `1` unexpected.
+- **Failure semantics**: Non-zero exit. With `--json-errors`, stderr carries a single JSON line `{v, error, code, type, details?}`. Exit codes: `2` usage error (incl. malformed Skool URL, cookies file path missing on disk), `3` no transcript producible (no caption track in the ladder AND — for X — ASR produced nothing / every available backend failed, or the media download timed out — that case is transient/retryable and its remediation names `--concurrent-fragments` / `--media-timeout-sec`), `4` partial batch failure, `5` source-auth error (HTTP 401/403 — private Skool community needs cookies, X protected/suspended/age-gated media, or supplied cookies expired), `6` source rate-limit (HTTP 429), `7` missing dependency (yt-dlp absent, ffmpeg required-but-absent, or **no ASR backend available** for caption-less media — `details.remediation` carries the hint), `1` unexpected. When `details` carries a `remediation` key, it is ALSO printed as a second, plain stderr line (`remediation: <text>`) even WITHOUT `--json-errors` — the remedy is operator-visible either way.
 - **Idempotency**: Re-running overwrites the output file and sidecar. yt-dlp itself caches nothing the skill depends on; behaviour is reproducible given network availability.
 - **Dry-run support**: Not currently exposed as a flag. Inspect the fallback ladder via `_build_ladder` if needed.
 
@@ -148,11 +149,11 @@ first, then feed the resulting `.txt` to that skill).
   - X / Twitter — `x.com`, `www.x.com`, `mobile.x.com`, `twitter.com`, `www.twitter.com`, `mobile.twitter.com` (status `…/status/<id>` and `…/i/broadcasts/<id>`).
   - Skool — `skool.com`, `www.skool.com`, `app.skool.com`; additionally URLs must match `/<community>/classroom/<id>?md=<lesson-id>`. Landing / `/about` / `/calendar` pages are rejected.
   URLs that merely contain a supported host as a substring elsewhere are rejected.
-- **ASR backends (external, optional)**: For caption-less X media the skill shells out (argv arrays, never a shell string) to whichever local engine is present — MacWhisper `mw`, Whisper CLI, or whisper.cpp. None is a pip dependency; all are probed at runtime. **ffmpeg** (also external) is required to turn an X Broadcast's HLS stream into a valid audio file; the skill **fails fast with exit 7** (clear remediation, before any large download) when ffmpeg is absent for an HLS source. `bash scripts/install.sh` reports which engines are available; `scripts/install_components.py` guides/installs them (incl. ffmpeg). If no ASR backend is available (and cloud is not opted in), the run also fails cleanly with exit 7, never a traceback.
+- **ASR backends (external, optional)**: For caption-less X media the skill shells out (argv arrays, never a shell string) to whichever local engine is present — MacWhisper `mw`, Whisper CLI, or whisper.cpp. None is a pip dependency; all are probed at runtime. **ffmpeg** (also external) is required to turn an X Broadcast's HLS stream into a valid audio file; the skill **fails fast with exit 7** (clear remediation, before any large download) when ffmpeg is absent for an HLS source. `bash scripts/install.sh` reports which engines are available; `scripts/install_components.py` guides/installs them (incl. ffmpeg). If no ASR backend is available (and cloud is not opted in), the run also fails cleanly with exit 7, never a traceback. **ASR portability**: the fallback chain resolves in order `mw` → Whisper CLI → whisper.cpp → (opt-in) cloud (§2 Capabilities) — a caption-less Broadcast/Space genuinely REQUIRES ffmpeg **and** at least one of these; a box with neither (e.g. a bare Linux/CI runner) fails hard on exit 7. Remediate with `scripts/install_components.py --install-whisper` (in-venv Whisper CLI; `ffmpeg` itself needs the separate `--system --run`) or `--asr-allow-cloud` (+ an API key) to fall back to the cloud backend. Run `scripts/fetch.py doctor` (§4 Script Contract) **before** a long fetch to see which backends resolve, with zero downloads.
 - **Cloud ASR egress (opt-in only)**: The OpenAI/compatible cloud backend is used **only** with `--asr-allow-cloud` (or `TRANSCRIPT_FETCHER_ASR_ALLOW_CLOUD=1`) AND an API key present. When used, the **audio leaves the machine** to the configured endpoint — disclosed here and in the stat notes. Local backends are always tried first; cloud is the last resort.
 - **Silence removal before ASR (X)**: before transcribing, the X path runs ffmpeg `silenceremove` to trim leading silence and collapse long interior/trailing gaps — this cuts Whisper-family hallucinated filler (e.g. `"Продолжение следует..."`) on silent lead-in/out. **ON by default**; `--keep-silence` (or `TRANSCRIPT_FETCHER_SILENCE_REMOVAL=0`) opts out; `_THRESHOLD`/`_MIN_GAP_SEC`/`_KEEP_SEC` tune it. Only **true silence** is removed (music/speech survive — a music-only intro can still trigger filler, see KNOWN_ISSUES TF-X-6). Never fatal: ffmpeg absent or a filter failure transparently falls back to the original audio. The stat `notes` record what was stripped (`silence-removal: stripped ~Ns ...`); the original media is kept for the ffprobe duration fill.
 - **Secrets**: The API key is read from `OPENAI_API_KEY` / `TRANSCRIPT_FETCHER_OPENAI_API_KEY` or a skill-local `.env`. A `.env` is loaded **only** at the CLI entry point and is **refused** if it is a symlink or not `chmod 600` (group/world-readable). The key is sent **only** in an HTTP `Authorization` header — never on a command line, never logged. `.env` is git-ignored; only `scripts/.env.example` (placeholders) is committed.
-- **Per-host cookies (`~/.transcript-fetcher/`)**: cookies for auth-walled media resolve (after an explicit `--cookies-file`) from a skill-local home folder — mirrors the `html` skill's `~/.html`. An `auth-map.json` (`--auth-map` / `TRANSCRIPT_FETCHER_AUTH_MAP` / `~/.transcript-fetcher/auth-map.json`) maps a host to its `{cookies_file}`, or the convention `~/.transcript-fetcher/<host>-cookies.txt` is used. Host match is **label-boundary** (a key `x.com` matches `x.com`/`*.x.com`, never `evil-x.com`); auth-map and convention files are **hardened** (symlink-reject + `0600`). The resolved Netscape cookies.txt feeds yt-dlp's `--cookies` (and Skool's opener). `--cookies-from-browser BROWSER` loads cookies straight from a local browser via yt-dlp (opt-in — reads the browser's cookie store).
+- **Per-host cookies (`~/.transcript-fetcher/`)**: cookies for auth-walled media resolve (after an explicit `--cookies-file`) from a skill-local home folder — mirrors the `html` skill's `~/.html`. An `auth-map.json` (`--auth-map` / `TRANSCRIPT_FETCHER_AUTH_MAP` / `~/.transcript-fetcher/auth-map.json`) maps a host to its `{cookies_file}`, or the convention `~/.transcript-fetcher/<host>-cookies.txt` is used — e.g. `~/.transcript-fetcher/x.com-cookies.txt` for `https://x.com/...` URLs, `~/.transcript-fetcher/twitter.com-cookies.txt` for `https://twitter.com/...` URLs. The convention lookup tries the EXACT URL hostname first, then — ONLY for the three well-known mirror-prefix labels `www`/`mobile`/`m` — the same file with that single label stripped (e.g. `www.x.com` and `mobile.x.com` both also resolve `x.com-cookies.txt` when the exact-host file is absent); distinct domains are never aliased to each other (`x.com` and `twitter.com` still need separate files — no generic parent-domain walk). A custom filename (e.g. `x-cookies.txt`) REQUIRES an `auth-map.json` entry; the convention path only matches the literal `<host>-cookies.txt` name (or its single-label-stripped mirror variant). Host match is **label-boundary** (a key `x.com` matches `x.com`/`*.x.com`, never `evil-x.com`); auth-map and convention files are **hardened** (symlink-reject + `0600`). The resolved Netscape cookies.txt feeds yt-dlp's `--cookies` (and Skool's opener). `--cookies-from-browser BROWSER` loads cookies straight from a local browser via yt-dlp (opt-in — reads the browser's cookie store). On an X auth failure (`SourceAuthError`, exit 5) the message names the **refresh path**: the resolved `--cookies-file` when one was supplied, else the convention path to create — derived from the failing URL's own host (`www.`/`mobile.` labels stripped), e.g. `~/.transcript-fetcher/x.com-cookies.txt` for an `x.com` URL or `~/.transcript-fetcher/twitter.com-cookies.txt` for a `twitter.com` URL; the convention lookup's mirror-prefix fallback above guarantees this hinted path is actually picked up on retry, for all 6 documented X hosts.
 - **Temp-file hygiene**: For X media, all intermediates (audio, VTT, info.json, `.part`, `.m3u8`, fragments) live under one tempdir removed in a `finally` block even on error — nothing is left behind.
 - **Auth credentials**: `--cookies-file <path>` accepts a Netscape `cookies.txt` and is **ALWAYS OPTIONAL** for every source. The file is read once at startup, never copied or re-emitted. For Skool, public communities (e.g. `zero-one`) serve lessons without auth; private / paid communities respond with HTTP 401/403 and the user then needs to supply cookies. YouTube/Vimeo optionally forward the file to yt-dlp's `--cookies` for age-gated or unlisted videos. The skill **never blocks on missing cookies up-front** — it tries the fetch and surfaces a `SourceAuthError` (exit 5) only if the source returns 401/403.
 

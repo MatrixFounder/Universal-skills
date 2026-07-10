@@ -74,7 +74,19 @@ def write_stat_sidecar(stat: TranscriptStat, plain_path: Path) -> Path:
 
 
 class TranscriptFetchError(RuntimeError):
-    """Raised when no caption track in the fallback ladder is available."""
+    """Raised when no caption track in the fallback ladder is available.
+
+    Mirrors :class:`MissingDependencyError`'s optional ``remediation`` attribute
+    (task 029.02, R7): a transient media-download timeout can carry an
+    actionable hint (e.g. raise ``--concurrent-fragments``/``--media-timeout-sec``)
+    that ``fetch.py`` surfaces in both the single-URL and batch JSON error
+    envelopes. Backward-compatible — every existing ``TranscriptFetchError("msg")``
+    call site keeps working unchanged; ``remediation`` defaults to ``None``.
+    """
+
+    def __init__(self, message: str, *, remediation: Optional[str] = None) -> None:
+        super().__init__(message)
+        self.remediation = remediation
 
 
 class SourceAuthError(RuntimeError):

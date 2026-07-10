@@ -28,6 +28,7 @@ Nothing here is destructive; system installs require BOTH ``--system`` and
 from __future__ import annotations
 
 import argparse
+import importlib.metadata as _im
 import json
 import platform
 import shlex
@@ -35,6 +36,7 @@ import shutil
 import subprocess
 import sys
 from pathlib import Path
+from typing import Optional
 
 _HERE = Path(__file__).resolve().parent
 if str(_HERE) not in sys.path:
@@ -50,11 +52,22 @@ def _have(cmd: str) -> bool:
 
 
 def _have_yt_dlp() -> bool:
+    """Probe distribution metadata — NEVER ``import yt_dlp`` (arch-016 §10.3:
+    the doctor/component-list path must stay import-free)."""
     try:
-        import yt_dlp  # noqa: F401
+        _im.version("yt-dlp")
         return True
-    except Exception:  # noqa: BLE001
+    except _im.PackageNotFoundError:
         return False
+
+
+def yt_dlp_version() -> Optional[str]:
+    """Installed yt-dlp version, or ``None`` if absent. Import-free (see
+    :func:`_have_yt_dlp`)."""
+    try:
+        return _im.version("yt-dlp")
+    except _im.PackageNotFoundError:
+        return None
 
 
 def _have_pymodule(name: str) -> bool:

@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import functools
 import json
+import math
 import re
 import shutil
 import subprocess
@@ -37,6 +38,12 @@ from .youtube import (
 # Re-export the canonical helpers so a consuming adapter imports only from here.
 yt_dlp_argv = _yt_dlp_command
 download_subtitle = _try_download_subtitle
+
+# Default parallel-fragment count for the media (HLS) download (arch-016 §10.1).
+# `download_audio()` clamps any override to [1, 32]: the upper bound guards against
+# tripping X's rate limiter, `1` reproduces the pre-029 serial download for A/B
+# debugging.
+DEFAULT_CONCURRENT_FRAGMENTS = 8
 
 # X-specific phrases layered ON TOP of youtube's base tuples.
 _X_AUTH_PATTERNS = (
@@ -72,10 +79,34 @@ _X_HARD_PATTERNS = (
 def classify_failure(stderr: str) -> Optional[str]:
     """Categorise a yt-dlp failure for an X URL.
 
-    Returns one of ``"auth"`` / ``"rate"`` / ``"hard"`` (in that precedence) or
+    Returns one of ``"auth"`` / ``"rate"`` / ``"transient"`` / ``"hard"`` or
     ``None`` when no known phrase matched. The X adapter maps these onto
     ``SourceAuthError`` (5) / ``SourceRateLimitError`` (6) /
-    ``TranscriptFetchError`` (3).
+    ``TranscriptFetchError`` (3, remediation-carrying for ``"transient"``).
+
+    ``"transient"`` is scoped to the media (audio) download's socket-timeout
+    phrase ONLY (``"timeout downloading audio"``, emitted by
+    :func:`download_audio`) — it deliberately does NOT match the metadata
+    probe's timeout phrase (``"timeout probing metadata"``, emitted by
+    :func:`probe_metadata`): a slow probe is not fixed by raising
+    ``--concurrent-fragments``/``--media-timeout-sec``, so folding it into
+    ``"transient"`` would point the user at a remediation that cannot help.
+    It is the ONLY category the concurrency/media-budget remediation can fix
+    (arch-016 §10, task 029.02).
+
+    Ordering + match rule (deliberate, closes an in-band-signalling gap):
+    the ``"transient"`` check runs LAST (after auth/rate/hard) and matches via
+    ``str.startswith`` rather than a substring test. ``download_audio``'s
+    ``TimeoutExpired`` branch replaces stderr WHOLESALE with the sentinel
+    string, so for that internally-authored message ``startswith`` is an exact
+    match. But this function is also fed RAW yt-dlp stderr from the metadata
+    probe / caption download / non-timeout download failures — a channel that
+    can echo server-supplied free text. If that text happened to contain the
+    phrase mid-string while ALSO carrying an auth/rate/hard signal, a substring
+    match checked first would let ``"transient"`` spoof over the correct
+    (and more actionable) classification. Checking auth/rate/hard first, and
+    matching the transient sentinel only at the START of the string, closes
+    that without touching the authored timeout message itself.
     """
     s = (stderr or "").lower()
     for pat in _X_AUTH_PATTERNS:
@@ -89,6 +120,8 @@ def classify_failure(stderr: str) -> Optional[str]:
     for pat in (*_YT_HARD, *_X_HARD_PATTERNS):
         if pat in s:
             return "hard"
+    if s.startswith("timeout downloading audio"):
+        return "transient"
     return None
 
 
@@ -350,6 +383,7 @@ def download_audio(
     cookies_from_browser: Optional[str] = None,
     yt_dlp_bin: Optional[str] = None,
     max_duration_min: Optional[float] = None,
+    concurrent_fragments: Optional[int] = None,
 ) -> tuple[Optional[Path], Optional[str]]:
     """Download the minimal media needed for ASR. Returns ``(media_path, stderr)``.
 
@@ -359,6 +393,13 @@ def download_audio(
         (`-f worstaudio/worst -S +size,+br`) and hand the media file to a
         video-capable backend (MacWhisper). Never a literal instance-specific
         format id.
+
+    ``concurrent_fragments`` (arch-016 §10.1) sets ``--concurrent-fragments`` on
+    the media argv — ``None`` resolves to :data:`DEFAULT_CONCURRENT_FRAGMENTS`,
+    then any value is clamped to ``[1, 32]``. Emitted unconditionally: yt-dlp
+    treats it as a safe no-op for a progressive (non-fragmented) single-file
+    download, and it is what turns a ~120 KB/s serial HLS pull into a parallel
+    one for a long X Broadcast/Space.
 
     Security: a **fixed** output template (`media.%(ext)s`, NOT `%(id)s.%(ext)s`)
     is used; the resulting file is resolved and asserted to live inside
@@ -372,6 +413,11 @@ def download_audio(
         "--no-warnings",
         "--output", out_tmpl,
     ]
+    effective_fragments = (
+        DEFAULT_CONCURRENT_FRAGMENTS if concurrent_fragments is None else concurrent_fragments
+    )
+    n_fragments = min(32, max(1, int(effective_fragments)))
+    args += ["--concurrent-fragments", str(n_fragments)]
     # Always pick the smallest variant that still carries audio (minimal bytes).
     # Use yt-dlp's built-in ``worst*`` selectors (deterministically the
     # lowest-quality/-bitrate variant, NOT a literal instance-specific format id).
@@ -413,6 +459,43 @@ def download_audio(
             return None, f"refusing media outside workdir: {media}"
         return media, (proc.stderr if proc.returncode != 0 else None)
     return None, proc.stderr or f"no media produced (rc={proc.returncode})"
+
+
+def media_timeout_for(duration_s: Optional[float]) -> int:
+    """Media-download budget in seconds from a probed duration.
+
+    ``min(21600, max(600, duration_s*4))`` when the probe reported a positive,
+    finite duration (a 70-min broadcast → ~16800 s), else a generous 1800 s (X
+    Broadcasts commonly probe duration=None). The 21600 s (6 h) upper cap
+    exists because a per-attempt subprocess timeout is a HANG CEILING, not a
+    wait time we actually expect to incur — an unbounded ``duration*4`` lets a
+    pathological probed duration (or an un-clipped multi-hour broadcast) yield
+    a multi-day budget that only yt-dlp's own (much shorter) socket-timeout
+    would ever actually bound in practice.
+
+    Accepts ``duration_s`` defensively — int/float/numeric string — because
+    the value comes straight from yt-dlp's ``-J`` JSON: ``Infinity``/``NaN``
+    round-trip through ``json.loads`` on a pathological extractor value, and a
+    caller may hand in a numeric string. Unparseable / non-finite (NaN/inf) /
+    non-positive / ``None`` all fall back to the 1800 s default rather than
+    raising (bare ``int(duration_s*4)`` would raise ``OverflowError`` on
+    ``inf`` or ``TypeError`` on a ``str``). A FINITE but astronomically large
+    ``duration_s`` (e.g. ``1e308``) is ALSO handled without raising: once
+    ``d >= 5400`` the ``21600`` cap already applies (``5400 * 4 == 21600``),
+    so the cap is returned directly, before ever computing ``d * 4`` — for
+    ``d`` near the float max that intermediate product overflows to ``inf``,
+    and ``int(inf)`` raises ``OverflowError`` (the exact residual the
+    never-raises contract above would otherwise miss). Pure + unit-testable;
+    the CLI/env override it in x.py (029.02)."""
+    try:
+        d = float(duration_s)
+    except (TypeError, ValueError):
+        return 1800
+    if not math.isfinite(d) or d <= 0:
+        return 1800
+    if d >= 5400:
+        return 21600
+    return min(21600, max(600, int(d * 4)))
 
 
 def probe_media_duration(media: Path, *, timeout_sec: int = 60) -> Optional[int]:
@@ -548,6 +631,7 @@ def find_downloaded_media(workdir: Path) -> Optional[Path]:
 
 
 __all__ = (
+    "DEFAULT_CONCURRENT_FRAGMENTS",
     "DEFAULT_TIMEOUT_SEC",
     "caption_langs",
     "classify_failure",
@@ -559,6 +643,7 @@ __all__ = (
     "ffmpeg_available",
     "find_downloaded_media",
     "is_hls_only",
+    "media_timeout_for",
     "pick_any_caption",
     "pick_caption",
     "probe_media_duration",

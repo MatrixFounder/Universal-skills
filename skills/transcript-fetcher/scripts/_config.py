@@ -159,12 +159,12 @@ def openai_max_upload_bytes() -> int:
     Default 25 MiB (the OpenAI Whisper API limit). Raise it via
     ``TRANSCRIPT_FETCHER_OPENAI_MAX_UPLOAD_MB`` for an OpenAI-compatible server
     with a larger limit, or set it to ``0`` to disable the client-side check.
+    A negative value clamps to 0 (unbounded) rather than erroring.
     """
-    raw = env("OPENAI_MAX_UPLOAD_MB")
-    if raw and raw.strip().lstrip("-").isdigit():
-        mb = int(raw.strip())
-        return max(0, mb) * 1024 * 1024
-    return 25 * 1024 * 1024
+    mb = _safe_int(env("OPENAI_MAX_UPLOAD_MB"))
+    if mb is None:
+        return 25 * 1024 * 1024
+    return max(0, mb) * 1024 * 1024
 
 
 def tool_bin(key: str, default: str) -> str:
@@ -183,8 +183,10 @@ def ffprobe_bin() -> str:
 
 
 def asr_timeout_sec(default: int) -> int:
-    raw = env("ASR_TIMEOUT_SEC")
-    return int(raw) if raw and raw.strip().isdigit() else default
+    """TRANSCRIPT_FETCHER_ASR_TIMEOUT_SEC (env/.env). Malformed / non-positive
+    → default (config must never crash a run)."""
+    n = _safe_int(env("ASR_TIMEOUT_SEC"))
+    return n if n is not None and n > 0 else default
 
 
 def asr_allow_cloud_default() -> bool:
@@ -194,6 +196,44 @@ def asr_allow_cloud_default() -> bool:
 
 def asr_model_default() -> Optional[str]:
     return env("ASR_MODEL")
+
+
+# --------------------------------------------------------------------- #
+# Media download concurrency + budget (TASK 029, arch-016 §10.1/§10.2)
+# --------------------------------------------------------------------- #
+def _safe_int(raw: Optional[str]) -> Optional[int]:
+    """Parse an integer out of a raw env string; NEVER raises — config must
+    never crash a run (R2b).
+
+    Replaces the ``raw.strip().isdigit()``-then-``int()`` idiom: ``str.isdigit()``
+    is ``True`` for non-ASCII decimal-*looking* characters (e.g. the superscript
+    ``'²'`` / ``'¹'``) that ``int()`` still rejects with ``ValueError`` — that
+    mismatch is the crash class this closes. Note ``int()`` itself is fine with
+    genuine Unicode decimal digits (e.g. Arabic-Indic ``'١٢'`` → ``12``); only
+    the isdigit()-true/int()-invalid characters like ``'²'`` trigger it. Returns
+    ``None`` on ``None``/empty/malformed input; the caller applies its own
+    default.
+    """
+    if raw is None:
+        return None
+    try:
+        return int(raw.strip())
+    except (ValueError, AttributeError):
+        return None
+
+
+def concurrent_fragments(default: int = 8) -> int:
+    """TRANSCRIPT_FETCHER_CONCURRENT_FRAGMENTS (env/.env). Malformed / non-positive
+    → default (config must never crash a run)."""
+    n = _safe_int(env("CONCURRENT_FRAGMENTS"))
+    return n if n is not None and n > 0 else default
+
+
+def media_timeout_sec() -> Optional[int]:
+    """TRANSCRIPT_FETCHER_MEDIA_TIMEOUT_SEC (env/.env). Returns None when unset OR
+    malformed OR non-positive (the caller then falls back to media_timeout_for)."""
+    n = _safe_int(env("MEDIA_TIMEOUT_SEC"))
+    return n if n is not None and n > 0 else None
 
 
 # --------------------------------------------------------------------- #

@@ -73,6 +73,7 @@ Analysis Phase" which mandates this read.
 - **TF-X-4** [captions: VTT + SRT + TTML/DFXP](issues/tf-x-4-captions-vtt-srt-ttml.md) — severity `LOW`, status `handled`, opened 2026-07-09
 - **TF-X-5** [X auth + long-broadcast cost + duration](issues/tf-x-5-x-auth-long-broadcast-duration.md) — severity `LOW`, status `handled`, opened 2026-07-09
 - **TF-X-6** [ASR filler on silence → silence-removal preprocessing](issues/tf-x-6-asr-filler-on-silence-removal.md) — severity `LOW`, status `handled`, opened 2026-07-09
+- **TF-X-7** [media-download `TimeoutExpired` orphans ffmpeg children; workdir rmtree races them](issues/tf-x-7-timeout-orphans-ffmpeg-children.md) — severity `LOW`, status `open`, opened 2026-07-10
 
 ## security
 

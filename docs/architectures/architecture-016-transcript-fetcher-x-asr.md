@@ -3,8 +3,9 @@
 > **Subsystem:** `transcript-fetcher` skill (Apache-2.0).
 > **Builds on:** v1.1 source-adapter architecture (`youtube`/`vimeo`/`skool`, shared
 > `TranscriptStat` + `_vtt_to_text` + `_description`).
-> **Task:** TASK 026 (`docs/tasks/task-026-transcript-fetcher-x-asr.md`).
-> **Status:** design (pre-merge).
+> **Task:** TASK 026 (`docs/tasks/task-026-transcript-fetcher-x-asr.md`) — implemented;
+> **+ TASK 029** (`docs/TASK.md`, HLS hardening + `doctor`, §10) — design.
+> **Status:** §1–§9 implemented (TASK 026 + follow-ups); §10 design (pre-merge).
 
 ---
 
@@ -408,3 +409,235 @@ forwarded only to whisper/whisper.cpp/cloud.
   silence is removed — a *music-only* intro survives and can still trigger filler (engine-level).
   Verified by a gated real-ffmpeg test (`test_real_ffmpeg_strips_silence`: 10 s synthetic
   silence+tone+silence collapses to ≤ 5 s).
+
+## 10. TASK 029 — HLS download hardening + `doctor` (spec S1–S6)
+
+> **Amended after adversarial cycle 1 (2026-07-10):** four deltas layered onto
+> the design below without changing its shape — (1) the media-timeout floor
+> (§10.2) is now capped at 21600 s (6h) and derived from the
+> `--max-duration-min`-clipped duration, not the full probed one; (2)
+> `doctor`'s `remediation` (§10.3) now covers EVERY missing component (ffmpeg
+> included) and is cloud-backend-aware for the no-local-ASR hint; (3) the
+> transient-timeout remediation (§10.4) is also printed to stderr in non-JSON
+> mode, and a media-download rate-limit additionally names
+> `--concurrent-fragments`; (4) the auth cookie hint (§10.4) is derived from
+> the failing URL's own host instead of a hardcoded `x.com`. All four config
+> accessors also close a Unicode-digit crash class (`str.isdigit()`-true /
+> `int()`-invalid characters like `'²'`) that could raise uncaught out of a
+> plain fetch run.
+>
+> **Amended after adversarial cycle 3 (2026-07-10) — three residuals from the
+> cycle-1 amendment above:** (1) §10.2's `--max-duration-min` budget clip now
+> only applies when ffmpeg is present — cycle-1's fix clipped the budget
+> whenever the flag was set, even on an ffmpeg-less box where the download
+> itself is never actually clipped (`download_audio` only emits
+> `--download-sections` inside its ffmpeg branch), which sized a premature
+> timeout for a download that was really pulling the full media; (2) §10.3's
+> "EVERY missing component" `remediation` contract is narrowed to ONLY
+> flow-blocking gaps (yt-dlp / ffmpeg / no-ASR-capability-at-all) — it made
+> `remediation == []` / `✓ Ready.` unattainable on any correctly-provisioned
+> box short of all three local ASR engines installed simultaneously
+> (impossible on Linux); non-blocking gaps (an alternative local ASR engine,
+> or the no-local-ASR note on a cloud-configured box) now surface only as
+> informational lines in the human report, never in `remediation`; (3) §10.4's
+> host-derived auth cookie hint strips a `www.`/`mobile.` label before
+> printing the convention path, but `_auth.resolve_cookies_file`'s convention
+> lookup was unchanged — a dead end for 4 of the 6 documented X hosts. The
+> resolver now carries the matching `www`/`mobile`/`m` label-stripped
+> fallback (exact-host file still wins when both exist), so the hinted path
+> always round-trips.
+
+Origin: the 004-broadcast import (2026-07-09) — a ~70-min X Broadcast (2089 HLS fragments)
+timed out on the **serial** media download (~120 KB/s) while `yt-dlp -N 16` pulled the same
+media at ~2.2 MB/s (≈18×). Four design changes, all confined to the existing forward surface
+(`_ytdlp_media.py` / `x.py` / `fetch.py` / `_config.py` / `install_components.py`);
+youtube/vimeo/skool byte-stable (HS-1 preserved).
+
+### 10.1 Parallel fragment download (S1)
+
+`download_audio()` gains `concurrent_fragments: Optional[int]` and always emits
+`--concurrent-fragments <N>` on the **media** argv (yt-dlp ignores it for single-file
+progressive downloads — safe no-op). Resolution: CLI `--concurrent-fragments` >
+`TRANSCRIPT_FETCHER_CONCURRENT_FRAGMENTS` (env/.env) > `DEFAULT_CONCURRENT_FRAGMENTS = 8`
+(module constant, `_ytdlp_media.py`).
+
+**Layered validation contract** (three distinct layers, per RTM R2b/R3b — do NOT collapse):
+
+1. **CLI** `--concurrent-fragments <= 0` → **UsageError exit 2** (mirrors the existing
+   `--timeout-sec` / `--asr-timeout-sec` / `--max-duration-min` validators in `fetch.py`).
+2. **env/config** non-positive or malformed → silently fall back to the default **8**
+   (config never crashes a run — the `_config` contract).
+3. The resolved value is then **capped at 32** in `download_audio` (upper bound only in
+   practice — neither upstream layer yields `< 1`; the `max(1, …)` guard is defensive).
+   Bounded to avoid rate-limit trips (spec §Risks); `1` reproduces serial behaviour for
+   A/B debugging.
+
+The caption/subtitle argv paths are **unchanged** (single files today, per spec).
+
+### 10.2 Split probe/media budgets (S2)
+
+`--timeout-sec` (180 s default) stays the **probe + caption** per-attempt budget (≤60 s
+socket). The media download gets its own budget resolved as: CLI `--media-timeout-sec`
+(`<= 0` → UsageError exit 2) > `TRANSCRIPT_FETCHER_MEDIA_TIMEOUT_SEC` (malformed → ignored) >
+`media_timeout_for(duration_s)` — a pure helper in `_ytdlp_media.py` returning
+`min(21600, max(600, duration_s × 4))` when the probe reported a positive, finite duration,
+else **1800 s** (X Broadcasts commonly probe `duration: None`, closing OQ-1's practical gap).
+`x.py` computes the effective budget once (it owns `info`) and passes it only to
+`download_audio`; silence-removal and ASR keep their existing `asr_timeout_sec` budgets.
+
+**Amended (adversarial cycle 1):** the derived floor is now bounded on BOTH ends:
+
+1. **Upper cap — 21600 s (6h).** An uncapped `duration_s × 4` on a pathological/un-clipped
+   probed duration (e.g. a 10-hour broadcast → 144000 s / 40h) turned the per-attempt budget
+   into a multi-day hang ceiling that only yt-dlp's own (much shorter) socket-timeout would
+   ever actually bound in practice. A per-attempt timeout exists to cap a HANG, not to model
+   the expected wait — 6h is generous headroom over any realistic single-attempt media pull.
+2. **Clip-awareness.** `--max-duration-min` clips the ACTUAL download (`download_audio`'s
+   `--download-sections`), but the pre-amendment budget derived from the FULL probed
+   duration regardless — a `--max-duration-min 10` run against a 6-hour broadcast got a
+   budget sized for the whole 6 hours instead of the ~10 minutes actually being pulled. `x.py`
+   now computes `effective_duration = min(probed_duration, max_duration_min × 60)` (when the
+   clip is active and the probed duration is a positive number) BEFORE calling
+   `media_timeout_for`. An explicit CLI/env `--media-timeout-sec` still wins unchanged over
+   both the cap and the clip — it is the operator's deliberate override.
+
+`media_timeout_for` also now coerces `duration_s` defensively (`float()` in a try/except) —
+`Infinity`/`NaN` round-trip through yt-dlp's `-J` JSON on a pathological extractor value, and
+a caller may hand in a numeric string; unparseable/non-finite/non-positive/`None` all fall
+back to 1800 s rather than raising `OverflowError`/`TypeError`. A FINITE but astronomical
+`duration_s` (e.g. `1e308`) is also handled (cycle-3 INFO fix): once `d >= 5400` the 21600 s
+cap is returned directly, before ever computing `d * 4` — for `d` near the float max that
+product overflows to `inf`, and `int(inf)` raises `OverflowError`.
+
+**Amended (adversarial cycle 3) — clip conditioned on ffmpeg.** Step 2 above clipped the
+budget whenever `--max-duration-min` was set and the probed duration was positive — but
+`download_audio`'s `--download-sections` (the clip that ACTUALLY bounds the download) is only
+emitted inside its `ffmpeg_available()` branch (§10.1/x.py). Without ffmpeg, a progressive
+(non-HLS) X video is downloaded in full regardless of `--max-duration-min`, so a budget sized
+for the clip was premature — `x.py` now gates the clip on `ytm.ffmpeg_available()` too: no
+ffmpeg → `effective_duration` stays the FULL probed duration, matching what is actually
+downloaded.
+
+### 10.3 `fetch.py doctor` (S3) — readiness without $PATH guessing
+
+Positional subcommand dispatched **before** the normal argparse contract (additive; `doctor`
+is not a valid URL, so no collision). Reports: resolved interpreter (`sys.executable`),
+in-venv flag, yt-dlp presence + version, ffmpeg + each ASR backend, cloud opt-in state.
+
+**Import-free by construction (resolves the `_components()` contradiction):**
+`install_components._have_yt_dlp()` is **refactored** to probe via
+`importlib.metadata.version("yt-dlp")` (distribution metadata, no module import) instead of
+`import yt_dlp` — so `_components()` itself becomes import-free and the doctor **reuses the
+whole `_components()` list** (one source of truth, no logic fork). The doctor deliberately
+never uses `shutil.which("yt-dlp")` (vendored in the venv — the false-negative that caused
+the 004 detour). Exit **0** when yt-dlp (the only hard dep) is present, **7** otherwise;
+`--json` emits a stable envelope `{v, interpreter, in_venv, ready, components:{…},
+remediation:[…]}`. No network, no heavy imports — the probe stays cheap (spec §Risks).
+**Secrets discipline:** the cloud row reports only a **boolean** key-presence
+(`key_present: true|false`) — never the key value, in either human or `--json` output
+(preserves `_config`'s never-log-secrets invariant).
+
+**Amended (adversarial cycle 1) — remediation contract widened.** The original design built
+`remediation` only from `required: True` components (yt-dlp alone) plus a single no-local-ASR
+hint. This let a missing **ffmpeg** — labelled "REQUIRED for X Broadcast/Space ASR" in its own
+row, and a hard `exit 7` for any HLS-only X source — produce `remediation: []` and a bare
+`✓ Ready.` human line, a false all-clear for the exact pre-flight scenario `doctor` exists to
+catch. The contract now:
+
+1. Iterates EVERY component in `_components()` (not just `required: True`) and, for each
+   `present: False`, appends `"<key> — <install_hint>"` to `remediation` — ffmpeg gets bespoke
+   wording ("needed for X Broadcast/Space (HLS) ASR and by whisper/whisper.cpp at runtime")
+   since it back-stops BOTH the HLS path and the whisper-family backends despite being an
+   optional (`required: False`) component itself.
+2. The no-local-ASR hint is **cloud-aware**: when the synthetic `cloud` row already resolves
+   (`key_present AND allow_cloud`), the hint is replaced with an informational note
+   ("caption-less media will use the cloud backend") instead of demanding a redundant local
+   install; otherwise it states the consequence explicitly ("caption-less X media
+   (Broadcasts/Spaces) will exit 7").
+3. Human mode now distinguishes three states: `✓ Ready.` (remediation empty — nothing to
+   report), `✓ Core ready (yt-dlp present) — gaps above may block specific flows.`
+   (yt-dlp present, `remediation` non-empty — the CLI itself works but a listed gap may bite a
+   specific flow), or the bare `Remediation:` block with no extra summary line (yt-dlp absent
+   — the block itself IS the failure output).
+
+Exit semantics are UNCHANGED (`0` iff yt-dlp present, R5d) — a non-empty `remediation` with
+`ready: true` means "usable, but gaps remain", not failure. The JSON envelope's KEYS are
+unchanged (`{v, interpreter, in_venv, ready, components, remediation}`); only the population
+of `remediation` widened.
+
+**Amended (adversarial cycle 3) — narrowed to flow-blocking gaps.** The cycle-1 widening above
+("EVERY missing component") over-corrected: on the flagship recommended box (yt-dlp + one
+local ASR engine + ffmpeg — sufficient for every documented flow) it still emitted install
+hints for the OTHER, unneeded local ASR engines, making `remediation == []` / `✓ Ready.`
+unattainable except with all three local engines installed simultaneously (impossible on
+Linux, where MacWhisper does not exist). `remediation` now contains ONLY the three
+flow-blocking gap kinds — yt-dlp missing, ffmpeg missing, or NO ASR capability at all (no
+local backend present AND NOT (cloud `key_present` AND `allow_cloud`)) — never an individual
+missing ALTERNATIVE local ASR engine while ASR capability resolves elsewhere. Those
+non-blocking gaps (including the no-local-ASR note on an already cloud-configured box) are
+demoted to informational-only: an indented `→ <install_hint>` line under each missing
+component's row in the human report (mirroring `install_components._print_report`), plus one
+extra informational note line for the cloud-configured case — never JSON `remediation`. The
+envelope's KEYS and exit semantics are unchanged; only the population of `remediation`
+narrowed back down to genuinely flow-blocking gaps.
+
+### 10.4 Transient-failure classification (S4) + cookie contract surfacing (S6)
+
+`classify_failure()` gains a `"transient"` category scoped to the skill-authored
+**audio-download** timeout message (`"timeout downloading audio"`); the probe timeout
+(`"timeout probing metadata"`) is deliberately NOT transient (concurrency/media budget cannot
+fix it). `_raise_for_failure` maps `"transient"` → `TranscriptFetchError` with a
+`remediation` attr (mirrors `MissingDependencyError`) naming `--concurrent-fragments` /
+`--media-timeout-sec`; `fetch.py` surfaces `details.remediation` in the JSON envelope for
+single-URL and a top-level `remediation` field for batch records (mirroring the existing batch
+`MissingDependencyError` record shape — the two modes intentionally use DIFFERENT envelope
+shapes, not a shared `details.remediation`). Exit codes unchanged (3 / 4).
+The auth branch names the cookie **refresh** path: the resolved cookies file when one fed
+the request, else the convention path to create.
+
+**Amended (adversarial cycle 1) — three deltas:**
+
+1. **Ordering + match rule hardened.** `classify_failure` originally checked the transient
+   substring FIRST (before auth/rate/hard) and matched anywhere in the string. Because the
+   function is also fed raw yt-dlp stderr from the metadata probe / caption download / non-
+   timeout download failures (a channel that can echo server-supplied free text), a
+   server-influenced message that happened to CONTAIN the phrase mid-string could spoof
+   `"transient"` over a correct (and more actionable) auth/rate/hard classification. The check
+   now runs LAST and matches via `str.startswith` — an exact match for the internally-authored
+   sentinel (which replaces stderr wholesale on `TimeoutExpired`), and no longer matchable
+   mid-string by third-party text.
+2. **Remediation is now message-visible, not just attribute-visible.** The transient hint
+   originally lived ONLY in the `remediation` attribute / `details.remediation` JSON field —
+   `str(e)` (and hence the default non-`--json-errors` stderr line) never named
+   `--concurrent-fragments`/`--media-timeout-sec`. `fetch.py`'s `_emit_error` now prints a
+   second stderr line (`remediation: <text>`) whenever `details` carries a `remediation` key,
+   in BOTH the transient-timeout and `MissingDependencyError` cases, so the fix is visible
+   without `--json-errors`.
+3. **Rate-limit hint gains a concurrency note; auth hint's cookie filename is host-derived.**
+   A 429 caused by the new 8-way parallel fragment default previously said only "retry
+   later" with no link back to `--concurrent-fragments` — `_raise_for_failure` gains a
+   `media_download: bool` parameter (`True` ONLY from the audio-download failure call site,
+   not the metadata-probe one) that appends a `--concurrent-fragments` hint to the rate-limit
+   message when set. Separately, the auth hint's convention cookie filename was hardcoded to
+   `x.com-cookies.txt` regardless of the failing URL's actual host — a dead end for the other
+   5 documented X hosts (`twitter.com`, `www.x.com`, `mobile.x.com`, `www.twitter.com`,
+   `mobile.twitter.com`), since `_auth.resolve_cookies_file`'s convention lookup keys on the
+   EXACT hostname with no aliasing. The hint now derives the host from the failing URL
+   (`www.`/`mobile.` labels stripped) — e.g. `~/.transcript-fetcher/twitter.com-cookies.txt`
+   for a `twitter.com` URL, `~/.transcript-fetcher/x.com-cookies.txt` for an `x.com` one.
+
+**Amended (adversarial cycle 3) — the hint/resolver mismatch from delta 3 above, closed.**
+Delta 3 stripped `www.`/`mobile.` from the printed hint but left
+`_auth.resolve_cookies_file`'s convention lookup untouched — it still keyed on the EXACT URL
+hostname, so the hinted file was a dead end for 4 of the 6 documented X hosts (`www.x.com`,
+`mobile.x.com`, `www.twitter.com`, `mobile.twitter.com`): creating the file the hint named did
+NOT make the next attempt find it. `resolve_cookies_file` now carries the matching fallback —
+if the exact-host convention file is absent AND the host's first label is one of the three
+well-known mirror prefixes (`www`, `mobile`, `m`), it also tries the same file with that label
+stripped (exact-host file still wins when both exist). This is deliberately narrow — only a
+single well-known label strip, never a generic parent-domain walk (which would widen the
+cookie-leak surface) — so the printed hint now round-trips for all 6 allowlisted X hosts.
+
+SKILL.md §Dependencies (vendored yt-dlp warning + doctor), §ASR portability (backend chain +
+exit-7 remediation) and §X cookies (convention `<host>-cookies.txt`, auth-map for custom
+names) document S3/S5/S6.

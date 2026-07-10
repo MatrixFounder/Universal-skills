@@ -78,6 +78,160 @@ class TestDownloadAudioArgv(unittest.TestCase):
             self.assertNotIn("-x", argv)
 
 
+class TestConcurrentFragments(unittest.TestCase):
+    """`--concurrent-fragments` argv wiring on the media download (arch-016 §10.1,
+    task-029.01 TC-01..04). ffmpeg is mocked absent so the argv assertions stay
+    independent of whether the host actually has ffmpeg installed."""
+
+    @staticmethod
+    def _download_argv(**kwargs) -> list:
+        captured: dict = {}
+        with tempfile.TemporaryDirectory() as d:
+            workdir = Path(d)
+
+            def fake_run(args, **kw):
+                captured["argv"] = list(args)
+                (workdir / "media.mp4").write_bytes(b"x")
+                return _proc(0)
+
+            with mock.patch.object(ytm, "ffmpeg_available", return_value=False), \
+                 mock.patch.object(ytm.subprocess, "run", side_effect=fake_run):
+                ytm.download_audio("https://x.com/i/broadcasts/z", workdir, **kwargs)
+        return captured["argv"]
+
+    def test_default_emits_8(self) -> None:
+        argv = self._download_argv()
+        self.assertIn("--concurrent-fragments", argv)
+        i = argv.index("--concurrent-fragments")
+        self.assertEqual(argv[i + 1], "8")
+        # Regression: the pre-existing non-concurrency argv shape is unchanged.
+        self.assertIn("-f", argv)
+        self.assertIn("--output", argv)
+        self.assertIn("--no-playlist", argv)
+
+    def test_explicit_value_passed_through(self) -> None:
+        argv = self._download_argv(concurrent_fragments=16)
+        i = argv.index("--concurrent-fragments")
+        self.assertEqual(argv[i + 1], "16")
+
+    def test_over_range_clamped_to_32(self) -> None:
+        argv = self._download_argv(concurrent_fragments=99)
+        i = argv.index("--concurrent-fragments")
+        self.assertEqual(argv[i + 1], "32")
+
+    def test_serial_value_of_1_reproduces_pre_029_behaviour(self) -> None:
+        argv = self._download_argv(concurrent_fragments=1)
+        i = argv.index("--concurrent-fragments")
+        self.assertEqual(argv[i + 1], "1")
+
+
+class TestClassifyFailureTransient(unittest.TestCase):
+    """`classify_failure()` "transient" bucket (arch-016 §10, task 029.02, R7).
+
+    Scoped to the media-download socket-timeout phrase ONLY — a metadata-probe
+    timeout must NOT be classified as transient (the concurrency/media-budget
+    remediation cannot fix a slow probe)."""
+
+    def test_audio_download_timeout_is_transient(self) -> None:
+        self.assertEqual(
+            ytm.classify_failure("timeout downloading audio (>1800s)"),
+            "transient",
+        )
+
+    def test_probe_timeout_is_not_transient(self) -> None:
+        self.assertNotEqual(
+            ytm.classify_failure("timeout probing metadata (>180s)"),
+            "transient",
+        )
+
+    def test_auth_rate_hard_still_intact(self) -> None:
+        # Regression: adding the transient bucket must not disturb the
+        # pre-existing auth/rate/hard classification.
+        self.assertEqual(
+            ytm.classify_failure("ERROR: This account is protected"), "auth"
+        )
+        self.assertEqual(
+            ytm.classify_failure("ERROR: HTTP Error 429: Too Many Requests"), "rate"
+        )
+        self.assertEqual(
+            ytm.classify_failure("ERROR: This broadcast is unavailable"), "hard"
+        )
+
+    def test_mid_string_embedded_phrase_from_server_text_not_transient(self) -> None:
+        # INFO-2 lock: the sentinel is matched via startswith, not substring.
+        # A server-influenced free-text stderr that happens to CONTAIN the
+        # phrase mid-string (not as the whole authored message) must NOT be
+        # classified transient.
+        self.assertNotEqual(
+            ytm.classify_failure(
+                "ERROR: server said timeout downloading audio was reported "
+                "upstream, please retry"
+            ),
+            "transient",
+        )
+
+    def test_authored_message_still_transient(self) -> None:
+        # The internally-authored TimeoutExpired message (download_audio
+        # replaces stderr wholesale on timeout) — startswith is an exact
+        # match for it.
+        self.assertEqual(
+            ytm.classify_failure("timeout downloading audio (>1800s)"),
+            "transient",
+        )
+
+    def test_authored_style_string_with_auth_phrase_auth_wins(self) -> None:
+        # An authored-shaped string that ALSO carries an auth phrase must
+        # classify as auth, not transient — auth/rate/hard are checked first.
+        self.assertEqual(
+            ytm.classify_failure(
+                "timeout downloading audio: this account is protected"
+            ),
+            "auth",
+        )
+
+
+class TestMediaTimeoutFor(unittest.TestCase):
+    """Pure-helper table test for `media_timeout_for()` (arch-016 §10.2, TC-05)."""
+
+    def test_no_duration_falls_back_to_generous_default(self) -> None:
+        self.assertEqual(ytm.media_timeout_for(None), 1800)
+        self.assertEqual(ytm.media_timeout_for(0), 1800)
+
+    def test_short_duration_floors_at_600(self) -> None:
+        self.assertEqual(ytm.media_timeout_for(100), 600)
+
+    def test_long_duration_scales_by_4x(self) -> None:
+        self.assertEqual(ytm.media_timeout_for(4200), 16800)
+
+    def test_absurd_duration_capped_at_21600(self) -> None:
+        # F3/F7 lock: a pathological/un-clipped duration must not yield a
+        # multi-day budget — 36000s*4 = 144000s uncapped, but capped at 21600.
+        self.assertEqual(ytm.media_timeout_for(36000), 21600)
+
+    def test_numeric_string_accepted(self) -> None:
+        # INFO-1 lock: yt-dlp's -J JSON value may arrive as a numeric string
+        # via a direct-library caller; media_timeout_for must coerce it.
+        self.assertEqual(ytm.media_timeout_for("4200"), 16800)
+
+    def test_non_finite_and_unparseable_fall_back_to_1800(self) -> None:
+        # INFO-1 lock: OverflowError on int(inf*4) / TypeError on a bad str
+        # must both fall back to the generous default, never raise.
+        self.assertEqual(ytm.media_timeout_for(float("inf")), 1800)
+        self.assertEqual(ytm.media_timeout_for(float("nan")), 1800)
+        self.assertEqual(ytm.media_timeout_for("abc"), 1800)
+
+    def test_astronomical_finite_duration_capped_without_overflow(self) -> None:
+        # cycle-2 INFO lock: a FINITE duration whose x4 product would overflow
+        # to float `inf` (e.g. 1e308) must still return the 21600 cap, not
+        # raise OverflowError out of `int(d * 4)`.
+        self.assertEqual(ytm.media_timeout_for(1e308), 21600)
+        self.assertEqual(ytm.media_timeout_for(4.5e307), 21600)
+        self.assertEqual(ytm.media_timeout_for(1.7e308), 21600)
+        # Boundary: exactly at the 5400s early-return threshold (5400*4 ==
+        # 21600, so this is a no-op boundary check, not a behaviour change).
+        self.assertEqual(ytm.media_timeout_for(5400), 21600)
+
+
 class TestProbeMetadataBrowserCookies(unittest.TestCase):
     def test_browser_cookies_in_probe_argv(self) -> None:
         captured: dict = {}

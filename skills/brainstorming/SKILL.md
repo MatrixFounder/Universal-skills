@@ -4,7 +4,6 @@ description: Use when brainstorming ideas, exploring solutions, generating optio
 tier: 2
 version: 3.1
 status: active
-changelog: v3.1 — VDD-Adversarial review pass. Added Knowledge Depth, First Principles, Wild Card, Second-Order Thinking, Pre-Mortem. Added Commitment mechanism. Operationalized techniques via references/ideation_techniques.md. Fixed duplication and placeholders.
 ---
 
 # Universal Brainstorming Protocol

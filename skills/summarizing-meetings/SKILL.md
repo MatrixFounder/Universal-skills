@@ -8,13 +8,6 @@ description: >-
 tier: 2
 version: 2.0
 status: active
-changelog: >-
-  v2.0 — Universalized: added a content-class axis (transcript vs document/article/paper/thread),
-  an orthogonal opt-in structured note-JSON output (`--emit note-json`, language-neutral fields)
-  for knowledge-base / wiki import, known-concepts reconciliation, verbatim-quote + clean-name
-  discipline, and an
-  explicit (no-silent) language/translation policy. v1.0 meeting pyramid path is unchanged
-  (default invocation is byte-for-byte back-compatible). v1.0 — Initial meeting meta-skill.
 ---
 
 # Summarizing — Universal Summarization Meta-Skill (model-agnostic)

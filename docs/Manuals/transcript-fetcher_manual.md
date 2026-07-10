@@ -1,9 +1,9 @@
 # Transcript Fetcher Manual
 
 Practical reference for the [`transcript-fetcher`](../../skills/transcript-fetcher/)
-skill (v1.1): pull a clean plain-text transcript from a video URL or
-Skool classroom lesson, optionally save its description / metadata
-sidecar, emit a JSON stat record alongside.
+skill (v1.3): pull a clean plain-text transcript from a YouTube / Vimeo /
+X.com (Twitter) video URL or Skool classroom lesson, optionally save its
+description / metadata sidecar, emit a JSON stat record alongside.
 
 This manual is for **users** of the skill. For the design rationale
 and adversarial-review notes, see
@@ -15,7 +15,8 @@ and adversarial-review notes, see
 
 | Capability | Detail |
 |---|---|
-| **Sources (v1.1)** | **YouTube** + **Vimeo** (both via `yt-dlp`) + **Skool** classroom lessons (`/<community>/classroom/<id>?md=<lesson-id>` via stdlib HTML scrape). Any other host is rejected by the hostname allowlist with `ValueError: Unsupported source for URL: ...`. Zoom / podcast adapter slots remain reserved — see [`references/supported_sources.md`](../../skills/transcript-fetcher/references/supported_sources.md). |
+| **Sources (v1.3)** | **YouTube** + **Vimeo** (both via `yt-dlp`) + **Skool** classroom lessons (`/<community>/classroom/<id>?md=<lesson-id>` via stdlib HTML scrape) + **X.com / Twitter** (native status video AND Broadcasts/Spaces — captions-first, ASR fallback when caption-less). Any other host is rejected by the hostname allowlist with `ValueError: Unsupported source for URL: ...`. Zoom / podcast adapter slots remain reserved — see [`references/supported_sources.md`](../../skills/transcript-fetcher/references/supported_sources.md). |
+| **X.com / Twitter** | Status video and Broadcasts/Spaces (`x.com`, `twitter.com`, plus `www.`/`mobile.` variants). Embedded captions win when present; caption-less media falls back to ASR (MacWhisper → Whisper CLI → whisper.cpp → opt-in cloud) — see §4. ffmpeg is required for Broadcast/Space (HLS) sources. |
 | **Skool delegation** | When a Skool lesson embeds a YouTube / Vimeo video, the adapter delegates the transcript fetch to that source's adapter; description metadata always comes from the Skool lesson itself. Loom / Wistia / native Skool MP4 are flagged `embed_source_unsupported` (description still written). When an author has filled the lesson's `transcript` field, that text wins outright. |
 | **Auth** | `--cookies-file <Netscape cookies.txt>` is **ALWAYS OPTIONAL**. Skool public communities (e.g. `zero-one`) serve lessons without auth; private / paid ones answer HTTP 401/403 → `SourceAuthError` (exit code 5). Cookies are also forwarded to yt-dlp's `--cookies` when supplied (age-gated YouTube, private Vimeo, etc.). |
 | **Caption tracks** | Manual (user-uploaded) and auto-generated. The fallback ladder picks the highest-quality track for a given language. |
@@ -50,6 +51,42 @@ Verify:
 ./scripts/.venv/bin/python -m yt_dlp --version
 # 2026.03.17  (or newer in the same major)
 ```
+
+`yt-dlp` is **vendored inside `scripts/.venv`** — it is intentionally
+never installed on `$PATH`. Do **NOT** `which yt-dlp` (it will report
+"not found" even on a correctly-bootstrapped skill) or `pip install` /
+`brew install` a duplicate globally. The canonical one-command
+readiness check is the `doctor` subcommand:
+
+```bash
+./scripts/.venv/bin/python scripts/fetch.py doctor
+# human-readable: interpreter, in-venv flag, yt-dlp version, ffmpeg,
+# each ASR backend, cloud opt-in state, and remediation for any gap.
+./scripts/.venv/bin/python scripts/fetch.py doctor --json
+# machine-readable: {v, interpreter, in_venv, ready, components, remediation}
+```
+
+Exits `0` when yt-dlp (the only hard dependency) is present, `7` with an
+actionable remediation line otherwise. `remediation` names ONLY the gaps
+that can actually block a flow: yt-dlp missing (the skill cannot run at
+all), ffmpeg missing (it back-stops X Broadcast/Space HLS ASR and
+whisper/whisper.cpp at runtime even though it is itself an optional
+component), or no ASR capability at all (no local backend present AND no
+fully-configured cloud opt-in — caption-less X media will exit `7`). An
+individual missing ALTERNATIVE local ASR engine — e.g. Whisper CLI absent
+while MacWhisper is present, or all three local engines absent while
+`--asr-allow-cloud` + an API key are already configured — is never a
+flow-blocking gap, so it never appears in `remediation`; it still shows as
+a `[✗]` row with an indented install-hint line in the human report, purely
+informational. Human mode prints `✓ Ready.` only when `remediation` is
+empty — reachable with just a single local ASR engine + ffmpeg + yt-dlp, or
+a working cloud backend, NOT all three local engines installed at once;
+when yt-dlp is present but a flow-blocking gap remains it prints `✓ Core
+ready (yt-dlp present) — gaps above may block specific flows.` instead.
+Never network access, never a heavy import. Run it before a long X
+Broadcast/Space import to confirm ffmpeg + an ASR backend are available
+(see §8 Troubleshooting) — an EMPTY `remediation` is the signal that no
+flow-blocking gap remains.
 
 ---
 
@@ -173,7 +210,9 @@ for X, `<lesson-id>.txt` for Skool. Exit code `4` if any URL failed;
 | `--with-description` | off | Also write `<out>.description.md` (YAML frontmatter + Markdown body) and populate metadata fields in the stat sidecar. |
 | `--description-only` | off | Skip the transcript download entirely; produce only the description sidecar. Implies `--with-description`. |
 | `--cookies-file PATH` | none | Netscape `cookies.txt`. Optional for every source; Skool needs it only for private communities, yt-dlp uses it for age-gated content. |
-| `--timeout-sec` | `180` | Per-attempt yt-dlp / HTTP timeout. Worst-case wall-clock = `(ladder_steps + 1) × timeout_sec` if every attempt times out. For long X Broadcasts raise it (the audio download counts against it). |
+| `--timeout-sec` | `180` | Per-attempt yt-dlp / HTTP timeout for the **metadata probe and caption download only**. Worst-case wall-clock = `(ladder_steps + 1) × timeout_sec` if every attempt times out. Since TASK 029 the X **media** (audio) download no longer counts against this budget — it has its own `--media-timeout-sec` below. |
+| `--concurrent-fragments N` | `8` | (X) Parallel HLS fragment downloads for the media (audio) download (yt-dlp `-N`; also `TRANSCRIPT_FETCHER_CONCURRENT_FRAGMENTS`). `1` reproduces serial (pre-029) behaviour. Three DISTINCT layers, not one shared clamp: values above `32` are capped at `32`; the CLI flag rejects `<= 0` with exit `2` (not clamped — rejected); the env var falls back to the default `8` on a non-positive or malformed value. Ignored by YouTube/Vimeo/Skool (progressive downloads). |
+| `--media-timeout-sec N` | duration-derived, else `1800` | (X) Per-attempt timeout budget for the media (audio) download only — separate from `--timeout-sec` above (also `TRANSCRIPT_FETCHER_MEDIA_TIMEOUT_SEC`). Default: `min(21600, max(600, duration_sec × 4))` when the probe reported a duration — capped at `21600`s (6h; the budget is a hang ceiling, not an expected wait) — else `1800` (Broadcasts often probe `duration: None`). When `--max-duration-min` clips the download AND ffmpeg is present (the only case where the download itself is clipped — see the `--max-duration-min` row below), the floor is derived from the CLIPPED duration (`min(duration_sec, max_duration_min × 60)`), not the full probed one — a `--max-duration-min 10` run on a 6-hour broadcast gets a budget sized for ~10 minutes of media, not 6 hours. Without ffmpeg, a progressive (non-HLS) download is NOT clipped, so the budget stays sized for the FULL probed duration. An explicit `--media-timeout-sec`/env value always wins over both the duration-derived floor and the clip. |
 | `--on-collision error\|skip\|suffix` | `error` | Batch mode behaviour when two URLs share an output filename. |
 | `--json-errors` | off | Emit failure messages as a single JSON line on stderr (machine-readable). |
 | `--debug` | off | (X) Print pipeline stages to stderr (also `TRANSCRIPT_FETCHER_DEBUG=1`). Stdout stays pure JSON. |
@@ -192,7 +231,7 @@ for X, `<lesson-id>.txt` for Skool. Exit code `4` if any URL failed;
 | `0` | Success. |
 | `1` | Unexpected error (uncategorized exception). |
 | `2` | Usage error (bad flag combo, malformed URL, cookies file missing on disk, Skool URL not a lesson). |
-| `3` | `TranscriptFetchError` — no caption track in the fallback ladder (transcript path). |
+| `3` | `TranscriptFetchError` — no transcript producible: no caption track in the fallback ladder; for X also ASR produced nothing / every available backend failed, or the media (audio) download timed out — the timeout case is transient/retryable: re-run with `--concurrent-fragments` / `--media-timeout-sec` (the error's own `remediation:` line says so). |
 | `4` | Batch mode: at least one URL failed (partial success). |
 | `5` | `SourceAuthError` — source returned HTTP 401/403 (private Skool needs cookies; X protected/suspended/age-gated; cookies expired). |
 | `6` | `SourceRateLimitError` — source returned HTTP 429. |
@@ -488,8 +527,8 @@ A required external tool is absent. The message + `details.remediation`
 | Cause | Fix |
 |---|---|
 | yt-dlp not installed | `bash scripts/install.sh` (re-creates the venv). |
-| **No ASR backend** for caption-less X media | Install MacWhisper (`mw`), or `./scripts/.venv/bin/python scripts/install_components.py --install-whisper` (Whisper CLI + ffmpeg), or run with `--asr-allow-cloud` + an API key. Run `install_components.py` for a status report. |
-| ffmpeg required but absent | Only the Whisper/whisper.cpp backends need it; MacWhisper does not. `brew install ffmpeg` or `install_components.py --system --run`. |
+| **No ASR backend** for caption-less X media | Install MacWhisper (`mw`), or `./scripts/.venv/bin/python scripts/install_components.py --install-whisper` (in-venv Whisper CLI; it needs ffmpeg at runtime — `--system --run` installs that separately), or run with `--asr-allow-cloud` + an API key. Run `fetch.py doctor` for a status report. |
+| ffmpeg required but absent | Whisper CLI / whisper.cpp need it at ASR runtime with ANY media. Separately, ANY X Broadcast/Space (HLS source) needs ffmpeg to produce a valid container the ASR engine can open — the skill fails fast on this **before** the download, with **any** backend including MacWhisper (`mw` itself doesn't need ffmpeg, but an HLS source can't reach it without one). `brew install ffmpeg` or `install_components.py --system --run`. |
 
 This is distinct from exit `3` (`TranscriptFetchError`): exit 7 means
 the toolchain is incomplete; exit 3 means the tools ran but no transcript
@@ -556,9 +595,12 @@ serve a large body).
 - **Zoom and podcast adapters reserved, not implemented.** Slots are
   documented in
   [`references/supported_sources.md`](../../skills/transcript-fetcher/references/supported_sources.md).
-- **No Whisper fallback.** Videos / native Skool MP4s with no captions
-  cannot be transcribed by this skill. Pair with a separate Whisper
-  invocation for caption-less content.
+- **No ASR retrofit for YouTube/Vimeo/Skool (TF-X-1, by design).** Caption-less
+  YouTube/Vimeo videos or native Skool MP4s still exit `3` (no transcript
+  producible) — pair with a separate Whisper invocation for those. X.com
+  media is the exception: caption-less X status video and Broadcasts/Spaces
+  ARE transcribed automatically, via the built-in ASR fallback chain
+  (MacWhisper → Whisper CLI → whisper.cpp → opt-in cloud; see §4).
 - **Cookies path appears in `ps` output** when forwarded to yt-dlp via
   `--cookies <path>`. The value (cookies themselves) is not exposed;
   only the file path is. Use a path outside of shared mounts when this

@@ -95,6 +95,65 @@ class TestResolution(unittest.TestCase):
                 self.assertEqual(r.name, "x.com-cookies.txt")
 
 
+class TestConventionMirrorPrefixFallback(unittest.TestCase):
+    """FIX-1 (cycle 3): the auth-hint printed by x.py's exit-5 message names the
+    STRIPPED-host convention file for a www./mobile./m. URL — the resolver must
+    actually find that file for the round-trip to work (closes the F10
+    residual: 4 of 6 documented X hosts were a dead end)."""
+
+    def test_www_x_com_resolves_x_com_cookies_via_fallback(self) -> None:
+        with tempfile.TemporaryDirectory() as d:
+            _cookies(d, name="x.com-cookies.txt")
+            with mock.patch.object(_auth, "DEFAULT_AUTH_DIR", Path(d)), \
+                 mock.patch.dict(os.environ, {}, clear=False):
+                os.environ.pop(_auth._ENV_AUTH_MAP, None)
+                r = _auth.resolve_cookies_file("https://www.x.com/jack/status/1")
+                self.assertIsNotNone(r)
+                self.assertEqual(r.name, "x.com-cookies.txt")
+
+    def test_mobile_twitter_com_resolves_twitter_com_cookies(self) -> None:
+        with tempfile.TemporaryDirectory() as d:
+            _cookies(d, name="twitter.com-cookies.txt")
+            with mock.patch.object(_auth, "DEFAULT_AUTH_DIR", Path(d)), \
+                 mock.patch.dict(os.environ, {}, clear=False):
+                os.environ.pop(_auth._ENV_AUTH_MAP, None)
+                r = _auth.resolve_cookies_file(
+                    "https://mobile.twitter.com/jack/status/1"
+                )
+                self.assertIsNotNone(r)
+                self.assertEqual(r.name, "twitter.com-cookies.txt")
+
+    def test_exact_host_file_wins_over_stripped_when_both_exist(self) -> None:
+        with tempfile.TemporaryDirectory() as d:
+            _cookies(d, name="www.x.com-cookies.txt")
+            _cookies(d, name="x.com-cookies.txt")
+            with mock.patch.object(_auth, "DEFAULT_AUTH_DIR", Path(d)), \
+                 mock.patch.dict(os.environ, {}, clear=False):
+                os.environ.pop(_auth._ENV_AUTH_MAP, None)
+                r = _auth.resolve_cookies_file("https://www.x.com/jack/status/1")
+                self.assertEqual(r.name, "www.x.com-cookies.txt")
+
+    def test_lookalike_prefix_without_dot_boundary_not_stripped(self) -> None:
+        # "wwwx.com" — the first label is "wwwx", NOT "www" + a dot boundary —
+        # must never fall back to "x.com-cookies.txt".
+        with tempfile.TemporaryDirectory() as d:
+            _cookies(d, name="x.com-cookies.txt")
+            with mock.patch.object(_auth, "DEFAULT_AUTH_DIR", Path(d)), \
+                 mock.patch.dict(os.environ, {}, clear=False):
+                os.environ.pop(_auth._ENV_AUTH_MAP, None)
+                r = _auth.resolve_cookies_file("https://wwwx.com/z")
+                self.assertIsNone(r)
+
+    def test_fallback_file_still_rejected_when_insecure(self) -> None:
+        with tempfile.TemporaryDirectory() as d:
+            _cookies(d, name="x.com-cookies.txt", mode=0o644)
+            with mock.patch.object(_auth, "DEFAULT_AUTH_DIR", Path(d)), \
+                 mock.patch.dict(os.environ, {}, clear=False):
+                os.environ.pop(_auth._ENV_AUTH_MAP, None)
+                with self.assertRaises(_auth.AuthMapError):
+                    _auth.resolve_cookies_file("https://www.x.com/z")
+
+
 class TestHardening(unittest.TestCase):
     def test_auth_map_must_be_0600(self) -> None:
         with tempfile.TemporaryDirectory() as d:

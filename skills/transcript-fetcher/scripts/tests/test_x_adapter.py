@@ -24,6 +24,7 @@ if str(_SCRIPTS) not in sys.path:
 import fetch  # noqa: E402
 import asr  # noqa: E402
 from sources import x as xmod  # noqa: E402
+from sources import _auth  # noqa: E402
 from sources import _ytdlp_media as ytm  # noqa: E402
 from sources._stat import (  # noqa: E402
     MissingDependencyError,
@@ -469,6 +470,396 @@ class TestBatchExit7(unittest.TestCase):
         rec = json.loads(out_buf.getvalue().strip().splitlines()[-1])
         self.assertEqual(rec["type"], "MissingDependencyError")
         self.assertEqual(rec["remediation"], "Install MacWhisper.")
+
+
+class TestMediaBudgetRouting(unittest.TestCase):
+    """Media budget resolved ONCE in x.py and passed ONLY to `download_audio`
+    (arch-016 §10, task 029.02). Probe keeps its own small `timeout_sec`."""
+
+    _INFO_LONG = {
+        "id": "z", "duration": 4200,
+        "subtitles": {}, "automatic_captions": {},
+    }
+    _INFO_NO_DURATION = {
+        "id": "z", "duration": None,
+        "subtitles": {}, "automatic_captions": {},
+    }
+
+    def test_duration_derived_budget_reaches_download_audio(self) -> None:
+        captured: dict = {}
+
+        def fake_download_audio(url, workdir, **kw):
+            captured.update(kw)
+            p = Path(workdir) / "media.m4a"
+            p.write_bytes(b"x")
+            return p, None
+
+        result = asr.ASRResult(text="body", backend_name="macwhisper")
+        with tempfile.TemporaryDirectory() as d:
+            out = Path(d) / "out.txt"
+            with mock.patch.object(ytm, "probe_metadata",
+                                   return_value=(self._INFO_LONG, None)), \
+                 mock.patch.object(ytm, "download_audio",
+                                   side_effect=fake_download_audio), \
+                 mock.patch.object(ytm, "ffmpeg_available", return_value=True), \
+                 mock.patch.object(ytm, "remove_silence",
+                                   return_value=(None, "off")), \
+                 mock.patch.object(asr, "transcribe_with_fallback",
+                                   return_value=result):
+                xmod.fetch_x_transcript(
+                    "https://x.com/i/broadcasts/z", out,
+                    concurrent_fragments=16,
+                )
+        self.assertEqual(captured["timeout_sec"], 16800)  # max(600, 4200*4)
+        self.assertEqual(captured["concurrent_fragments"], 16)
+
+    def test_cli_or_env_override_wins_over_duration(self) -> None:
+        captured: dict = {}
+
+        def fake_download_audio(url, workdir, **kw):
+            captured.update(kw)
+            p = Path(workdir) / "media.m4a"
+            p.write_bytes(b"x")
+            return p, None
+
+        result = asr.ASRResult(text="body", backend_name="macwhisper")
+        with tempfile.TemporaryDirectory() as d:
+            out = Path(d) / "out.txt"
+            with mock.patch.object(ytm, "probe_metadata",
+                                   return_value=(self._INFO_LONG, None)), \
+                 mock.patch.object(ytm, "download_audio",
+                                   side_effect=fake_download_audio), \
+                 mock.patch.object(ytm, "ffmpeg_available", return_value=True), \
+                 mock.patch.object(ytm, "remove_silence",
+                                   return_value=(None, "off")), \
+                 mock.patch.object(asr, "transcribe_with_fallback",
+                                   return_value=result):
+                xmod.fetch_x_transcript(
+                    "https://x.com/i/broadcasts/z", out,
+                    media_timeout_sec=3600,
+                )
+        self.assertEqual(captured["timeout_sec"], 3600)
+
+    def test_no_duration_falls_back_to_1800(self) -> None:
+        captured: dict = {}
+
+        def fake_download_audio(url, workdir, **kw):
+            captured.update(kw)
+            p = Path(workdir) / "media.m4a"
+            p.write_bytes(b"x")
+            return p, None
+
+        result = asr.ASRResult(text="body", backend_name="macwhisper")
+        with tempfile.TemporaryDirectory() as d:
+            out = Path(d) / "out.txt"
+            with mock.patch.object(ytm, "probe_metadata",
+                                   return_value=(self._INFO_NO_DURATION, None)), \
+                 mock.patch.object(ytm, "download_audio",
+                                   side_effect=fake_download_audio), \
+                 mock.patch.object(ytm, "ffmpeg_available", return_value=True), \
+                 mock.patch.object(ytm, "remove_silence",
+                                   return_value=(None, "off")), \
+                 mock.patch.object(asr, "transcribe_with_fallback",
+                                   return_value=result):
+                xmod.fetch_x_transcript("https://x.com/i/broadcasts/z", out)
+        self.assertEqual(captured["timeout_sec"], 1800)
+
+    def test_probe_keeps_its_own_small_timeout(self) -> None:
+        captured: dict = {}
+
+        def fake_probe_metadata(url, *, timeout_sec, **kw):
+            captured["probe_timeout_sec"] = timeout_sec
+            return self._INFO_LONG, None
+
+        def fake_download_audio(url, workdir, **kw):
+            p = Path(workdir) / "media.m4a"
+            p.write_bytes(b"x")
+            return p, None
+
+        result = asr.ASRResult(text="body", backend_name="macwhisper")
+        with tempfile.TemporaryDirectory() as d:
+            out = Path(d) / "out.txt"
+            with mock.patch.object(ytm, "probe_metadata",
+                                   side_effect=fake_probe_metadata), \
+                 mock.patch.object(ytm, "download_audio",
+                                   side_effect=fake_download_audio), \
+                 mock.patch.object(ytm, "ffmpeg_available", return_value=True), \
+                 mock.patch.object(ytm, "remove_silence",
+                                   return_value=(None, "off")), \
+                 mock.patch.object(asr, "transcribe_with_fallback",
+                                   return_value=result):
+                xmod.fetch_x_transcript(
+                    "https://x.com/i/broadcasts/z", out,
+                    timeout_sec=180, media_timeout_sec=3600,
+                )
+        # The probe got the small general timeout_sec, NOT the media budget.
+        self.assertEqual(captured["probe_timeout_sec"], 180)
+
+
+class TestMediaBudgetClip(unittest.TestCase):
+    """F3/F7 lock: the media-download budget must respect --max-duration-min —
+    it derives from the EFFECTIVE (clipped) duration, not the full probed one.
+    FIX-6 (cycle 3): that clip only applies when ffmpeg is present — mirrors
+    `download_audio`, where `--download-sections` (the actual clip) is only
+    emitted in the ffmpeg branch."""
+
+    _INFO_LONG = {
+        "id": "z", "duration": 4200,
+        "subtitles": {}, "automatic_captions": {},
+    }
+
+    def test_max_duration_min_clips_the_budget(self) -> None:
+        captured: dict = {}
+
+        def fake_download_audio(url, workdir, **kw):
+            captured.update(kw)
+            p = Path(workdir) / "media.m4a"
+            p.write_bytes(b"x")
+            return p, None
+
+        result = asr.ASRResult(text="body", backend_name="macwhisper")
+        with tempfile.TemporaryDirectory() as d:
+            out = Path(d) / "out.txt"
+            with mock.patch.object(ytm, "probe_metadata",
+                                   return_value=(self._INFO_LONG, None)), \
+                 mock.patch.object(ytm, "download_audio",
+                                   side_effect=fake_download_audio), \
+                 mock.patch.object(ytm, "ffmpeg_available", return_value=True), \
+                 mock.patch.object(ytm, "remove_silence",
+                                   return_value=(None, "off")), \
+                 mock.patch.object(asr, "transcribe_with_fallback",
+                                   return_value=result):
+                xmod.fetch_x_transcript(
+                    "https://x.com/i/broadcasts/z", out,
+                    max_duration_min=1,  # clip to 60s << the 4200s duration
+                )
+        # media_timeout_for(min(4200, 60)) == max(600, 60*4) == 600
+        self.assertEqual(captured["timeout_sec"], 600)
+
+    def test_no_clip_when_max_duration_min_unset(self) -> None:
+        captured: dict = {}
+
+        def fake_download_audio(url, workdir, **kw):
+            captured.update(kw)
+            p = Path(workdir) / "media.m4a"
+            p.write_bytes(b"x")
+            return p, None
+
+        result = asr.ASRResult(text="body", backend_name="macwhisper")
+        with tempfile.TemporaryDirectory() as d:
+            out = Path(d) / "out.txt"
+            with mock.patch.object(ytm, "probe_metadata",
+                                   return_value=(self._INFO_LONG, None)), \
+                 mock.patch.object(ytm, "download_audio",
+                                   side_effect=fake_download_audio), \
+                 mock.patch.object(ytm, "ffmpeg_available", return_value=True), \
+                 mock.patch.object(ytm, "remove_silence",
+                                   return_value=(None, "off")), \
+                 mock.patch.object(asr, "transcribe_with_fallback",
+                                   return_value=result):
+                xmod.fetch_x_transcript("https://x.com/i/broadcasts/z", out)
+        self.assertEqual(captured["timeout_sec"], 16800)  # unclipped: 4200*4
+
+    def test_no_clip_when_ffmpeg_absent(self) -> None:
+        # FIX-6: `download_audio`'s `--download-sections` clip is emitted
+        # ONLY inside its `ffmpeg_available()` branch — without ffmpeg a
+        # progressive download pulls the FULL media, so the budget must NOT
+        # be clipped either, even though --max-duration-min is set.
+        captured: dict = {}
+
+        def fake_download_audio(url, workdir, **kw):
+            captured.update(kw)
+            p = Path(workdir) / "media.m4a"
+            p.write_bytes(b"x")
+            return p, None
+
+        result = asr.ASRResult(text="body", backend_name="macwhisper")
+        with tempfile.TemporaryDirectory() as d:
+            out = Path(d) / "out.txt"
+            with mock.patch.object(ytm, "probe_metadata",
+                                   return_value=(self._INFO_LONG, None)), \
+                 mock.patch.object(ytm, "download_audio",
+                                   side_effect=fake_download_audio), \
+                 mock.patch.object(ytm, "ffmpeg_available", return_value=False), \
+                 mock.patch.object(ytm, "remove_silence",
+                                   return_value=(None, "off")), \
+                 mock.patch.object(asr, "transcribe_with_fallback",
+                                   return_value=result):
+                xmod.fetch_x_transcript(
+                    "https://x.com/i/broadcasts/z", out,
+                    max_duration_min=1,  # would clip to 60s IF ffmpeg present
+                )
+        # media_timeout_for(4200) == max(600, 4200*4) == 16800 — the FULL
+        # (unclipped) duration, because ffmpeg is absent so the download
+        # itself is never actually clipped.
+        self.assertEqual(captured["timeout_sec"], 16800)
+
+    def test_explicit_media_timeout_sec_still_wins_over_clip(self) -> None:
+        captured: dict = {}
+
+        def fake_download_audio(url, workdir, **kw):
+            captured.update(kw)
+            p = Path(workdir) / "media.m4a"
+            p.write_bytes(b"x")
+            return p, None
+
+        result = asr.ASRResult(text="body", backend_name="macwhisper")
+        with tempfile.TemporaryDirectory() as d:
+            out = Path(d) / "out.txt"
+            with mock.patch.object(ytm, "probe_metadata",
+                                   return_value=(self._INFO_LONG, None)), \
+                 mock.patch.object(ytm, "download_audio",
+                                   side_effect=fake_download_audio), \
+                 mock.patch.object(ytm, "ffmpeg_available", return_value=True), \
+                 mock.patch.object(ytm, "remove_silence",
+                                   return_value=(None, "off")), \
+                 mock.patch.object(asr, "transcribe_with_fallback",
+                                   return_value=result):
+                xmod.fetch_x_transcript(
+                    "https://x.com/i/broadcasts/z", out,
+                    max_duration_min=1, media_timeout_sec=9999,
+                )
+        self.assertEqual(captured["timeout_sec"], 9999)
+
+
+class TestAuthMessageHostDerivedCookieName(unittest.TestCase):
+    """F10 lock: the auth-failure remediation hint names the convention cookie
+    file DERIVED FROM THE URL HOST, not a hardcoded x.com-cookies.txt."""
+
+    def test_twitter_com_url_names_twitter_com_cookies(self) -> None:
+        with tempfile.TemporaryDirectory() as d:
+            out = Path(d) / "out.txt"
+            with mock.patch.object(
+                ytm, "probe_metadata",
+                return_value=(None, "ERROR: This account is protected"),
+            ):
+                with self.assertRaises(SourceAuthError) as ctx:
+                    xmod.fetch_x_transcript(
+                        "https://twitter.com/jack/status/20", out
+                    )
+        self.assertIn("twitter.com-cookies.txt", str(ctx.exception))
+        self.assertNotIn("x.com-cookies.txt", str(ctx.exception))
+
+    def test_www_prefix_stripped(self) -> None:
+        with tempfile.TemporaryDirectory() as d:
+            out = Path(d) / "out.txt"
+            with mock.patch.object(
+                ytm, "probe_metadata",
+                return_value=(None, "ERROR: This account is protected"),
+            ):
+                with self.assertRaises(SourceAuthError) as ctx:
+                    xmod.fetch_x_transcript(
+                        "https://www.x.com/jack/status/20", out
+                    )
+        self.assertIn("x.com-cookies.txt", str(ctx.exception))
+        self.assertNotIn("www.x.com-cookies.txt", str(ctx.exception))
+
+    def test_hinted_convention_path_round_trips_through_resolver(self) -> None:
+        # FIX-1 (cycle 3) round-trip lock: creating EXACTLY the file named by
+        # the exit-5 hint (the www./mobile.-stripped host) must make
+        # `_auth.resolve_cookies_file` find it on retry — closes the F10
+        # residual where the hint and the resolver disagreed.
+        with tempfile.TemporaryDirectory() as d:
+            cookies = Path(d) / "x.com-cookies.txt"
+            cookies.write_text("# Netscape HTTP Cookie File\n", encoding="utf-8")
+            os.chmod(cookies, 0o600)
+            with mock.patch.object(_auth, "DEFAULT_AUTH_DIR", Path(d)), \
+                 mock.patch.dict(os.environ, {}, clear=False):
+                os.environ.pop(_auth._ENV_AUTH_MAP, None)
+                resolved = _auth.resolve_cookies_file(
+                    "https://www.x.com/jack/status/20"
+                )
+        self.assertIsNotNone(resolved)
+        self.assertEqual(resolved.name, "x.com-cookies.txt")
+
+
+class TestRateLimitConcurrentFragmentsHint(unittest.TestCase):
+    """F8 lock: a rate-limit failure during the media DOWNLOAD names
+    --concurrent-fragments; the same failure from the metadata PROBE does not
+    (the probe never uses concurrent fragments)."""
+
+    def test_download_path_names_concurrent_fragments(self) -> None:
+        def fake_download_audio(url, workdir, **kw):
+            return None, "ERROR: HTTP Error 429: Too Many Requests"
+
+        with tempfile.TemporaryDirectory() as d:
+            out = Path(d) / "out.txt"
+            with mock.patch.object(ytm, "probe_metadata",
+                                   return_value=(_INFO_NO_CAPTIONS, None)), \
+                 mock.patch.object(ytm, "download_audio",
+                                   side_effect=fake_download_audio), \
+                 mock.patch.object(ytm, "ffmpeg_available", return_value=True):
+                with self.assertRaises(SourceRateLimitError) as ctx:
+                    xmod.fetch_x_transcript(
+                        "https://x.com/i/broadcasts/z", out
+                    )
+        self.assertIn("--concurrent-fragments", str(ctx.exception))
+
+    def test_probe_path_does_not_name_concurrent_fragments(self) -> None:
+        with tempfile.TemporaryDirectory() as d:
+            out = Path(d) / "out.txt"
+            with mock.patch.object(
+                ytm, "probe_metadata",
+                return_value=(None, "ERROR: HTTP Error 429: Too Many Requests"),
+            ):
+                with self.assertRaises(SourceRateLimitError) as ctx:
+                    xmod.fetch_x_transcript(
+                        "https://x.com/i/broadcasts/z", out
+                    )
+        self.assertNotIn("--concurrent-fragments", str(ctx.exception))
+
+
+class TestTransientRemediation(unittest.TestCase):
+    def test_audio_timeout_raises_transcriptfetcherror_with_remediation(self) -> None:
+        def fake_download_audio(url, workdir, **kw):
+            return None, "timeout downloading audio (>1800s)"
+
+        with tempfile.TemporaryDirectory() as d:
+            out = Path(d) / "out.txt"
+            with mock.patch.object(ytm, "probe_metadata",
+                                   return_value=(_INFO_NO_CAPTIONS, None)), \
+                 mock.patch.object(ytm, "download_audio",
+                                   side_effect=fake_download_audio), \
+                 mock.patch.object(ytm, "ffmpeg_available", return_value=True):
+                with self.assertRaises(TranscriptFetchError) as ctx:
+                    xmod.fetch_x_transcript(
+                        "https://x.com/i/broadcasts/z", out
+                    )
+        remediation = ctx.exception.remediation
+        self.assertIsNotNone(remediation)
+        self.assertIn("--concurrent-fragments", remediation)
+        self.assertIn("--media-timeout-sec", remediation)
+
+
+class TestAuthMessageCookiePath(unittest.TestCase):
+    def test_convention_path_named_without_cookies_file(self) -> None:
+        with tempfile.TemporaryDirectory() as d:
+            out = Path(d) / "out.txt"
+            with mock.patch.object(
+                ytm, "probe_metadata",
+                return_value=(None, "ERROR: This account is protected"),
+            ):
+                with self.assertRaises(SourceAuthError) as ctx:
+                    xmod.fetch_x_transcript(
+                        "https://x.com/i/broadcasts/z", out
+                    )
+        self.assertIn("x.com-cookies.txt", str(ctx.exception))
+
+    def test_resolved_path_named_with_cookies_file(self) -> None:
+        with tempfile.TemporaryDirectory() as d:
+            out = Path(d) / "out.txt"
+            cookies = Path(d) / "mine-cookies.txt"
+            cookies.write_text("# netscape cookies\n", encoding="utf-8")
+            with mock.patch.object(
+                ytm, "probe_metadata",
+                return_value=(None, "ERROR: This account is protected"),
+            ):
+                with self.assertRaises(SourceAuthError) as ctx:
+                    xmod.fetch_x_transcript(
+                        "https://x.com/i/broadcasts/z", out,
+                        cookies_file=cookies,
+                    )
+        self.assertIn(str(cookies), str(ctx.exception))
 
 
 class TestAuthMapCLI(unittest.TestCase):

@@ -22,9 +22,11 @@ import shutil
 import tempfile
 from pathlib import Path
 from typing import Iterable, Optional
+from urllib.parse import urlparse
 
 from asr._base import DEFAULT_ASR_TIMEOUT_SEC
 
+from . import _auth
 from . import _ytdlp_media as ytm
 from ._captions import captions_file_to_plain_meta
 from ._description import write_description_md
@@ -63,6 +65,8 @@ def fetch_x_transcript(
     yt_dlp_bin: Optional[str] = None,
     workdir: Optional[Path] = None,
     timeout_sec: int = DEFAULT_TIMEOUT_SEC,
+    concurrent_fragments: Optional[int] = None,
+    media_timeout_sec: Optional[int] = None,
     cookies_file: Optional[Path] = None,
     cookies_from_browser: Optional[str] = None,
     with_description: bool = False,
@@ -81,6 +85,15 @@ def fetch_x_transcript(
     (429), ``TranscriptFetchError`` (no transcript producible), or
     ``MissingDependencyError`` (yt-dlp/ffmpeg/no-ASR-backend) — all mapped to
     exit codes by the CLI.
+
+    ``concurrent_fragments``/``media_timeout_sec`` (arch-016 §10, task 029.02)
+    apply to the ASR-path media download ONLY — the metadata probe keeps
+    ``timeout_sec``. ``media_timeout_sec`` is expected to already be the
+    CLI-or-env value resolved by the caller (``fetch.py``); ``None`` here means
+    "derive the budget from the probed duration" via
+    :func:`_ytdlp_media.media_timeout_for` (kept ``Optional`` so a direct
+    library caller — e.g. a test — can also pass an explicit budget or rely on
+    the duration-derived floor).
     """
     log = make_logger(debug)
     out_path = Path(out_path)
@@ -110,9 +123,42 @@ def fetch_x_transcript(
             yt_dlp_bin=yt_dlp_bin,
         )
         if info is None:
-            _raise_for_failure(err, url)
+            _raise_for_failure(err, url, cookies_file=cookies_file)
             # _raise_for_failure always raises; this is unreachable.
             raise TranscriptFetchError(f"could not fetch metadata for {url}")
+
+        # Media (audio) download budget — resolved ONCE, here, now that the
+        # duration is known (info in hand). CLI-or-env (`media_timeout_sec`,
+        # already resolved by the caller) wins; else the duration-derived floor.
+        # Applies ONLY to the ASR-path `download_audio()` call below — the probe
+        # above kept `timeout_sec`, and captions/silence-removal/ASR keep their
+        # own existing budgets untouched.
+        #
+        # `--max-duration-min` CLIPS the actual download (see `download_audio`'s
+        # `--download-sections`) — the budget must respect that clip, not the
+        # full probed duration, else a `--max-duration-min 10` run on a 6-hour
+        # broadcast gets a budget sized for the whole 6 hours. When the clip is
+        # active and the probed duration is a positive number, feed the SMALLER
+        # of (probed duration, clip) to `media_timeout_for`. BUT `--download-
+        # sections` (the clip itself) is only emitted in `download_audio`'s
+        # `ffmpeg_available()` branch — without ffmpeg a progressive (non-HLS)
+        # download is NOT clipped, so the budget must NOT be clipped either;
+        # feeding it the clipped duration there would size a premature timeout
+        # for a download that is actually pulling the FULL media.
+        effective_duration = info.get("duration")
+        if (
+            max_duration_min is not None
+            and max_duration_min > 0
+            and isinstance(effective_duration, (int, float))
+            and effective_duration > 0
+            and ytm.ffmpeg_available()
+        ):
+            effective_duration = min(effective_duration, max_duration_min * 60)
+        media_budget = (
+            media_timeout_sec
+            if media_timeout_sec is not None
+            else ytm.media_timeout_for(effective_duration)
+        )
 
         notes: list[str] = []
         chosen_kind: Optional[str] = None
@@ -213,14 +259,18 @@ def fetch_x_transcript(
                 media, derr = ytm.download_audio(
                     url,
                     workdir,
-                    timeout_sec=timeout_sec,
+                    timeout_sec=media_budget,
                     cookies_file=cookies_file,
                     cookies_from_browser=cookies_from_browser,
                     yt_dlp_bin=yt_dlp_bin,
                     max_duration_min=max_duration_min,
+                    concurrent_fragments=concurrent_fragments,
                 )
                 if media is None:
-                    _raise_for_failure(derr, url, default_msg="audio download failed")
+                    _raise_for_failure(
+                        derr, url, default_msg="audio download failed",
+                        cookies_file=cookies_file, media_download=True,
+                    )
                     raise TranscriptFetchError(f"audio download failed for {url}")
                 media_path = media
 
@@ -327,22 +377,79 @@ def fetch_x_transcript(
 
 
 def _raise_for_failure(
-    stderr: Optional[str], url: str, *, default_msg: str = "could not fetch media"
+    stderr: Optional[str],
+    url: str,
+    *,
+    default_msg: str = "could not fetch media",
+    cookies_file: Optional[Path] = None,
+    media_download: bool = False,
 ) -> None:
-    """Map a yt-dlp failure string to the right typed exception. Always raises."""
+    """Map a yt-dlp failure string to the right typed exception. Always raises.
+
+    ``cookies_file`` (R9b) is the SAME resolved file the caller passed to
+    yt-dlp for this attempt (or ``None``) — on an ``"auth"`` classification the
+    message names it (so the user knows exactly which file to refresh) or, when
+    none was used, points at the convention path DERIVED FROM THE URL'S HOST
+    (``~/.transcript-fetcher/<host>-cookies.txt``, ``www.``/``mobile.`` labels
+    stripped) — a hardcoded ``x.com-cookies.txt`` would be a dead-end hint for
+    the other 5 documented X hosts (twitter.com, www.x.com, mobile.x.com, ...).
+    ``_auth.resolve_cookies_file``'s convention lookup carries the matching
+    fallback (tries the exact host first, then the same ``www``/``mobile``/``m``
+    label-stripped host — see its module docstring), so the printed hint is
+    guaranteed to round-trip: creating the named file makes the NEXT attempt
+    for any of the 6 allowlisted hosts pick it up.
+
+    ``media_download`` (F8) is True ONLY when the failure came from the ASR-path
+    media download (not the metadata probe) — on a ``"rate"`` classification it
+    appends a hint naming ``--concurrent-fragments`` (the new parallel-fragment
+    default is a plausible cause of a 429 that a metadata-probe rate-limit
+    is not).
+    """
     category = ytm.classify_failure(stderr or "")
     tail = _tail(stderr)
     if category == "auth":
+        if cookies_file is not None:
+            cookie_hint = f"refresh the cookies file you supplied ({cookies_file})"
+        else:
+            host = (urlparse(url).hostname or "x.com").lower()
+            for prefix in ("www.", "mobile."):
+                if host.startswith(prefix):
+                    host = host[len(prefix):]
+                    break
+            convention = _auth.DEFAULT_AUTH_DIR / f"{host}-cookies.txt"
+            cookie_hint = (
+                f"supply a fresh --cookies-file, or place one at the convention "
+                f"path {convention}"
+            )
         raise SourceAuthError(
             f"X media requires authentication or is protected/suspended: {url}"
             + (f" ({tail})" if tail else "")
-            + " — supply --cookies-file with a logged-in session if you have access."
+            + f" — {cookie_hint} (or use --cookies-from-browser)."
         )
     if category == "rate":
-        raise SourceRateLimitError(
+        msg = (
             f"X rate-limited the request for {url}"
             + (f" ({tail})" if tail else "")
             + " — retry later."
+        )
+        if media_download:
+            msg += (
+                " If this recurs during the media download, lower "
+                "--concurrent-fragments (parallel fragment requests can trip "
+                "rate limits)."
+            )
+        raise SourceRateLimitError(msg)
+    if category == "transient":
+        # The ONLY category the concurrency/media-budget remediation can fix
+        # (see `_ytdlp_media.classify_failure` docstring) — a media (audio)
+        # download socket-timeout, not a metadata-probe timeout.
+        raise TranscriptFetchError(
+            f"{default_msg} for {url}" + (f": {tail}" if tail else ""),
+            remediation=(
+                "The media download timed out. Long HLS broadcasts need parallel "
+                "fragment download — raise --concurrent-fragments (e.g. 16) and/or "
+                "--media-timeout-sec (e.g. 3600)."
+            ),
         )
     # "hard" or unknown → not producible.
     raise TranscriptFetchError(

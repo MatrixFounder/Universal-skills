@@ -19,7 +19,16 @@ Resolution order for a given URL (first match wins):
      ``x.com`` never leaks onto ``evil-x.com``);
   3. the **convention** file ``~/.transcript-fetcher/<host>-cookies.txt`` if it
      exists;
-  4. ``None`` (anonymous — the skill then surfaces ``SourceAuthError`` only if
+  4. the SAME convention file with a single well-known **mirror-prefix** label
+     stripped from the host (``www``/``mobile``/``m`` — e.g. ``www.x.com`` and
+     ``mobile.x.com`` both also try ``x.com-cookies.txt``) if THAT file exists
+     and step 3 did not already match. This mirrors the auth-map's
+     label-boundary suffix semantics for the three well-known mirror prefixes
+     ONLY — a generic parent-domain walk (trying every suffix of the host)
+     would widen the cookie-leak surface far beyond what a single
+     conventional mirror label warrants, so it is deliberately NOT
+     implemented;
+  5. ``None`` (anonymous — the skill then surfaces ``SourceAuthError`` only if
      the source actually returns 401/403).
 
 Auth-map and convention-discovered files are hardened like a bearer credential
@@ -91,6 +100,26 @@ def _match_host(host: Optional[str], amap: dict) -> Optional[dict]:
             if best is None or len(key) > len(best):
                 best = key
     return amap.get(best) if best else None
+
+
+_MIRROR_LABELS = ("www", "mobile", "m")
+
+
+def _strip_mirror_prefix(host: str) -> Optional[str]:
+    """Strip a single well-known mirror-prefix label from ``host``, e.g.
+    ``www.x.com`` -> ``x.com``, ``mobile.twitter.com`` -> ``twitter.com``.
+
+    Only the three conventional mirror labels (``www``, ``mobile``, ``m``) are
+    recognised, and only when they form the ENTIRE first label — ``wwwx.com``
+    (no dot right after ``www``) is left untouched, never partially stripped.
+    Returns ``None`` when the first label isn't one of the three, or there is
+    no remaining host after it (a bare ``m``/``www`` with nothing after the
+    dot is nonsensical).
+    """
+    label, sep, rest = host.partition(".")
+    if sep and rest and label in _MIRROR_LABELS:
+        return rest
+    return None
 
 
 def load_auth_map(path: Path) -> dict:
@@ -171,7 +200,11 @@ def resolve_cookies_file(
 
     ``auth_map`` is a **pre-loaded** dict (from :func:`load_configured_auth_map`), or
     ``None``. Returns the explicit file unchanged when given; otherwise consults the
-    pre-loaded auth-map, then the ``~/.transcript-fetcher/<host>-cookies.txt`` convention.
+    pre-loaded auth-map, then the ``~/.transcript-fetcher/<host>-cookies.txt`` convention
+    (falling back to the same file with a well-known ``www``/``mobile``/``m`` mirror-prefix
+    label stripped — see the module docstring's resolution order, step 4 — so the auth-hint
+    path printed by a source adapter's exit-5 message, which already strips that label, is
+    guaranteed to round-trip through this resolver).
     Auth-map / convention hits are hardened (symlink/0600). ``None`` when nothing applies.
     """
     if explicit_cookies_file is not None:
@@ -192,6 +225,17 @@ def resolve_cookies_file(
     if conv.is_file() or conv.is_symlink():
         _assert_secure_credential_file(conv, "cookies file (~/.transcript-fetcher)")
         return conv
+
+    # Narrow mirror-prefix fallback (exact-host file above always wins when
+    # both exist) — see module docstring / `_strip_mirror_prefix`.
+    stripped_host = _strip_mirror_prefix(host)
+    if stripped_host is not None:
+        conv_stripped = DEFAULT_AUTH_DIR / f"{stripped_host}-cookies.txt"
+        if conv_stripped.is_file() or conv_stripped.is_symlink():
+            _assert_secure_credential_file(
+                conv_stripped, "cookies file (~/.transcript-fetcher)"
+            )
+            return conv_stripped
     return None
 
 

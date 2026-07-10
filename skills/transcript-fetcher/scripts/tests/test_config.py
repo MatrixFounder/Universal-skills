@@ -81,6 +81,89 @@ class TestTypedAccessors(unittest.TestCase):
             self.assertEqual(cfg.openai_api_key(), "prefixed")
 
 
+class TestMediaConcurrencyAndTimeoutConfig(unittest.TestCase):
+    """`concurrent_fragments()` / `media_timeout_sec()` accessors (TASK 029 S1/S2,
+    task-029.01 TC-06..08)."""
+
+    def test_defaults(self) -> None:
+        with mock.patch.dict(os.environ, {}, clear=True):
+            self.assertEqual(cfg.concurrent_fragments(), 8)
+            self.assertIsNone(cfg.media_timeout_sec())
+
+    def test_concurrent_fragments_overrides_and_fallbacks(self) -> None:
+        with mock.patch.dict(os.environ, {P + "CONCURRENT_FRAGMENTS": "16"}, clear=True):
+            self.assertEqual(cfg.concurrent_fragments(), 16)
+        with mock.patch.dict(os.environ, {P + "CONCURRENT_FRAGMENTS": "abc"}, clear=True):
+            self.assertEqual(cfg.concurrent_fragments(), 8)
+        with mock.patch.dict(os.environ, {P + "CONCURRENT_FRAGMENTS": "0"}, clear=True):
+            self.assertEqual(cfg.concurrent_fragments(), 8)
+        with mock.patch.dict(os.environ, {P + "CONCURRENT_FRAGMENTS": "-4"}, clear=True):
+            self.assertEqual(cfg.concurrent_fragments(), 8)
+
+    def test_media_timeout_sec_overrides_and_fallbacks(self) -> None:
+        with mock.patch.dict(os.environ, {P + "MEDIA_TIMEOUT_SEC": "3600"}, clear=True):
+            self.assertEqual(cfg.media_timeout_sec(), 3600)
+        with mock.patch.dict(os.environ, {P + "MEDIA_TIMEOUT_SEC": "abc"}, clear=True):
+            self.assertIsNone(cfg.media_timeout_sec())
+        with mock.patch.dict(os.environ, {P + "MEDIA_TIMEOUT_SEC": "0"}, clear=True):
+            self.assertIsNone(cfg.media_timeout_sec())
+
+
+class TestUnicodeDigitCrashLock(unittest.TestCase):
+    """F4/F6 lock: `str.isdigit()` is True for non-ASCII decimal-*looking*
+    characters (e.g. the superscript '²') that `int()` still rejects with
+    ValueError. Every accessor built on the isdigit()-then-int() idiom must
+    fall back to its documented default/None instead of raising — config must
+    never crash a run (R2b). Live-repro that motivated this lock:
+    `TRANSCRIPT_FETCHER_CONCURRENT_FRAGMENTS='²' ./scripts/.venv/bin/python
+    scripts/fetch.py <url> --out /tmp/x.txt` used to raise ValueError from
+    `_config.py`.
+    """
+
+    # '²' (U+00B2 SUPERSCRIPT TWO) and '٤٢' Arabic-Indic digits mixed with a
+    # non-arabic-indic-but-isdigit-true character ('٤' + '²') are both
+    # isdigit()-true / int()-invalid.
+    _EXOTIC = ("²", "٤²")
+
+    def test_concurrent_fragments_never_raises(self) -> None:
+        for val in self._EXOTIC:
+            with mock.patch.dict(os.environ, {P + "CONCURRENT_FRAGMENTS": val}, clear=True):
+                self.assertEqual(cfg.concurrent_fragments(), 8, val)
+
+    def test_media_timeout_sec_never_raises(self) -> None:
+        for val in self._EXOTIC:
+            with mock.patch.dict(os.environ, {P + "MEDIA_TIMEOUT_SEC": val}, clear=True):
+                self.assertIsNone(cfg.media_timeout_sec(), val)
+
+    def test_asr_timeout_sec_never_raises(self) -> None:
+        for val in self._EXOTIC:
+            with mock.patch.dict(os.environ, {P + "ASR_TIMEOUT_SEC": val}, clear=True):
+                self.assertEqual(cfg.asr_timeout_sec(1800), 1800, val)
+
+    def test_openai_max_upload_mb_never_raises(self) -> None:
+        for val in self._EXOTIC:
+            with mock.patch.dict(os.environ, {P + "OPENAI_MAX_UPLOAD_MB": val}, clear=True):
+                self.assertEqual(cfg.openai_max_upload_bytes(), 25 * 1024 * 1024, val)
+
+
+class TestSafeInt(unittest.TestCase):
+    def test_genuine_unicode_digits_parse_fine(self) -> None:
+        # int() itself is fine with real Unicode decimal digits (Arabic-Indic
+        # '١٢' == 12) — only isdigit()-true/int()-invalid glyphs (e.g. '²')
+        # are the crash class _safe_int guards against.
+        self.assertEqual(cfg._safe_int("١٢"), 12)
+
+    def test_none_and_malformed(self) -> None:
+        self.assertIsNone(cfg._safe_int(None))
+        self.assertIsNone(cfg._safe_int("²"))
+        self.assertIsNone(cfg._safe_int("abc"))
+        self.assertIsNone(cfg._safe_int(""))
+
+    def test_negative_and_whitespace(self) -> None:
+        self.assertEqual(cfg._safe_int("-5"), -5)
+        self.assertEqual(cfg._safe_int("  42  "), 42)
+
+
 class TestSilenceConfig(unittest.TestCase):
     def test_defaults(self) -> None:
         with mock.patch.dict(os.environ, {}, clear=True):

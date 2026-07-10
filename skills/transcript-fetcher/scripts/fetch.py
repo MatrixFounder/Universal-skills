@@ -118,6 +118,13 @@ def _emit_error(
         sys.stderr.write(json.dumps(envelope, ensure_ascii=False) + "\n")
     else:
         sys.stderr.write(message.rstrip() + "\n")
+        # Make the remedy operator-visible even without --json-errors (F15) —
+        # `details["remediation"]` already exists for TranscriptFetchError's
+        # transient-timeout hint AND MissingDependencyError's install hint;
+        # this is the only place either reaches non-JSON stderr.
+        remediation = (details or {}).get("remediation")
+        if remediation:
+            sys.stderr.write(f"remediation: {remediation}\n")
     sys.stderr.flush()
     return code if code != 0 else 1
 
@@ -215,6 +222,8 @@ def _fetch_one(
     lang: str,
     prefer: str,
     timeout_sec: int,
+    concurrent_fragments: Optional[int] = None,
+    media_timeout_sec: Optional[int] = None,
     with_description: bool = False,
     description_only: bool = False,
     cookies_file: Optional[Path] = None,
@@ -289,6 +298,8 @@ def _fetch_one(
             fallback_ladder=x_ladder,
             lang=lang,
             timeout_sec=timeout_sec,
+            concurrent_fragments=concurrent_fragments,
+            media_timeout_sec=media_timeout_sec,
             cookies_file=cookies_file,
             cookies_from_browser=cookies_from_browser,
             with_description=with_description,
@@ -318,6 +329,10 @@ def _build_parser() -> argparse.ArgumentParser:
         description=(
             "Fetch a clean plain-text transcript from a video URL "
             "(YouTube, Vimeo, or Skool lesson)."
+        ),
+        epilog=(
+            "Readiness check: fetch.py doctor [--json] — reports interpreter, "
+            "yt-dlp, ffmpeg, ASR backends + remediation."
         ),
     )
     p.add_argument(
@@ -362,6 +377,23 @@ def _build_parser() -> argparse.ArgumentParser:
         help=f"Per-attempt timeout for each yt-dlp call. "
         f"Default: {DEFAULT_TIMEOUT_SEC}s. Increase for very long "
         "videos or flaky networks.",
+    )
+    p.add_argument(
+        "--concurrent-fragments",
+        type=int,
+        default=None,
+        help="(X) Parallel HLS fragment downloads for the media (audio) "
+        "download. Default: 8, or TRANSCRIPT_FETCHER_CONCURRENT_FRAGMENTS. "
+        "1 = serial (pre-029 behaviour). Ignored by YouTube/Vimeo/Skool.",
+    )
+    p.add_argument(
+        "--media-timeout-sec",
+        type=int,
+        default=None,
+        help="(X) Per-attempt timeout budget for the X media (audio) download "
+        "ONLY — the metadata probe keeps --timeout-sec. Default: "
+        "duration-derived max(600, duration*4)s capped at 21600s (6h), "
+        "else 1800s; or TRANSCRIPT_FETCHER_MEDIA_TIMEOUT_SEC.",
     )
     p.add_argument(
         "--on-collision",
@@ -470,6 +502,201 @@ def _build_parser() -> argparse.ArgumentParser:
     return p
 
 
+# --------------------------------------------------------------------- #
+# `doctor` subcommand (UC-2, arch-016 §10.3)
+# --------------------------------------------------------------------- #
+
+
+def _run_doctor(argv: list[str]) -> int:
+    """``fetch.py doctor [--json]`` — cheap, import-free readiness check.
+
+    Reuses :func:`install_components._components` as the SINGLE source of
+    truth for component detection (no probe-logic fork). ``install_components``
+    is imported locally (not at module scope) so a plain ``fetch.py <url>``
+    run never pays for it; the module itself imports only stdlib + ``_config``,
+    so this stays free of ``yt_dlp``/``whisper``/``weasyprint`` imports either way.
+
+    ``.env`` is already loaded by ``main()`` (``cfg.load_skill_env()`` runs
+    before the positional dispatch) — doctor deliberately reports what a REAL
+    fetch run would see (``TRANSCRIPT_FETCHER_*_BIN`` overrides, ASR_ALLOW_CLOUD,
+    OPENAI_API_KEY, …), not the bare process environment. A doctor that ignored
+    ``.env`` could report "not ready" while a real run succeeds, or vice-versa.
+
+    Never touches the network and never imports ``yt_dlp`` — only distribution
+    metadata (:func:`install_components.yt_dlp_version`) and ``shutil.which``
+    probes for everything else.
+
+    Remediation contract (F1/F2/F5/F11 from cycle 1; REFINED in cycle 3 —
+    "flow-blocking gaps vs informational hints"): ``remediation`` names ONLY
+    the gaps that can actually block a flow:
+
+      (a) yt-dlp missing        — its install hint (the skill cannot run);
+      (b) ffmpeg missing        — the bespoke conditional-required line (it
+          back-stops X Broadcast/Space (HLS) ASR AND whisper/whisper.cpp at
+          runtime despite being an optional component itself);
+      (c) NO ASR capability AT ALL — no local backend present AND NOT
+          (cloud ``key_present`` AND ``allow_cloud``) — one line naming the
+          options and the consequence ("caption-less X media (Broadcasts/
+          Spaces) will exit 7").
+
+    An individual missing local ASR engine while ASR capability EXISTS
+    elsewhere (another local engine present, or cloud fully configured) is
+    NOT flow-blocking and never lands in ``remediation`` — cycle-2 found the
+    prior "every missing component" contract made ``remediation == []`` /
+    ``✓ Ready.`` unattainable on any real box short of all three local ASR
+    engines installed simultaneously (impossible on Linux, where MacWhisper
+    doesn't exist). Those non-blocking gaps are still surfaced in the HUMAN
+    report only, as an indented ``→`` install-hint line under each missing
+    component's row (see :func:`_print_doctor_report`) — informational, not a
+    remediation demand. A cloud-configured, no-local-ASR box additionally
+    gets one informational note line in the human report (not JSON
+    ``remediation``, since the ASR chain genuinely resolves via cloud).
+    JSON envelope KEYS are unchanged (``{v, interpreter, in_venv, ready,
+    components, remediation}``). Exit code stays 0 iff yt-dlp is present
+    (R5d, UNCHANGED) — a non-empty ``remediation`` with ``ready: true`` means
+    "usable, but a real flow-blocking gap remains", not failure.
+    """
+    p = argparse.ArgumentParser(
+        prog="fetch.py doctor",
+        description="Report transcript-fetcher readiness (import-free; no network).",
+    )
+    p.add_argument("--json", action="store_true", help="Machine-readable status.")
+    args = p.parse_args(argv)
+
+    import install_components as ic  # local: keeps a plain fetch run import-free
+
+    raw_components = ic._components()
+    components: dict = {}
+    for c in raw_components:
+        entry = {"present": c["present"], "required": c["required"]}
+        if c["key"] == "yt-dlp":
+            entry["version"] = ic.yt_dlp_version()
+        components[c["key"]] = entry
+    # Synthetic cloud row — boolean signals ONLY, never the key value.
+    components["cloud"] = {
+        "key_present": bool(cfg.openai_api_key()),
+        "allow_cloud": cfg.asr_allow_cloud_default(),
+    }
+
+    ready = components["yt-dlp"]["present"]
+    cloud = components["cloud"]
+    local_asr_present = any(components[key]["present"] for key in ic._ASR_KEYS)
+    cloud_ready = bool(cloud["key_present"] and cloud["allow_cloud"])
+
+    # Remediation contract (cycle-3 refinement — see docstring above):
+    # ONLY the three flow-blocking gap kinds land in `remediation`. An
+    # individual missing local ASR engine, while ASR capability exists
+    # elsewhere, is surfaced solely in the human report (`->` line under its
+    # own row) — never here.
+    remediation: list[str] = []
+    for c in raw_components:
+        if c["present"]:
+            continue
+        if c["key"] == "yt-dlp":
+            remediation.append(f"{c['key']} — {c['install_hint']}")
+        elif c["key"] == "ffmpeg":
+            remediation.append(
+                "ffmpeg — needed for X Broadcast/Space (HLS) ASR and by "
+                f"whisper/whisper.cpp at runtime: {c['install_hint']}"
+            )
+        # else: an individual missing ASR engine is informational-only —
+        # gated below on whether ASR capability exists at all.
+    if not local_asr_present and not cloud_ready:
+        remediation.append(
+            "No local ASR backend detected — install MacWhisper/whisper/"
+            "whisper.cpp (see `install_components.py`), or pass "
+            "--asr-allow-cloud with an OPENAI_API_KEY. Caption-less X "
+            "media (Broadcasts/Spaces) will exit 7."
+        )
+
+    envelope = {
+        "v": 1,
+        "interpreter": sys.executable,
+        "in_venv": sys.prefix != sys.base_prefix,
+        "ready": ready,
+        "components": components,
+        "remediation": remediation,
+    }
+
+    if args.json:
+        print(json.dumps(envelope, ensure_ascii=False, indent=2))
+    else:
+        _print_doctor_report(envelope, raw_components, local_asr_present, cloud_ready)
+
+    return 0 if ready else 7
+
+
+def _print_doctor_report(
+    envelope: dict,
+    raw_components: list[dict],
+    local_asr_present: bool,
+    cloud_ready: bool,
+) -> None:
+    """Human-mode doctor report.
+
+    Every missing component — flow-blocking or not — gets an indented ``→``
+    install-hint line directly under its ``[✗]`` row (mirrors
+    ``install_components._print_report``); this is always informational, and
+    is printed regardless of whether that component's hint also made it into
+    the ``Remediation:`` block below. A cloud-configured box with no local
+    ASR backend additionally gets one informational note (the ASR chain
+    resolves via cloud, so this is deliberately NOT in ``remediation``).
+    Final summary line depends on the remediation contract (cycle-3
+    refinement — see ``_run_doctor`` docstring):
+
+      * ``remediation`` empty              → ``"✓ Ready."`` (no flow-blocking
+        gap — attainable with just one local ASR engine + ffmpeg + yt-dlp, or
+        a fully-configured cloud backend; missing ALTERNATIVE engines above
+        are informational only).
+      * ``remediation`` non-empty, ready   → ``"✓ Core ready ..."`` (yt-dlp is
+        present so the CLI itself works, but a flow-blocking gap listed above
+        — ffmpeg, or no ASR capability at all — may bite a specific flow).
+      * ``remediation`` non-empty, NOT ready → no extra summary line; the
+        ``Remediation:`` block above (which always includes the yt-dlp hint
+        in this case) IS the failure output.
+    """
+    print("transcript-fetcher — doctor\n")
+    print(f"  interpreter : {envelope['interpreter']}")
+    print(f"  in venv     : {'yes' if envelope['in_venv'] else 'no'}")
+    print()
+    for c in raw_components:
+        entry = envelope["components"][c["key"]]
+        mark = "✓" if entry["present"] else "✗"
+        req = " (required)" if c["required"] else ""
+        version = f" [{entry['version']}]" if entry.get("version") else ""
+        print(f"  [{mark}] {c['label']}{req}{version}")
+        if not entry["present"]:
+            print(f"        → {c['install_hint']}")
+    cloud = envelope["components"]["cloud"]
+    cloud_mark = "✓" if cloud["key_present"] else "✗"
+    print(
+        f"  [{cloud_mark}] cloud ASR key present "
+        f"(allow_cloud={cloud['allow_cloud']})"
+    )
+    print()
+    remediation = envelope["remediation"]
+    if remediation:
+        print("  Remediation:")
+        for hint in remediation:
+            print(f"    → {hint}")
+    if not local_asr_present and cloud_ready:
+        if remediation:
+            print()
+        print(
+            "  Note: no local ASR backend, but cloud ASR is configured "
+            "(--asr-allow-cloud + key) — caption-less media will use the "
+            "cloud backend."
+        )
+    if not remediation:
+        print("  ✓ Ready.")
+    elif envelope["ready"]:
+        print()
+        print(
+            "  ✓ Core ready (yt-dlp present) — gaps above may block "
+            "specific flows."
+        )
+
+
 def _read_batch(path: Path) -> list[str]:
     urls: list[str] = []
     for raw in path.read_text(encoding="utf-8").splitlines():
@@ -486,6 +713,14 @@ def main(argv: Optional[list[str]] = None) -> int:
     # TRANSCRIPT_FETCHER_NO_DOTENV=1. Process env always wins.
     cfg.load_skill_env()
 
+    # Positional `doctor` dispatch BEFORE the normal argparse contract —
+    # `doctor` is never a valid URL, so there is no collision. Placed AFTER
+    # `cfg.load_skill_env()` so `.env` tool-bin overrides are honoured, but
+    # BEFORE `parser.parse_args` (own mini-parser, see `_run_doctor`).
+    effective_argv = sys.argv[1:] if argv is None else argv
+    if effective_argv and effective_argv[0] == "doctor":
+        return _run_doctor(effective_argv[1:])
+
     parser = _build_parser()
     args = parser.parse_args(argv)
 
@@ -500,6 +735,22 @@ def main(argv: Optional[list[str]] = None) -> int:
         args.asr_timeout_sec
         if args.asr_timeout_sec
         else cfg.asr_timeout_sec(DEFAULT_ASR_TIMEOUT_SEC)
+    )
+    # X media budget (arch-016 §10, task 029.02): CLI flag wins, else the
+    # TRANSCRIPT_FETCHER_CONCURRENT_FRAGMENTS / _MEDIA_TIMEOUT_SEC env knobs.
+    # Resolved ONCE here — NOT forwarded as a bare `None` from the CLI layer,
+    # because `download_audio`/`media_timeout_for` treat `None` as "use the
+    # library default", which would silently discard the env override
+    # (R2/R3a: an env-only run must still reach `download_audio`'s argv).
+    concurrent_fragments = (
+        args.concurrent_fragments
+        if args.concurrent_fragments is not None
+        else cfg.concurrent_fragments()
+    )
+    media_timeout_sec = (
+        args.media_timeout_sec
+        if args.media_timeout_sec is not None
+        else cfg.media_timeout_sec()
     )
 
     # Validate mutually-exclusive modes.
@@ -529,6 +780,22 @@ def main(argv: Optional[list[str]] = None) -> int:
     if args.asr_timeout_sec is not None and args.asr_timeout_sec <= 0:
         return _emit_error(
             f"--asr-timeout-sec must be positive, got {args.asr_timeout_sec}.",
+            code=2,
+            error_type="UsageError",
+            json_mode=json_errors,
+        )
+
+    if args.concurrent_fragments is not None and args.concurrent_fragments <= 0:
+        return _emit_error(
+            f"--concurrent-fragments must be positive, got {args.concurrent_fragments}.",
+            code=2,
+            error_type="UsageError",
+            json_mode=json_errors,
+        )
+
+    if args.media_timeout_sec is not None and args.media_timeout_sec <= 0:
+        return _emit_error(
+            f"--media-timeout-sec must be positive, got {args.media_timeout_sec}.",
             code=2,
             error_type="UsageError",
             json_mode=json_errors,
@@ -584,6 +851,8 @@ def main(argv: Optional[list[str]] = None) -> int:
                 lang=args.lang,
                 prefer=args.prefer,
                 timeout_sec=args.timeout_sec,
+                concurrent_fragments=concurrent_fragments,
+                media_timeout_sec=media_timeout_sec,
                 with_description=args.with_description,
                 description_only=args.description_only,
                 cookies_file=args.cookies_file,
@@ -611,11 +880,14 @@ def main(argv: Optional[list[str]] = None) -> int:
                 json_mode=json_errors,
             )
         except TranscriptFetchError as e:
+            detail = {"url": args.url}
+            if getattr(e, "remediation", None):
+                detail["remediation"] = e.remediation
             return _emit_error(
                 str(e),
                 code=3,
                 error_type="TranscriptFetchError",
-                details={"url": args.url},
+                details=detail,
                 json_mode=json_errors,
             )
         except SourceAuthError as e:
@@ -704,6 +976,8 @@ def main(argv: Optional[list[str]] = None) -> int:
                 lang=args.lang,
                 prefer=args.prefer,
                 timeout_sec=args.timeout_sec,
+                concurrent_fragments=concurrent_fragments,
+                media_timeout_sec=media_timeout_sec,
                 with_description=args.with_description,
                 description_only=args.description_only,
                 cookies_file=args.cookies_file,
@@ -736,6 +1010,21 @@ def main(argv: Optional[list[str]] = None) -> int:
                 "v": _JSON_ERRORS_SCHEMA,
                 "error": str(e),
                 "type": "MissingDependencyError",
+                "url": url,
+            }
+            if getattr(e, "remediation", None):
+                err_record["remediation"] = e.remediation
+            sys.stdout.write(json.dumps(err_record, ensure_ascii=False) + "\n")
+        except TranscriptFetchError as e:
+            # Surface the transient (media-download timeout) remediation hint
+            # per-URL, same as MissingDependencyError above — the batch run
+            # still aggregates to exit 4, but the record carries the
+            # actionable type + remediation instead of a generic "Exception".
+            failures += 1
+            err_record = {
+                "v": _JSON_ERRORS_SCHEMA,
+                "error": str(e),
+                "type": "TranscriptFetchError",
                 "url": url,
             }
             if getattr(e, "remediation", None):
