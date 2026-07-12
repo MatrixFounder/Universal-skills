@@ -1,0 +1,57 @@
+{
+  "v": 1,
+  "base_branch": "main",
+  "scheduling": { "enabled": false },
+  "max_issues_per_run": 1,
+  "max_attempts_per_issue": 2,
+  "max_changed_lines": 300,
+  "max_changed_files": 10,
+  "gate_timeout_sec": 900,
+  "human_only_categories": ["honest-scope", "tech-debt"],
+  "protected_paths": [
+    "LICENSE",
+    "THIRD_PARTY_NOTICES.md",
+    "skills/*/LICENSE",
+    "skills/*/NOTICE",
+    ".claude/settings.json",
+    ".claude/settings.local.json",
+    ".claude/commands",
+    ".claude/skills",
+    ".agent",
+    "docs/feedback/config.json",
+    "docs/feedback/heal-config.json"
+  ],
+  "gates": {
+    "docx": {
+      "venv": "skills/docx/scripts/.venv",
+      "e2e": "bash skills/docx/scripts/tests/test_e2e.sh",
+      "validator": "python3 skills/skill-creator/scripts/validate_skill.py skills/docx",
+      "replication": "office-docx-master"
+    },
+    "xlsx": {
+      "venv": "skills/xlsx/scripts/.venv",
+      "e2e": "bash skills/xlsx/scripts/tests/test_e2e.sh",
+      "validator": "python3 skills/skill-creator/scripts/validate_skill.py skills/xlsx",
+      "replication": "office-replica-of-docx"
+    },
+    "pptx": {
+      "venv": "skills/pptx/scripts/.venv",
+      "e2e": "bash skills/pptx/scripts/tests/test_e2e.sh",
+      "validator": "python3 skills/skill-creator/scripts/validate_skill.py skills/pptx",
+      "replication": "office-replica-of-docx"
+    },
+    "pdf": {
+      "venv": "skills/pdf/scripts/.venv",
+      "e2e": "bash skills/pdf/scripts/tests/test_e2e.sh",
+      "validator": "python3 skills/skill-creator/scripts/validate_skill.py skills/pdf",
+      "replication": "pdf-master-of-html-web-clean"
+    },
+    "html": {
+      "venv": "skills/html/scripts/.venv",
+      "e2e": "bash skills/html/scripts/tests/test_e2e.sh",
+      "validator": "python3 skills/skill-creator/scripts/validate_skill.py skills/html",
+      "replication": "two-master-html-see-CLAUDE-md-s2"
+    }
+  },
+  "_comment": "Components WITHOUT a gates entry (transcript-fetcher, wiki-*, …) are manual-only by design: no gate → not auto-fixable, honest scope. Replication classes refer to CLAUDE.md §2 — the heal workflow enforces master-only edits + byte-identity checks."
+}

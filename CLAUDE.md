@@ -316,3 +316,11 @@ commit. Do **not** alter or strip the per-skill `LICENSE` /
   Gold-Standard checks.
 - [`.claude/skills/skill-validator/`](.claude/skills/skill-validator/)
   — security and structural compliance scanner.
+- Quality feedback loop: `docs/issues/` + `docs/KNOWN_ISSUES.md` are fed by
+  the framework `run-feedback` skill (`/run-feedback`, end-of-run Retro) and
+  consumed by the framework `/heal-issues` workflow (config:
+  [`docs/feedback/heal-config.json`](docs/feedback/heal-config.json), reports:
+  `docs/feedback/heal-reports/` on fix branches). Scheduling is user-level
+  opt-in ONLY — no repo cron/CI/git-hooks, per the honest-scope precedent
+  (backlog xlsx-10 / review R2-H2); the documented contract is manual
+  invocation.

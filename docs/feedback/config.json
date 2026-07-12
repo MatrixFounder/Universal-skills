@@ -1,0 +1,19 @@
+{
+  "v": 1,
+  "issues_dir": "docs/issues",
+  "index_path": "docs/KNOWN_ISSUES.md",
+  "backlog_path": "docs/office-skills-backlog.md",
+  "backlog_anchor": "<!-- feedback:discovered-issues -->",
+  "id_prefixes": {
+    "_default": "RF",
+    "docx": "DOCX",
+    "xlsx": "XLSX",
+    "pptx": "PPTX",
+    "pdf": "PDF",
+    "html": "HTML2MD",
+    "transcript-fetcher": "TF-X",
+    "wiki-ingest": "WIKI-INGEST"
+  },
+  "excerpt_max_chars": 2000,
+  "feedback_dir": ".agent/feedback"
+}

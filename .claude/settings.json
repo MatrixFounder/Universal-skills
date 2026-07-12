@@ -2,8 +2,47 @@
   "env": {
     "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "1"
   },
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"$CLAUDE_PROJECT_DIR\"/.agent/skills/run-feedback/scripts/hooks/posttooluse.sh",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"$CLAUDE_PROJECT_DIR\"/.agent/skills/run-feedback/scripts/hooks/session_end.sh",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  },
   "permissions": {
     "allow": [
+      "Bash(python3 .agent/skills/run-feedback/scripts/run_feedback.py *)",
+      "Bash(git switch -c fix/*)",
+      "Bash(git switch fix/*)",
+      "Bash(git switch main)",
+      "Bash(git checkout fix/*)",
+      "Bash(git add docs/issues/*)",
+      "Bash(git add docs/KNOWN_ISSUES.md)",
+      "Bash(git add docs/feedback/heal-reports/*)",
+      "Bash(git add skills/*)",
+      "Bash(bash skills/docx/scripts/tests/test_e2e.sh)",
+      "Bash(bash skills/xlsx/scripts/tests/test_e2e.sh)",
+      "Bash(bash skills/pptx/scripts/tests/test_e2e.sh)",
+      "Bash(bash skills/pdf/scripts/tests/test_e2e.sh)",
+      "Bash(bash skills/html/scripts/tests/test_e2e.sh)",
       "Bash(ls *)",
       "Bash(cat *)",
       "Bash(head *)",
