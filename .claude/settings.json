@@ -3,25 +3,13 @@
     "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "1"
   },
   "hooks": {
-    "PostToolUse": [
-      {
-        "matcher": "Bash",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "\"$CLAUDE_PROJECT_DIR\"/.agent/skills/run-feedback/scripts/hooks/posttooluse.sh",
-            "timeout": 10
-          }
-        ]
-      }
-    ],
     "SessionEnd": [
       {
         "hooks": [
           {
             "type": "command",
             "command": "\"$CLAUDE_PROJECT_DIR\"/.agent/skills/run-feedback/scripts/hooks/session_end.sh",
-            "timeout": 10
+            "timeout": 30
           }
         ]
       }
