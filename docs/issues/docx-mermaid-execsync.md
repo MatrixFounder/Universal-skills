@@ -30,3 +30,18 @@ instead of CWD; (2) switch the `execSync` string to the argv-array form
 (`execFileSync('npx', [...])`) to remove the shell entirely. Both are mechanical and
 behaviour-preserving.
 **Do-not:** claim Mermaid temp-file hardening until this lands.
+
+## Reproduction
+
+No network, no mermaid-cli: a stubbed failing `npx` is enough — the `.mmd` is written into the
+CWD *before* the exec and its `unlinkSync` sits after the exec inside the `try`, so the temp
+leaks. Exits non-zero while the leak exists; 0 once rendering uses a scratch dir.
+
+````sh
+REPO="$(git rev-parse --show-toplevel)"
+cd "$(mktemp -d)"
+mkdir stub && printf '#!/bin/sh\nexit 1\n' > stub/npx && chmod +x stub/npx
+printf '# t\n\n```mermaid\ngraph TD; A-->B;\n```\n' > t.md
+PATH="$PWD/stub:$PATH" node "$REPO/skills/docx/scripts/md2docx.js" t.md out.docx >/dev/null 2>&1 || true
+test ! -e temp_1.mmd
+````

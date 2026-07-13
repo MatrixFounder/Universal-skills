@@ -31,3 +31,13 @@ rename the helper. One-line test change; no `preview.py` change (its JPEG output
 design, and it is a 4-skill replicated file).
 **Do-not:** attribute this failure to TASK 019 — the bootstrap prelude does not touch
 `preview.py`'s image-format logic.
+
+## Reproduction
+
+Requires LibreOffice (the render path is skipped without it). Red = `FAILED` with the
+`b'\xff\xd8\xff\xe0…' != b'\x89PNG…'` header mismatch; green after the assert targets JPEG.
+
+```sh
+cd skills/xlsx/scripts
+./.venv/bin/python -m unittest discover -s tests -p 'test_xlsx_add_comment.py' -k test_single_cell_renders_via_libreoffice
+```

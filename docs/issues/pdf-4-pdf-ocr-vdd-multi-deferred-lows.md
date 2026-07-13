@@ -46,3 +46,31 @@ deferred:
 **Workaround:** none required — both are LOW and the chain is production-ready
 (modulo the documented sandbox composition-verification caveat on the `pdf-4`
 backlog row). Promoting either to a follow-up is at user discretion.
+
+## Reproduction
+
+Self-contained (scratch dirs, PYTHONPATH-stubbed engine, PATH-stubbed tesseract — no network,
+no real OCR). Each block exits non-zero while its defect exists and 0 after the fix.
+
+**L1 — stale sidecar survives a mid-OCR failure:**
+
+```sh
+cd skills/pdf/scripts
+T=$(mktemp -d)
+./.venv/bin/python -c "from pypdf import PdfWriter; w=PdfWriter(); w.add_blank_page(72,72); w.write('$T/in.pdf')"
+printf 'def ocr(input_file, output_file, **kwargs):\n    sc = kwargs.get("sidecar")\n    if sc:\n        open(sc, "w").write("PARTIAL\\n")\n    raise RuntimeError("simulated mid-OCR crash")\n' > $T/ocrmypdf.py
+PYTHONPATH=$T ./.venv/bin/python pdf_ocr.py $T/in.pdf $T/out.pdf --sidecar $T/side.txt || true
+test ! -e $T/side.txt
+```
+
+**L2 — non-zero `tesseract --list-langs` misclassified as `LanguagePackMissing`:**
+
+```sh
+cd skills/pdf/scripts
+T=$(mktemp -d)
+./.venv/bin/python -c "from pypdf import PdfWriter; w=PdfWriter(); w.add_blank_page(72,72); w.write('$T/in.pdf')"
+printf 'def ocr(*a, **k):\n    raise RuntimeError("never reached")\n' > $T/ocrmypdf.py
+printf '#!/bin/sh\necho "Error: leptonica load failure" >&2\nexit 2\n' > $T/tesseract && chmod +x $T/tesseract
+PYTHONPATH=$T PATH=$T:$PATH ./.venv/bin/python pdf_ocr.py $T/in.pdf $T/out.pdf --json-errors 2>$T/err.json || true
+! grep -q LanguagePackMissing $T/err.json
+```
