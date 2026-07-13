@@ -1017,7 +1017,10 @@ class TestRenderSmoke(unittest.TestCase):
     """
 
     def _render_to_png(self, xlsx_path):
-        """Run preview.py to render `xlsx_path` to PNG. Return Path of PNG."""
+        """Run preview.py to render `xlsx_path` to a preview image; return its
+        Path. NOTE: preview.py's documented contract is JPEG output regardless
+        of the output path's extension (the `.preview.png` name below is kept
+        as a realistic user-supplied path — XLSX-PREVIEW-PNG-ASSERT)."""
         import subprocess, sys
         from pathlib import Path
         out_png = xlsx_path.parent / (xlsx_path.stem + ".preview.png")
@@ -1049,18 +1052,20 @@ class TestRenderSmoke(unittest.TestCase):
                        "--cell", "A5", "--author", "Q", "--text", "msg"])
             self.assertEqual(rc, 0)
             png = self._render_to_png(out)
-            # PNG header is 8 bytes (\x89PNG\r\n\x1a\n); a render that
-            # produced an empty/corrupt file would fail header parsing
+            # preview.py always emits JPEG (its documented contract, regardless
+            # of the output extension) — assert the JPEG SOI marker. A render
+            # that produced an empty/corrupt file would fail the header check
             # but might still create the file. Be explicit about size.
             self.assertGreater(
                 png.stat().st_size, 1024,
-                f"PNG suspiciously small ({png.stat().st_size} bytes) — "
+                f"preview suspiciously small ({png.stat().st_size} bytes) — "
                 f"likely render aborted before producing real output",
             )
             with open(png, "rb") as f:
                 self.assertEqual(
-                    f.read(8), b"\x89PNG\r\n\x1a\n",
-                    "Output is not a valid PNG (header mismatch)",
+                    f.read(3), b"\xff\xd8\xff",
+                    "Output is not a valid JPEG (preview.py's contract is "
+                    "JPEG regardless of the output extension)",
                 )
 
     def test_threaded_renders_via_libreoffice(self):

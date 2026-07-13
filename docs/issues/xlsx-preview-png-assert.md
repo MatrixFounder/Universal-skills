@@ -1,8 +1,10 @@
 ---
 id: XLSX-PREVIEW-PNG-ASSERT
 type: known-issue
-status: open
+status: fixed
 opened_at: 2026-06-05
+resolved_at: 2026-07-13
+resolved_by: heal-issues run 2026-07-13 (branch fix/xlsx-preview-png-assert)
 category: test
 severity: LOW
 component: xlsx
@@ -11,6 +13,13 @@ auto_fixable: true
 ---
 
 # XLSX-PREVIEW-PNG-ASSERT (pre-existing; surfaced by TASK 019 vdd-multi verification)
+
+> **Resolved 2026-07-13 by /heal-issues (manual pilot run #3).** Fix path (a) applied: the
+> render-smoke assertion now targets the JPEG SOI marker (`\xff\xd8\xff`) — preview.py's
+> documented contract is JPEG regardless of the output extension — with the helper docstring
+> and comments corrected to stop re-seeding the PNG confusion. preview.py itself untouched
+> (4-skill replicated file, by design). Gates: issue repro green, unit 522 OK, e2e 148/148,
+> validate_skill PASSED.
 
 **Status:** DEFERRED (LOW; pre-existing, **not** a TASK 019 regression — proven below).
 **Severity:** LOW (test-only; the rendering itself works, the assertion is wrong).

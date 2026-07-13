@@ -92,4 +92,4 @@ Analysis Phase" which mandates this read.
 
 ## test
 
-- **XLSX-PREVIEW-PNG-ASSERT** [preview smoke-test asserts PNG magic but `preview.py` emits JPEG](issues/xlsx-preview-png-assert.md) — severity `LOW`, status `open`, opened 2026-06-05
+- **XLSX-PREVIEW-PNG-ASSERT** [preview smoke-test asserts PNG magic but `preview.py` emits JPEG](issues/xlsx-preview-png-assert.md) — severity `LOW`, status `fixed`, opened 2026-06-05
