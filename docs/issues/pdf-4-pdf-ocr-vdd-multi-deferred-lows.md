@@ -7,6 +7,7 @@ category: robustness
 severity: LOW
 component: pdf
 slug: pdf-4-pdf-ocr-vdd-multi-deferred-lows
+auto_fixable: true
 ---
 
 # PDF-4 (`pdf_ocr.py`) — vdd-multi deferred LOWs (2026-06-03)

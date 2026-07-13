@@ -7,6 +7,7 @@ category: security
 severity: LOW
 component: docx
 slug: docx-mermaid-execsync
+auto_fixable: true
 ---
 
 # DOCX-MERMAID-EXECSYNC (pre-existing; surfaced by TASK 019 vdd-multi)

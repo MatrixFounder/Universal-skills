@@ -7,6 +7,7 @@ category: test
 severity: LOW
 component: xlsx
 slug: xlsx-preview-png-assert
+auto_fixable: true
 ---
 
 # XLSX-PREVIEW-PNG-ASSERT (pre-existing; surfaced by TASK 019 vdd-multi verification)
