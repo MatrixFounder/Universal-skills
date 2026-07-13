@@ -1,8 +1,10 @@
 ---
 id: DOCX-MERMAID-EXECSYNC
 type: known-issue
-status: open
+status: fixed
 opened_at: 2026-06-05
+resolved_at: 2026-07-13
+resolved_by: heal-issues run 2026-07-13 (branch fix/docx-mermaid-execsync)
 category: security
 severity: LOW
 component: docx
@@ -11,6 +13,14 @@ auto_fixable: true
 ---
 
 # DOCX-MERMAID-EXECSYNC (pre-existing; surfaced by TASK 019 vdd-multi)
+
+> **Resolved 2026-07-13 by /heal-issues (manual pilot run #2).** Mermaid rendering now runs
+> inside a per-diagram `fs.mkdtempSync(os.tmpdir())` scratch (removed in `finally` on both
+> success and failure) and the command is `execFileSync('npx', [...argv])` — no shell string,
+> no predictable names, nothing in the CWD. Regression tests:
+> `tests/test_md2docx_mermaid_hygiene.py` (failure path via stubbed npx: CWD clean + docx
+> still produced). Gates: issue repro green, unit 206 OK, e2e 155/155, validate_skill PASSED;
+> success path smoke-verified with a real mermaid render (PNG embedded, CWD clean).
 
 **Status:** DEFERRED (LOW; pre-existing, out of TASK 019 scope).
 **Severity:** LOW (not exploitable under the single-tenant local-CLI trust model).

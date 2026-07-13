@@ -77,7 +77,7 @@ Analysis Phase" which mandates this read.
 
 ## security
 
-- **DOCX-MERMAID-EXECSYNC** [Mermaid `execSync` predictable-name-in-CWD temp files](issues/docx-mermaid-execsync.md) — severity `LOW`, status `open`, opened 2026-06-05
+- **DOCX-MERMAID-EXECSYNC** [Mermaid `execSync` predictable-name-in-CWD temp files](issues/docx-mermaid-execsync.md) — severity `LOW`, status `fixed`, opened 2026-06-05
 - **HTML2MD-4** [SSRF residuals (lite path hardened; chrome TOCTOU residual)](issues/html2md-4-ssrf-residuals-lite-path-hardened.md) — severity `LOW`, status `open`, opened 2026-06-23
 - **HTML2MD-6** [the remote-reader tier sends the target URL to an external service](issues/html2md-6-remote-reader-sends-url-external.md) — severity `LOW`, status `by-design`, opened 2026-06-23
 - **HTML2MD-10** [authenticated Chrome (login-gated) honest-scope](issues/html2md-10-authenticated-chrome-honest-scope.md) — severity `LOW`, status `handled`, opened 2026-06-23

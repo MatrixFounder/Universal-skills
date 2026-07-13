@@ -1,7 +1,8 @@
 // md2docx.js
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
-const { execSync } = require('child_process');
+const { execFileSync } = require('child_process');
 const marked = require('marked');
 const sizeOf = require('image-size').imageSize;
 const { Document, Packer, Paragraph, TextRun, Table, TableRow, TableCell, ImageRun, HeadingLevel, BorderStyle, WidthType, ShadingType, LevelFormat, AlignmentType, Header, Footer, PageNumber, PageOrientation } = require('docx');
@@ -342,13 +343,20 @@ try {
             children.push(new Paragraph({ spacing: { after: 240 } }));
         } else if (token.type === 'code' && token.lang === 'mermaid') {
             imgCounter++;
-            const mmdFile = `temp_${imgCounter}.mmd`;
-            const pngFile = `temp_${imgCounter}.png`;
+            // DOCX-MERMAID-EXECSYNC: render inside an unpredictable per-diagram
+            // scratch dir — never the CWD (no predictable-name pre-plant surface,
+            // nothing left behind) — and exec in argv form (no shell string).
+            const mmdScratch = fs.mkdtempSync(path.join(os.tmpdir(), 'md2docx-mmd-'));
+            const mmdFile = path.join(mmdScratch, 'diagram.mmd');
+            const pngFile = path.join(mmdScratch, 'diagram.png');
             fs.writeFileSync(mmdFile, token.text);
 
             try {
                 console.log(`Generating diagram ${imgCounter}...`);
-                execSync(`npx -y @mermaid-js/mermaid-cli -i ${mmdFile} -o ${pngFile} -s 2 -b white -t neutral`, { stdio: 'inherit' });
+                execFileSync(process.platform === 'win32' ? 'npx.cmd' : 'npx',
+                    ['-y', '@mermaid-js/mermaid-cli', '-i', mmdFile, '-o', pngFile,
+                     '-s', '2', '-b', 'white', '-t', 'neutral'],
+                    { stdio: 'inherit' });
                 if (fs.existsSync(pngFile)) {
                     const imgData = fs.readFileSync(pngFile);
                     const dims = sizeOf(imgData);
@@ -373,11 +381,13 @@ try {
                             altText: { title: `Diagram ${imgCounter}`, description: "Process Diagram", name: "Diagram" }
                         })]
                     }));
-                    fs.unlinkSync(pngFile);
                 }
-                fs.unlinkSync(mmdFile);
             } catch (err) {
                 console.error(err);
+            } finally {
+                // Scratch removal replaces the old per-file unlinks: it runs on
+                // BOTH success and render failure, so nothing ever leaks.
+                fs.rmSync(mmdScratch, { recursive: true, force: true });
             }
         } else if (token.type === 'code' && token.lang !== 'mermaid') {
             const lines = token.text.split('\n');
