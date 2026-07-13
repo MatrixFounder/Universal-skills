@@ -1,8 +1,10 @@
 ---
 id: PDF-4
 type: known-issue
-status: open
+status: fixed
 opened_at: 2026-06-03
+resolved_at: 2026-07-13
+resolved_by: heal-issues run 2026-07-13 (branch fix/pdf-4-pdf-ocr-vdd-multi-deferred-lows)
 category: robustness
 severity: LOW
 component: pdf
@@ -11,6 +13,15 @@ auto_fixable: true
 ---
 
 # PDF-4 (`pdf_ocr.py`) — vdd-multi deferred LOWs (2026-06-03)
+
+> **Resolved 2026-07-13 by /heal-issues (manual pilot run #1).** L1: the `--sidecar` now goes
+> through an O_EXCL `.partial.txt` scratch in the sidecar dir and is promoted via `os.replace`
+> only after a green run, with the scratch in the `finally` cleanup — a mid-OCR failure leaves
+> no stale sidecar. L2: a non-zero `tesseract --list-langs` rc now raises a distinct
+> `OcrEngineUnavailable` diagnostic (rc + stderr in details) instead of collapsing into
+> `LanguagePackMissing`. Regression tests: `test_sidecar_atomic_promoted_on_success`,
+> `test_sidecar_not_left_on_engine_failure`, `test_installed_languages_tesseract_broken`.
+> Gates: both repros green, unit suite OK, e2e 84/84, validate_skill PASSED.
 
 **Status:** DEFERRED (LOW; documented-scope, not regressions).
 **Backlog row:** `pdf-4` in

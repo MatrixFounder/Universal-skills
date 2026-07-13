@@ -260,6 +260,25 @@ def _installed_languages() -> set[str]:
             f"Could not run `tesseract --list-langs`: {exc}",
             error_type="OcrEngineUnavailable",
         ) from exc
+    # PDF-4/L2: a tesseract that RUNS but exits non-zero (broken install,
+    # missing shared lib, corrupt tessdata dir) is NOT "language packs
+    # missing" — surface the real diagnostic instead of parsing an empty
+    # stream into an empty language set.
+    if proc.returncode != 0:
+        detail = (proc.stderr or proc.stdout or "").strip()
+        raise _OcrError(
+            f"`tesseract --list-langs` failed with exit code {proc.returncode}"
+            + (f": {detail}" if detail else "")
+            + ". The tesseract install itself is broken (this is not a missing "
+            "language pack) — reinstall it (macOS `brew reinstall tesseract`; "
+            "Debian `apt install --reinstall tesseract-ocr`). See "
+            "references/ocr.md.",
+            error_type="OcrEngineUnavailable",
+            details={
+                "tesseract_exit": proc.returncode,
+                "stderr": (proc.stderr or "")[:500],
+            },
+        )
     langs: set[str] = set()
     for line in f"{proc.stdout}\n{proc.stderr}".splitlines():
         token = line.strip()
@@ -423,7 +442,9 @@ def run_ocr(
     `main` already computed to avoid a second `tesseract --list-langs` spawn.
 
     The output is written to an O_EXCL `.partial` scratch (mkstemp) in the
-    OUTPUT dir and `os.replace`d into place; every temp (the `.partial`, plus a
+    OUTPUT dir and `os.replace`d into place; the `--sidecar` text gets the same
+    treatment (scratch in the sidecar dir, promoted only after a green run —
+    PDF-4/L1); every temp (the partials, plus a
     decrypted scratch when `--password` is used) is removed on every exit path —
     so a failure leaves no partial or stale OUTPUT (invariant I-3). The image-prep
     knobs have host
@@ -459,8 +480,6 @@ def run_ocr(
             f"Unknown OCR mode: {mode!r}.", error_type="InternalError",
         )
     kwargs: dict = {"language": lang, "progress_bar": False, mode: True}
-    if sidecar is not None:
-        kwargs["sidecar"] = str(sidecar)
     if jobs is not None:
         kwargs["jobs"] = jobs
     if deskew:
@@ -477,6 +496,7 @@ def run_ocr(
     # or a NON-ZERO ExitCode RETURNED (not raised) by ocrmypdf — is mapped to a
     # clean envelope and never leaves a partial or decrypted scratch behind (I-3).
     tmp_out: Path | None = None
+    tmp_sidecar: Path | None = None
     decrypted: Path | None = None
     try:
         # mkstemp is INSIDE the try so an OSError on an unwritable/nonexistent
@@ -485,6 +505,18 @@ def run_ocr(
         fd, tmp_name = tempfile.mkstemp(dir=str(outp.parent), suffix=".partial.pdf")
         os.close(fd)
         tmp_out = Path(tmp_name)
+
+        # PDF-4/L1: the sidecar gets the same atomicity treatment as the PDF —
+        # the engine writes into an O_EXCL scratch in the SIDECAR dir and the
+        # final path appears only via os.replace after a fully-green run, so a
+        # mid-OCR failure never leaves a stale/partial sidecar.txt behind.
+        if sidecar is not None:
+            sfd, s_name = tempfile.mkstemp(
+                dir=str(sidecar.parent), suffix=".partial.txt",
+            )
+            os.close(sfd)
+            tmp_sidecar = Path(s_name)
+            kwargs["sidecar"] = str(tmp_sidecar)
 
         # R5: ocrmypdf has no input-password path — decrypt to a 0600 scratch in
         # the OUTPUT dir first, then OCR that (D-A3). The output is unencrypted.
@@ -505,14 +537,19 @@ def run_ocr(
                 details={"ocrmypdf_exit": int(rc)},
             )
         os.replace(tmp_out, outp)
+        # Sidecar promotion comes AFTER the PDF: the primary deliverable wins;
+        # a failure between the two replaces leaves a new PDF and no sidecar —
+        # never a stale sidecar next to an old PDF.
+        if tmp_sidecar is not None:
+            os.replace(tmp_sidecar, sidecar)
     except _OcrError:
         raise
     except Exception as exc:  # noqa: BLE001 — mapped to a clean _OcrError
         raise _map_engine_exception(exc) from exc
     finally:
-        # I-3 / S-3: never leave the partial or the decrypted scratch behind
-        # (success already moved the partial away).
-        for scratch in (tmp_out, decrypted):
+        # I-3 / S-3: never leave the partial, the sidecar scratch, or the
+        # decrypted scratch behind (success already moved the partials away).
+        for scratch in (tmp_out, tmp_sidecar, decrypted):
             if scratch is not None:
                 with contextlib.suppress(OSError):
                     scratch.unlink(missing_ok=True)

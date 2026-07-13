@@ -358,6 +358,26 @@ class TestEngineProbeAndLangValidate(unittest.TestCase):
                 pdf_ocr._installed_languages()
         self.assertEqual(ctx.exception.error_type, "OcrEngineUnavailable")
 
+    def test_installed_languages_tesseract_broken(self) -> None:
+        # PDF-4/L2 — tesseract RUNS but exits non-zero → the real diagnostic
+        # (OcrEngineUnavailable + rc/stderr), NOT LanguagePackMissing from an
+        # empty parse.
+        import subprocess as _sp
+
+        def fake_run(argv, **kw):  # noqa: ANN001, ANN202
+            return _sp.CompletedProcess(
+                argv, 2, stdout="", stderr="Error: leptonica load failure",
+            )
+
+        with mock.patch.object(pdf_ocr.shutil, "which",
+                               return_value="/usr/bin/tesseract"), \
+             mock.patch.object(pdf_ocr.subprocess, "run", side_effect=fake_run):
+            with self.assertRaises(pdf_ocr._OcrError) as ctx:
+                pdf_ocr._installed_languages()
+        self.assertEqual(ctx.exception.error_type, "OcrEngineUnavailable")
+        self.assertEqual(ctx.exception.details["tesseract_exit"], 2)
+        self.assertIn("leptonica", ctx.exception.message)
+
     def test_main_engine_path(self) -> None:
         # TC-E2E-02 / updated TC-UNIT-07 — engine-aware end-to-end.
         scan = self._fx["scan"]
@@ -424,6 +444,38 @@ class TestOcrRunner(unittest.TestCase):
         self.assertEqual(fake.captured["jobs"], 2)
         self.assertTrue(fake.captured["output_file"].endswith(".partial.pdf"))
         self.assertEqual(Path(fake.captured["output_file"]).parent, Path(self._tmp))
+
+    def test_sidecar_atomic_promoted_on_success(self) -> None:
+        # PDF-4/L1 — the engine writes the SIDECAR scratch; the final path
+        # appears only via os.replace, with no .partial.txt left behind.
+        out = Path(self._tmp) / "side_ok.pdf"
+        sidecar = Path(self._tmp) / "side_ok.txt"
+
+        def behavior(kwargs):  # noqa: ANN001, ANN202
+            Path(kwargs["output_file"]).write_bytes(b"%PDF-1.7 fake\n")
+            Path(kwargs["sidecar"]).write_text("ocr text", encoding="utf-8")
+
+        code, fake = self._run(out, behavior, sidecar=sidecar)
+        self.assertEqual(code, 0)
+        self.assertTrue(fake.captured["sidecar"].endswith(".partial.txt"),
+                        "engine must receive the scratch, not the final path")
+        self.assertEqual(sidecar.read_text(encoding="utf-8"), "ocr text")
+        self.assertEqual(list(Path(self._tmp).glob("*.partial.txt")), [])
+
+    def test_sidecar_not_left_on_engine_failure(self) -> None:
+        # PDF-4/L1 — engine writes a partial sidecar then dies mid-OCR →
+        # neither the final sidecar nor any scratch survives (I-3 parity).
+        out = Path(self._tmp) / "side_fail.pdf"
+        sidecar = Path(self._tmp) / "side_fail.txt"
+
+        def behavior(kwargs):  # noqa: ANN001, ANN202
+            Path(kwargs["sidecar"]).write_text("PARTIAL", encoding="utf-8")
+            raise RuntimeError("simulated mid-OCR crash")
+
+        with self.assertRaises(pdf_ocr._OcrError):
+            self._run(out, behavior, sidecar=sidecar)
+        self.assertFalse(sidecar.exists(), "no stale sidecar on failure")
+        self.assertEqual(list(Path(self._tmp).glob("*.partial.txt")), [])
 
     def test_atomic_no_partial_on_failure(self) -> None:
         # TC-UNIT-14 — engine writes the partial then raises → nothing left (I-3).

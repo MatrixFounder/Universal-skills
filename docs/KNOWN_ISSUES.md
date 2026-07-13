@@ -65,7 +65,7 @@ Analysis Phase" which mandates this read.
 
 ## robustness
 
-- **PDF-4** [`pdf_ocr.py` vdd-multi deferred LOWs (sidecar atomicity, `--list-langs` non-zero exit)](issues/pdf-4-pdf-ocr-vdd-multi-deferred-lows.md) — severity `LOW`, status `open`, opened 2026-06-03
+- **PDF-4** [`pdf_ocr.py` vdd-multi deferred LOWs (sidecar atomicity, `--list-langs` non-zero exit)](issues/pdf-4-pdf-ocr-vdd-multi-deferred-lows.md) — severity `LOW`, status `fixed`, opened 2026-06-03
 - **HTML2MD-1** [Cloudflare/captcha-hard sites auto-recover via the remote reader tier](issues/html2md-1-cloudflare-captcha-remote-tier-recovery.md) — severity `LOW`, status `handled`, opened 2026-06-23
 - **HTML2MD-7** [clean-source host variants (Wikipedia REST, arXiv /html)](issues/html2md-7-clean-source-host-variants.md) — severity `LOW`, status `handled`, opened 2026-06-23
 - **HTML2MD-8** [empty-extraction guard (no more silent empties)](issues/html2md-8-empty-extraction-guard.md) — severity `SEV-2`, status `handled`, opened 2026-06-23
