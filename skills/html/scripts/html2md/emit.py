@@ -37,8 +37,14 @@ from .naming import (  # shared with serialize (OP1) — re-aliased to the histo
 # alphabet + the mime prefix exclude both); an angle-bracketed destination (CommonMark)
 # may contain spaces/parens — html_convert.js emits that form for localized archive
 # subresources whose decoded filenames carry spaces (e.g. Confluence attachments).
+# The alt admits ONE level of balanced brackets: CommonMark link text may nest them, and
+# real captions do (`![Foo [bar]](src)` — an editorial aside inside a figcaption). A flat
+# `[^\]]*` stops at the inner ']' and fails the whole match, silently leaving the image a
+# remote hotlink (never localized) and a data: blob unstripped in --stdout. Deeper nesting
+# needs recursion (not in `re`) and does not occur in emitted captions.
 # Groups: 1=alt, 2=bracketed src, 3=bare src, 4=title.
-_IMG_RE = re.compile(r'!\[([^\]]*)\]\(\s*(?:<([^<>\n]*)>|([^)\s>]+))(\s+"[^"]*")?\s*\)')
+_IMG_RE = re.compile(
+    r'!\[((?:[^\[\]]|\[[^\[\]]*\])*)\]\(\s*(?:<([^<>\n]*)>|([^)\s>]+))(\s+"[^"]*")?\s*\)')
 
 
 def _img_src(m: re.Match) -> str:

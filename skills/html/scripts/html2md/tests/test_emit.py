@@ -375,6 +375,45 @@ class TestSpacedDestinations(unittest.TestCase):
             self.assertTrue((out / link).is_file(), link)
 
 
+class TestBracketedAlt(unittest.TestCase):
+    """A caption carrying a bracketed aside — `![Foo [bar]](src)`, CommonMark-legal
+    balanced link text that real figcaptions emit (vc.ru/osnova) — must still match, or
+    the image is silently left a remote hotlink and a data: blob survives --stdout."""
+
+    def test_img_re_balanced_brackets_in_alt(self):
+        cases = {
+            "![Кекс [не утверждаю, но тенденция]](https://cdn/x/-/scale_crop/592x/)":
+                ("Кекс [не утверждаю, но тенденция]", "https://cdn/x/-/scale_crop/592x/"),
+            "![[leading]](x.png)": ("[leading]", "x.png"),
+            "![a [b] c [d]](<a b.png>)": ("a [b] c [d]", "a b.png"),
+            "![plain](x.png)": ("plain", "x.png"),
+            "![](x.png)": ("", "x.png"),
+        }
+        for md, (want_alt, want_src) in cases.items():
+            m = emit._IMG_RE.search(md)
+            self.assertIsNotNone(m, md)
+            self.assertEqual(m.group(1), want_alt, md)
+            self.assertEqual(emit._img_src(m), want_src, md)
+
+    def test_strip_data_images_bracketed_alt(self):
+        uri = "data:image/png;base64," + "A" * 2048
+        self.assertEqual(emit._strip_data_images(f"x ![cap [aside]]({uri}) y"), "x  y")
+
+    def test_bracketed_alt_image_localized(self):
+        """The regression: alt with an aside → localized to _attachments/, not hotlinked."""
+        from html2md.model import AcquireResult
+        d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, d, ignore_errors=True)
+        acq = AcquireResult(html="", base_url="https://example.com/a", mode="url")
+        md = "![Подпись [почувствуйте вайб]](https://cdn.example.com/img/-/scale_crop/592x/)"
+        out, = emit._download_and_rewrite(
+            [md], acq, attach_dir=Path(d) / "_attachments", attach_name="_attachments",
+            max_images=None, remote_resolver=lambda src: _PNG)
+        self.assertIn("](_attachments/", out)
+        self.assertNotIn("cdn.example.com", out)
+        self.assertIn("![Подпись [почувствуйте вайб]]", out)  # alt preserved verbatim
+
+
 class TestSniffExt(unittest.TestCase):
     def test_pseudo_extension_defers_to_magic(self):
         """Confluence "atl.site.logo" (PNG bytes) → .png, not .logo."""
