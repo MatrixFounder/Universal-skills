@@ -146,5 +146,48 @@ class TestMathNormalization(unittest.TestCase):
         self.assertNotIn(r"a + b\c + d", out)  # the row-break must not be merged away
 
 
+class TestLinkHygiene(unittest.TestCase):
+    """Tracking-redirect unwrap + image-alt tag strip (class-based, double-gated)."""
+
+    _VC = ("https://api.vc.ru/v2.8/redirect"
+           "?to=https%3A%2F%2Fru.wikipedia.org%2Fwiki%2FTime-based_One-time_Password_Algorithm"
+           "&postId=156552")
+
+    def test_redirect_unwrapped_to_decoded_target(self):
+        out = tidy_markdown(f"see [TOTP]({self._VC}) for details\n")
+        self.assertIn("(https://ru.wikipedia.org/wiki/Time-based_One-time_Password_Algorithm)", out)
+        self.assertNotIn("api.vc.ru", out)
+
+    def test_oauth_redirect_uri_example_untouched(self):
+        # Documented OAuth example: `redirect_uri` is a QUERY PARAM, but the PATH has no
+        # redirect segment — the double gate must leave the documented URL exactly as-is.
+        url = "https://example.com/oauth/authorize?redirect_uri=https%3A%2F%2Fapp.com%2Fcb&scope=x"
+        out = tidy_markdown(f"[authorize]({url})\n")
+        self.assertIn(url, out)
+
+    def test_redirect_path_without_encoded_target_untouched(self):
+        # Redirect-ish path but no url-encoded absolute target → not a tracking wrapper.
+        url = "https://example.com/redirect?to=%2Flocal%2Fpath&x=1"
+        out = tidy_markdown(f"[local]({url})\n")
+        self.assertIn(url, out)
+
+    def test_redirect_inside_code_fence_untouched(self):
+        out = tidy_markdown(f"```\ncurl '{self._VC}'\n```\n")
+        self.assertIn("api.vc.ru", out)
+
+    def test_image_alt_anchor_stripped_keeps_text(self):
+        md = (f'![Legend (<a href="{self._VC}" rel="nofollow noreferrer noopener" '
+              f'target="_blank">SVG</a>)](_attachments/x.jpg)\n')
+        out = tidy_markdown(md)
+        self.assertIn("![Legend (SVG)](_attachments/x.jpg)", out)
+        self.assertNotIn("<a ", out)
+
+    def test_anchor_in_prose_left_alone(self):
+        # The tag strip is scoped to image ALT brackets — inline HTML in prose is not ours.
+        md = 'keep <a href="https://x.example">this</a> line\n'
+        out = tidy_markdown(md)
+        self.assertIn('<a href="https://x.example">this</a>', out)
+
+
 if __name__ == "__main__":
     unittest.main()

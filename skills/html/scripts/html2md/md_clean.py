@@ -9,6 +9,15 @@ about, and the pdf-mastered reader-mode (tuned for blog articles) barely trims t
     then the text on its own line. We merge them back into ``### Title``.
   • **Standalone chrome lines** — exact-match boilerplate (``Copy`` / ``Search…`` /
     ``Ask AI`` / feedback / AI-assistant widget text) that leaks as stray paragraphs.
+  • **Tracking-redirect link wrappers** — publishing platforms launder every external
+    link through a redirect endpoint (vc.ru: ``https://api.vc.ru/v2.8/redirect?to=
+    <url-encoded target>&postId=…``); the article's REAL link is the decoded ``to=``
+    value. Unwrapped only on a double signal (redirect-ish path segment AND a query
+    param whose value is a url-encoded absolute http(s) URL) — a documented OAuth
+    ``…/authorize?redirect_uri=…`` example has no redirect path segment and stays.
+  • **HTML tags inside image alt text** — alt is a plain-text context by spec, so any
+    tag in ``![…]`` is converter residue (observed: a raw ``<a …>SVG</a>`` caption
+    leaking into alt on vc.ru). Tags are dropped, their inner text kept.
 
 Conservative by design: only EXACT-match chrome strings and genuinely-empty headings
 are touched; real prose, links, code, lists and tables are never *removed*.
@@ -100,6 +109,47 @@ _MATH_SIGNAL = re.compile(
 _MATH_DELIM_CAP = 5000
 
 
+# --------------------------------------------------------------------------- #
+# Link hygiene: tracking-redirect unwrap + image-alt tag strip
+# --------------------------------------------------------------------------- #
+# Both are CLASS-based (no site list) and double-gated, per this module's "leave junk
+# before deleting real content" rule. The unwrap fires only when a URL token has BOTH
+# (a) a redirect-ish segment in its PATH (…/redirect, /redir/, /away, /leaving, /exit,
+# /outlink) — so a documented `…/oauth/authorize?redirect_uri=…` example is never
+# touched — AND (b) a query param whose value is a url-encoded ABSOLUTE http(s) URL.
+# The token is then replaced by that decoded target (unquoted exactly once; a decoded
+# value that is not http(s) leaves the token alone). Applied outside code fences only.
+_URL_TOKEN = re.compile(r"https?://[^\s()<>\"'\]]+")
+_REDIRECT_PATH = re.compile(r"/[a-z0-9._-]*(?:redirect|redir|away|leaving|exit|outlink)[a-z0-9._-]*(?:/|$)", re.I)
+_REDIRECT_TARGET = re.compile(
+    r"(?:^|[?&])(?:to|url|u|target|dest|goto|link|redirect_to)=(https?%3[Aa]%2[Ff]%2[Ff][^&\s]+)"
+)
+# Any tag inside an image's alt brackets. Alt is plain text by spec — a `<a …>` (or any
+# tag) there is turndown residue from a rich figure caption, never authored content.
+_IMG_ALT = re.compile(r"!\[([^\]]*)\]")
+_TAG = re.compile(r"</?[A-Za-z][^>]*>")
+
+
+def _unwrap_tracking_redirects(line: str) -> str:
+    def _one(m: "re.Match[str]") -> str:
+        url = m.group(0)
+        path, sep, query = url.partition("?")
+        if not sep or not _REDIRECT_PATH.search(path):
+            return url
+        tm = _REDIRECT_TARGET.search(query)
+        if not tm:
+            return url
+        from urllib.parse import unquote
+        target = unquote(tm.group(1))
+        return target if target.lower().startswith(("http://", "https://")) else url
+
+    return _URL_TOKEN.sub(_one, line)
+
+
+def _strip_tags_in_image_alt(line: str) -> str:
+    return _IMG_ALT.sub(lambda m: "![" + _TAG.sub("", m.group(1)) + "]", line)
+
+
 def _looks_like_math(s: str) -> bool:
     return bool(_MATH_SIGNAL.search(s))
 
@@ -181,6 +231,10 @@ def tidy_markdown(md: str) -> str:
         if _is_chrome(line) or _is_attr_soup(line):
             i += 1
             continue
+        # Link hygiene (outside fences only): alt-tag strip FIRST — a redirect href inside
+        # an alt-text `<a>` vanishes with its tag, so the unwrap then sees only real link
+        # targets (order matters; reversed, the dead alt href would be unwrapped for nothing).
+        line = _unwrap_tracking_redirects(_strip_tags_in_image_alt(line))
         out.append(line)
         i += 1
     text = _normalize_math("\n".join(out))
