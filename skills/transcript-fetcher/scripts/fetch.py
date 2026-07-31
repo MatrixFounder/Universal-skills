@@ -83,6 +83,10 @@ from sources.x import (  # noqa: E402
     extract_x_id,
     fetch_x_transcript,
 )
+from sources.yandex import (  # noqa: E402
+    extract_episode_id as extract_yandex_episode_id,
+    fetch_yandex_transcript,
+)
 from sources.youtube import (  # noqa: E402  (after sys.path tweak)
     DEFAULT_FALLBACK_RU,
     DEFAULT_TIMEOUT_SEC,
@@ -159,6 +163,14 @@ for _h in (
     "mobile.twitter.com",
 ):
     _SOURCE_BY_HOST[_h] = "x"
+# Yandex VH/Strm — webinar/stream recordings. ASR-only: that player carries no
+# caption track (see sources/yandex.py module docstring for the evidence).
+for _h in (
+    "runtime.strm.yandex.ru",
+    "frontend.vh.yandex.ru",
+    "strm.yandex.ru",
+):
+    _SOURCE_BY_HOST[_h] = "yandex"
 
 # Retained for backwards-compat with existing tests that imported the set.
 _YOUTUBE_HOSTS = frozenset(
@@ -296,6 +308,28 @@ def _fetch_one(
             url,
             out_path,
             fallback_ladder=x_ladder,
+            lang=lang,
+            timeout_sec=timeout_sec,
+            concurrent_fragments=concurrent_fragments,
+            media_timeout_sec=media_timeout_sec,
+            cookies_file=cookies_file,
+            cookies_from_browser=cookies_from_browser,
+            with_description=with_description,
+            description_only=description_only,
+            asr_allow_cloud=asr_allow_cloud,
+            asr_model=asr_model,
+            asr_timeout_sec=asr_timeout_sec,
+            max_duration_min=max_duration_min,
+            remove_silence=remove_silence,
+            debug=debug,
+        )
+    elif source == "yandex":
+        # Yandex VH/Strm: no caption track exists on this player, so the
+        # adapter goes straight to ASR and the caption ladder is not passed.
+        # `lang` is the ASR language hint (default ru — these are RU webinars).
+        stat = fetch_yandex_transcript(
+            url,
+            out_path,
             lang=lang,
             timeout_sec=timeout_sec,
             concurrent_fragments=concurrent_fragments,
@@ -1111,11 +1145,17 @@ def _resolve_batch_path(
 def _extract_any_id(url: str) -> Optional[str]:
     """Source-aware id extraction for batch output filenames.
 
-    Tries the YouTube, Vimeo, then X extractors so an X status/broadcast URL is
-    named by its real id instead of a slugified URL. Returns ``None`` when no
-    source pattern matches (caller falls back to :func:`_slugify`).
+    Tries the YouTube, Vimeo, X, then Yandex extractors so an X status/broadcast
+    or a Yandex VH/Strm episode URL is named by its real id instead of a
+    slugified URL. Returns ``None`` when no source pattern matches (caller falls
+    back to :func:`_slugify`).
     """
-    return extract_video_id(url) or extract_vimeo_id(url) or extract_x_id(url)
+    return (
+        extract_video_id(url)
+        or extract_vimeo_id(url)
+        or extract_x_id(url)
+        or extract_yandex_episode_id(url)
+    )
 
 
 def _slugify(text: str) -> str:

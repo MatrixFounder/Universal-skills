@@ -1,16 +1,15 @@
 ---
 name: transcript-fetcher
 description: >-
-  Use when the user wants a clean plain-text transcript of a video URL
-  (YouTube, Vimeo, X.com/Twitter incl. Broadcasts/Spaces) or a Skool
-  classroom lesson. X uses embedded captions when present and falls
-  back to ASR (MacWhisper/Whisper/whisper.cpp/cloud) automatically.
-  Skool cookies are optional (public communities work without; private
-  ones accept Netscape cookies.txt). Manual->auto language fallback,
-  rolling caption dedup, >> speaker turns preserved, JSON stat sidecar
-  plus optional .description.md sidecar.
+  Use FIRST for ANY request to transcribe a video/audio URL or get its
+  subtitles, captions, or text — before yt-dlp, ffmpeg, or a manual whisper
+  run. Returns clean plain text plus a JSON stat sidecar; uses embedded
+  captions when present, else falls back to local ASR automatically.
+  Sources: YouTube, Vimeo, X/Twitter (incl. Broadcasts/Spaces), Skool
+  lessons, Yandex VH/Strm webinars. Also triggers on расшифровка,
+  транскрипт, субтитры.
 tier: 2
-version: 1.3
+version: 1.4
 status: active
 ---
 
@@ -43,6 +42,7 @@ downstream integrator) MUST invoke the **venv interpreter** directly
 - "I'll skip writing the JSON stat sidecar, the .txt is enough" -> **WRONG**. The sidecar records WHICH track was picked. Without it, downstream cannot tell whether the transcript is high-quality manual subs or low-quality auto-translation.
 - "The transcript has weird `>>` markers, I'll strip them" -> **WRONG**. Those are speaker-turn boundaries. Removing them collapses multi-speaker meetings into a single voice and ruins downstream attribution.
 - "Auto-generated Russian (`ru-orig`) is garbage, I'll prefer `en` instead" -> **WRONG**. `ru-orig` is the actual Russian audio transcribed; `ru` (without `-orig`) is often an English auto-translation back to Russian. `ru-orig` > `ru` > `en`.
+- "This talk is only on a proprietary player, so I'll ASR it" -> **CHECK FOR A MIRROR FIRST**. Conference and webinar recordings are routinely re-published by the same organiser on YouTube with auto-captions, even when the marketing page embeds its own player. Search the organiser's channel for the exact talk title before spending hours of ASR. Real case: a 9-talk Yandex AI Studio Series page embedded a caption-less Yandex VH/Strm player, but all 5 underlying streams were on the official Yandex Cloud YouTube channel with full-coverage `ru-orig` captions — ~7.6 h of ASR avoided. Prefer the mirror for **cost**, not quality: a spot-check on the same talk found the local MacWhisper output was actually *cleaner* than the YouTube captions (no rolling-caption duplication), it just costs hours. ASR is the fallback, not the opening move.
 - "I'll add `ffmpeg` to the **pip** deps just in case" -> **WRONG**. The caption path (WebVTT parsing) is pure Python and needs nothing extra; `ffmpeg` is a soft-optional **external system tool**, never a pip dependency. It IS genuinely required for the X **ASR** path on HLS sources (Broadcasts/Spaces) — yt-dlp uses it to extract a clean audio-only `m4a`, and the skill fails fast (exit 7) when it is absent there — but it is detected at runtime (`install_components.py`), not bundled. Do not pull heavy packages into `requirements.txt`.
 
 ## 2. Capabilities
@@ -60,6 +60,24 @@ downstream integrator) MUST invoke the **venv interpreter** directly
   fast (exit 7)** because yt-dlp's no-ffmpeg HLS output is not a valid
   container the ASR engine can open. (For non-HLS progressive media, or
   when embedded captions exist, ffmpeg is not needed.)
+- **Fetch** Yandex VH/Strm recordings (`runtime.strm.yandex.ru/player/episode/<ID>`,
+  `frontend.vh.yandex.ru/player/<ID>`) — the player behind Yandex Cloud
+  webinars and streams. **ASR-only by design**: that player carries no
+  caption track at all (verified five ways — no subtitle key in the config
+  JSON, zero `#EXT-X-MEDIA` tags in the HLS master, only video+`lang="rus"`
+  audio AdaptationSets in DASH, `yt-dlp --list-subs` reports none, and a
+  live player reports `video.textTracks: []`), so a caption ladder would be
+  dead code. yt-dlp has no extractor for this host, but its **generic**
+  extractor takes the signed manifest directly — the adapter is therefore
+  only a resolver (episode id -> config JSON -> signed DASH/HLS URL) and
+  reuses the shared download/ASR pipeline unchanged. No auth: the config
+  endpoint answers with zero headers. Two live traps the adapter handles —
+  the config's `duration` field **lies** (observed 4365 vs a real 3800 s,
+  and 43970 vs a real 8825 s), so the real duration is the `#EXTINF` sum
+  from the media playlist; and signed URLs are minted per request and
+  expire (~48 h), so they are never cached. `ffmpeg` is **required** here
+  (HLS/DASH-only source); the skill fails fast with exit 7 without it.
+  **Before using this path, check for a YouTube mirror** — see §1.
 - **Fetch** Skool lesson pages via a stdlib HTML scrape — public
   communities work without auth; private/paid ones accept an optional
   Netscape `cookies.txt`. Then **delegate** embedded YouTube/Vimeo
@@ -148,7 +166,10 @@ downstream integrator) MUST invoke the **venv interpreter** directly
   - Vimeo — `vimeo.com`, `www.vimeo.com`, `player.vimeo.com`.
   - X / Twitter — `x.com`, `www.x.com`, `mobile.x.com`, `twitter.com`, `www.twitter.com`, `mobile.twitter.com` (status `…/status/<id>` and `…/i/broadcasts/<id>`).
   - Skool — `skool.com`, `www.skool.com`, `app.skool.com`; additionally URLs must match `/<community>/classroom/<id>?md=<lesson-id>`. Landing / `/about` / `/calendar` pages are rejected.
+  - Yandex VH/Strm — `runtime.strm.yandex.ru`, `frontend.vh.yandex.ru`, `strm.yandex.ru` (episode `…/player/episode/<id>`). Other `*.yandex.ru` hosts (e.g. `music.yandex.ru`) are NOT routed here.
   URLs that merely contain a supported host as a substring elsewhere are rejected.
+- **Second-hop allowlist (Yandex only)**: the Yandex adapter resolves a *stream* URL out of a remote JSON document and hands it to yt-dlp, so that URL is untrusted input and is separately gated — https-only, against an **exact-host** set (`strm.yandex.ru`, `runtime.strm.yandex.ru`, `frontend.vh.yandex.ru`, `vh.yandex.ru`). Deliberately not a `*.yandexcloud.net` suffix rule: that is object storage where anyone can create a bucket, which would turn the allowlist into an open redirect. Every HTTP hop is fetched through the shared restricted opener, so a cross-host **redirect** is refused too (the pre-flight check on the original URL alone guarantees nothing about where the bytes came from), and each document read is capped at 8 MB.
+- **Silence removal** also runs on the Yandex ASR path (same default-on behaviour and `--keep-silence` opt-out documented for X below).
 - **ASR backends (external, optional)**: For caption-less X media the skill shells out (argv arrays, never a shell string) to whichever local engine is present — MacWhisper `mw`, Whisper CLI, or whisper.cpp. None is a pip dependency; all are probed at runtime. **ffmpeg** (also external) is required to turn an X Broadcast's HLS stream into a valid audio file; the skill **fails fast with exit 7** (clear remediation, before any large download) when ffmpeg is absent for an HLS source. `bash scripts/install.sh` reports which engines are available; `scripts/install_components.py` guides/installs them (incl. ffmpeg). If no ASR backend is available (and cloud is not opted in), the run also fails cleanly with exit 7, never a traceback. **ASR portability**: the fallback chain resolves in order `mw` → Whisper CLI → whisper.cpp → (opt-in) cloud (§2 Capabilities) — a caption-less Broadcast/Space genuinely REQUIRES ffmpeg **and** at least one of these; a box with neither (e.g. a bare Linux/CI runner) fails hard on exit 7. Remediate with `scripts/install_components.py --install-whisper` (in-venv Whisper CLI; `ffmpeg` itself needs the separate `--system --run`) or `--asr-allow-cloud` (+ an API key) to fall back to the cloud backend. Run `scripts/fetch.py doctor` (§4 Script Contract) **before** a long fetch to see which backends resolve, with zero downloads.
 - **Cloud ASR egress (opt-in only)**: The OpenAI/compatible cloud backend is used **only** with `--asr-allow-cloud` (or `TRANSCRIPT_FETCHER_ASR_ALLOW_CLOUD=1`) AND an API key present. When used, the **audio leaves the machine** to the configured endpoint — disclosed here and in the stat notes. Local backends are always tried first; cloud is the last resort.
 - **Silence removal before ASR (X)**: before transcribing, the X path runs ffmpeg `silenceremove` to trim leading silence and collapse long interior/trailing gaps — this cuts Whisper-family hallucinated filler (e.g. `"Продолжение следует..."`) on silent lead-in/out. **ON by default**; `--keep-silence` (or `TRANSCRIPT_FETCHER_SILENCE_REMOVAL=0`) opts out; `_THRESHOLD`/`_MIN_GAP_SEC`/`_KEEP_SEC` tune it. Only **true silence** is removed (music/speech survive — a music-only intro can still trigger filler, see KNOWN_ISSUES TF-X-6). Never fatal: ffmpeg absent or a filter failure transparently falls back to the original audio. The stat `notes` record what was stripped (`silence-removal: stripped ~Ns ...`); the original media is kept for the ffprobe duration fill.

@@ -57,6 +57,7 @@ Analysis Phase" which mandates this read.
 
 - **HTML2MD-2** [PDFs / binary URLs are not converted](issues/html2md-2-pdf-binary-urls-not-converted.md) — severity `LOW`, status `by-design`, opened 2026-06-23
 - **HTML2MD-3** [data-grid SPAs degrade](issues/html2md-3-data-grid-spas-degrade.md) — severity `LOW`, status `open`, opened 2026-06-23
+- **TF-YANDEX-1** [Yandex VH/Strm is ASR-only — that player carries no caption track](issues/transcript-fetcher-yandex-asr-only.md) — severity `LOW`, status `by-design`, opened 2026-07-31
 
 ## performance
 
