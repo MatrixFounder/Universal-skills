@@ -90,3 +90,73 @@ System
 # Local-only Claude Code config + agentic-development CLAUDE.md import
 /CLAUDE.local.md
 /CLAUDE.agentic.md
+
+# >>> agentic-development framework >>>
+# Managed by the agentic-development installer. Do not edit between the markers.
+
+# Framework content (symlink or local copy) and installer state.
+/.agentic-development
+/.agentic-installer-state.json
+
+# Framework components.
+/.agent/skills/*
+/.agent/workflows/*
+/.agent/tools
+/.agent/rules
+/.agent/sessions
+/.agent/feedback
+/System
+/.claude/skills/*
+/.claude/commands/*
+/.claude/agents/*
+/.claude/hooks
+/.claude/settings.json
+/.claude/settings.local.json
+
+# Claude bridge files (gitignored — they import the framework).
+/CLAUDE.agentic.md
+/CLAUDE.local.md
+
+# .claude runtime locks.
+/.claude/*.lock
+
+# Project-local entries (kept in version control).
+!/.agent/skills/brainstorming
+!/.agent/skills/docx
+!/.agent/skills/hooks-creator
+!/.agent/skills/marp-slide
+!/.agent/skills/mcp-builder
+!/.agent/skills/pdf
+!/.agent/skills/post-writing
+!/.agent/skills/pptx
+!/.agent/skills/skill-creator
+!/.agent/skills/skill-enhancer
+!/.agent/skills/skill-validator
+!/.agent/skills/summarizing-meetings
+!/.agent/skills/text-humanizer
+!/.agent/skills/transcript-fetcher
+!/.agent/skills/vdd-adversarial
+!/.agent/skills/vdd-sarcastic
+!/.agent/skills/xlsx
+!/.agent/workflows/auto-heal-skill.md
+!/.agent/workflows/generate-detailed-meeting-summary.md
+!/.claude/commands/auto-heal-external-skill.md
+!/.claude/commands/generate-detailed-meeting-summary.md
+!/.claude/skills/brainstorming
+!/.claude/skills/docx
+!/.claude/skills/hooks-creator
+!/.claude/skills/marp-slide
+!/.claude/skills/mcp-builder
+!/.claude/skills/pdf
+!/.claude/skills/post-writing
+!/.claude/skills/pptx
+!/.claude/skills/skill-creator
+!/.claude/skills/skill-enhancer
+!/.claude/skills/skill-validator
+!/.claude/skills/summarizing-meetings
+!/.claude/skills/text-humanizer
+!/.claude/skills/transcript-fetcher
+!/.claude/skills/vdd-adversarial
+!/.claude/skills/vdd-sarcastic
+!/.claude/skills/xlsx
+# <<< end agentic-development framework <<<
