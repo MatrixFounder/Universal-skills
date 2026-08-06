@@ -14,6 +14,7 @@ from __future__ import annotations
 import argparse
 import os
 import sys
+import tempfile
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -33,12 +34,49 @@ _EXIT_ENGINE = 3
 _EXIT_SELF_OVERWRITE = 6  # SelfOverwriteRefused.CODE owns the raise
 _EXIT_FETCH = 10
 _EXIT_EMPTY = 11          # EmptyExtraction.CODE owns the raise
+# `html get --stdout` only: the consumer closed the pipe, so it holds a PREFIX of the bytes.
+# 128+SIGPIPE is the shell convention; the skill's own map has no code for a write failure,
+# and exit 0 here would be the undetectable truncation the file path exists to exclude.
+_EXIT_BROKEN_PIPE = 141
 _DEFAULT_ATTACH_DIR = "_attachments"
 
 # Empty-extraction guard (R-7a): a substantial source page that converts to a near-empty
 # Markdown body is silent content loss — treat it as a typed failure, not exit 0.
 _MIN_BODY_CHARS = 16            # stripped whole-page Markdown shorter than this ⇒ "empty"
 _SUBSTANTIAL_SOURCE_CHARS = 2048  # only flag when the SOURCE HTML was non-trivial
+
+# OP3 `html get` — default byte cap. The conversion flags default `--max-bytes` to None
+# (unbounded) because the text path bounds itself downstream; for an ARBITRARY BINARY
+# download that default is a DoS foot-gun, so `get` carries a finite one. 64 MiB matches
+# the cap the wiki-import consumer already applied to its own (now removed) urlopen.
+_GET_DEFAULT_MAX_BYTES = 64 * 1024 * 1024
+
+# OP3 `html get` — TOTAL wall-clock budget. `--timeout` is PER OPERATION and bounds nothing in
+# total: a redirect chain multiplies it by (max_redirects + 1) inside EVERY retry pass, and a
+# slow-drip body resets the read timeout on each chunk while `--max-bytes` caps only SIZE.
+# Both measured: a 5-hop chain stalling under the timeout ran 2.4x the per-op budget, and a
+# body dripping 1 byte / 1.6 s returned OK after 12.85 s against a 2 s timeout. At the shipped
+# defaults the redirect case alone is 60 x 6 x 4 = 1440 s. This is the bound a consumer sizes
+# its `subprocess(timeout=…)` against — so it has to be a real one, not a documented estimate.
+_GET_DEFAULT_DEADLINE_S = 300.0
+
+# The verb roster, surfaced in `html --help`. Until now the verbs were intercepted in `main`
+# BEFORE the flat parser and therefore appeared in NO help output at all — so a consumer had
+# no way to detect which verbs an installed copy supports. That matters because a caller that
+# depends on a verb must fail CLOSED on an older install, and `html <verb> --help` cannot tell
+# them apart: on a copy without the verb, argparse treats it as INPUT, sees --help, prints the
+# top-level help and exits 0 — a FALSE POSITIVE.
+# Each line therefore carries a full, unambiguous usage string (`html get URL OUTPUT_PATH`)
+# that cannot occur by accident. Probe with e.g. `html --help | grep -q 'html get URL'`;
+# a bare `grep -q get` would match `--target-selector`. Pinned by test_get.py.
+_VERB_HELP = (
+    "Verbs (each takes its own --help):\n"
+    "  html fetch INPUT [OUTPUT_DIR]   download to <slug>.html + .meta.json (OP1)\n"
+    "  html md INPUT [OUTPUT_DIR]      convert artifact/HTML/URL to Markdown (OP2)\n"
+    "  html get URL OUTPUT_PATH        download raw bytes, guarded, no conversion (OP3)\n"
+    "  html search QUERY [OUTPUT_DIR]  web search to Markdown notes\n"
+    "  html login URL                  mint a browser session (headful)\n"
+)
 
 
 # --------------------------------------------------------------------------- #
@@ -53,7 +91,7 @@ def build_parser() -> argparse.ArgumentParser:
             "INPUT is a URL or a local .html/.htm/.mhtml/.mht/.webarchive. By default "
             "BOTH <slug>.md (whole page) and <slug>.reader.md (reader-extracted) are "
             "written, and images are downloaded into _attachments/. The Chrome engine "
-            "(--engine chrome) is OPT-IN and soft-optional."
+            "(--engine chrome) is OPT-IN and soft-optional.\n\n" + _VERB_HELP
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
@@ -599,6 +637,224 @@ def _md_main(argv: list[str]) -> int:
             json_mode=json_mode, stream=sys.stderr)
 
 
+def _parse_headers(raw: "list[str] | None") -> "dict[str, str] | None":
+    """``--header 'Key: value'`` (repeatable) → the ``extra_headers`` dict.
+
+    Rejects control characters in BOTH halves. The URL gets the same treatment from
+    ``acquire._assert_safe_target``; a header pair is a second injection surface into the
+    same request, and this one is introduced by ``get`` itself, so it carries its own check
+    rather than assuming the transport will catch it (httpx does today — that is a property
+    of the dependency, not a guarantee of ours)."""
+    if not raw:
+        return None
+    out: dict[str, str] = {}
+    for item in raw:
+        # ★ Check the RAW item BEFORE any stripping. Checking after `.strip()` is a real
+        # bypass and it shipped in the first draft: `str.strip()` removes \r and \n, so
+        # "X-Bad\n: c" became "X-Bad" and the control-char test never saw the newline.
+        if any(ord(c) < 0x20 or ord(c) == 0x7f for c in item):
+            raise Usage("--header contains control characters.")
+        key, sep, value = item.partition(":")
+        key, value = key.strip(), value.strip()
+        if not sep or not key:
+            raise Usage("--header must be 'KEY: VALUE'.")
+        out[key] = value
+    return out
+
+
+def _get_main(argv: list[str]) -> int:
+    """``html get URL OUTPUT_PATH`` — OP3: download a URL to raw bytes on disk, verbatim.
+
+    **What this is for.** :func:`acquire._fetch_lite_html` (the TEXT path) deliberately
+    refuses a ``%PDF-`` payload — turndown blows its call stack on binary input — which is
+    right for Markdown conversion and fatal for a caller that *wants* the bytes. Before this
+    verb existed, such a caller had nothing to shell out to and fell back to a bare
+    ``urllib.request.urlopen`` with **no SSRF guard at all**.
+
+    **It bypasses no guard.** ``get`` calls :func:`acquire._assert_safe_target` and then
+    :func:`acquire._http_get_bytes` — the same two the text path uses — and simply omits the
+    content-type interpretation layered *above* them. The ladder is the function being
+    called, not a check being skipped: control-char/CRLF refusal, http(s) only, **every** hop
+    re-validated by ``_assert_public_http``, DNS resolved-then-pinned, redirects followed
+    manually under a cap, the body streamed and aborted the moment it passes the cap, bounded
+    timeout, no credential forwarding.
+
+    ⚠️ **One inherited caveat, stated rather than implied**: the DNS pin is authoritative
+    only on a DIRECT connection. ``httpx`` honours ``trust_env`` by default, so when an
+    http(s) proxy is configured — including a macOS System Configuration proxy that
+    ``env | grep -i proxy`` does NOT reveal — the proxy performs the target resolution and
+    the pin never fires. The per-hop ``_assert_public_http`` pre-check still runs. This is a
+    property of the shared ladder (the text path has it identically), not of this verb.
+
+    **No content interpretation, by design**: no decode, no sanitize, no sniffing. A caller
+    asking for bytes gets bytes; deciding what they are is the caller's job (that is what
+    makes this composable with the pdf skill, which makes zero network calls of its own).
+    Consequence the caller owns: these are UNSANITIZED, fully remote-controlled bytes written
+    under a caller-chosen name — do not point ``get`` at a path that will then be rendered.
+
+    Design notes (rationale lives in ``scripts/.AGENTS.md``): dedicated parser rather than
+    ``build_parser()``, following the ``_login_main`` primitive-verb precedent;
+    ``OUTPUT_PATH`` is a FILE, not an ``OUTPUT_DIR``.
+
+    **Time is bounded for real, not estimated.** ``--timeout`` is PER OPERATION, so it bounds
+    nothing in total: a redirect chain multiplies it by ``max_redirects + 1`` inside every
+    retry pass, and a slow-drip body resets the read timeout on each chunk while
+    ``--max-bytes`` caps only SIZE. ``--deadline`` (default 300 s) is the total wall clock,
+    enforced inside the ladder at each hop and each chunk — it is the number to size a
+    ``subprocess(timeout=…)`` against. Exceeding it is exit 10 with ``details.kind ==
+    "deadline"``.
+
+    Exit map: 0 ok · 2 usage (**including a non-http(s) URL**, so a caller's typo is
+    distinguishable from a security refusal) · 10 FetchFailed (``details.kind`` discriminates
+    ``refused`` / ``deadline`` / ``unreachable``, and ``details.max_bytes`` marks over-cap) ·
+    1 internal · **141 broken pipe** (``--stdout`` only — the consumer closed the pipe and
+    holds a PREFIX; reporting 0 there would be the undetectable truncation the file path
+    exists to exclude).
+    """
+    parser = argparse.ArgumentParser(
+        prog="html get",
+        description="Download URL to OUTPUT_PATH as raw bytes, through the SSRF-guarded "
+                    "fetch ladder. No conversion, no content sniffing.")
+    parser.add_argument("url", metavar="URL", help="http(s) URL to download")
+    parser.add_argument("output", metavar="OUTPUT_PATH", nargs="?", default=None,
+                        help="file to write, replaced atomically (parent dirs are created; "
+                             "an existing file is OVERWRITTEN). Omit only with --stdout.")
+    parser.add_argument("--stdout", action="store_true",
+                        help="write the bytes to stdout instead of a file (no temp-file "
+                             "lifecycle for the caller)")
+    parser.add_argument("--max-bytes", metavar="N", type=int,
+                        default=_GET_DEFAULT_MAX_BYTES,
+                        help=f"abort past N bytes (default: {_GET_DEFAULT_MAX_BYTES}). The "
+                             f"body is buffered, so this is also the memory bound.")
+    parser.add_argument("--timeout", metavar="S", type=float, default=60.0,
+                        help="PER-OPERATION timeout in seconds, 0 < S <= 300 (default: 60). "
+                             "It does NOT bound the total — see --deadline.")
+    parser.add_argument("--deadline", metavar="S", type=float,
+                        default=_GET_DEFAULT_DEADLINE_S,
+                        help=f"TOTAL wall-clock budget in seconds, 0 < S <= 3600 "
+                             f"(default: {_GET_DEFAULT_DEADLINE_S:g}). This is the number to "
+                             f"size a subprocess timeout against.")
+    parser.add_argument("--retries", metavar="N", type=int, default=2,
+                        help="transient-failure retry budget, 0..10 (default: 2)")
+    parser.add_argument("--header", metavar="KEY:VALUE", action="append", default=None,
+                        help="extra request header (repeatable). Needed for content "
+                             "negotiation, e.g. 'Accept: application/pdf,*/*'.")
+    parser.add_argument("--browser-ua", action="store_true",
+                        help="send a browser User-Agent from the first request instead of "
+                             "the honest default (which escalates only on a 403)")
+    _errors.add_json_errors_argument(parser)  # ALSO routes argparse's own usage errors
+    try:                                      # through the JSON envelope — the consumer
+        args = parser.parse_args(argv)        # parses stderr as JSON and chokes on banners
+    except SystemExit as exc:
+        # argparse already printed usage/help; RETURN the code rather than raise, because
+        # this verb's consumer is another program calling `main()` directly.
+        # ⚠️ `exc.code or _EXIT_USAGE` would be WRONG: `--help` exits 0, and 0 is falsy, so
+        # the fallback would turn a successful --help into exit 2 — and a capability probe
+        # (`html get --help`) would then read as "verb missing" on an install that HAS it.
+        return _EXIT_USAGE if exc.code is None else int(exc.code)
+
+    json_mode = bool(args.json_errors)
+    try:
+        if args.max_bytes <= 0:
+            raise Usage("--max-bytes must be a positive integer.")
+        if not 0 <= args.retries <= 10:
+            raise Usage("--retries must be between 0 and 10.")
+        # `type=float` accepts 0, -5, 1e9 and nan without complaint, and httpx applies the
+        # value PER OPERATION rather than as a total budget — so an unvalidated timeout is a
+        # slow-drip window, not just a bad number.
+        if not (args.timeout > 0) or args.timeout > 300:  # `not >` also rejects nan
+            raise Usage("--timeout must be a number in (0, 300].")
+        if not (args.deadline > 0) or args.deadline > 3600:
+            raise Usage("--deadline must be a number in (0, 3600].")
+        if (args.output is None) == (not args.stdout):
+            raise Usage("pass exactly one of OUTPUT_PATH or --stdout.")
+        if args.browser_ua and any(k.lower() == "user-agent"
+                                   for k in (h.partition(":")[0].strip()
+                                             for h in (args.header or []))):
+            # `_http_get_bytes` does `headers.update(extra_headers)` AFTER seeding the UA, so
+            # the header would silently win and --browser-ua would be a no-op. Refuse rather
+            # than pick a winner the caller cannot see.
+            raise Usage("--browser-ua conflicts with --header 'User-Agent: …'; pass one.")
+
+        # A caller mistake must NOT masquerade as a network refusal. Delegating scheme
+        # checking to the ladder reports `html get /tmp/x.pdf` as exit 10 "refused
+        # non-http(s) target", which reads as an SSRF block in the consumer's logs.
+        if urlparse(args.url).scheme not in ("http", "https"):
+            raise Usage(f"URL must be http(s), got: {args.url!r}")
+
+        out: Path | None = None
+        if args.output is not None:
+            out = Path(args.output)
+            # `write_bytes` opens 'wb', which FOLLOWS a symlink and writes through it. This
+            # is the one hazard the caller cannot audit from the path it passed, and `get` is
+            # the only verb that writes unsanitized remote bytes to a caller-named path.
+            if out.is_symlink():
+                raise Usage(f"OUTPUT_PATH is a symlink; refusing to write through it: "
+                            f"{args.output!r}")
+            if out.is_dir():
+                raise Usage(f"OUTPUT_PATH is a directory: {args.output!r}")
+
+        extra_headers = _parse_headers(args.header)
+
+        from . import acquire as acquire_mod
+        # Same order the text path uses: control-char refusal, THEN the network ladder.
+        acquire_mod._assert_safe_target(args.url)
+        # The single network seam. Any refusal (scheme, private/unresolvable host, redirect
+        # cap, over-cap body) raises FetchFailed → exit 10 BEFORE anything is written.
+        raw = acquire_mod._http_get_bytes(
+            args.url, max_bytes=args.max_bytes, timeout=args.timeout,
+            retries=args.retries, extra_headers=extra_headers,
+            deadline_s=args.deadline,
+            **({"ua": acquire_mod._BROWSER_UA} if args.browser_ua else {}))
+
+        if out is None:
+            try:
+                sys.stdout.buffer.write(raw)
+                sys.stdout.buffer.flush()
+            except BrokenPipeError:
+                # `html get URL --stdout | head` is ordinary usage, and it must not surface as
+                # `Internal error: BrokenPipeError`. But it must not report SUCCESS either:
+                # the caller received a PREFIX, and silently returning 0 is exactly the
+                # undetectable truncation the file path is built to exclude. So: distinct,
+                # documented exit 141 (128+SIGPIPE, the shell convention — the skill's own map
+                # has no code for a write failure). Re-point stdout at /dev/null first, or
+                # CPython prints "Exception ignored" at shutdown when it flushes again.
+                os.dup2(os.open(os.devnull, os.O_WRONLY), sys.stdout.fileno())
+                return _EXIT_BROKEN_PIPE
+            sys.stderr.write(f"html get: wrote {len(raw)} bytes to stdout\n")
+            return _EXIT_OK
+
+        out.parent.mkdir(parents=True, exist_ok=True)
+        # Atomic replace via a UNIQUE sibling temp: a crash or a full disk mid-write can never
+        # leave a TRUNCATED artifact under the caller's name, which the caller has no way to
+        # detect. `mkstemp` rather than a fixed `<name>.part` because the fixed form collided
+        # — an existing `.part` DIRECTORY produced `Internal error: PermissionError` — and
+        # because two concurrent `get`s to one OUTPUT_PATH would otherwise share it.
+        # mkstemp also creates 0600, so a capability-URL artifact is not world-readable while
+        # in flight, and `os.replace` carries that mode to the final file.
+        # (A refusal earlier than this leaves a pre-existing OUTPUT_PATH untouched — `get`
+        # never unlinks a file it did not create.)
+        fd, tmp_name = tempfile.mkstemp(dir=out.parent, prefix=out.name + ".", suffix=".part")
+        try:
+            with os.fdopen(fd, "wb") as handle:
+                handle.write(raw)
+            os.replace(tmp_name, out)
+        finally:
+            if os.path.exists(tmp_name):
+                os.unlink(tmp_name)
+        sys.stderr.write(f"html get: wrote {out.name} ({len(raw)} bytes)\n")
+        return _EXIT_OK
+    except _AppError as exc:
+        return _errors.report_error(
+            str(exc), code=exc.CODE, error_type=exc.error_type,
+            details=exc.details, json_mode=json_mode, stream=sys.stderr)
+    except Exception as exc:  # noqa: BLE001 — terminal catch-all, redacted
+        return _errors.report_error(
+            f"Internal error: {type(exc).__name__}",
+            code=InternalError.CODE, error_type="InternalError",
+            json_mode=json_mode, stream=sys.stderr)
+
+
 def combined_main(argv: list[str] | None = None) -> int:
     """The combined ``html2md`` command: **fetch → md → delete the intermediate HTML**.
 
@@ -650,10 +906,11 @@ def main(argv: list[str] | None = None) -> int:
 
     Exit map (§5.1): 0 ok · 1 BadInput/ConvertFailed/internal · 2 usage ·
     3 EngineNotInstalled · 6 SelfOverwriteRefused · 10 FetchFailed · 11 EmptyExtraction.
-    Leading verbs (``login`` / ``fetch``) are intercepted BEFORE the flat parser (the
-    positional INPUT is ``nargs="?"``, so ``fetch URL`` would otherwise mis-parse as
-    INPUT="fetch"). A bare ``INPUT [OUTPUT_DIR] …`` (no verb) is the end-to-end pipeline
-    (fetch+convert in one process); the combined ``html2md`` command builds on it."""
+    Leading verbs (the roster is ``_VERB_HELP``, which is also what ``--help`` prints) are
+    intercepted BEFORE the flat parser (the positional INPUT is ``nargs="?"``, so
+    ``fetch URL`` would otherwise mis-parse as INPUT="fetch"). A bare ``INPUT [OUTPUT_DIR] …``
+    (no verb) is the end-to-end pipeline (fetch+convert in one process); the combined
+    ``html2md`` command builds on it."""
     if argv is None:
         argv = sys.argv[1:]
     if argv and argv[0] == "login":
@@ -662,6 +919,8 @@ def main(argv: list[str] | None = None) -> int:
         return _fetch_main(argv[1:])
     if argv and argv[0] == "md":
         return _md_main(argv[1:])
+    if argv and argv[0] == "get":  # OP3: raw bytes, guarded ladder, no interpretation
+        return _get_main(argv[1:])
     if argv and argv[0] == "search":  # `html search QUERY [OUT]` → the --search flag branch
         return main(["--search", *argv[1:]])
     parser = build_parser()

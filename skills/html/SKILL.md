@@ -91,6 +91,51 @@ for two consumers: (1) an **Obsidian web-clipper** (self-contained note), and
 > - `python3 scripts/html md INPUT [OUTPUT_DIR]` — **OP2**: convert a fetched artifact /
 >   local HTML / URL → Markdown. A local `.html` with a sibling `.meta.json` recovers full
 >   frontmatter from the sidecar.
+> - `python3 scripts/html get URL (OUTPUT_PATH | --stdout)` — **OP3**: download a URL to
+>   **raw bytes**, verbatim, through the same SSRF-guarded ladder. **No conversion, no
+>   sanitizing, no content sniffing** — the caller decides what the bytes are. Use it when
+>   you need the file itself (a PDF to hand to the **pdf** skill, an image, any binary):
+>   OP1/OP2 refuse a `%PDF-` payload on purpose, because turndown blows its call stack on
+>   binary input, and before OP3 existed a caller needing those bytes had nothing to shell
+>   out to and fell back to an unguarded raw HTTP GET. OP3 **bypasses no guard** — it calls
+>   `_assert_safe_target` + `_http_get_bytes`, the same two the text path uses, and omits
+>   only the content-type layer above them. Egress is direct unless `HTML_PROXY` is set (§5).
+>   - **Flags**: `--stdout` (bytes to stdout, no file — for a caller that wants a string and
+>     no temp-file lifecycle) · `--max-bytes N` (default 64 MiB — a *finite* default, unlike
+>     the conversion flags', because an unbounded arbitrary-binary download is a DoS
+>     foot-gun; the body is buffered, so **this is also the memory bound**) · `--timeout S`
+>     (**per operation**, default 60, in `(0, 300]`) · `--deadline S` (**total wall clock**,
+>     default 300, in `(0, 3600]`) · `--retries N` (0..10) · `--header 'KEY: VALUE'`
+>     (repeatable — needed for content negotiation, e.g. `Accept: application/pdf,*/*`) ·
+>     `--browser-ua` · `--json-errors`.
+>   - ★ **Wall-clock: size your `subprocess(timeout=…)` against `--deadline`, not
+>     `--timeout`.** `--timeout` is **per operation** and bounds nothing in total: a redirect
+>     chain multiplies it by `max_redirects + 1` inside *every* retry pass, and a slow-drip
+>     body resets the read timeout on each chunk while `--max-bytes` caps only SIZE. Measured:
+>     a 5-hop chain stalling *below* the timeout ran 2.4x the per-op budget, and a body
+>     dripping one byte per 1.6 s returned OK after 12.85 s against a 2 s timeout —
+>     time-unbounded in principle. At the shipped defaults the redirect case alone would be
+>     `60 x 6 x 4 = 1440 s`. `--deadline` is enforced inside the ladder at every hop and every
+>     chunk, so it is a real bound; exceeding it is exit 10 with `details.kind == "deadline"`.
+>   - **Exit map**: `0` ok · `2` usage — **including a non-http(s) URL**, so a caller's typo
+>     is distinguishable from a security refusal · `10` FetchFailed (SSRF refusal, redirect
+>     cap, over-cap body, deadline) · `1` internal · `141` broken pipe (`--stdout` only: the
+>     consumer closed the pipe and holds a PREFIX — **not** reported as success, so truncation
+>     stays detectable). Under exit 10 read **`details.kind`** to tell the classes apart:
+>     `refused` (a security block — SSRF / scheme / control chars) · `deadline` · otherwise a
+>     transport failure; `details.max_bytes` marks the over-cap case. Asserting only on the
+>     exit code cannot distinguish a security refusal from an unreachable host.
+>   - `--browser-ua` and `--header 'User-Agent: …'` are **mutually exclusive** (the header
+>     would silently win and make the flag a no-op). The artifact is written `0600`.
+>   - **On failure nothing is written**, and a pre-existing `OUTPUT_PATH` is left **untouched
+>     — not removed** (`get` never unlinks a file it did not create). On success the write is
+>     atomic (`.part` + rename), so a truncated artifact the caller cannot detect is
+>     impossible.
+>   - **Capability probe** (for programmatic consumers, so an older install fails CLOSED):
+>     `python3 scripts/html --help | grep -q 'html get URL'`. ⚠️ A bare `grep -q get`
+>     **always succeeds** — it matches `--target-selector` — and `html get --help` exits 0 on
+>     a build *without* the verb too (argparse reads `get` as INPUT and prints the top-level
+>     help). Neither is a valid probe.
 > - `python3 scripts/html2md.py INPUT [OUTPUT_DIR]` — **combined** (fetch → md → delete the
 >   intermediate HTML): the classic web-clip — you get just `<slug>.md` (+ `.reader.md`) +
 >   `_attachments/`, no leftover HTML. This is the bare/back-compat one-shot.
@@ -106,7 +151,8 @@ for two consumers: (1) an **Obsidian web-clipper** (self-contained note), and
   - `python3 scripts/html INPUT [OUTPUT_DIR] [--engine lite|chrome|auto|jina|remote] [--no-remote] [--remote-format html|markdown] [--target-selector SEL] [--chrome-storage-state PATH | --chrome-cookies-file PATH | --chrome-user-data-dir DIR] [--chrome-scroll] [--chrome-scroll-passes N] [--reader-mode|--no-reader|--reader-only] [--download-images|--no-download-images] [--attachments-dir _attachments] [--archive-frame main|N|all|auto] [--max-bytes N] [--max-images N] [--retries N] [--rate-limit REQS_PER_SEC] [--stdout] [--json-errors]`
   - Search: `python3 scripts/html search "QUERY" [OUTPUT_DIR] [--max-results N] [...]` (or the legacy `--search "QUERY"`).
   - Login (mint a session, headful): `python3 scripts/html login URL [--save-state state.json]`.
-- **Environment (optional):** `HTML_READER_URL` / `HTML_READER_PROVIDERS` (remote reader base(s)), `HTML_READER_TOKEN` (generic reader auth), `JINA_API_KEY` (jina quota), `HTML_SEARCH_URL` / `HTML_SEARCH_PROVIDERS` (search provider base(s)), `HTML_CHROME_STORAGE_STATE` / `HTML_CHROME_COOKIES_FILE` / `HTML_CHROME_USER_DATA_DIR` (Chrome auth — server-deployable secrets), `HTML_SSRF_ALLOW_NETS` (SSRF carve-out CIDR list — **no code default**; unset/empty → none; `.env.example` ships `198.18.0.0/15` for RFC-2544/`.eth.limo` mappings; `0.0.0.0/0` disables IPv4 protection). All optional; the CLI **auto-loads `<skill>/.env`** at startup (an in-process `import` caller does not — call `_load_skill_env()` yourself). See [`.env.example`](.env.example).
+  - Raw bytes (OP3): `python3 scripts/html get URL (OUTPUT_PATH | --stdout) [--max-bytes N] [--timeout S] [--retries N] [--header 'KEY: VALUE'] [--browser-ua] [--json-errors]`.
+- **Environment (optional):** `HTML_READER_URL` / `HTML_READER_PROVIDERS` (remote reader base(s)), `HTML_READER_TOKEN` (generic reader auth), `JINA_API_KEY` (jina quota), `HTML_SEARCH_URL` / `HTML_SEARCH_PROVIDERS` (search provider base(s)), `HTML_CHROME_STORAGE_STATE` / `HTML_CHROME_COOKIES_FILE` / `HTML_CHROME_USER_DATA_DIR` (Chrome auth — server-deployable secrets), `HTML_SSRF_ALLOW_NETS` (SSRF carve-out CIDR list — **no code default**; unset/empty → none; `.env.example` ships `198.18.0.0/15` for RFC-2544/`.eth.limo` mappings; `0.0.0.0/0` disables IPv4 protection), `HTML_PROXY` (egress proxy — **the ONLY way to proxy**: `trust_env=False`, so `HTTP_PROXY`/`HTTPS_PROXY` and the macOS System Configuration proxy are ignored. Setting it re-opens the DNS-rebinding window, see §5, and prints a one-time notice). All optional; the CLI **auto-loads `<skill>/.env`** at startup (an in-process `import` caller does not — call `_load_skill_env()` yourself). See [`.env.example`](.env.example).
 - **INPUT**: a `http(s)` URL, or a local `.html`/`.htm`/`.mhtml`/`.mht`/`.webarchive`.
 - **OUTPUT_DIR**: directory to write `<slug>.md` (+ `<slug>.reader.md` by default) and
   `_attachments/` into. **Omit → defaults to `./tmp/html_out/`** (created on demand,
@@ -134,7 +180,16 @@ for two consumers: (1) an **Obsidian web-clipper** (self-contained note), and
 
 ## 5. Safety Boundaries
 - **Allowed scope**: only the input + the named OUTPUT_DIR (and its `_attachments/`).
-  Never writes elsewhere.
+  Never writes elsewhere. **Exception — OP3 `get`**: it writes the single caller-named
+  `OUTPUT_PATH`, creating parent directories, and **overwrites** an existing file (atomically,
+  via a sibling `.part` + rename, so a truncated artifact is impossible). A symlink or a
+  directory at `OUTPUT_PATH` is **refused** (exit 2) — `get` never writes *through* a link.
+  ⚠️ The bytes it writes are **unsanitized and fully remote-controlled** — every other write
+  path in this skill runs `sanitize_untrusted_html` and derives its own slug. Do not point
+  `get` at a path that will subsequently be rendered (`html get URL page.html` produces a live
+  script/`file:`-bearing document on disk). The artifact is written **`0600`** — it is created
+  via `mkstemp` and `os.replace`d into place, so it is never world-readable, not even in
+  flight, and a crash cannot leave a truncated file under the caller's name.
 - **Image reads are confined**: a malicious `<img src="../../etc/passwd">` /
   `file:///…` / absolute path is **refused** — local image reads are confined to the
   input's base dir (CWE-22/73 guard).
@@ -159,9 +214,24 @@ for two consumers: (1) an **Obsidian web-clipper** (self-contained note), and
   session is never carried to another site. Session files (`storage_state`/`cookies.txt`) are
   **bearer credentials**: passed by **path only** (never argv), required mode **0600** (group+world
   rejected), symlinks refused, values never logged/redacted. The target + session stay **local**.
+- **Egress is DIRECT by default (`trust_env=False`)** so the connection pin is authoritative.
+  The ambient environment — `HTTP_PROXY`/`HTTPS_PROXY`/`ALL_PROXY`, `.netrc`, `SSL_CERT_*` — is
+  **ignored**; proxying is an explicit opt-in via **`HTML_PROXY`**, and setting it prints a
+  one-time stderr notice. This is not tidiness: until it changed, the pin was **decorative**.
+  Measured — pinning `example.com` to a blackholed `192.0.2.1` returned **HTTP 200** under an
+  ambient proxy (pin ignored) and `ConnectTimeout` direct (pin honoured); the machine had **no
+  proxy env vars**, yet `urllib.request.getproxies()` still returned one from macOS System
+  Configuration. Check yours with
+  `python3 -c "import urllib.request;print(urllib.request.getproxies())"`.
 - **Honest-scope residuals**: DNS-rebinding (resolve-then-connect TOCTOU) is **closed on the lite
-  path** (the connection is pinned to the validated IP), but **remains on the Chrome tier**
-  (Playwright manages its own sockets); `storage_state` localStorage is origin-restored (readable
+  path** (the connection is pinned to the validated IP) — but **re-opens whenever `HTML_PROXY` is
+  set**, because the proxy then resolves the target itself. The per-hop `_assert_public_http`
+  pre-check still runs in that mode, so it is a TOCTOU window, not an open door. ⚠️ Note also that
+  under a **fake-IP resolver** (Clash/V2Ray-style, which is what the shipped
+  `HTML_SSRF_ALLOW_NETS=198.18.0.0/15` default exists for) the pin binds the *synthetic* address;
+  the synthetic→real mapping lives in the proxy tool and is outside this skill's control.
+  Rebinding also **remains on the Chrome tier** (Playwright manages its own sockets, and it keeps
+  using the SYSTEM proxy regardless of `HTML_PROXY`); `storage_state` localStorage is origin-restored (readable
   by same-origin scripts the page loads); the login-wall heuristic is best-effort/per-site; `_registrable` is last-2-labels
   (multi-level suffixes like `co.uk` over-match); a reader follows its own server-side redirects.
   Run untrusted conversions in an egress-restricted sandbox. See `references/html-to-markdown.md`

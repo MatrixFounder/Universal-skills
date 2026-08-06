@@ -381,6 +381,45 @@ def _ssrf_allowed_nets():
     return _parse_allowed_nets(os.environ.get(_SSRF_ALLOW_ENV))
 
 
+_PROXY_ENV = "HTML_PROXY"
+_proxy_warned = False
+
+
+def _proxy_setting() -> "str | None":
+    """The explicitly-configured egress proxy, or ``None`` for a DIRECT connection.
+
+    ★ WHY THIS EXISTS — the DNS pin was decorative until it did. ``httpx`` honours
+    ``trust_env`` by default, which silently mounts ``HTTP_PROXY``/``HTTPS_PROXY`` **and**
+    (on macOS) the System Configuration proxy — invisible to ``env | grep -i proxy``. When
+    proxied, httpx connects to the PROXY and the proxy resolves the target, so
+    :func:`_pin_host_addrs`' ``socket.getaddrinfo`` override never fires for the target host
+    and the resolve-then-connect TOCTOU the pin exists to close stays wide open.
+
+    Measured, not assumed: pinning ``example.com`` to a blackholed ``192.0.2.1`` and
+    requesting it returned **HTTP 200** under an ambient proxy (pin ignored) and
+    ``ConnectTimeout`` with ``trust_env=False`` (pin honoured).
+
+    So the client is built with ``trust_env=False`` ALWAYS, and proxying becomes an explicit
+    opt-in through this one var. Read LAZILY per call for the same reason as
+    :func:`_ssrf_allowed_nets` — the skill-local ``.env`` is loaded by the shim AFTER import.
+
+    ⚠️ Setting it is a real trade-off, and it is announced once per process on stderr rather
+    than made silently: with a proxy configured the pin CANNOT apply. The per-hop
+    :func:`_assert_public_http` pre-check still runs, so the residual is a TOCTOU window, not
+    an open door.
+    """
+    global _proxy_warned
+    value = (os.environ.get(_PROXY_ENV) or "").strip()
+    if not value:
+        return None
+    if not _proxy_warned:
+        _proxy_warned = True
+        sys.stderr.write(
+            f"html: {_PROXY_ENV} is set — egress goes through the proxy, which resolves the "
+            f"target itself, so the DNS-rebinding pin does NOT apply on this run.\n")
+    return value
+
+
 def _is_ssrf_blocked(ip: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
     """Return True if *ip* must be blocked for SSRF.
 
@@ -531,6 +570,7 @@ def _assert_public_http(url: str) -> None:
 def _http_get_bytes(url: str, *, max_bytes: int | None, timeout: float = 20.0,
                     max_redirects: int = 5, retries: int = 2, ua: str = _UA,
                     extra_headers: dict | None = None,
+                    deadline_s: float | None = None,
                     final_url_out: "list[str] | None" = None) -> bytes:
     """Fetch ``url`` over HTTP(S) → bytes. SSRF-safe, streaming, bounded, retrying.
 
@@ -558,6 +598,24 @@ def _http_get_bytes(url: str, *, max_bytes: int | None, timeout: float = 20.0,
     if _RATE_LIMITER is not None:
         _RATE_LIMITER.wait()
 
+    # ``timeout`` is PER OPERATION (httpx applies it per connect/read/write), so on its own it
+    # bounds nothing in total: a redirect chain multiplies it by ``max_redirects + 1`` inside
+    # every retry pass, and a slow-drip body resets the read timeout on every chunk, making the
+    # wall clock unbounded while staying under ``max_bytes``. Both were MEASURED: a 5-hop chain
+    # stalling below the timeout ran 2.4x the per-op budget, and a body dripping one byte per
+    # 1.6 s returned OK after 12.85 s against a 2 s timeout. ``deadline_s`` is the total
+    # wall-clock budget that makes a documented bound TRUE; ``None`` keeps the historical
+    # (unbounded) behaviour for the callers that have not opted in.
+    _end = None if deadline_s is None else time.monotonic() + deadline_s
+
+    def _check_deadline(where: str) -> None:
+        if _end is not None and time.monotonic() > _end:
+            raise FetchFailed(
+                f"exceeded the total deadline ({deadline_s}s) for {_redact(url)}",
+                details={"url": _redact(url), "kind": "deadline",
+                         "deadline_s": deadline_s, "phase": where},
+            )
+
     def _one_pass(use_ua: str) -> bytes:
         """One full request (manual redirects + streaming). Raises httpx errors for the
         outer loop to classify, or FetchFailed for terminal conditions."""
@@ -565,8 +623,15 @@ def _http_get_bytes(url: str, *, max_bytes: int | None, timeout: float = 20.0,
         if extra_headers:
             headers.update(extra_headers)
         current = url
-        with httpx.Client(follow_redirects=False, timeout=timeout, headers=headers) as client:
+        # trust_env=False is LOAD-BEARING, not tidiness: it is what makes the
+        # `_pin_host_addrs` override below authoritative. With httpx's default the ambient
+        # (or macOS System Configuration) proxy resolves the target itself and the pin is
+        # inert — proven by experiment, see `_proxy_setting`. Proxying stays available, but
+        # only as an explicit, announced opt-in via $HTML_PROXY.
+        with httpx.Client(follow_redirects=False, timeout=timeout, headers=headers,
+                          trust_env=False, proxy=_proxy_setting()) as client:
             for _ in range(max_redirects + 1):
+                _check_deadline("redirect")  # bounds the (max_redirects + 1) multiplier
                 _assert_public_http(current)  # scheme + fast pre-check (anti-SSRF)
                 # Authoritative SSRF check + pin: resolve once, validate, and connect to the
                 # EXACT validated IP so httpx cannot reach a re-resolved (DNS-rebinding) private
@@ -584,7 +649,8 @@ def _http_get_bytes(url: str, *, max_bytes: int | None, timeout: float = 20.0,
                     chunks: list[bytes] = []
                     total = 0
                     for chunk in resp.iter_bytes():
-                        total += len(chunk)
+                        _check_deadline("body")  # bounds the slow-drip: max_bytes caps SIZE,
+                        total += len(chunk)      # never TIME, and each read resets the timeout
                         if max_bytes is not None and total > max_bytes:
                             raise FetchFailed(
                                 f"response exceeds --max-bytes ({max_bytes}) for "
