@@ -9,18 +9,45 @@ const { Document, Packer, Paragraph, TextRun, Table, TableRow, TableCell, ImageR
 
 // Parse CLI arguments: node md2docx.js <input.md> <output.docx>
 //   [--header "text"] [--footer "text"] [--page-size A4|Letter] [--landscape] [--margins T,R,B,L]
-const USAGE = 'Usage: node md2docx.js <input.md> <output.docx> [--header "text"] [--footer "text"] [--page-size A4|Letter] [--landscape] [--margins T,R,B,L]';
+const USAGE = 'Usage: node md2docx.js <input.md> <output.docx> [--header "text"] [--footer "text"] [--page-size A4|Letter] [--landscape] [--margins T,R,B,L]\n'
+    + '       [--obsidian [--vault-root DIR] [--frontmatter table|render|strip] [--lang ru|en|auto]\n'
+    + '                   [--links text|italic] [--inline-tags strip|keep] [--transclude] [--strict-assets]]';
 const args = process.argv.slice(2);
 let inputFile, outputFile, headerText, footerText;
 let pageSizeArg = 'letter';   // default US Letter (backward-compatible)
 let landscape = false;
 let marginsArg = null;        // null → default 1440 dxa on all sides
+// TASK 030 — Obsidian pre-processing. Off by default; without --obsidian this script
+// behaves exactly as before, except for the unescaped-spaces warning below (which is a
+// diagnostic for plain-CommonMark authors too, so it is deliberately NOT gated).
+let obsidian = false;
+let obsidianOpts = { vaultRoot: null, frontmatter: 'table', lang: 'auto', links: 'text', inlineTags: 'strip', transclude: false, strictAssets: false };
+// Which Obsidian flags the user actually TYPED. The value-carrying ones have non-null
+// defaults, so `obsidianOpts` alone cannot tell "not given" from "given the default" — and
+// the first version of the stray check therefore accepted and silently discarded
+// `--frontmatter`, `--lang`, `--links` and `--inline-tags` without `--obsidian`, while
+// SKILL.md claimed every Obsidian flag was rejected.
+const obsidianFlagsSeen = [];
+const OBSIDIAN_CHOICES = { '--frontmatter': ['table', 'render', 'strip'], '--lang': ['ru', 'en', 'auto'], '--links': ['text', 'italic'], '--inline-tags': ['strip', 'keep'] };
 const positional = [];
-const VALUE_FLAGS = new Set(['--header', '--footer', '--page-size', '--margins']);
+// `--vault-root` and friends are KNOWN value-flags, so a bare `--vault-root DIR` never
+// reports as "unknown" (the precedent at line 26 above) and the DIR is never mistaken for
+// a positional. Whether the flag is USABLE is a separate check, after the loop, so flag
+// order does not matter.
+const VALUE_FLAGS = new Set(['--header', '--footer', '--page-size', '--margins',
+    '--vault-root', '--frontmatter', '--lang', '--links', '--inline-tags']);
 for (let i = 0; i < args.length; i++) {
     const a = args[i];
     if (a === '--landscape') {
         landscape = true;
+    } else if (a === '--obsidian') {
+        obsidian = true;
+    } else if (a === '--transclude') {
+        obsidianOpts.transclude = true;
+        obsidianFlagsSeen.push(a);
+    } else if (a === '--strict-assets') {
+        obsidianOpts.strictAssets = true;
+        obsidianFlagsSeen.push(a);
     } else if (VALUE_FLAGS.has(a)) {
         if (i + 1 >= args.length) {
             // TASK 019: a known flag without its value gets a precise diagnostic (not "unknown").
@@ -29,9 +56,19 @@ for (let i = 0; i < args.length; i++) {
             process.exit(1);
         }
         const v = args[++i];
+        if (OBSIDIAN_CHOICES[a] && !OBSIDIAN_CHOICES[a].includes(v)) {
+            console.error(`Invalid value for ${a}: "${v}" (expected ${OBSIDIAN_CHOICES[a].join('|')}).`);
+            process.exit(1);
+        }
+        if (OBSIDIAN_CHOICES[a] || a === '--vault-root') obsidianFlagsSeen.push(a);
         if (a === '--header') headerText = v;
         else if (a === '--footer') footerText = v;
         else if (a === '--page-size') pageSizeArg = v;
+        else if (a === '--vault-root') obsidianOpts.vaultRoot = v;
+        else if (a === '--frontmatter') obsidianOpts.frontmatter = v;
+        else if (a === '--lang') obsidianOpts.lang = v;
+        else if (a === '--links') obsidianOpts.links = v;
+        else if (a === '--inline-tags') obsidianOpts.inlineTags = v;
         else marginsArg = v;  // --margins
     } else if (a.startsWith('--')) {
         // TASK 019: reject unknown flags instead of silently treating them as positionals.
@@ -50,12 +87,104 @@ if (!inputFile || !outputFile) {
     process.exit(1);
 }
 
-const inputFileAbs = path.resolve(inputFile);
-const inputDir = path.dirname(inputFileAbs);
+// The Obsidian flags only mean something with --obsidian. Checked AFTER the parse loop so
+// `--vault-root DIR --obsidian` and `--obsidian --vault-root DIR` behave identically.
+// Exit 1 is this script's code for every usage error (see line 36); exit 2 is
+// obsidian2md.js's convention and is deliberately not back-ported here.
+if (!obsidian && obsidianFlagsSeen.length) {
+    const stray = [...new Set(obsidianFlagsSeen)];
+    console.error(`${stray.join(', ')} requires --obsidian`);
+    console.error(USAGE);
+    process.exit(1);
+}
 
-const rawMarkdown = fs.readFileSync(inputFileAbs, 'utf-8');
+let inputFileAbs = path.resolve(inputFile);
+let inputDir = path.dirname(inputFileAbs);
+let obsidianTmpDir = null;
+
+let rawMarkdown = fs.readFileSync(inputFileAbs, 'utf-8');
+
+// TASK 030 — Obsidian pre-processing (R11). The library runs IN-PROCESS (no subprocess);
+// its output goes to a temp directory so the intermediate never litters the vault. Image
+// destinations it emits are absolute, so resolving them against inputDir still works.
+if (obsidian) {
+    const obsidianLib = require('./_obsidian_lib');
+    let result;
+    try {
+        result = obsidianLib.convert(rawMarkdown, {
+            notePath: inputFileAbs,
+            vaultRoot: obsidianOpts.vaultRoot,
+            frontmatter: obsidianOpts.frontmatter,
+            lang: obsidianOpts.lang,
+            links: obsidianOpts.links,
+            inlineTags: obsidianOpts.inlineTags,
+            transclude: obsidianOpts.transclude,
+        });
+    } catch (e) {
+        console.error(`Obsidian pre-processing failed: ${e.message}`);
+        process.exit(1);
+    }
+    for (const w of result.warnings) console.error(`warning: ${w}`);
+    if (obsidianOpts.strictAssets && result.missing.length) {
+        console.error(`${result.missing.length} attachment(s) not found: ${result.missing.join(', ')}`);
+        process.exit(8);
+    }
+    obsidianTmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'md2docx-obsidian-'));
+    // Cleaned in the `finally` of the writer at the bottom of this file, and on every
+    // early exit through process.on('exit') — a temp dir that survives a failed run is a
+    // leak that only shows up under a full disk, i.e. never during testing.
+    process.on('exit', () => {
+        if (obsidianTmpDir) {
+            try { fs.rmSync(obsidianTmpDir, { recursive: true, force: true }); } catch (e) { /* best effort */ }
+        }
+    });
+    const generated = path.join(obsidianTmpDir, path.basename(inputFileAbs));
+    fs.writeFileSync(generated, result.markdown, 'utf-8');
+    inputFileAbs = generated;
+    // inputDir deliberately KEEPS pointing at the real note's directory. The converter
+    // absolutises the destinations it rewrites, but a note may also carry ordinary
+    // CommonMark `![alt](img/pic.png)` — Obsidian emits exactly that when "Use
+    // [[Wikilinks]]" is off. Re-basing on the temp dir resolved those against an empty
+    // directory and `buildImageRun` threw, so `--obsidian` turned a document that converted
+    // fine into a hard exit 1. The intermediate .md is the only file in the temp dir; there
+    // is nothing there to resolve against anyway.
+    rawMarkdown = result.markdown;
+}
+
 const markdown = rawMarkdown.replace(/^---\n[\s\S]*?\n---\n/, '');
 const tokens = marked.lexer(markdown);
+
+// TASK 030 R6(c) — the silent-loss guard. `![a](my folder/pic.png)` is legal-looking
+// Markdown that `marked` reports as a `text` token, so the image is dropped and the run
+// still exits 0. This warns for EVERY caller, not only --obsidian ones: a plain-CommonMark
+// author writing a path with a space hits exactly the same loss.
+// Honest scope: docx_replace.py --insert-after spawns this script through _actions.py with
+// capture_output=True and reads stderr only on a non-zero return code, so on that path the
+// warning is captured and discarded. Routing it through _actions.py is out of scope here.
+// The destination must NOT start with `<`: the angle-bracket form carries spaces legally
+// and DOES lex as an image, so matching it would warn about images that arrived intact —
+// which is exactly what obsidian2md.js emits.
+const UNPARSED_IMAGE = /!\[[^\]]*\]\((?!<)[^)<>]*\s[^)]*\)/;
+(function warnUnparsedImages(list) {
+    for (const tok of list || []) {
+        // Only an INLINE `text` token (no child tokens) can be a failed image: a block-level
+        // paragraph carries the same characters in `.raw` even when the image parsed fine.
+        if (tok.type === 'text' && !tok.tokens && typeof tok.raw === 'string') {
+            const m = UNPARSED_IMAGE.exec(tok.raw);
+            if (m) {
+                console.error('warning: image link with unescaped spaces was not parsed as '
+                    + `an image: ${m[0]}`);
+            }
+        }
+        if (tok.tokens) warnUnparsedImages(tok.tokens);
+        if (tok.items) warnUnparsedImages(tok.items);
+        // A `table` token keeps its text in header/row CELLS, not in `.tokens`, so the walk
+        // used to stop at the table and an unparsed image inside one was dropped in silence
+        // — the very outcome this guard exists to announce.
+        if (tok.header) for (const cell of tok.header) warnUnparsedImages(cell.tokens);
+        if (tok.rows) for (const row of tok.rows) for (const cell of row) warnUnparsedImages(cell.tokens);
+    }
+})(tokens);
 
 const border = { style: BorderStyle.SINGLE, size: 1, color: "CCCCCC" };
 const borders = { top: border, bottom: border, left: border, right: border };
@@ -133,7 +262,25 @@ function resolveLocalImagePath(rawHref) {
     return path.resolve(inputDir, href);
 }
 
-function buildImageRun(localPath, altText) {
+// TASK 030 R3(g)/(h) — the Obsidian `![[pic.png|300]]` width hint. CommonMark cannot
+// express it, so obsidian2md.js parks it on a reserved alt-text prefix and this is where
+// it is consumed. The hint is an UPPER BOUND and never upscales, which keeps the
+// `Math.min(1, …)` invariant below intact; Obsidian itself does upscale, so a source
+// narrower than the hint renders smaller here than in the vault (documented in SKILL.md).
+const SIZE_HINT = /^w=(\d+)(?:x(\d+))?\|/;
+
+function parseSizeHint(altText) {
+    if (typeof altText !== 'string') return { hint: null, alt: altText };
+    const m = SIZE_HINT.exec(altText);
+    if (!m) return { hint: null, alt: altText };
+    return {
+        hint: { w: parseInt(m[1], 10), h: m[2] ? parseInt(m[2], 10) : null },
+        alt: altText.slice(m[0].length),
+    };
+}
+
+function buildImageRun(localPath, rawAltText) {
+    const { hint, alt: altText } = parseSizeHint(rawAltText);
     const imageType = detectImageType(localPath);
     if (!imageType) {
         throw new Error(`Unsupported image format for markdown image: ${localPath}`);
@@ -150,6 +297,19 @@ function buildImageRun(localPath, altText) {
     const maxHeight = maxHeightPx;
     let w = dims.width || maxWidth;
     let h = dims.height || 400;
+    if (hint) {
+        if (hint.h) {
+            // Both dimensions given explicitly: honour them as written, still bounded by
+            // the natural size so the hint cannot upscale.
+            w = Math.min(hint.w, w);
+            h = Math.min(hint.h, h);
+        } else {
+            // Width only: height follows the source aspect ratio.
+            const target = Math.min(hint.w, w);
+            h = Math.round(h * (target / w));
+            w = target;
+        }
+    }
     // Scale proportionally so the image fits BOTH dimensions.
     const scale = Math.min(1, maxWidth / w, maxHeight / h);
     if (scale < 1) {
