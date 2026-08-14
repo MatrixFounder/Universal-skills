@@ -1834,6 +1834,38 @@ else
     echo "$bat_out" | tail -25
 fi
 
+# ---------- TASK 030 / docx-10: Obsidian note input ----------
+# Fixture-backed only. TASK 030 criterion A11 (the real vault note) is a MANUAL gate and is
+# deliberately NOT wired here — that note lives outside the repository, on one machine.
+# A zero-test run is a FAILURE, not a pass: a suite that silently collects nothing reports
+# the same green as a suite that ran.
+echo "docx-10 Obsidian note input:"
+obs_rc=0
+obs_out=$("$PY" -m unittest tests.test_obsidian2md 2>&1) || obs_rc=$?
+obs_ran=$(echo "$obs_out" | grep -oE 'Ran [0-9]+ tests?' | grep -oE '[0-9]+' | tail -1)
+obs_ran=${obs_ran:-0}
+if [ "$obs_rc" -eq 0 ] && [ "$obs_ran" -gt 0 ]; then
+    ok "obsidian2md: $obs_ran tests passed"
+else
+    nok "obsidian2md" "rc=$obs_rc ran=$obs_ran"
+    echo "$obs_out" | tail -25
+fi
+
+# The fixture vault must stay complete: every asset the suite's acceptance criteria need is
+# committed, and a missing one would turn an assertion into a skip nobody reads.
+obs_vault="$SKILL_DIR/../examples/fixture-obsidian-vault"
+obs_missing=""
+for f in ".obsidian/app.json" "note.md" "linked note.md" "plain-commonmark.md" \
+         "_attachments/diagram.png" "_attachments/photo.jpg" \
+         "_attachments/100% coverage.png" "sub dir with space/nested.png"; do
+    [ -f "$obs_vault/$f" ] || obs_missing="$obs_missing $f"
+done
+if [ -z "$obs_missing" ]; then
+    ok "fixture vault complete (8 required paths)"
+else
+    nok "fixture vault" "missing:$obs_missing"
+fi
+
 echo
 echo "$pass passed, $fail failed"
 
