@@ -1866,6 +1866,29 @@ else
     nok "fixture vault" "missing:$obs_missing"
 fi
 
+# ---------- TASK 031 / docx-11: Math support ----------
+# Fixture-backed only. TASK 031 acceptance criterion A9 (the reference document) is a MANUAL
+# gate and is deliberately NOT wired here — that document lives outside the repository.
+# A zero-test run is a FAILURE, not a pass, matching the docx-10 block above.
+echo "docx-11 math support:"
+math_rc=0
+math_out=$("$PY" -m unittest tests.test_md2docx_math 2>&1) || math_rc=$?
+math_ran=$(echo "$math_out" | grep -oE 'Ran [0-9]+ tests?' | grep -oE '[0-9]+' | tail -1)
+math_ran=${math_ran:-0}
+if [ "$math_rc" -eq 0 ] && [ "$math_ran" -gt 0 ]; then
+    ok "md2docx_math: $math_ran tests passed"
+else
+    nok "md2docx_math" "rc=$math_rc ran=$math_ran"
+    echo "$math_out" | tail -25
+fi
+
+# The math fixture must exist for the suite above to have exercised anything real.
+if [ -f "$SKILL_DIR/../examples/fixture-math.md" ]; then
+    ok "fixture-math.md present"
+else
+    nok "fixture-math.md" "missing"
+fi
+
 echo
 echo "$pass passed, $fail failed"
 

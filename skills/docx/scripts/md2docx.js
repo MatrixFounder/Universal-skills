@@ -5,11 +5,13 @@ const path = require('path');
 const { execFileSync } = require('child_process');
 const marked = require('marked');
 const sizeOf = require('image-size').imageSize;
-const { Document, Packer, Paragraph, TextRun, Table, TableRow, TableCell, ImageRun, HeadingLevel, BorderStyle, WidthType, ShadingType, LevelFormat, AlignmentType, Header, Footer, PageNumber, PageOrientation } = require('docx');
+const { Document, Packer, Paragraph, TextRun, Table, TableRow, TableCell, ImageRun, HeadingLevel, BorderStyle, WidthType, ShadingType, LevelFormat, AlignmentType, Header, Footer, PageNumber, PageOrientation, ImportedXmlComponent } = require('docx');
+const mathLib = require('./_math_lib');
 
 // Parse CLI arguments: node md2docx.js <input.md> <output.docx>
 //   [--header "text"] [--footer "text"] [--page-size A4|Letter] [--landscape] [--margins T,R,B,L]
 const USAGE = 'Usage: node md2docx.js <input.md> <output.docx> [--header "text"] [--footer "text"] [--page-size A4|Letter] [--landscape] [--margins T,R,B,L]\n'
+    + '       [--no-math] [--strict-math]\n'
     + '       [--obsidian [--vault-root DIR] [--frontmatter table|render|strip] [--lang ru|en|auto]\n'
     + '                   [--links text|italic] [--inline-tags strip|keep] [--transclude] [--strict-assets]]';
 const args = process.argv.slice(2);
@@ -17,6 +19,11 @@ let inputFile, outputFile, headerText, footerText;
 let pageSizeArg = 'letter';   // default US Letter (backward-compatible)
 let landscape = false;
 let marginsArg = null;        // null → default 1440 dxa on all sides
+// TASK 031 — math ($…$/$$…$$) support. On by default; --no-math restores literal-text
+// pre-TASK-031 behaviour byte-for-byte. --strict-math turns a KaTeX render failure into a
+// hard exit instead of the default degrade-to-literal-text-plus-warning.
+let noMath = false;
+let strictMath = false;
 // TASK 030 — Obsidian pre-processing. Off by default; without --obsidian this script
 // behaves exactly as before, except for the unescaped-spaces warning below (which is a
 // diagnostic for plain-CommonMark authors too, so it is deliberately NOT gated).
@@ -40,6 +47,10 @@ for (let i = 0; i < args.length; i++) {
     const a = args[i];
     if (a === '--landscape') {
         landscape = true;
+    } else if (a === '--no-math') {
+        noMath = true;
+    } else if (a === '--strict-math') {
+        strictMath = true;
     } else if (a === '--obsidian') {
         obsidian = true;
     } else if (a === '--transclude') {
@@ -152,7 +163,26 @@ if (obsidian) {
 }
 
 const markdown = rawMarkdown.replace(/^---\n[\s\S]*?\n---\n/, '');
-const tokens = marked.lexer(markdown);
+
+// TASK 031 — math preprocessing runs on the frontmatter-stripped text, after --obsidian
+// pre-processing (obsidian2md.js never touches `$`, so there is no ordering conflict) and
+// before marked.lexer(), so substitution happens before CommonMark's `_`/`*` emphasis-pairing
+// rules ever see the text. --no-math skips this entirely: mathText === markdown, formulas
+// stays empty, and every downstream call becomes a no-op (R6(d)).
+let mathText = markdown;
+let mathFormulas = [];
+if (!noMath) {
+    try {
+        const mathResult = mathLib.preprocessMath(markdown, { strict: strictMath });
+        mathText = mathResult.text;
+        mathFormulas = mathResult.formulas;
+    } catch (e) {
+        console.error(e && e.message ? e.message : e);
+        process.exit(1);
+    }
+}
+
+const tokens = marked.lexer(mathText);
 
 // TASK 030 R6(c) — the silent-loss guard. `![a](my folder/pic.png)` is legal-looking
 // Markdown that `marked` reports as a `text` token, so the image is dropped and the run
@@ -317,13 +347,19 @@ function buildImageRun(localPath, rawAltText) {
         h = Math.round(h * scale);
     }
 
+    // TASK 031 R5 — ImageRun.altText's three fields are plain strings, not run children, so
+    // there is nowhere to splice a math object into. A formula here falls back to its
+    // original literal source text instead — the ONE sink in this file that needs
+    // restoreLiteral rather than mathAwareRuns.
+    const literalAltText = mathLib.restoreLiteral(altText || path.basename(localPath), mathFormulas);
+
     return new ImageRun({
         type: imageType,
         data: imgData,
         transformation: { width: w, height: h },
         altText: {
-            title: altText || path.basename(localPath),
-            description: altText || path.basename(localPath),
+            title: literalAltText,
+            description: literalAltText,
             name: path.basename(localPath)
         }
     });
@@ -342,23 +378,57 @@ function decodeEntities(s) {
         .replace(/&amp;/g, '&');
 }
 
+// ImportedXmlComponent.fromXmlString() wraps its result in a container whose own rootKey is
+// undefined — it supports parsing a multi-root fragment, so the container's `.root` array
+// holds each top-level node. Our OMML strings are always exactly one root element
+// (<m:oMath>…</m:oMath>), so pushing the wrapper itself as a paragraph child serializes as a
+// bogus `<undefined>` XML element (verified against this docx version — .root[0] is the real,
+// correctly-keyed `m:oMath` component).
+function importedMathComponent(omml) {
+    return ImportedXmlComponent.fromXmlString(omml).root[0];
+}
+
+// TASK 031 — splits `text` on math sentinels (mathFormulas is populated once, near the top
+// of the script, by preprocessMath() before marked ever runs) and returns an array of
+// ParagraphChild: TextRun for each literal piece (using styleOpts — the same options every
+// call site already passed to `new TextRun`), a fresh ImportedXmlComponent per math piece.
+// Every run-bearing branch of parseInlineText calls this instead of building a TextRun
+// directly, so a formula sitting inside **bold**/*italic*/a link still renders as a real
+// (unstyled) math object rather than leaking raw sentinel bytes (R4(b)).
+function mathAwareRuns(text, styleOpts) {
+    const pieces = mathLib.splitMathSentinels(text, mathFormulas);
+    const out = [];
+    for (const piece of pieces) {
+        if (piece.type === 'math') {
+            out.push(importedMathComponent(piece.formula.omml));
+        } else if (piece.text) {
+            out.push(new TextRun(Object.assign({ text: piece.text }, styleOpts)));
+        }
+    }
+    return out;
+}
+
 function parseInlineText(rawText) {
     const inlineTokens = marked.Lexer.lexInline(rawText);
     const runs = [];
     for (const t of inlineTokens) {
         if (t.type === 'strong') {
-            runs.push(new TextRun({ text: decodeEntities(t.text), font: "Arial", size: 24, bold: true }));
+            runs.push(...mathAwareRuns(decodeEntities(t.text), { font: "Arial", size: 24, bold: true }));
         } else if (t.type === 'em') {
-            runs.push(new TextRun({ text: decodeEntities(t.text), font: "Arial", size: 24, italics: true }));
+            runs.push(...mathAwareRuns(decodeEntities(t.text), { font: "Arial", size: 24, italics: true }));
         } else if (t.type === 'codespan') {
+            // No mathAwareRuns here: R1(b) excludes code spans from math scanning before
+            // marked ever sees the text, so a sentinel can never reach this branch.
             runs.push(new TextRun({ text: decodeEntities(t.text), font: "Courier New", size: 22 }));
         } else if (t.type === 'link') {
-            runs.push(new TextRun({ text: decodeEntities(t.text), font: "Arial", size: 24, underline: true, color: "0000FF" }));
+            runs.push(...mathAwareRuns(decodeEntities(t.text), { font: "Arial", size: 24, underline: true, color: "0000FF" }));
         } else if (t.type === 'image') {
             const localPath = resolveLocalImagePath(t.href);
             if (localPath === null) {
-                // Keep previous permissive behavior for remote/data refs: write alt text only.
-                runs.push(new TextRun({ text: decodeEntities(t.text) || t.href, font: "Arial", size: 24 }));
+                // Keep previous permissive behavior for remote/data refs: write alt text
+                // only. This is an ordinary TextRun sink (not ImageRun.altText), so a
+                // formula here gets the same mathAwareRuns treatment as any other text (R4(b)).
+                runs.push(...mathAwareRuns(decodeEntities(t.text) || t.href, { font: "Arial", size: 24 }));
             } else {
                 runs.push(buildImageRun(localPath, decodeEntities(t.text)));
             }
@@ -366,17 +436,41 @@ function parseInlineText(rawText) {
             if (t.raw.includes('<br>')) {
                 const parts = t.raw.split('<br>');
                 for (let i = 0; i < parts.length; i++) {
-                    runs.push(new TextRun({ text: decodeEntities(parts[i].trim()), font: "Arial", size: 24 }));
+                    runs.push(...mathAwareRuns(decodeEntities(parts[i].trim()), { font: "Arial", size: 24 }));
                     if (i < parts.length - 1) {
                         runs.push(new TextRun({ text: "", break: 1 }));
                     }
                 }
             } else {
-                runs.push(new TextRun({ text: decodeEntities(t.text || t.raw), font: "Arial", size: 24 }));
+                runs.push(...mathAwareRuns(decodeEntities(t.text || t.raw), { font: "Arial", size: 24 }));
             }
         }
     }
     return runs;
+}
+
+// TASK 031 R4(d) — a paragraph or table-cell text whose ENTIRE trimmed content is exactly one
+// sentinel referencing a DISPLAY formula gets a dedicated centered paragraph, so `$$…$$` alone
+// between blank lines reads visually distinct from surrounding prose the way Word's own
+// display equations do. Returns null when `text` doesn't have that exact shape (mixed
+// content, an inline formula, or a formula whose render failed and fell back to literal text)
+// — callers fall through to their normal paragraph-building path, which still renders the
+// formula correctly, just inline and left-flowing rather than centered.
+function buildDisplayMathParagraph(text) {
+    const pieces = mathLib.splitMathSentinels(text.trim(), mathFormulas);
+    if (pieces.length === 1 && pieces[0].type === 'math' && pieces[0].formula.display) {
+        return new Paragraph({
+            alignment: AlignmentType.CENTER,
+            spacing: { before: 120, after: 120 },
+            children: [importedMathComponent(pieces[0].formula.omml)]
+        });
+    }
+    return null;
+}
+
+function cellIsBlank(cellTokens) {
+    if (!cellTokens || cellTokens.length === 0) return true;
+    return cellTokens.every(t => !(t.text || t.raw || '').trim());
 }
 
 function renderCellTokens(tokens) {
@@ -384,7 +478,8 @@ function renderCellTokens(tokens) {
     if (!tokens) return [new Paragraph({ children: [] })];
     for (const token of tokens) {
         if (token.type === 'paragraph' || token.type === 'text') {
-            paragraphs.push(new Paragraph({ children: parseInlineText(token.text) }));
+            paragraphs.push(buildDisplayMathParagraph(token.text)
+                || new Paragraph({ children: parseInlineText(token.text) }));
         } else if (token.type === 'space') {
             continue;
         } else {
@@ -459,7 +554,7 @@ try {
             }));
         } else if (token.type === 'paragraph') {
             if (token.text.startsWith('<!--')) continue;
-            children.push(new Paragraph({
+            children.push(buildDisplayMathParagraph(token.text) || new Paragraph({
                 children: parseInlineText(token.text),
                 spacing: { before: 120, after: 120 }
             }));
@@ -468,15 +563,32 @@ try {
             const rows = token.rows;
 
             const numCols = headerCells.length;
-            const colWidth = Math.floor(contentWidthDxa / numCols);
-            const colWidthsArray = Array(numCols).fill(colWidth);
+            // TASK 031 — the Pandoc LaTeX->Markdown "equation array" convention: a 4-column
+            // table whose 1st/3rd columns are blank spacers, 2nd holds the formula (usually
+            // display math), 4th a short number/label (`|  | $$…$$ |  | (N) |`). An equal
+            // 4-way split leaves the formula only ~1/4 of the page width, clipping any
+            // non-trivial equation — measured on the docx-11 acceptance document (TASK 031
+            // A9). Every such table observed is a single-row (header-only) table, so
+            // detecting the shape on the header row is sufficient.
+            const isEquationArrayTable = numCols === 4
+                && cellIsBlank(headerCells[0].tokens) && cellIsBlank(headerCells[2].tokens);
+
+            let colWidthsArray;
+            if (isEquationArrayTable) {
+                colWidthsArray = [0.03, 0.80, 0.03, 0.14].map(f => Math.floor(contentWidthDxa * f));
+                const roundedSum = colWidthsArray.reduce((a, b) => a + b, 0);
+                colWidthsArray[3] += contentWidthDxa - roundedSum; // absorb rounding remainder
+            } else {
+                const colWidth = Math.floor(contentWidthDxa / numCols);
+                colWidthsArray = Array(numCols).fill(colWidth);
+            }
 
             const tableRows = [];
 
             tableRows.push(new TableRow({
-                children: headerCells.map(c => new TableCell({
+                children: headerCells.map((c, i) => new TableCell({
                     borders,
-                    width: { size: colWidth, type: WidthType.DXA },
+                    width: { size: colWidthsArray[i], type: WidthType.DXA },
                     shading: { fill: "D5E8F0", type: ShadingType.CLEAR },
                     margins: { top: 80, bottom: 80, left: 120, right: 120 },
                     children: renderCellTokens(c.tokens)
@@ -485,9 +597,9 @@ try {
 
             for (const row of rows) {
                 tableRows.push(new TableRow({
-                    children: row.map(c => new TableCell({
+                    children: row.map((c, i) => new TableCell({
                         borders,
-                        width: { size: colWidth, type: WidthType.DXA },
+                        width: { size: colWidthsArray[i], type: WidthType.DXA },
                         shading: { type: ShadingType.CLEAR },
                         margins: { top: 80, bottom: 80, left: 120, right: 120 },
                         children: renderCellTokens(c.tokens)

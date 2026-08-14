@@ -1,8 +1,12 @@
 # ARCHITECTURE: docx skill — Word .docx create / edit / convert / validate (OOXML MASTER)
 
-> **Status:** §1–§7 Shipped (backlog docx-1 … docx-9, 2026-06-05).
-> **§8 Obsidian note input (docx-10 / TASK 030) is IN PROGRESS.** Its code exists and is
-> exercised end to end. Its SKILL.md surface lands with the same task.
+> **Status:** §1–§7, §9 Shipped (backlog docx-1 … docx-9, docx-11).
+> **§8 Obsidian note input (docx-10 / TASK 030) Shipped**, verdict WARNING (see
+> `docs/tasks/task-030-docx-obsidian-support.md` — five adversarial cycles, all mechanical
+> gates green, one un-reviewed repair batch tracked as carry-over work, not a defect).
+> **§9 Math support (docx-11 / TASK 031) Shipped** 2026-08-14, standard (non-VDD) pipeline —
+> two review-gate rounds (task-reviewer, architecture-reviewer, plan-reviewer), each WARNING
+> → fixes applied; see `docs/tasks/task-031-docx-math-support.md`.
 > **License:** Proprietary, All Rights Reserved (`skills/docx/LICENSE`).
 > **Replication role:** MASTER for `office/` (→ xlsx, pptx), `_soffice.py` (→ xlsx, pptx),
 > `office_passwd.py` (→ xlsx, pptx), `_errors.py` / `_venv_bootstrap.py` / `preview.py` (→ xlsx, pptx, pdf).
@@ -10,7 +14,7 @@
 > **Execution mode:** `script-first` (Tier 2 skill).
 > **Tasks covered:** docx-1 … docx-11 (backlog IDs); TASK 006 (docx_replace),
 > TASK 008 (relocators), TASK 019 (venv self-bootstrap + A4 page-size + install hardening),
-> TASK 030 (Obsidian note input — see §8).
+> TASK 030 (Obsidian note input — see §8), TASK 031 (math support — see §9).
 
 ---
 
@@ -37,6 +41,7 @@ so the agent never has to derive low-level OOXML constructs by hand.
 - Reject password-protected and legacy `.doc` (CFB) inputs with a clear exit-3 message
 - Warn when a macro-enabled `.docm` input would silently drop its `vbaProject.bin`
 - Convert an **Obsidian vault note** to `.docx` in one command — frontmatter re-emitted as a table, `![[embeds]]` resolved to real images, `[[wikilinks]]` flattened, callouts and Obsidian-only syntax normalised (§8)
+- Render inline `$…$` and display `$$…$$` math as native OOXML math objects (`<m:oMath>`), editable in Word like any equation authored with its own equation editor (§9)
 - Emit failures as machine-readable JSON to stderr (`--json-errors`) for agent harness integration
 
 **What it deliberately does NOT do:**
@@ -46,7 +51,7 @@ so the agent never has to derive low-level OOXML constructs by hand.
 - Convert conditionals / loops in templates (plain `{{key}}` substitution only; no docxtpl expressions)
 - Create or manipulate custom content controls, style inheritance chains, or macro code
 - Fetch remote images silently or install system tools (LibreOffice, Poppler, Node.js)
-- Render math (`$…$` / `$$…$$`) — it reaches the document as literal text; deferred to backlog `docx-11`
+- Generate Word-native automatic equation numbering (`m:oMathPara` tab stops / `SEQ` fields) — a source document's own numbering (e.g. a Pandoc equation table's `(1)`, `(2)`, …) converts as ordinary text/table content, unchanged; deferred, see §9.3
 - Convert a `.docx` back into an Obsidian note, or evaluate Obsidian plugin syntax (Dataview, Templater, Excalidraw)
 
 ---
@@ -55,7 +60,7 @@ so the agent never has to derive low-level OOXML constructs by hand.
 
 | Capability | Entry-point script | Runtime | Notes |
 |---|---|---|---|
-| Markdown → `.docx` | `scripts/md2docx.js` | Node.js | Page geometry (`--page-size A4\|Letter`, `--landscape`, `--margins T,R,B,L`) derived from actual page dimensions (TASK 019 B). Default US Letter for backward-compat. Mermaid diagrams via `execSync(mmdc …)`. |
+| Markdown → `.docx` | `scripts/md2docx.js` | Node.js | Page geometry (`--page-size A4\|Letter`, `--landscape`, `--margins T,R,B,L`) derived from actual page dimensions (TASK 019 B). Default US Letter for backward-compat. Mermaid diagrams via `execSync(mmdc …)`. Inline/display math (`$…$`/`$$…$$`) → native `<m:oMath>` via `_math_lib.js`, on by default (`--no-math`/`--strict-math`). See §9. |
 | Obsidian note → CommonMark | `scripts/obsidian2md.js` | Node.js | Pre-processor, no OOXML knowledge. Frontmatter → GFM table (default) / prose / strip; `![[embed]]` → image with an angle-bracket destination; `[[wikilink]]` → text; callouts, `==highlight==`, `%%comment%%`, task boxes; attachment resolution via `.obsidian/app.json` → note dir → literal path → NFC-folded vault index. All logic in `_obsidian_lib.js`. TASK 030. |
 | Obsidian note → `.docx` (one command) | `scripts/md2docx.js --obsidian` | Node.js | Runs `_obsidian_lib.js` in-process into an `fs.mkdtempSync` directory, then the normal MD → `.docx` path. `--vault-root DIR` is a known value-flag, rejected with exit 1 without `--obsidian`. TASK 030. |
 | HTML / `.webarchive` / `.mhtml` → `.docx` | `scripts/html2docx.js` | Node.js | Three input formats; Confluence / CMS chrome stripping; two-tier SVG renderer (Chrome Tier 1 → resvg-js Tier 2); `--reader-mode` candidate list. |
@@ -97,7 +102,8 @@ skills/docx/
 └── scripts/
     │
     ├── [Node.js CLIs — no venv needed]
-    │   ├── md2docx.js                # MD → .docx; page-geometry; Mermaid; --obsidian
+    │   ├── md2docx.js                # MD → .docx; page-geometry; Mermaid; --obsidian; math
+    │   │   └── _math_lib.js          # $…$/$$…$$ → KaTeX MathML → mathml2omml OMML (TASK 031)
     │   ├── obsidian2md.js            # Obsidian note → CommonMark CLI (TASK 030)
     │   │   └── _obsidian_lib.js      # the conversion core; required by BOTH
     │   │                             #   obsidian2md.js and md2docx.js --obsidian
@@ -155,7 +161,8 @@ skills/docx/
     │
     ├── install.sh                    # venv + npm + smoke-test (TASK 019 C)
     ├── requirements.txt              # python-docx, lxml, defusedxml, Pillow, msoffcrypto-tool
-    └── package.json / node_modules/  # docx, marked, mammoth, turndown, image-size, cheerio, …
+    └── package.json / node_modules/  # docx, marked, mammoth, turndown, image-size, cheerio,
+                                       #   katex, mathml2omml (TASK 031), …
 ```
 
 ### 3.2 Runtime model
@@ -179,7 +186,8 @@ docx_replace.py (Python)
 ```mermaid
 graph TD
     subgraph Node["Node.js layer"]
-        MD2DOCX["md2docx.js\n(MD→.docx, --obsidian)"]
+        MD2DOCX["md2docx.js\n(MD→.docx, --obsidian, math)"]
+        MATHLIB["_math_lib.js\n(KaTeX→MathML→OMML)"]
         OBS2MD["obsidian2md.js\n(Obsidian→CommonMark)"]
         OBSLIB["_obsidian_lib.js\n(conversion core)"]
         HTML2DOCX["html2docx.js\n(HTML→.docx)"]
@@ -250,6 +258,7 @@ graph TD
     DOCX2MD --> CORE
     OBS2MD --> OBSLIB
     MD2DOCX --> OBSLIB
+    MD2DOCX --> MATHLIB
 ```
 
 ---
@@ -335,9 +344,13 @@ version `v` is currently `1`; bumped only when existing field semantics change.
 node scripts/md2docx.js INPUT.md OUTPUT.docx
     [--header TEXT] [--footer TEXT]
     [--page-size A4|Letter] [--landscape] [--margins T,R,B,L]
+    [--no-math] [--strict-math]
     [--obsidian [--vault-root DIR] [--frontmatter table|render|strip]
                 [--lang ru|en|auto] [--links text|italic]
                 [--inline-tags strip|keep] [--transclude] [--strict-assets]]
+    # math ($…$/$$…$$ → OOXML <m:oMath>) is ON by default; --no-math restores literal-text
+    # pre-TASK-031 behaviour; --strict-math exits 1 on the first formula KaTeX cannot render
+    # (default: falls back to the literal source text for that one formula + a stderr warning)
 
 node scripts/obsidian2md.js INPUT.md OUTPUT.md
     [--vault-root DIR] [--frontmatter table|render|strip] [--lang ru|en|auto]
@@ -447,7 +460,10 @@ and runnable in isolation per the project plan's independence requirement.
 **Not replicated** (docx-only): `docx_replace.py`, `docx_add_comment.py`, `docx_fill_template.py`,
 `docx_accept_changes.py`, `docx_merge.py`, `docx_anchor.py`, `_actions.py`, `_relocator.py`,
 `_app_errors.py`, `md2docx.js`, `html2docx.js`, `docx2md.js` and `docx2md/`,
-`obsidian2md.js` and `_obsidian_lib.js`.
+`obsidian2md.js` and `_obsidian_lib.js`, `_math_lib.js` (TASK 031 — no second consumer exists;
+`pdf`'s equivalent math step is `katex_render.js`/`preprocess_math`, a separate implementation
+targeting MathML rather than OMML, so there is no shared code to extract, only a shared
+heuristic — TASK 031 §5).
 
 `_obsidian_lib.js` is a **reuse candidate** for `pdf` (`md2pdf.js`), `pptx`, and `marp-slide`,
 which face the same Obsidian input. It is deliberately NOT replicated by TASK 030: a fourth
@@ -639,3 +655,109 @@ Three properties are the reason this change is safe to ship, and each has a test
 
 The temp directory is removed on success **and** on failure (a `process.on('exit')` hook),
 so a failed run leaves nothing behind.
+
+---
+
+## 9. TASK 031 — Math support
+
+> **Status:** Shipped 2026-08-14. Backlog `docx-11`, deferred out of TASK 030 (§8.5's first
+> row) as its own task. Standard (non-VDD) pipeline — see
+> `docs/tasks/task-031-docx-math-support.md`. All of TASK 031 §4's A1–A11 pass; the reference
+> document (A9, manual gate) converts to 328 native `<m:oMath>` objects, `office/validate.py`
+> → `OK`.
+
+### 9.1 Why a pre-lexer string substitution, and why OMML over a PNG raster
+
+`marked` has no math extension loaded, so `$x^2$` lexes as an ordinary `text` token and
+reaches the document byte-for-byte. Two designs were available to fix that, and both
+precedents already exist elsewhere in this repo:
+
+1. **Post-token rewrite** — teach `parseInlineText` to recognise `$…$` inside an already-lexed
+   `text` token. Rejected: CommonMark's emphasis pairing runs *before* any math-aware code
+   would see the text. Two adjacent formulas each carrying one literal underscore
+   (`$x_i$ … $y_j$`) present `marked`'s inline lexer with two candidate `_` emphasis markers
+   that can pair across unrelated prose, silently italicising everything between them.
+2. **Pre-lexer substitution** — extract and replace math spans in the raw Markdown string
+   *before* `marked.lexer()` ever runs, same as `pdf/md2pdf.py::preprocess_math` does for its
+   own (MathML/weasyprint) pipeline and the same shape `_obsidian_lib.js` R10 already uses to
+   protect fenced/inline code from its own rewrites. **Chosen** — the substitution sentinel
+   (Private-Use-Area Unicode, never `_`/`*`/`` ` ``) is inert to every CommonMark rule by
+   construction, so this is not merely "safer", the failure mode does not exist.
+
+**OMML vs. a PNG raster** (the backlog's two named options): a feasibility spike run during
+analysis (TASK 031 §1) rendered all 328 formula occurrences (197 unique) in the acceptance document
+(`tmp15/Направляемая звёздообразная маскированная диффузия.md`, outside the repo tree) through
+KaTeX → MathML → `mathml2omml` → `docx`-js's `ImportedXmlComponent.fromXmlString()`, spliced
+directly into `Paragraph.children`. 197/197 unique formulas rendered, the output passed `office/validate.py`,
+and a LibreOffice preview showed real fractions, subscripts, and an n-ary sum with limits —
+genuine editable Word math objects. A raster was rejected once OMML was known to work: it
+would need a rendering surface this skill does not otherwise have (no headless-Chrome/
+weasyprint equivalent wired for docx — `html2docx.js`'s Tier-1/Tier-2 SVG rasteriser exists for
+a different purpose and was not reused here), and a raster is strictly worse on every axis that
+matters for a Word document (not editable, not searchable, DPI/reflow).
+
+### 9.2 Data model — the sentinel / formula-registry contract
+
+`_math_lib.js`'s `preprocessMath(rawText)` returns `{text, formulas}`, consumed at two points
+in `md2docx.js`:
+
+| Producer | Wire format | Consumer |
+|---|---|---|
+| `preprocessMath()`, called on `markdown` — the variable produced immediately AFTER the frontmatter-strip regex at `md2docx.js:154`, so math scanning never has to reason about YAML frontmatter content — after `--obsidian` pre-processing | each matched `$…$`/`$$…$$` span replaced by `<N>` (N = decimal index into `formulas[]`); any pre-existing U+E000/U+E001 byte in the source is stripped first | `marked.lexer()` — sees only inert PUA text, no CommonMark-significant characters |
+| `formulas[N] = {tex, raw, display, omml, error}` — `omml` populated by a KaTeX→MathML→`mathml2omml` batch render pass over the **unique** `(tex, display)` pairs, `error` set instead on a render failure | array, indexed by the sentinel's `N` | `splitMathSentinels(text)` inside `parseInlineText` (and the strong/em/link branches) — looks up `formulas[N]` and either splices a fresh `ImportedXmlComponent.fromXmlString(omml)` or, on `error` without `--strict-math`, falls back to `formulas[N].raw` (the original literal source text) |
+
+**Why a registry index rather than embedding the OMML string directly in the sentinel.** The
+render pass runs as a single batch *after* extraction, so formula rendering, deduplication
+(a repeated `$\mathbf{x}_t$` renders once), and error handling are all in one place, mirroring
+`pdf/md2pdf.py::preprocess_math`'s two-pass shape. Embedding the OMML string inline would
+require the sentinel to survive character-escaping paths uninspected (`decodeEntities`, XML
+serialization) between substitution and splice — the index is opaque and short, so it does.
+
+**Why a fresh `ImportedXmlComponent` per occurrence, never a shared instance.** `docx`-js
+composes its XML tree once at `Packer.toBuffer()`; reusing one object across two splice points
+(a formula repeated in two paragraphs) has no documented aliasing guarantee, and re-parsing a
+short OMML string per occurrence is measured-cheap.
+
+**Display vs. inline placement.** A paragraph or table cell whose entire trimmed text is
+exactly one sentinel referencing a `display: true` formula gets a dedicated centred
+`Paragraph` — covers the acceptance document's actual shape, where every numbered equation is
+the sole content of one cell in its own 4-column GFM table (`|  | $$…$$ |  | (N) |`, the Pandoc
+LaTeX→Markdown equation-with-number convention). Mixed-content display math (rare — `$$…$$`
+sharing a line with other prose) still renders, just inline and left-flowing rather than
+centred — a documented degradation, not a failure.
+
+**Trust boundary.** KaTeX runs with `trust: false` (same reasoning as `pdf/katex_render.js`):
+document content is untrusted, and `trust: true` would let `\href`/`\includegraphics`/
+`\htmlData` emit MathML carrying external references. A `$`-dense document (>10 000 `$` chars,
+mirroring `pdf`'s `_MATH_DOLLAR_CAP`) skips math preprocessing entirely with a stderr warning —
+a DoS guard on the extraction regex's O(n²) worst case, checked before KaTeX ever runs.
+
+### 9.3 Honest scope
+
+| Limitation | Where it is enforced or recorded |
+|---|---|
+| Math inside `**bold**`/`*italic*`/`[link](...)` renders as a real (unstyled) math object, not styled to match — OOXML math runs do not inherit paragraph-level bold/italic the way `TextRun` does, and per-run `<m:rPr>` restyling inside the returned OMML is deferred | TASK 031 §2, R4(b) |
+| No Word-native automatic equation numbering (`m:oMathPara` tab stops / `SEQ` fields) — a source document's own numbers (e.g. a Pandoc equation table's `(1)`, `(2)`, …) sit outside the `$$…$$` delimiters and convert unchanged via the existing table path | TASK 031 §2, §5 |
+| Math inside a **locally-resolved** image's alt text renders as the original literal `$…$` string, never a math object — `buildImageRun()`'s `ImageRun.altText` fields are plain strings, not run children. A **remote/data-URL** image reference's alt text is an ordinary `TextRun` fallback, not `altText` — a formula there DOES render as a real math object | TASK 031 §2, R5(a) |
+| `--obsidian` + math interaction is architecturally independent (`obsidian2md.js` never touches `$`) but not exercised by a combined fixture | TASK 031 §2, [[docx-11-math-followups]] |
+
+### 9.4 Regression contracts
+
+- **No sentinel byte ever reaches the output**, on any code path — including a formula that
+  ends up inside an `ImageRun.altText` string, which cannot hold a math run and must fall back
+  to the literal source text instead (R5). Asserted directly against `word/document.xml`.
+- **Zero behaviour change for a document with no `$`.** Both the dense-`$` guard and the
+  extraction regexes short-circuit on `text.indexOf('$') === -1` before any KaTeX call.
+- **`--no-math` reproduces pre-TASK-031 output byte-for-byte** — the same "zero regression"
+  contract TASK 030 established for `--obsidian`.
+- **A fenced code block containing `$…$` passes through untouched** — code-span/fence exclusion
+  runs before either math regex, matching `_obsidian_lib.js` R10's "inert code, and only code"
+  precedent (§8.6).
+- **A 4-column table whose 1st/3rd cells are blank gets asymmetric column widths, not an equal
+  split.** Found during the A9 manual gate, not originally scoped: the acceptance document's
+  every display equation sits inside its own single-row `|  | $$…$$ |  | (N) |` table (the
+  Pandoc equation-with-number convention), and an equal 4-way split left the formula column
+  ~1/4 of the page width — a `\begin{cases}` definition rendered as `q(...) = {` with
+  everything past it clipped. `cellIsBlank()` detects the shape on the header row; the formula
+  column gets 80% of `contentWidthDxa`, the spacers 3% each, the number column 14%. Applies to
+  any table matching the shape, independent of whether it contains math.

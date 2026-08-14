@@ -77,7 +77,8 @@ are bundled in this repository.
 | `image-size` | MIT | docx/md2docx.js |
 | `pptxgenjs` | MIT | pptx/md2pptx.js |
 | `@mermaid-js/mermaid-cli` | MIT | docx/md2docx.js (optional mermaid rendering) |
-| `katex` | MIT | pdf/katex_render.js (optional `$…$`/`$$…$$` → MathML for weasyprint) |
+| `katex` | MIT | pdf/katex_render.js (optional `$…$`/`$$…$$` → MathML for weasyprint); docx/_math_lib.js (own copy, `$…$`/`$$…$$` → MathML → OMML) |
+| `mathml2omml` | LGPL-3.0-or-later | docx/_math_lib.js (MathML → OOXML `<m:oMath>`; dynamically-loaded npm dependency, same usage pattern as the LGPLv3 LibreOffice invocation in `_soffice.py` — never statically linked or modified) |
 
 ## External Command-Line Tools (not bundled, invoked via PATH)
 
