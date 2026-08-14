@@ -1015,6 +1015,105 @@ class TestAdversarialCycle3(unittest.TestCase):
 
 
 @unittest.skipUnless(HAVE_NODE, "node not available")
+class TestAdversarialCycle4(unittest.TestCase):
+    """Regression locks for cycle 4, which retired four regex-based masking designs.
+
+    Cycle 4 found two CRITICALs. Both were reachable from ordinary notes, both were silent,
+    and both defeated `--strict-assets`. The masking is now one line-based state machine
+    over a single shared store; these tests are what stops it from becoming regexes again.
+    """
+
+    # --- C4-01 (CRITICAL): an unmatched backtick masked whole sections -----------------
+
+    def test_a_stray_backtick_does_not_mask_the_rest_of_the_document(self):
+        # An unmatched run paired with the NEXT genuine span's opener, so every paragraph
+        # between them was stored as one "inline span" and restored verbatim. Embeds and
+        # wikilinks reached the .docx literally, at exit 0, with no warning.
+        out = convert_text(
+            "# T\n\nA stray ` backtick in prose.\n\nSee [[Note]] and ![[diagram.png]] here.\n\n"
+            "Use `code` at the end.\n")
+        self.assertNotIn("[[", out)
+        self.assertIn("![diagram](", out)
+        self.assertIn("`code`", out)      # the real span is still masked
+
+    def test_strict_assets_still_sees_a_missing_asset_past_a_stray_backtick(self):
+        # The mask also hid the missing attachment from R7(b), so exit 8 never fired.
+        tmp = tempfile.mkdtemp(dir=VAULT, prefix=".t-")
+        try:
+            src = os.path.join(tmp, "n.md")
+            with open(src, "w", encoding="utf-8") as fh:
+                fh.write("# T\n\nA stray ` here.\n\nSee ![[nope.png]].\n\nUse `code`.\n")
+            proc = run_convert(src, os.path.join(tmp, "o.md"),
+                               "--vault-root", VAULT, "--strict-assets")
+            self.assertEqual(proc.returncode, 8)
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    def test_unterminated_blockquoted_fence_ends_with_its_blockquote(self):
+        # A fence inside a blockquote was not matched by the fence pass (the `>` defeated
+        # its `^[ \t]*`), fell through to the inline pass, and swallowed the document.
+        out = convert_text(
+            "# T\n\n> ```js\n> snippet\n\nReal [[Note]] and ![[diagram.png]] here\n\n"
+            "Some `inline` code\n")
+        self.assertNotIn("[[", out)
+        self.assertIn("![diagram](", out)
+
+    def test_a_matched_inline_span_is_still_masked(self):
+        # Guard against fixing the leak by not masking inline code at all.
+        out = convert_text("# T\n\nA `![[z.png]]` span and ``a ` b`` too.\n")
+        self.assertIn("`![[z.png]]`", out)
+
+    # --- C4-02 / V4-01 (CRITICAL/HIGH): nested transclusion substituted wrong text ------
+
+    def test_nested_transclusion_preserves_every_generation(self):
+        # A embeds B embeds C. Separate mask stores per note meant C was masked against one
+        # store and unmasked against another: C's code block was DESTROYED and B's was
+        # duplicated in its place.
+        base = tempfile.mkdtemp()
+        try:
+            os.makedirs(os.path.join(base, ".obsidian"))
+            for name, body in (
+                ("C", "# C\n\n```sh\nCCC_CODE\n```\n"),
+                ("B", "# B\n\n```sh\nBBB_CODE\n```\n\n![[C]]\n"),
+                ("A", "# A\n\n![[B]]\n"),
+            ):
+                with open(os.path.join(base, name + ".md"), "w", encoding="utf-8") as fh:
+                    fh.write(body)
+            dst = os.path.join(base, "out.md")
+            proc = run_convert(os.path.join(base, "A.md"), dst,
+                               "--vault-root", base, "--transclude")
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            with open(dst, encoding="utf-8") as fh:
+                body = fh.read()
+            self.assertEqual(body.count("BBB_CODE"), 1, "B duplicated or lost")
+            self.assertEqual(body.count("CCC_CODE"), 1, "C duplicated or lost")
+            self.assertNotIn("obsmask", body, "a mask sentinel leaked into the output")
+        finally:
+            shutil.rmtree(base, ignore_errors=True)
+
+    def test_no_mask_sentinel_ever_reaches_the_output(self):
+        # The single highest-signal check in the suite: a sentinel in the output means the
+        # store identity is wrong somewhere.
+        out = convert_text(
+            "# T\n\n```sh\ncode\n```\n\nA `span` and\n\n    indented\n\n> quote\n")
+        self.assertNotIn("obsmask", out)
+
+    # --- C4-04 (HIGH): a fence indented 1-3 spaces did not close the list --------------
+
+    def test_fence_indented_one_to_three_spaces_closes_the_list(self):
+        # List CONTENT starts after the marker and its spaces; using marker-indent + 1 made
+        # a 1-space-indented fence look like list content, so the list never closed and the
+        # following indented code block was rewritten.
+        out = convert_text("# T\n\n- a\n\n ```\nx\n ```\n\n    #include <stdio.h>\n\nend\n")
+        self.assertIn("    #include <stdio.h>", out)
+
+    def test_a_fence_indented_into_the_list_stays_list_content(self):
+        # The other side of the same boundary.
+        out = convert_text("# T\n\n- a\n\n  ```\nx\n  ```\n\n  more [[a link]]\n")
+        self.assertNotIn("[[", out)
+
+
+@unittest.skipUnless(HAVE_NODE, "node not available")
 class TestIdempotenceAndRegression(unittest.TestCase):
     """R14 — the two properties that make this safe to ship."""
 
