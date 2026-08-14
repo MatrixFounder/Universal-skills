@@ -1114,6 +1114,102 @@ class TestAdversarialCycle4(unittest.TestCase):
 
 
 @unittest.skipUnless(HAVE_NODE, "node not available")
+class TestAdversarialCycle5(unittest.TestCase):
+    """Regression locks for cycle 5, which attacked the cycle-4 state-machine rewrite.
+
+    Cycle 5 found the defect in `flushParagraph` — the index arithmetic I had flagged as the
+    least-reviewed code in the file — plus four more the suite could not see.
+    """
+
+    # --- C5-02 (CRITICAL): flushParagraph duplicated paragraph text --------------------
+
+    def test_a_multi_line_code_span_does_not_duplicate_its_paragraph(self):
+        # Masking can shrink a paragraph's line count; the write-back mapped the new lines
+        # onto the old slots with a NEGATIVE slice offset, which JavaScript reads as "all but
+        # the last N" rather than "empty", so lines landed in two slots each.
+        out = convert_text("# T\n\nalpha `one\ntwo\nthree` beta\ngamma\n")
+        self.assertEqual(out.count("alpha"), 1)
+        self.assertEqual(out.count("gamma"), 1)
+
+    def test_an_image_in_such_a_paragraph_is_embedded_once(self):
+        # The visible symptom: the same picture twice in the .docx.
+        tmp = tempfile.mkdtemp(dir=VAULT, prefix=".t-")
+        try:
+            src = os.path.join(tmp, "n.md")
+            with open(src, "w", encoding="utf-8") as fh:
+                fh.write("# T\n\nsee `one\ntwo\nthree` and ![[diagram.png]]\nend\n")
+            out = os.path.join(tmp, "o.docx")
+            proc = subprocess.run(
+                ["node", MD2DOCX, src, out, "--obsidian", "--vault-root", VAULT],
+                capture_output=True, text=True)
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            self.assertEqual(len(_media(out)), 1, "image embedded more than once")
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    # --- C5-01 (HIGH): a CRLF note's fence never closed --------------------------------
+
+    def test_crlf_note_converts_past_its_first_fence(self):
+        # The closing regex is `$`-anchored and allows only spaces/tabs, so ```\r could never
+        # match, while the opener's info-string class ate the \r. Every fence opened, none
+        # closed, and the rest of the document was masked to EOF.
+        out = convert_text("# T\r\n\r\n```\r\nx\r\n```\r\n\r\nSee [[Other]] here\r\n")
+        self.assertNotIn("[[", out)
+
+    def test_crlf_does_not_disable_strict_assets(self):
+        # The mask also hid the missing attachment, so exit 8 stopped firing.
+        tmp = tempfile.mkdtemp(dir=VAULT, prefix=".t-")
+        try:
+            src = os.path.join(tmp, "n.md")
+            with open(src, "w", encoding="utf-8", newline="") as fh:
+                fh.write("# T\r\n\r\n```\r\nx\r\n```\r\n\r\n![[nope.png]]\r\n")
+            proc = run_convert(src, os.path.join(tmp, "o.md"),
+                               "--vault-root", VAULT, "--strict-assets")
+            self.assertEqual(proc.returncode, 8)
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    # --- C5-03 (HIGH): a blockquoted fence had its `>` prefix doubled ------------------
+
+    def test_blockquoted_fence_keeps_exactly_one_quote_prefix(self):
+        # The buffer already carries the prefix; prepending it again produced `> > ```js`,
+        # which changes the quote depth and the rendered structure.
+        out = convert_text("# T\n\n> ```js\n> code\n> ```\n\nafter\n")
+        self.assertIn("> ```js", out)
+        self.assertNotIn("> > ", out)
+
+    # --- C5-03b (HIGH): a backslash-escaped backtick opened a mask region --------------
+
+    def test_escaped_backtick_does_not_open_a_mask(self):
+        # Same shape as cycle 4's stray-backtick CRITICAL, through a different door.
+        out = convert_text("# T\n\nA \\` and [[X]] and `code` here.\n")
+        self.assertNotIn("[[", out)
+        self.assertIn("`code`", out)
+
+    def test_an_escaped_backtick_inside_a_real_span_is_still_content(self):
+        out = convert_text("# T\n\nUse `a \\` b` and [[X]].\n")
+        self.assertIn("`a \\` b`", out)
+        self.assertNotIn("[[", out)
+
+    # --- C5-04 (MEDIUM): a tilde fence may carry backticks in its info string ----------
+
+    def test_tilde_fence_with_a_backtick_in_its_info_string_is_a_fence(self):
+        # CommonMark forbids a backtick in a BACKTICK fence's info string and allows it in a
+        # tilde fence's; applying the backtick rule to both left the block unmasked.
+        out = convert_text("# T\n\n~~~`js\n[[keep-me]]\n~~~\n\nSee [[Y]]\n")
+        self.assertIn("[[keep-me]]", out)      # inside the fence: inert
+        self.assertNotIn("See [[Y]]", out)     # outside it: rewritten
+
+    def test_a_backtick_fence_info_string_still_rejects_backticks(self):
+        # The other side of the same rule. `` ```a`b `` is three ticks with the info string
+        # "a`b", which CommonMark does not accept as a fence — so its contents are ordinary
+        # text and must be rewritten. (Note `` ````js `` would be a FOUR-tick fence with info
+        # "js", which is perfectly valid; the two are easy to confuse.)
+        out = convert_text("# T\n\n```a`b\n[[rewrite-me]]\n```\n")
+        self.assertNotIn("[[rewrite-me]]", out)
+
+
+@unittest.skipUnless(HAVE_NODE, "node not available")
 class TestIdempotenceAndRegression(unittest.TestCase):
     """R14 — the two properties that make this safe to ship."""
 

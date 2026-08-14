@@ -162,28 +162,33 @@ function maskAll(text, keep) {
 
     const flushParagraph = () => {
         if (!para.length) { para = []; return; }
-        // Inline spans are masked WITHIN one paragraph. A code span cannot span a blank
+        // Inline spans are masked WITHIN one paragraph. A code span cannot cross a blank
         // line, so bounding here is what stops one stray backtick from swallowing the rest
         // of the document by pairing with the next real span's opener.
-        const joined = para.map((i) => out[i]).join('\n');
-        const masked = maskInlineSpans(joined, keep);
-        const parts = masked.split('\n');
-        // maskInlineSpans may collapse a multi-line span into fewer lines; keep the text
-        // whole by putting it all on the first slot and blanking the rest.
-        for (let k = 0; k < para.length; k++) {
-            out[para[k]] = k === 0 ? parts.slice(0, parts.length - (para.length - 1)).join('\n')
-                : parts[parts.length - (para.length - 1) + (k - 1)];
-        }
-        if (parts.length === para.length) {
-            for (let k = 0; k < para.length; k++) out[para[k]] = parts[k];
-        }
+        //
+        // The write-back is a SPLICE, not index arithmetic over the old slots. Masking can
+        // change a paragraph's line count (a multi-line span collapses to one sentinel), and
+        // the arithmetic that tried to map the new lines back onto the old slots computed a
+        // NEGATIVE slice offset — which JavaScript reads as "all but the last N", not as
+        // "empty" — so lines were written into two slots each and the paragraph came out
+        // DUPLICATED. An image inside such a paragraph was embedded twice.
+        const start = para[0];
+        const masked = maskInlineSpans(para.map((i) => out[i]).join('\n'), keep);
+        out.splice(start, para.length, ...masked.split('\n'));
         para = [];
     };
 
     for (let i = 0; i < lines.length; i++) {
         const line = lines[i];
         const bq = BQ_PREFIX.exec(line)[1];
-        const rest = line.slice(bq.length);
+        // A CRLF note keeps its `\r` at the end of every line. The CLOSING-fence regex is
+        // anchored with `$` and allows only spaces and tabs before it, so `` ```\r `` could
+        // never close — while the OPENING regex's info-string class happily ate the `\r`.
+        // Every fence therefore opened and none closed, and the unterminated-fence flush
+        // masked the whole rest of the document: embeds, wikilinks and callouts after the
+        // first fence reached the .docx literally, at exit 0, with --strict-assets silent.
+        // Match on the stripped line; emit the original.
+        const rest = line.slice(bq.length).replace(/\r$/, '');
 
         if (fence) {
             // A fence opened inside a blockquote ends where the blockquote does: the first
@@ -192,7 +197,7 @@ function maskAll(text, keep) {
             // snippet — routine when quoting chat or a PR review — masked every embed and
             // wikilink after it, at exit 0.
             if (fence.bq && !bq) {
-                out.push(fence.bq + keep(fence.buf.join('\n')));
+                out.push(keep(fence.buf.join('\n')));
                 fence = null;
                 i--;                                   // re-read this line outside the fence
                 continue;
@@ -200,22 +205,26 @@ function maskAll(text, keep) {
             fence.buf.push(line);
             const close = /^([ \t]{0,3})(`{3,}|~{3,})[ \t]*$/.exec(rest);
             if (close && close[2][0] === fence.char && close[2].length >= fence.len) {
-                out.push(fence.bq + keep(fence.buf.join('\n')));
+                out.push(keep(fence.buf.join('\n')));
                 fence = null;
             }
             continue;
         }
 
         // A fence opener: 0-3 spaces of indent (4+ is indented code), any info string.
-        const open = /^([ \t]{0,3})(`{3,}|~{3,})([^`]*)$/.exec(rest);
+        // CommonMark forbids a backtick in a BACKTICK fence's info string, and allows one
+        // in a tilde fence's. Applying the backtick rule to both meant `~~~`js` was not
+        // recognised as a fence at all, and its contents were rewritten.
+        const open = /^([ \t]{0,3})(?:(`{3,})([^`]*)|(~{3,})(.*))$/.exec(rest);
         if (open) {
             flushParagraph();
             // Indent is measured on the fence itself, not on a sentinel that swallowed it —
             // that is what v3 got wrong. A fence starting left of the open list item's
             // content closes the list.
+            const marker = open[2] || open[4];
             const indent = open[1].replace(/\t/g, '    ').length;
             if (listIndent >= 0 && indent < listIndent) listIndent = -1;
-            fence = { char: open[2][0], len: open[2].length, bq, buf: [line] };
+            fence = { char: marker[0], len: marker.length, bq, buf: [line] };
             continue;
         }
 
@@ -266,7 +275,7 @@ function maskAll(text, keep) {
         para.push(out.length - 1);
     }
 
-    if (fence) out.push(fence.bq + keep(fence.buf.join('\n')));   // unterminated: to EOF
+    if (fence) out.push(keep(fence.buf.join('\n')));   // unterminated: to EOF
     flushParagraph();
     return out.join('\n');
 }
@@ -278,18 +287,29 @@ function maskAll(text, keep) {
  * A run with no partner is literal text and must be left alone — the v4 regex instead let it
  * pair with the opener of the next genuine span, masking every paragraph in between.
  */
+/** Is the character at `i` preceded by an odd number of backslashes, i.e. escaped? */
+function isEscaped(text, i) {
+    let n = 0;
+    while (i - n - 1 >= 0 && text[i - n - 1] === '\\') n++;
+    return n % 2 === 1;
+}
+
 function maskInlineSpans(text, keep) {
     let out = '';
     let i = 0;
     while (i < text.length) {
         if (text[i] !== '`') { out += text[i++]; continue; }
+        // A backslash-escaped backtick is literal text, not a delimiter. Treating it as an
+        // opener let it pair with the next real span and mask everything between — the same
+        // shape as the cycle-4 stray-backtick CRITICAL, through a different door.
+        if (isEscaped(text, i)) { out += text[i++]; continue; }
         let n = 0;
         while (text[i + n] === '`') n++;
         const openRun = text.slice(i, i + n);
         let j = i + n;
         let found = -1;
         while (j < text.length) {
-            if (text[j] === '`') {
+            if (text[j] === '`' && !isEscaped(text, j)) {
                 let m = 0;
                 while (text[j + m] === '`') m++;
                 if (m === n) { found = j; break; }

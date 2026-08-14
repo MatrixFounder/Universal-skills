@@ -2,9 +2,9 @@
 
 **Status:** CODE COMPLETE — **verdict WARNING, not PASS** (VDD-Enhanced, 2026-08-13/14).
 
-All mechanical gates are green: 341 unit tests, E2E 157/157, `validate_skill.py` PASSED,
-A11 clean. **Four** adversarial cycles ran; the fourth was authorised by the user beyond the
-workflow's three-cycle cap.
+All mechanical gates are green: 350 unit tests, E2E 157/157, `validate_skill.py` PASSED,
+A11 clean. **Five** adversarial cycles ran; the fourth and fifth were authorised by the user
+beyond the workflow's three-cycle cap.
 
 | Cycle | Target | Confirmed | Refuted |
 |---|---|---|---|
@@ -12,14 +12,23 @@ workflow's three-cycle cap.
 | 2 | cycle 1's repairs | 6 | 0 |
 | 3 | cycle 2's repairs | 5 | 1 |
 | 4 | cycle 3's repairs | 8 | 0 |
+| 5 | cycle 4's rewrite | 8 | 0 |
 
-Every cycle found real defects in the previous cycle's repairs. Cycle 4 found two further
-CRITICALs — an unmatched backtick masking whole paragraphs, and nested transclusion destroying
-a grandchild's content. Neither was visible to the then-passing 333 tests or to A11. The
-masking was rebuilt as a line-based state machine over a single shared store, rather than
-patched a fifth time.
+Every cycle found real defects in the previous cycle's repairs. Cycle 5 found the defect in
+`flushParagraph`'s index arithmetic, the code the cycle-4 brief had named as its least
+reviewed. A negative slice offset **duplicated** a paragraph, embedding an image twice.
 
-The verdict stays **WARNING**: cycle 4's repairs were applied after the last cycle and have
+Four more came with it. A CRLF note's fence never closes, so everything after the first fence
+is masked to EOF. A blockquoted fence returns with its `> ` prefix doubled. A backslash-escaped
+backtick opens a mask region. The backtick-fence info-string rule was applied to tilde fences,
+which CommonMark exempts.
+
+Cycle 5 also ran the two methods no earlier cycle had: a **differential test of the masker
+against `marked`'s own lexer** and a property check, over the 405 markdown files in
+`examples/` and `docs/`. After the fixes: masking is exactly reversible on every file, no mask
+sentinel reaches any output, and nothing throws.
+
+The verdict stays **WARNING**: cycle 5's repairs were applied after the last cycle and have
 had no review pass (`vdd-enhanced` §4.5). Findings the cycles raised but never verified are
 tracked in
 [`docs/backlog/wi-030-adversarial-carryover.md`](backlog/wi-030-adversarial-carryover.md)
