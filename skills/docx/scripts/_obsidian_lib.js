@@ -119,8 +119,12 @@ const MAX_TRANSCLUDE_DEPTH = 3;
 // the inside of a fenced block. A note that DOCUMENTS Obsidian syntax — this repository is
 // full of them — would have its examples silently rewritten. Mask first, restore last.
 //
-// The sentinel carries NUL, which cannot occur in the source text of a note, so no rule
-// and no user content can collide with it.
+// The sentinel is NUL-delimited. That is not on its own a guarantee: U+0000 IS valid UTF-8
+// and `readFileSync(path, 'utf-8')` preserves it, so a note carrying the sentinel's own bytes
+// could make `unmaskCode` splice an unrelated stored code region into that position, or leave
+// a literal `obsmask` in the document. `stripControlChars()` removes NUL from the source
+// before any masking runs, which closes that and is required anyway: XML 1.0 forbids U+0000,
+// so a NUL reaching the writer produces a .docx no reader will open.
 
 const MASK_OPEN = '\u0000obsmask';
 const MASK_CLOSE = '\u0000';
@@ -255,12 +259,17 @@ function maskAll(text, keep) {
                 const l = lines[i];
                 const r = l.slice(BQ_PREFIX.exec(l)[1].length);
                 if (!r.trim()) {
-                    // a blank line continues the block only if more indented code follows
+                    // A blank line continues the block only if more indented code follows.
+                    // EVERY blank in the run is kept: pushing one and jumping the cursor past
+                    // the rest deleted them from the document, so the masked region restored
+                    // different bytes than it captured — the code block's own content edited.
                     let j = i + 1;
                     while (j < lines.length && !lines[j].slice(BQ_PREFIX.exec(lines[j])[1].length).trim()) j++;
                     const nxt = j < lines.length ? lines[j].slice(BQ_PREFIX.exec(lines[j])[1].length) : '';
                     if (!/^(?:[ ]{4}|\t)/.test(nxt)) break;
-                    buf.push(l); i = j - 1; i++; continue;
+                    for (let k = i; k < j; k++) buf.push(lines[k]);
+                    i = j;
+                    continue;
                 }
                 if (!/^(?:[ ]{4}|\t)/.test(r)) break;
                 buf.push(l); i++;
@@ -334,6 +343,18 @@ function unmaskCode(text, store) {
         out = next;
     }
     return out;
+}
+
+/**
+ * Remove characters that cannot appear in a `.docx` — and that would otherwise let a note
+ * forge a mask sentinel.
+ *
+ * XML 1.0 permits only tab, newline, carriage return and U+0020 upward among the C0 range, so
+ * these bytes could never survive into the output anyway. Dropping them here rather than at
+ * the writer keeps the masking invariant simple: nothing in the text can look like a sentinel.
+ */
+function stripControlChars(text) {
+    return text.replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F]/g, '');
 }
 
 /** A store plus the `keep` that appends to it. One per convert() run, shared with children. */
@@ -811,7 +832,7 @@ function transclude(file, ctx) {
     ctx.visited.add(key);
     ctx.depth++;
     const inner = { ...ctx, noteDir: path.dirname(key) };
-    const body = parseFrontmatter(raw).body;                           // R12(b)
+    const body = parseFrontmatter(stripControlChars(raw)).body;        // R12(b)
     // Masked into the PARENT's store, and NOT unmasked here. convert() unmasks once, at the
     // very end, over the whole document. Giving the child its own store made a nested
     // transclusion (A embeds B embeds C) substitute the wrong text — C masked into one store
@@ -827,6 +848,12 @@ function transclude(file, ctx) {
     // Demote WHILE MASKED, or this reads a `# comment` inside a shell fence as a heading and
     // edits the code it is inlining.
     out = out.replace(/^(#{1,5})\s/gm, '$1# ');                        // R12(a) demote
+    // Removed on unwind: `visited` marks the notes on the CURRENT path, which is what
+    // detects a cycle. Leaving entries behind made a DIAMOND (A embeds B and C, both of which
+    // embed the same note) look like a cycle on its second, non-recursive occurrence — the
+    // shared note was replaced by a pointer line and the run reported a cycle that did not
+    // exist.
+    ctx.visited.delete(key);
     ctx.depth--;
     return '\n' + out.trim() + '\n';
 }
@@ -957,7 +984,7 @@ function convert(text, opts) {
         ? path.resolve(options.vaultRoot)
         : findVaultRoot(noteDir);
 
-    const parsed = parseFrontmatter(text);
+    const parsed = parseFrontmatter(stripControlChars(text));
     const { data } = parsed;
     // Removing the frontmatter leaves the blank line that separated it from the H1. Trim
     // leading blanks ONLY when there was frontmatter to remove: a plain CommonMark file

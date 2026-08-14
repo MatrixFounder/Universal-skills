@@ -1210,6 +1210,282 @@ class TestAdversarialCycle5(unittest.TestCase):
 
 
 @unittest.skipUnless(HAVE_NODE, "node not available")
+class TestCarryoverMedium(unittest.TestCase):
+    """The MEDIUM findings the cycles raised but never verified.
+
+    Three were live defects; three were mutation survivors — requirements with no test at
+    all, which is the same exposure as a defect and harder to see.
+    """
+
+    # --- C5-06: blank runs inside an indented code block were deleted -----------------
+
+    def test_blank_line_run_inside_indented_code_survives(self):
+        # The blank-run branch pushed ONE blank and jumped the cursor past the rest, so the
+        # masked region restored different bytes than it captured — it edited the code.
+        out = convert_text("para\n\n    line1\n\n\n    line2\n\nafter\n")
+        self.assertIn("    line1\n\n\n    line2", out)
+
+    def test_masking_is_reversible_on_that_shape(self):
+        # The property the defect broke, asserted directly.
+        script = (
+            'const l=require(process.argv[1]);'
+            'const s="para\\n\\n    a\\n\\n\\n\\n    b\\n\\nafter\\n";'
+            'const {store,keep}=l.newMaskStore();'
+            'process.stdout.write(String(l.unmaskCode(l.maskAll(s,keep),store)===s));')
+        proc = subprocess.run(
+            ["node", "-e", script, os.path.join(SCRIPTS, "_obsidian_lib.js")],
+            capture_output=True, text=True)
+        self.assertEqual(proc.stdout.strip(), "true", proc.stderr)
+
+    # --- C5-05b (I4): a note could forge a mask sentinel -----------------------------
+
+    def test_a_note_carrying_the_sentinel_bytes_cannot_inject_stored_code(self):
+        # U+0000 is valid UTF-8 and readFileSync preserves it, so the "NUL cannot occur"
+        # assumption was false: an in-range index spliced an unrelated code region into the
+        # note. Control characters are now stripped before masking — which XML 1.0 requires
+        # anyway, since a NUL would make the .docx unopenable.
+        tmp = tempfile.mkdtemp(dir=VAULT, prefix=".t-")
+        try:
+            src = os.path.join(tmp, "n.md")
+            nul = chr(0)
+            with open(src, "w", encoding="utf-8") as fh:
+                fh.write("# T\n\n```sh\nSECRET_FENCE\n```\n\nHere: "
+                         + nul + "obsmask0" + nul + "\n")
+            dst = os.path.join(tmp, "o.md")
+            proc = run_convert(src, dst, "--vault-root", VAULT)
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            with open(dst, encoding="utf-8") as fh:
+                body = fh.read()
+            self.assertEqual(body.count("SECRET_FENCE"), 1, "a stored region was injected")
+            self.assertEqual(body.count(chr(0)), 0, "NUL reached the output")
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    # --- C5-04: a diamond was mis-reported as a cycle --------------------------------
+
+    def test_diamond_transclusion_inlines_the_shared_note_twice(self):
+        # A embeds B and C; both embed Shared. `visited` was never cleared on unwind, so the
+        # second, non-recursive occurrence tripped the cycle branch: the shared note was
+        # replaced by a pointer and the run reported a cycle that did not exist.
+        base = tempfile.mkdtemp()
+        try:
+            os.makedirs(os.path.join(base, ".obsidian"))
+            for name, body in (("Shared", "# Shared\n\nSHARED_BODY_TEXT\n"),
+                               ("B", "# B\n\n![[Shared]]\n"),
+                               ("C", "# C\n\n![[Shared]]\n"),
+                               ("A", "# A\n\n![[B]]\n\n![[C]]\n")):
+                with open(os.path.join(base, name + ".md"), "w", encoding="utf-8") as fh:
+                    fh.write(body)
+            dst = os.path.join(base, "out.md")
+            proc = run_convert(os.path.join(base, "A.md"), dst,
+                               "--vault-root", base, "--transclude")
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            self.assertNotIn("cycle", proc.stderr)
+            with open(dst, encoding="utf-8") as fh:
+                body = fh.read()
+            self.assertEqual(body.count("SHARED_BODY_TEXT"), 2)
+        finally:
+            shutil.rmtree(base, ignore_errors=True)
+
+    def test_a_true_cycle_is_still_caught(self):
+        # The other side of the same change: `visited` must still catch a real cycle.
+        base = tempfile.mkdtemp()
+        try:
+            os.makedirs(os.path.join(base, ".obsidian"))
+            for name, body in (("P", "# P\n\nP_BODY\n\n![[Q]]\n"),
+                               ("Q", "# Q\n\nQ_BODY\n\n![[P]]\n")):
+                with open(os.path.join(base, name + ".md"), "w", encoding="utf-8") as fh:
+                    fh.write(body)
+            proc = run_convert(os.path.join(base, "P.md"), os.path.join(base, "o.md"),
+                               "--vault-root", base, "--transclude")
+            self.assertEqual(proc.returncode, 0)
+            self.assertIn("cycle", proc.stderr)
+        finally:
+            shutil.rmtree(base, ignore_errors=True)
+
+    # --- C5-08 (mutation survivor): R12(c) depth cap had no test ---------------------
+
+    def test_transclusion_depth_cap_is_enforced(self):
+        # A->B->C->D inline; E is refused at the cap. Disabling MAX_TRANSCLUDE_DEPTH left
+        # the suite green, so the requirement was unlocked.
+        base = tempfile.mkdtemp()
+        try:
+            os.makedirs(os.path.join(base, ".obsidian"))
+            chain = ["A", "B", "C", "D", "E"]
+            for i, name in enumerate(chain):
+                nxt = "\n\n![[%s]]\n" % chain[i + 1] if i + 1 < len(chain) else "\n"
+                with open(os.path.join(base, name + ".md"), "w", encoding="utf-8") as fh:
+                    fh.write("# %s\n\n%s_BODY%s" % (name, name, nxt))
+            dst = os.path.join(base, "out.md")
+            proc = run_convert(os.path.join(base, "A.md"), dst,
+                               "--vault-root", base, "--transclude")
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            self.assertIn("depth limit", proc.stderr)
+            with open(dst, encoding="utf-8") as fh:
+                body = fh.read()
+            for name in ("B", "C", "D"):
+                self.assertIn(name + "_BODY", body, name + " should be inlined")
+            self.assertNotIn("E_BODY", body, "E is past the cap and must not be inlined")
+        finally:
+            shutil.rmtree(base, ignore_errors=True)
+
+    # --- C5-10 (mutation survivor): render mode's multi-value branch had no test ------
+
+    def test_render_mode_keeps_every_value_of_a_multi_value_key(self):
+        # Dropping every attendee after the first passed the suite — the D1 failure class
+        # this task exists to close, in a selectable mode.
+        out = convert_text(
+            "---\nlang: en\nparticipants:\n  - Ada Lovelace\n  - Alan Turing\n---\n\n# T\n",
+            "--frontmatter", "render")
+        self.assertIn("- Ada Lovelace", out)
+        self.assertIn("- Alan Turing", out)
+
+    # --- C5-11 (mutation survivor): six R5 sub-features had no test -------------------
+
+    def test_r5d_vault_index_folds_nfc_and_case(self):
+        # macOS hands out NFD; a byte compare finds no such filename at all. The note spells
+        # the name in NFC and the file on disk is written in NFD.
+        #
+        # The name MUST contain a character that actually decomposes. The first version of
+        # this test used "Схема.png", whose Cyrillic letters have no decomposition, so NFD
+        # and NFC were the same string and the test asserted nothing — a vacuous test, which
+        # is the defect class it exists to catch. "й" (U+0439) decomposes to и + U+0306.
+        # It also uses a capital in the note to exercise the case-fold half of R5(d).
+        import unicodedata
+        name = "Стройка.png"
+        self.assertNotEqual(unicodedata.normalize("NFD", name),
+                            unicodedata.normalize("NFC", name),
+                            "fixture name must decompose or this test proves nothing")
+        base = tempfile.mkdtemp()
+        try:
+            os.makedirs(os.path.join(base, ".obsidian"))
+            os.makedirs(os.path.join(base, "deep"))
+            on_disk = unicodedata.normalize("NFD", name)
+            shutil.copy(os.path.join(VAULT, "_attachments", "diagram.png"),
+                        os.path.join(base, "deep", on_disk))
+            if unicodedata.normalize("NFD", os.listdir(os.path.join(base, "deep"))[0]) != on_disk:
+                self.skipTest("filesystem normalises filenames; NFD cannot be staged here")
+            src = os.path.join(base, "n.md")
+            with open(src, "w", encoding="utf-8") as fh:
+                fh.write("# T\n\n![[%s]]\n" % unicodedata.normalize("NFC", name).upper())
+            dst = os.path.join(base, "o.md")
+            proc = run_convert(src, dst, "--vault-root", base)
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            with open(dst, encoding="utf-8") as fh:
+                self.assertNotIn("image not found", fh.read())
+        finally:
+            shutil.rmtree(base, ignore_errors=True)
+
+    def test_r5e_ambiguous_attachment_warns_with_every_candidate(self):
+        # Spec clause R-2: more than one vault-wide match must list the candidates rather
+        # than silently taking the first.
+        base = tempfile.mkdtemp()
+        try:
+            os.makedirs(os.path.join(base, ".obsidian"))
+            for sub in ("one", "two"):
+                os.makedirs(os.path.join(base, sub))
+                shutil.copy(os.path.join(VAULT, "_attachments", "diagram.png"),
+                            os.path.join(base, sub, "shot.png"))
+            src = os.path.join(base, "n.md")
+            with open(src, "w", encoding="utf-8") as fh:
+                fh.write("# T\n\n![[shot.png]]\n")
+            proc = run_convert(src, os.path.join(base, "o.md"), "--vault-root", base)
+            self.assertIn("ambiguous attachment", proc.stderr)
+            self.assertIn("one", proc.stderr)
+            self.assertIn("two", proc.stderr)
+        finally:
+            shutil.rmtree(base, ignore_errors=True)
+
+    def test_r5f_vault_root_is_discovered_by_walking_up_to_dot_obsidian(self):
+        # No --vault-root given: the root is the nearest ancestor holding `.obsidian/`.
+        base = tempfile.mkdtemp()
+        try:
+            os.makedirs(os.path.join(base, ".obsidian"))
+            os.makedirs(os.path.join(base, "notes", "deep"))
+            os.makedirs(os.path.join(base, "assets"))
+            shutil.copy(os.path.join(VAULT, "_attachments", "diagram.png"),
+                        os.path.join(base, "assets", "far.png"))
+            src = os.path.join(base, "notes", "deep", "n.md")
+            with open(src, "w", encoding="utf-8") as fh:
+                fh.write("# T\n\n![[far.png]]\n")
+            dst = os.path.join(base, "notes", "deep", "o.md")
+            proc = run_convert(src, dst)          # deliberately no --vault-root
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            with open(dst, encoding="utf-8") as fh:
+                self.assertNotIn("image not found", fh.read())
+        finally:
+            shutil.rmtree(base, ignore_errors=True)
+
+    def test_r5h_skip_dirs_are_not_indexed(self):
+        # `.trash` is Obsidian's soft-delete folder: indexing it resurrects deleted files.
+        base = tempfile.mkdtemp()
+        try:
+            os.makedirs(os.path.join(base, ".obsidian"))
+            os.makedirs(os.path.join(base, ".trash"))
+            shutil.copy(os.path.join(VAULT, "_attachments", "diagram.png"),
+                        os.path.join(base, ".trash", "deleted.png"))
+            src = os.path.join(base, "n.md")
+            with open(src, "w", encoding="utf-8") as fh:
+                fh.write("# T\n\n![[deleted.png]]\n")
+            dst = os.path.join(base, "o.md")
+            run_convert(src, dst, "--vault-root", base)
+            with open(dst, encoding="utf-8") as fh:
+                self.assertIn("image not found", fh.read())
+        finally:
+            shutil.rmtree(base, ignore_errors=True)
+
+    def test_r5h_directory_symlinks_are_not_followed_by_the_index(self):
+        # The vault-wide search has no confinement check of its own, so not descending into a
+        # directory symlink is what keeps it inside the vault.
+        #
+        # Honest scope: this test asserts the OUTCOME, not the `isSymbolicLink()` guard.
+        # Removing that guard does NOT make this fail, because `readdir(withFileTypes)`
+        # already reports a symlinked directory as `isDirectory() === false` (measured). The
+        # explicit check is defensive redundancy; the outcome is what matters and is locked
+        # here either way.
+        base = tempfile.mkdtemp()
+        try:
+            vault = os.path.join(base, "vault")
+            outside = os.path.join(base, "outside")
+            os.makedirs(os.path.join(vault, ".obsidian"))
+            os.makedirs(outside)
+            shutil.copy(os.path.join(VAULT, "_attachments", "diagram.png"),
+                        os.path.join(outside, "target.png"))
+            os.symlink(outside, os.path.join(vault, "linked"))
+            src = os.path.join(vault, "n.md")
+            with open(src, "w", encoding="utf-8") as fh:
+                fh.write("# T\n\n![[target.png]]\n")
+            dst = os.path.join(vault, "o.md")
+            run_convert(src, dst, "--vault-root", vault)
+            with open(dst, encoding="utf-8") as fh:
+                self.assertIn("image not found", fh.read())
+        finally:
+            shutil.rmtree(base, ignore_errors=True)
+
+    def test_r5a_dot_slash_attachment_folder_rejects_dot_dot(self):
+        # The note-relative form is checked for `..` separately from the vault-relative one.
+        base = tempfile.mkdtemp()
+        try:
+            vault = os.path.join(base, "vault")
+            os.makedirs(os.path.join(vault, ".obsidian"))
+            os.makedirs(os.path.join(base, "outside"))
+            shutil.copy(os.path.join(VAULT, "_attachments", "diagram.png"),
+                        os.path.join(base, "outside", "t.png"))
+            with open(os.path.join(vault, ".obsidian", "app.json"), "w") as fh:
+                json.dump({"attachmentFolderPath": "./../outside"}, fh)
+            src = os.path.join(vault, "n.md")
+            with open(src, "w", encoding="utf-8") as fh:
+                fh.write("# T\n\n![[t.png]]\n")
+            dst = os.path.join(vault, "o.md")
+            proc = run_convert(src, dst, "--vault-root", vault)
+            self.assertIn("..", proc.stderr)
+            with open(dst, encoding="utf-8") as fh:
+                self.assertIn("image not found", fh.read())
+        finally:
+            shutil.rmtree(base, ignore_errors=True)
+
+
+@unittest.skipUnless(HAVE_NODE, "node not available")
 class TestIdempotenceAndRegression(unittest.TestCase):
     """R14 — the two properties that make this safe to ship."""
 

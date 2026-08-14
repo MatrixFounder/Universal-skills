@@ -34,9 +34,28 @@ inflated severity). An unverified finding is as likely to be wrong as right.
 Cycle 2 also lost two triage agents to API errors; cycle 3 re-ran those slices. Across cycles
 2 and 3 the triagers cleared **91** carried findings explicitly — already fixed, or wrong.
 
+## MEDIUM slice — worked and closed (2026-08-14)
+
+All seven MEDIUM findings were verified against the code as it stood, not accepted on report.
+
+| ID | Verdict | Outcome |
+|---|---|---|
+| C5-05a paragraph blank-line injection | **already fixed** | closed by cycle 5's `splice` rewrite; re-verified, not re-fixed |
+| C5-06 blank run in indented code deleted | **live** | fixed — every blank of the run is kept; masking is reversible again |
+| C5-05b sentinel forgeable via NUL | **live** | fixed — control characters stripped before masking (XML 1.0 forbids them regardless) |
+| C5-04 diamond read as a cycle | **live** | fixed — `visited` is an on-path set, cleared on unwind; a true cycle is still caught |
+| C5-08 depth cap untested | **coverage gap** | test added; the cap could be disabled with the suite green |
+| C5-10 `render` multi-value untested | **coverage gap** | test added; dropping every value but the first passed the suite |
+| C5-11 six R5 sub-features untested | **coverage gap** | five tests added; the sixth (symlink guard) is defensive redundancy — `readdir` already reports a symlinked directory as `isDirectory() === false`, measured and recorded in the test |
+
+13 new tests, 11 of 12 mechanisms proven load-bearing by mutation. The NFC test needed a
+second attempt: the first used a Cyrillic name with no decomposition, so NFD and NFC were the
+same string and it asserted nothing.
+
 ## What remains unverified after cycle 5
 
-Severity counts: {'MEDIUM': 7, 'LOW': 7} — no CRITICAL or HIGH remains.
+
+Severity counts: **7 LOW** — the 7 MEDIUM were worked (see above); no CRITICAL or HIGH remains.
 
 | Severity | ID | Title |
 |---|---|---|
