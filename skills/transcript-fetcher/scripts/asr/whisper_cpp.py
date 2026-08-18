@@ -59,7 +59,11 @@ class WhisperCppBackend(ASRBackend):
         wav_path = audio_path.parent / f"{audio_path.stem}.16k.wav"
         ff = self._run(
             [
-                cfg.ffmpeg_bin(), "-y", "-i", str(audio_path),
+                # `-nostdin`: `_run` now starts the child in its own session
+                # (TF-X-8), so an ffmpeg left reading stdin for interactive keys
+                # would compete for the operator's terminal. Matches the argv in
+                # `_ytdlp_media.remove_silence`.
+                cfg.ffmpeg_bin(), "-nostdin", "-y", "-i", str(audio_path),
                 "-ar", "16000", "-ac", "1", "-f", "wav", str(wav_path),
             ]
         )

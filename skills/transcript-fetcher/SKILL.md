@@ -300,6 +300,7 @@ See `examples/`:
 - `scripts/sources/_auth.py` — `~/.transcript-fetcher/` per-host cookie resolution (auth-map + convention, hardened; mirrors the `html` skill's `~/.html`).
 - `scripts/asr/` — pluggable ASR backend package: `_base.py` (the `ASRBackend` interface), `macwhisper.py`, `whisper_cli.py`, `whisper_cpp.py`, `openai_api.py` (opt-in cloud), `__init__.py` (priority registry + fallback chain).
 - `scripts/_config.py` — skill-local `.env` loader (secrets-safe) + typed config accessors (endpoints/models/tool paths).
+- `scripts/_procgroup.py` — source-neutral process-group subprocess runner: kills a timed-out child AND its descendants (yt-dlp's ffmpeg / JS runtime, whisper's ffmpeg decode). Imported by both `sources/` and `asr/`; must import from neither.
 - `scripts/.env.example` — config/secret template (copy to `.env`, `chmod 600`).
 - `scripts/install_components.py` — detect / guide / install the optional ASR components.
 - `scripts/sources/skool.py` — Skool lesson adapter (cookies.txt + Next.js scrape + embed delegation).

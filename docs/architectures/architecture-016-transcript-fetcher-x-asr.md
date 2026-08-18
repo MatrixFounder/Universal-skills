@@ -641,3 +641,121 @@ cookie-leak surface) — so the printed hint now round-trips for all 6 allowlist
 SKILL.md §Dependencies (vendored yt-dlp warning + doctor), §ASR portability (backend chain +
 exit-7 remediation) and §X cookies (convention `<host>-cookies.txt`, auth-map for custom
 names) document S3/S5/S6.
+
+### 10.5 Process-group teardown on a media timeout (TF-X-7, 2026-08-18)
+
+`download_audio` no longer launches yt-dlp through `subprocess.run(..., timeout=…)`. That
+call SIGKILLs **only the PID it launched**, and yt-dlp spawns ffmpeg as a child of its own —
+the external downloader for live HLS, and the `-x --audio-format m4a` postprocessor at the
+end of every VOD download — so a `TimeoutExpired` orphaned that ffmpeg: it kept consuming
+CPU/network and writing into the workdir that `fetch_x_transcript`'s `finally` block was
+already `rmtree`-ing (invisible disk usage against unlinked inodes). Pre-existing before
+TASK 029, but amplified by it: `"transient"` classification actively invites an immediate
+8-connection retry that can race a still-live orphan, and the budget cap grew from 180 s to
+21600 s, making a kill far likelier to land mid-postprocessing.
+
+`_ytdlp_media.run_in_process_group(argv, timeout=…)` replaces it — a `CompletedProcess`-
+returning wrapper over `Popen(..., start_new_session=True)` so the child heads its own
+process group and every descendant it spawns lands in that group. On `TimeoutExpired` the
+group gets SIGTERM, a `GROUP_KILL_GRACE_SEC` (5 s) grace, then SIGKILL. Three properties are
+load-bearing:
+
+1. **The SIGKILL is unconditional**, sent even when the direct child has already been reaped
+   — the child exiting says nothing about the grandchild, which is the whole point. The
+   group id stays reserved while its unreaped leader is a zombie, so the escalation cannot
+   land on a recycled group.
+2. **The own-group guard.** `_process_group_of` returns `None` — falling back to
+   `Popen.kill()` on the PID alone — when the resolved pgid equals `os.getpgrp()`, when
+   process groups are unavailable (Windows), or when the child is already gone. Signalling
+   our own group would take the CLI down with the download.
+3. **`BaseException`, not just `TimeoutExpired`.** `start_new_session=True` also detaches
+   the child from the terminal's foreground process group, so Ctrl-C no longer reaches
+   yt-dlp directly; without that arm the fix would have traded a timeout orphan for a Ctrl-C
+   orphan.
+4. **The teardown is uninterruptible and non-raising** (adversarial review of the fix).
+   `_wait_quietly` swallows a `KeyboardInterrupt` landing in the grace wait — a second
+   Ctrl-C, the likeliest input on a stuck-looking download precisely because the first one
+   no longer reaches the child, would otherwise abort `_kill_process_group` between the
+   SIGTERM and the SIGKILL and leave the orphan alive. And `_kill_process_group` wraps its
+   whole body, degrading to a direct-PID `_kill_direct` rather than letting an exception
+   escape: it runs inside an `except` block, so anything raising there REPLACES the
+   `TimeoutExpired` that `download_audio` handles (returning the retryable `"transient"`
+   sentinel) with an unhandled crash on a merely slow download.
+
+The `"timeout downloading audio (>{n}s)"` sentinel is preserved verbatim, so §10.4's
+`startswith`-matched `"transient"` classification and its retry remediation are untouched.
+The sibling helpers deliberately keep plain `subprocess.run`: `probe_metadata` /
+`download_captions` run yt-dlp with `--skip-download` (no ffmpeg is ever spawned), and
+`remove_silence` / `probe_media_duration` invoke ffmpeg/ffprobe directly as leaf processes.
+
+Regression coverage lives in `tests/test_ytdlp_media.TestTimeoutKillsProcessGroup`: the
+signal sequence, the own-group guard, an already-dead group, Ctrl-C, and — closing the
+issue's "not exercised in the suite" caveat — a POSIX-gated **real-process** reproduction
+that uses `/bin/sh` plus a background write-loop as a stand-in for the yt-dlp→ffmpeg pair
+and asserts the marker file stops growing after the timeout. That test fails against the
+pre-fix `subprocess.run` path (verified) and the stand-in loop is self-limiting (~20 s) so a
+regression cannot leave a permanent orphan behind. Both hardening properties above carry
+their own tests, each verified to fail against the un-hardened teardown.
+
+**Honest residual — `asr/*` is the same shape, deliberately out of scope.** The original
+TF-X-7 record justified excluding the ASR backends on the grounds that "the orphan risk is
+specific to the yt-dlp media-download subprocess boundary". That does not survive review:
+`asr/_base._run` is the identical unguarded `subprocess.run(..., timeout=…)` pattern, shared
+by every local backend. It is tracked as TF-X-8 rather than folded in here — this fix's
+scope is the boundary its reproduction actually exercises.
+
+### 10.6 The runner becomes shared plumbing — `_procgroup.py` (TF-X-8, 2026-08-19)
+
+§10.5's `run_in_process_group` was written for one call site and lived in
+`sources/_ytdlp_media.py`. TF-X-8 needed the same runner at `asr/_base.ASRBackend._run`, and
+that exposed a layering constraint the issue record's own "Fix path" had gotten wrong: it
+prescribed importing the helper from `_ytdlp_media`, which is not viable.
+
+**Why not.** `sources/x.py` and `sources/yandex.py` already do a module-level
+`from asr._base import DEFAULT_ASR_TIMEOUT_SEC`. An `asr → sources._ytdlp_media` edge closes
+that loop — reproduced by adding one more `sources → asr` import, which kills every entry
+point with a partially-initialized-module `ImportError`. It also breaks `asr/_base.py`'s
+stated "no heavy imports at module import time" rule: importing `_ytdlp_media` drags the
+yt-dlp/caption stack (an XML parser among it) into every ASR-only path — measured at +15
+modules, versus +1 for a standalone top-level module.
+
+**Resolution.** The runner moved to **`scripts/_procgroup.py`**, a source-neutral top-level
+module alongside `_config.py` (which `asr/*` and `sources/*` already both import bare — the
+established idiom). `sources/_ytdlp_media.py` re-exports `run_in_process_group` and
+`GROUP_KILL_GRACE_SEC` so existing `ytm.` call sites keep working. The module carries one
+rule in its docstring — **it must not import from `sources/` or `asr/`** — and
+`tests/test_ytdlp_media.TestProcgroupStaysSourceNeutral` enforces it two ways (an AST scan of
+the source, and a subprocess import asserting no `sources`/`asr` module lands in
+`sys.modules`). There is no import-lint gate for this skill, so the rule needed a test, the
+way CLAUDE.md's html-skill weasyprint/playwright exclusion does.
+
+**Scope widened to a checkable invariant.** A completeness sweep found the same unguarded
+`subprocess.run(timeout=…)` yt-dlp shape at three sites neither TF-X-7 nor TF-X-8 had named
+(`sources/youtube.py:378`, `sources/youtube.py:486`, `sources/vimeo.py:220`), and showed
+§10.5's justification for leaving `probe_metadata` / `download_captions` unguarded to be
+false: "`--skip-download` ⇒ no ffmpeg" is true about ffmpeg but does not establish leaf-ness,
+because yt-dlp spawns a JS runtime during extraction and `--cookies-from-browser` spawns a
+keychain/secret-service helper on exactly that path. All six sites now route through the
+helper, giving a rule that can be checked by grep instead of by argument: **every yt-dlp
+invocation goes through `run_in_process_group`; only genuine leaf ffmpeg/ffprobe calls use
+plain `subprocess.run`**, and "leaf" is backed by observing 0 children under the exact argv.
+
+**ASR exposure, measured rather than assumed.** Of the three local backends only
+`whisper_cli` (openai-whisper) spawns a grandchild — `whisper/audio.py` shells out to ffmpeg
+once, before the decode loop, so the child lives seconds at t≈0 against a 1800 s default
+budget, and normally self-reaps via SIGPIPE (0.08 s measured). The residual that justifies
+the fix is a decode **stalled on input**: it never writes to stdout, so no SIGPIPE arrives
+(still alive at ppid=1 five seconds after the kill), and a stall is also the main way a
+timeout reaches that window. `whisper.cpp` is a leaf. MacWhisper's `mw` is a socket client
+whose engine runs in the GUI app at ppid=1, outside any group we could signal — but killing
+`mw` still stops the work, because the app cancels on client-socket close (verified twice by
+CPU-time sampling), so `--asr-timeout-sec` is honest about both waiting and stopping.
+
+One behavioural consequence carried a fix of its own: `start_new_session=True` detaches the
+child from the controlling terminal, so `asr/whisper_cpp.py`'s ffmpeg argv gained `-nostdin`
+(matching `remove_silence`) to stop it competing for the operator's keystrokes.
+
+`install_components.py`'s `pip`/`brew`/`apt` calls were deliberately NOT touched: they pass no
+timeout at all, which is an unbounded-hang class rather than an orphan class, and their
+current foreground-process-group membership is what makes Ctrl-C reach the whole install tree.
+Tracked as TF-X-9.

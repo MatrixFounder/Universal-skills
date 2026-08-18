@@ -74,7 +74,9 @@ Analysis Phase" which mandates this read.
 - **TF-X-4** [captions: VTT + SRT + TTML/DFXP](issues/tf-x-4-captions-vtt-srt-ttml.md) — severity `LOW`, status `handled`, opened 2026-07-09
 - **TF-X-5** [X auth + long-broadcast cost + duration](issues/tf-x-5-x-auth-long-broadcast-duration.md) — severity `LOW`, status `handled`, opened 2026-07-09
 - **TF-X-6** [ASR filler on silence → silence-removal preprocessing](issues/tf-x-6-asr-filler-on-silence-removal.md) — severity `LOW`, status `handled`, opened 2026-07-09
-- **TF-X-7** [media-download `TimeoutExpired` orphans ffmpeg children; workdir rmtree races them](issues/tf-x-7-timeout-orphans-ffmpeg-children.md) — severity `LOW`, status `open`, opened 2026-07-10
+- **TF-X-7** [media-download `TimeoutExpired` orphans ffmpeg children; workdir rmtree races them](issues/tf-x-7-timeout-orphans-ffmpeg-children.md) — severity `LOW`, status `fixed`, opened 2026-07-10
+- **TF-X-8** [ASR backend `TimeoutExpired` has no process-group teardown (same shape as TF-X-7)](issues/tf-x-8-asr-subprocess-timeout-no-process-group.md) — severity `LOW`, status `fixed`, opened 2026-08-18
+- **TF-X-9** [`install_components.py` runs `pip` / `brew` / `apt` with no timeout — unbounded hang](issues/tf-x-9-install-components-no-timeout.md) — severity `LOW`, status `open`, opened 2026-08-19
 
 ## security
 

@@ -236,7 +236,8 @@ class TestSubprocessArgvShape(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as td:
             workdir = Path(td)
-            with mock.patch("subprocess.run", side_effect=fake_run):
+            with mock.patch.object(yt, "run_in_process_group",
+                                   side_effect=fake_run):
                 yt._try_download_subtitle(
                     url="https://youtu.be/abc",
                     lang="ru",
@@ -268,7 +269,8 @@ class TestRateLimitSurfacedInNote(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as td:
             workdir = Path(td)
-            with mock.patch("subprocess.run", side_effect=fake_run):
+            with mock.patch.object(yt, "run_in_process_group",
+                                   side_effect=fake_run):
                 ok, vtt, note = yt._try_download_subtitle(
                     url="https://youtu.be/abc",
                     lang="ru",

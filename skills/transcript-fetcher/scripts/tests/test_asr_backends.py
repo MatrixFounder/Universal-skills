@@ -7,7 +7,11 @@ cloud backend's endpoint/header/encoding.
 """
 from __future__ import annotations
 
+import os
+import subprocess
 import sys
+import tempfile
+import time
 import types
 import unittest
 from pathlib import Path
@@ -18,6 +22,7 @@ _SCRIPTS = _HERE.parent
 if str(_SCRIPTS) not in sys.path:
     sys.path.insert(0, str(_SCRIPTS))
 
+import _procgroup  # noqa: E402
 import asr  # noqa: E402
 from asr import macwhisper, openai_api, whisper_cli, whisper_cpp  # noqa: E402
 from asr._base import ASRBackend, ASRError, ASRResult  # noqa: E402
@@ -113,6 +118,102 @@ class TestFallbackChain(unittest.TestCase):
             res = asr.transcribe_with_fallback(Path("/x/a.m4a"))
         self.assertEqual(res.backend_name, "first")
         self.assertFalse(second.called)
+
+
+class TestRunProcessGroupTeardown(unittest.TestCase):
+    """TF-X-8: `_run` must reap the engine's GRANDchildren on a timeout.
+
+    `subprocess.run(timeout=…)` SIGKILLs only the PID it launched. The confirmed
+    grandchild-bearing backend is `whisper_cli` -> openai-whisper, whose
+    `whisper/audio.py` shells out to ffmpeg to decode the file before the
+    transcription loop starts. That ffmpeg usually dies on its own from SIGPIPE
+    when the killed parent drops the pipe — but a decode STALLED on input has
+    never written to stdout, so nothing signals it, and a stalled decode is also
+    the main way the timeout reaches that window at all.
+
+    Measured, so the scope claim is not folklore: `whisper.cpp` is a leaf, and
+    MacWhisper's `mw` is a socket client whose engine runs in the GUI app at
+    ppid=1 — outside any group we could signal, though killing `mw` does stop
+    the work because the app cancels on client-socket close.
+    """
+
+    class _Backend(ASRBackend):
+        name = "test-backend"
+
+        def available(self) -> bool:      # pragma: no cover - not exercised
+            return True
+
+        def transcribe(self, audio_path, *, lang=None):   # pragma: no cover
+            raise NotImplementedError
+
+    @unittest.skipUnless(os.name == "posix", "start_new_session is POSIX-only")
+    def test_engine_is_launched_in_its_own_session(self) -> None:
+        captured: dict = {}
+
+        class _FakeProc:
+            stdout = stderr = stdin = None
+
+            def __init__(self, args, **kwargs):
+                captured["kwargs"] = dict(kwargs)
+                self.args, self.pid, self.returncode = list(args), 4242, None
+
+            def communicate(self, timeout=None):
+                self.returncode = 0
+                return "", ""
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+        with mock.patch.object(_procgroup.subprocess, "Popen", _FakeProc):
+            proc = self._Backend()._run(["engine", "/tmp/a.m4a"])
+        self.assertTrue(captured["kwargs"].get("start_new_session"))
+        self.assertEqual(proc.returncode, 0)
+
+    def test_timeout_still_raises_asrerror_naming_the_budget(self) -> None:
+        # The ASRError message is built from `TimeoutExpired.timeout`; the
+        # process-group runner must keep that attribute meaning "the budget the
+        # caller asked for", not the internal SIGTERM->SIGKILL grace.
+        with self.assertRaises(ASRError) as ctx:
+            self._Backend()._run(["/bin/sh", "-c", "sleep 30"], timeout=1)
+        msg = str(ctx.exception)
+        self.assertIn("test-backend", msg)
+        self.assertIn("timed out after 1s", msg)
+
+    def test_missing_executable_still_raises_asrerror(self) -> None:
+        with self.assertRaises(ASRError) as ctx:
+            self._Backend()._run(["/nonexistent/engine-xyz", "/tmp/a.m4a"])
+        self.assertIn("executable not found", str(ctx.exception))
+
+    @unittest.skipUnless(os.name == "posix", "process groups are POSIX-only")
+    def test_real_grandchild_dies_with_the_engine(self) -> None:
+        """End-to-end reproduction of the TF-X-8 topology with real processes.
+
+        `/bin/sh` stands in for the whisper CLI and its background loop for the
+        ffmpeg decode child; the loop appends to a marker file, so "survived the
+        timeout" is observable as a file that keeps growing. Deliberately mirrors
+        the yt-dlp test in test_ytdlp_media.py — same defect, other boundary. The
+        loop is self-limiting (~20 s) so a regression cannot leave a permanent
+        orphan.
+        """
+        with tempfile.TemporaryDirectory() as d:
+            marker = Path(d) / "decoder-alive"
+            script = (
+                f"( echo x >> '{marker}'; i=0;"
+                f" while [ $i -lt 200 ]; do sleep 0.1; echo x >> '{marker}';"
+                " i=$((i+1)); done ) & sleep 30"
+            )
+            with self.assertRaises(ASRError):
+                self._Backend()._run(["/bin/sh", "-c", script], timeout=1)
+            self.assertTrue(marker.exists(), "the decode stand-in never started")
+            size_at_kill = marker.stat().st_size
+            time.sleep(0.8)
+            self.assertEqual(
+                marker.stat().st_size, size_at_kill,
+                "ffmpeg stand-in survived the ASR timeout and kept writing (TF-X-8)",
+            )
 
 
 class TestMacWhisperArgv(unittest.TestCase):

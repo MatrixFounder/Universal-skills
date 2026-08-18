@@ -27,6 +27,13 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
+# Top-level, source-neutral module (sibling of `_config`) — NOT
+# `sources._ytdlp_media`, which re-exports the same helper. Importing it from
+# there would drag the yt-dlp/caption stack into every ASR-only path (against
+# this module's "no heavy imports at import time" rule above) and close an
+# import cycle, since `sources/x.py` already imports `asr._base`.
+from _procgroup import run_in_process_group
+
 
 # Generous default: local transcription of a long broadcast/Space can take
 # several minutes. Callers may override via ``--asr-timeout-sec``.
@@ -102,13 +109,26 @@ class ASRBackend(abc.ABC):
         Always uses the argv-array form (no ``shell=True``) so a crafted path
         cannot inject shell metacharacters. Wraps the two expected process
         failures into :class:`ASRError` with an actionable message.
+
+        Runs through :func:`run_in_process_group` rather than
+        ``subprocess.run`` (TF-X-8): the latter SIGKILLs only the PID it
+        launched, so a timeout orphans any grandchild the engine spawned.
+        openai-whisper is the confirmed case — ``whisper/audio.py`` shells out
+        to ``ffmpeg`` to decode the file before the transcription loop starts.
+        That ffmpeg normally dies on its own from SIGPIPE once the killed
+        parent drops its pipe, but a decode STALLED on input has never written
+        to stdout, so nothing signals it — and a stalled decode is also the
+        main way a timeout reaches that window at all.
+
+        Note the two backends this does NOT help, established by measurement
+        rather than assumed: `whisper.cpp` is a leaf, and MacWhisper's ``mw``
+        is a socket client whose engine runs in the GUI app at ``ppid=1``,
+        outside any group we could signal — killing ``mw`` still stops the work
+        because the app cancels when the client socket closes.
         """
         try:
-            return subprocess.run(
+            return run_in_process_group(
                 argv,
-                check=False,
-                capture_output=True,
-                text=True,
                 timeout=timeout if timeout is not None else self.timeout_sec,
             )
         except FileNotFoundError as e:  # tool vanished between probe and run

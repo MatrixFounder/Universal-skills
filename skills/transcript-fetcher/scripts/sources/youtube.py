@@ -33,6 +33,12 @@ import tempfile
 from pathlib import Path
 from typing import Iterable, Optional
 
+# Every yt-dlp invocation goes through the process-group runner so a
+# TimeoutExpired reaps yt-dlp's descendants too (TF-X-7 / TF-X-8): the
+# extractor spawns a JS runtime, and `--cookies-from-browser` spawns a
+# keychain/secret-service helper, on exactly these --skip-download paths.
+from _procgroup import run_in_process_group
+
 from ._description import description_path_for, write_description_md
 from ._stat import (
     SourceRateLimitError,  # re-exported for callers # noqa: F401
@@ -375,13 +381,7 @@ def _try_download_subtitle(
     args.append(url)
 
     try:
-        proc = subprocess.run(
-            args,
-            check=False,
-            capture_output=True,
-            text=True,
-            timeout=timeout_sec,
-        )
+        proc = run_in_process_group(args, timeout=timeout_sec)
     except FileNotFoundError as e:
         return False, None, f"yt-dlp not found: {e}"
     except subprocess.TimeoutExpired:
@@ -483,13 +483,7 @@ def _fetch_video_info(
     args.append("--")
     args.append(url)
     try:
-        proc = subprocess.run(
-            args,
-            check=False,
-            capture_output=True,
-            text=True,
-            timeout=timeout_sec,
-        )
+        proc = run_in_process_group(args, timeout=timeout_sec)
     except (FileNotFoundError, subprocess.TimeoutExpired):
         return None
     if proc.returncode != 0:

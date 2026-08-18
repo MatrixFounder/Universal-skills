@@ -25,6 +25,13 @@ import subprocess
 from pathlib import Path
 from typing import Iterable, Optional
 
+# Process-group-aware execution lives in the top-level `_procgroup` module
+# (TF-X-8): `asr/_base` needs the same runner, and sourcing it from here would
+# both close an import cycle (`sources/x.py` already imports `asr._base`) and
+# drag this module's yt-dlp/caption stack into every ASR-only path. Re-exported
+# below so `ytm.run_in_process_group` stays a valid call site.
+from _procgroup import GROUP_KILL_GRACE_SEC, run_in_process_group
+
 from ._captions import SUPPORTED_CAPTION_EXTS
 from ._stat import MissingDependencyError
 from .youtube import (
@@ -196,9 +203,7 @@ def probe_metadata(
         args += ["--cookies-from-browser", cookies_from_browser]
     args += ["--", url]
     try:
-        proc = subprocess.run(
-            args, check=False, capture_output=True, text=True, timeout=timeout_sec
-        )
+        proc = run_in_process_group(args, timeout=timeout_sec)
     except FileNotFoundError as e:
         raise MissingDependencyError(
             f"yt-dlp is not installed: {e}",
@@ -340,9 +345,7 @@ def download_captions(
     args += ["--", url]
 
     try:
-        proc = subprocess.run(
-            args, check=False, capture_output=True, text=True, timeout=timeout_sec
-        )
+        proc = run_in_process_group(args, timeout=timeout_sec)
     except FileNotFoundError as e:
         return False, None, None, f"yt-dlp not found: {e}"
     except subprocess.TimeoutExpired:
@@ -405,6 +408,22 @@ def download_audio(
     is used; the resulting file is resolved and asserted to live inside
     ``workdir`` before it is returned, closing the untrusted-filename / path-escape
     gap on the yt-dlp-authored name.
+
+    Process hygiene (TF-X-7): yt-dlp is launched through
+    :func:`run_in_process_group`, NOT ``subprocess.run``, so a ``timeout_sec``
+    expiry kills yt-dlp's ffmpeg grandchild too. With a plain
+    ``subprocess.run(timeout=…)`` only the yt-dlp PID is signalled and the
+    ffmpeg it spawned (HLS external downloader / ``-x`` postprocessor) survives
+    the kill, writing into a workdir the caller's ``finally`` block is already
+    ``rmtree``-ing. Since TF-X-8 this is module-wide and grep-checkable rather
+    than a per-site judgement call: EVERY yt-dlp invocation here goes through
+    :func:`run_in_process_group`, and only ``remove_silence`` /
+    ``probe_media_duration`` keep plain ``subprocess.run`` — they invoke
+    ffmpeg/ffprobe as observed leaf processes (0 children under these argv).
+    ``probe_metadata`` / ``download_captions`` were once excluded on the grounds
+    that ``--skip-download`` spawns no ffmpeg; true about ffmpeg, but yt-dlp
+    also spawns a JS runtime during extraction and a keychain helper for
+    ``--cookies-from-browser``, so that reasoning never established leaf-ness.
     """
     out_tmpl = str(workdir / "media.%(ext)s")
     args = [
@@ -441,15 +460,15 @@ def download_audio(
     args += ["--", url]
 
     try:
-        proc = subprocess.run(
-            args, check=False, capture_output=True, text=True, timeout=timeout_sec
-        )
+        proc = run_in_process_group(args, timeout=timeout_sec)
     except FileNotFoundError as e:
         raise MissingDependencyError(
             f"yt-dlp is not installed: {e}",
             remediation="Run `bash skills/transcript-fetcher/scripts/install.sh`.",
         ) from e
     except subprocess.TimeoutExpired:
+        # The sentinel string is load-bearing: `classify_failure` matches it
+        # with `startswith` to return "transient". Do not reword it.
         return None, f"timeout downloading audio (>{timeout_sec}s)"
 
     media = find_downloaded_media(workdir)
@@ -633,6 +652,7 @@ def find_downloaded_media(workdir: Path) -> Optional[Path]:
 __all__ = (
     "DEFAULT_CONCURRENT_FRAGMENTS",
     "DEFAULT_TIMEOUT_SEC",
+    "GROUP_KILL_GRACE_SEC",
     "caption_langs",
     "classify_failure",
     "download_audio",
@@ -649,5 +669,6 @@ __all__ = (
     "probe_media_duration",
     "probe_metadata",
     "remove_silence",
+    "run_in_process_group",
     "yt_dlp_argv",
 )

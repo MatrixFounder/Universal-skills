@@ -2,13 +2,23 @@
 
 Subprocess is mocked — these assert argv shape for the clip (--download-sections),
 browser-cookie passthrough, and ffprobe duration parsing. No network, no yt-dlp.
+
+The `download_audio` tests fake `subprocess.Popen` rather than `subprocess.run`:
+that path runs through `run_in_process_group` (TF-X-7), so the real
+process-group teardown code stays under test instead of being mocked away. One
+test in `TestTimeoutKillsProcessGroup` DOES spawn real processes (a `/bin/sh`
+stand-in for the yt-dlp→ffmpeg parent/child pair) — it is the only honest
+reproduction of the orphan the fix exists to prevent, and it is POSIX-gated.
 """
 from __future__ import annotations
 
+import os
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
+import time
 import types
 import unittest
 from pathlib import Path
@@ -19,6 +29,7 @@ _SCRIPTS = _HERE.parent
 if str(_SCRIPTS) not in sys.path:
     sys.path.insert(0, str(_SCRIPTS))
 
+import _procgroup  # noqa: E402
 from sources import _ytdlp_media as ytm  # noqa: E402
 
 _HAVE_FFMPEG = bool(shutil.which("ffmpeg") and shutil.which("ffprobe"))
@@ -28,19 +39,67 @@ def _proc(returncode=0, stdout="", stderr=""):
     return types.SimpleNamespace(returncode=returncode, stdout=stdout, stderr=stderr)
 
 
+def _fake_popen(captured=None, *, on_start=None, returncode=0, stdout="", stderr="",
+                hangs=False, pid=424242):
+    """Build a `subprocess.Popen` replacement for `run_in_process_group`.
+
+    Implements only the surface that helper touches: `communicate`, `wait`,
+    `kill`, `pid`, `returncode`, and the context-manager protocol. `hangs=True`
+    makes every `communicate`/`wait` raise `TimeoutExpired` until something
+    sets `returncode` — which is how a test simulates "the group kill worked".
+    `captured` receives `argv`, `kwargs` and the live `proc` object.
+    """
+    class _FakeProc:
+        def __init__(self, args, **kwargs):
+            self.args = list(args)
+            self.pid = pid
+            self.returncode = None
+            self.direct_kills = 0
+            self.stdout = self.stderr = self.stdin = None
+            if captured is not None:
+                captured["argv"] = list(args)
+                captured["kwargs"] = dict(kwargs)
+                captured["proc"] = self
+            if on_start is not None:
+                on_start(list(args))
+
+        def communicate(self, timeout=None):
+            if hangs and self.returncode is None:
+                raise subprocess.TimeoutExpired(self.args, timeout)
+            if self.returncode is None:
+                self.returncode = returncode
+            return stdout, stderr
+
+        def wait(self, timeout=None):
+            if self.returncode is None:
+                raise subprocess.TimeoutExpired(self.args, timeout)
+            return self.returncode
+
+        def kill(self):
+            self.direct_kills += 1
+            self.returncode = -9
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+    return _FakeProc
+
+
 class TestDownloadAudioArgv(unittest.TestCase):
     def test_clip_and_browser_cookies_with_ffmpeg(self) -> None:
         captured: dict = {}
         with tempfile.TemporaryDirectory() as d:
             workdir = Path(d)
 
-            def fake_run(args, **kw):
-                captured["argv"] = list(args)
+            def touch(argv):
                 (workdir / "media.mp4").write_bytes(b"x")
-                return _proc(0)
 
             with mock.patch.object(ytm, "ffmpeg_available", return_value=True), \
-                 mock.patch.object(ytm.subprocess, "run", side_effect=fake_run):
+                 mock.patch.object(_procgroup.subprocess, "Popen",
+                                   _fake_popen(captured, on_start=touch)):
                 media, err = ytm.download_audio(
                     "https://x.com/i/broadcasts/z", workdir,
                     max_duration_min=30, cookies_from_browser="chrome",
@@ -62,13 +121,12 @@ class TestDownloadAudioArgv(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             workdir = Path(d)
 
-            def fake_run(args, **kw):
-                captured["argv"] = list(args)
+            def touch(argv):
                 (workdir / "media.mp4").write_bytes(b"x")
-                return _proc(0)
 
             with mock.patch.object(ytm, "ffmpeg_available", return_value=False), \
-                 mock.patch.object(ytm.subprocess, "run", side_effect=fake_run):
+                 mock.patch.object(_procgroup.subprocess, "Popen",
+                                   _fake_popen(captured, on_start=touch)):
                 ytm.download_audio(
                     "https://x.com/i/broadcasts/z", workdir, max_duration_min=30,
                 )
@@ -89,13 +147,12 @@ class TestConcurrentFragments(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             workdir = Path(d)
 
-            def fake_run(args, **kw):
-                captured["argv"] = list(args)
+            def touch(argv):
                 (workdir / "media.mp4").write_bytes(b"x")
-                return _proc(0)
 
             with mock.patch.object(ytm, "ffmpeg_available", return_value=False), \
-                 mock.patch.object(ytm.subprocess, "run", side_effect=fake_run):
+                 mock.patch.object(_procgroup.subprocess, "Popen",
+                                   _fake_popen(captured, on_start=touch)):
                 ytm.download_audio("https://x.com/i/broadcasts/z", workdir, **kwargs)
         return captured["argv"]
 
@@ -123,6 +180,300 @@ class TestConcurrentFragments(unittest.TestCase):
         argv = self._download_argv(concurrent_fragments=1)
         i = argv.index("--concurrent-fragments")
         self.assertEqual(argv[i + 1], "1")
+
+
+class TestProcgroupStaysSourceNeutral(unittest.TestCase):
+    """`_procgroup` must not import from `sources/` or `asr/` (TF-X-8).
+
+    That rule is the whole reason the runner lives in a top-level module: both
+    packages import it, and `sources/x.py` + `sources/yandex.py` already do a
+    module-level `from asr._base import DEFAULT_ASR_TIMEOUT_SEC`, so a single
+    edge back the other way closes an import cycle. Nothing else in this repo
+    would catch that — there is no import-lint gate for this skill — so the
+    rule is locked in here, the way CLAUDE.md locks the html skill's
+    weasyprint/playwright exclusion with a sys.modules assertion.
+    """
+
+    def test_no_first_party_imports_in_the_source(self) -> None:
+        import ast
+
+        tree = ast.parse(Path(_procgroup.__file__).read_text(encoding="utf-8"))
+        imported = set()
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                imported.update(a.name.split(".")[0] for a in node.names)
+            elif isinstance(node, ast.ImportFrom):
+                if node.level:      # any relative import is first-party
+                    imported.add(f".{node.module or ''}")
+                elif node.module:
+                    imported.add(node.module.split(".")[0])
+        self.assertEqual(
+            imported & {"sources", "asr", "_config", "fetch"}, set(),
+            f"_procgroup must stay source-neutral; found {sorted(imported)}",
+        )
+        self.assertFalse([m for m in imported if m.startswith(".")])
+
+    def test_importing_it_pulls_in_no_first_party_module(self) -> None:
+        # Belt-and-braces against a deferred/function-local import sneaking in.
+        import subprocess as _sp
+        out = _sp.run(
+            [sys.executable, "-c",
+             "import sys; sys.path.insert(0, %r); import _procgroup; "
+             "print([m for m in sys.modules if m.split('.')[0] "
+             "in ('sources', 'asr')])" % str(_SCRIPTS)],
+            capture_output=True, text=True, check=False,
+        )
+        self.assertEqual(out.returncode, 0, out.stderr)
+        self.assertEqual(out.stdout.strip(), "[]", out.stdout)
+
+
+class TestTimeoutKillsProcessGroup(unittest.TestCase):
+    """TF-X-7: a media-download timeout must reap yt-dlp's ffmpeg GRANDchild.
+
+    `subprocess.run(timeout=…)` SIGKILLs only the PID it launched, so the
+    ffmpeg yt-dlp spawned (HLS external downloader / `-x` postprocessor)
+    survived the kill and kept writing into a workdir `fetch_x_transcript`'s
+    `finally` block was already `rmtree`-ing. `download_audio` now goes through
+    `run_in_process_group`, which puts yt-dlp in its own session and signals
+    the whole group.
+    """
+
+    _URL = "https://x.com/i/broadcasts/z"
+
+    # -- launch shape ------------------------------------------------------
+    @unittest.skipUnless(os.name == "posix", "start_new_session is POSIX-only")
+    def test_child_is_launched_in_its_own_session(self) -> None:
+        captured: dict = {}
+        with tempfile.TemporaryDirectory() as d:
+            workdir = Path(d)
+            with mock.patch.object(ytm, "ffmpeg_available", return_value=True), \
+                 mock.patch.object(
+                     _procgroup.subprocess, "Popen",
+                     _fake_popen(captured,
+                                 on_start=lambda a: (workdir / "media.m4a").write_bytes(b"x")),
+                 ):
+                media, err = ytm.download_audio(self._URL, workdir)
+        # Without start_new_session the child shares OUR group and the kill
+        # below would either miss the grandchild or hit the CLI itself.
+        self.assertTrue(captured["kwargs"].get("start_new_session"))
+        self.assertIsNotNone(media)
+        self.assertIsNone(err)
+
+    # -- timeout teardown --------------------------------------------------
+    def _timeout_run(self, *, getpgid, killpg, captured=None):
+        """Drive `download_audio` into the TimeoutExpired branch.
+
+        Pass `captured` when the killpg stub needs to reach the live fake
+        process (e.g. to mark it dead once the SIGKILL lands) — it is filled in
+        at Popen-construction time, i.e. before any signal is sent.
+        """
+        captured = {} if captured is None else captured
+        with tempfile.TemporaryDirectory() as d:
+            with mock.patch.object(ytm, "ffmpeg_available", return_value=True), \
+                 mock.patch.object(_procgroup.subprocess, "Popen",
+                                   _fake_popen(captured, hangs=True)), \
+                 mock.patch.object(_procgroup.os, "getpgid", side_effect=getpgid), \
+                 mock.patch.object(_procgroup.os, "getpgrp", return_value=1), \
+                 mock.patch.object(_procgroup.os, "killpg", side_effect=killpg):
+                media, err = ytm.download_audio(self._URL, Path(d), timeout_sec=7)
+        return media, err, captured["proc"]
+
+    def test_sigterm_then_sigkill_to_the_group(self) -> None:
+        sent: list = []
+
+        box: dict = {}
+
+        def killpg(pgid, sig):
+            sent.append((pgid, sig))
+            if sig == signal.SIGKILL:
+                box["proc"].returncode = -9   # the group is gone for real now
+
+        media, err, proc = self._timeout_run(
+            getpgid=lambda pid: 4242, killpg=killpg, captured=box,
+        )
+        self.assertEqual(sent, [(4242, signal.SIGTERM), (4242, signal.SIGKILL)])
+        # The SIGKILL is unconditional: the direct child exiting says nothing
+        # about the ffmpeg grandchild, which is the process being reaped here.
+        self.assertEqual(proc.direct_kills, 0)
+        self.assertIsNone(media)
+        # Sentinel string preserved verbatim -> "transient" classification and
+        # its retry remediation are untouched by this fix.
+        self.assertEqual(err, "timeout downloading audio (>7s)")
+        self.assertEqual(ytm.classify_failure(err), "transient")
+
+    def test_never_signals_our_own_process_group(self) -> None:
+        # If start_new_session silently did not take effect, the child shares
+        # OUR group — killpg would take the whole CLI down. Fall back to the
+        # direct PID instead.
+        sent: list = []
+        media, err, proc = self._timeout_run(
+            getpgid=lambda pid: 1,                       # == our (patched) pgrp
+            killpg=lambda pgid, sig: sent.append((pgid, sig)),
+        )
+        self.assertEqual(sent, [])
+        self.assertEqual(proc.direct_kills, 1)
+        self.assertEqual(err, "timeout downloading audio (>7s)")
+
+    def test_group_already_gone_is_not_an_error(self) -> None:
+        def killpg(pgid, sig):
+            raise ProcessLookupError(3, "No such process")
+
+        media, err, proc = self._timeout_run(getpgid=lambda pid: 4242, killpg=killpg)
+        self.assertEqual(proc.direct_kills, 1)   # best-effort fallback
+        self.assertEqual(err, "timeout downloading audio (>7s)")
+
+    def test_child_gone_before_the_kill_is_not_an_error(self) -> None:
+        def getpgid(pid):
+            raise ProcessLookupError(3, "No such process")
+
+        sent: list = []
+        media, err, proc = self._timeout_run(
+            getpgid=getpgid,
+            killpg=lambda pgid, sig: sent.append((pgid, sig)),
+        )
+        self.assertEqual(sent, [])
+        self.assertEqual(proc.direct_kills, 1)
+        self.assertEqual(err, "timeout downloading audio (>7s)")
+
+    def test_keyboard_interrupt_also_tears_down_the_group(self) -> None:
+        # start_new_session detaches the child from the terminal's foreground
+        # group, so Ctrl-C no longer reaches yt-dlp. Without the BaseException
+        # arm this fix would have traded a timeout orphan for a Ctrl-C orphan.
+        sent: list = []
+
+        class _InterruptingProc:
+            def __init__(self, args, **kwargs):
+                self.args, self.pid, self.returncode = list(args), 424242, None
+                self.stdout = self.stderr = self.stdin = None
+
+            def communicate(self, timeout=None):
+                raise KeyboardInterrupt
+
+            def wait(self, timeout=None):
+                self.returncode = -9
+                return self.returncode
+
+            def kill(self):
+                self.returncode = -9
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+        with mock.patch.object(_procgroup.subprocess, "Popen", _InterruptingProc), \
+             mock.patch.object(_procgroup.os, "getpgid", return_value=4242), \
+             mock.patch.object(_procgroup.os, "getpgrp", return_value=1), \
+             mock.patch.object(_procgroup.os, "killpg",
+                               side_effect=lambda p, s: sent.append((p, s))):
+            with self.assertRaises(KeyboardInterrupt):
+                ytm.run_in_process_group(["yt-dlp"], timeout=7, grace_sec=0.01)
+        self.assertEqual(sent, [(4242, signal.SIGTERM), (4242, signal.SIGKILL)])
+
+    # -- the teardown must not be abortable or exception-clobbering --------
+    def test_second_ctrl_c_during_the_grace_does_not_skip_the_sigkill(self) -> None:
+        """A signal landing in the grace wait must not abort the escalation.
+
+        `start_new_session=True` means the FIRST Ctrl-C never reaches yt-dlp,
+        so a stuck-looking download is exactly when a user mashes the key. If
+        the interrupt aborted `_kill_process_group` between the SIGTERM and the
+        SIGKILL, anything ignoring SIGTERM would survive — the very orphan this
+        whole helper exists to reap.
+        """
+        sent: list = []
+
+        class _InterruptDuringWait:
+            stdout = stderr = stdin = None
+
+            def __init__(self, args, **kwargs):
+                self.args, self.pid, self.returncode = list(args), 424242, None
+                self.direct_kills = 0
+
+            def communicate(self, timeout=None):
+                raise subprocess.TimeoutExpired(self.args, timeout)
+
+            def wait(self, timeout=None):
+                raise KeyboardInterrupt          # the user's second Ctrl-C
+
+            def kill(self):
+                self.direct_kills += 1
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+        with mock.patch.object(_procgroup.subprocess, "Popen", _InterruptDuringWait), \
+             mock.patch.object(_procgroup.os, "getpgid", return_value=4242), \
+             mock.patch.object(_procgroup.os, "getpgrp", return_value=1), \
+             mock.patch.object(_procgroup.os, "killpg",
+                               side_effect=lambda p, s: sent.append((p, s))):
+            with self.assertRaises(subprocess.TimeoutExpired):
+                ytm.run_in_process_group(["yt-dlp"], timeout=7, grace_sec=5)
+        self.assertEqual(sent, [(4242, signal.SIGTERM), (4242, signal.SIGKILL)])
+
+    def test_teardown_failure_never_replaces_the_original_exception(self) -> None:
+        """`_kill_process_group` runs inside an `except` — it must not raise.
+
+        Anything escaping it replaces the `TimeoutExpired` that `download_audio`
+        catches (returning the retryable "transient" sentinel) with an
+        unhandled crash on a merely slow download. Simulated with an `os` that
+        has `killpg`/`getpgid` but no `getpgrp`, i.e. an AttributeError from
+        inside the own-group guard.
+        """
+        crippled_os = types.SimpleNamespace(
+            name="posix", killpg=lambda p, s: None, getpgid=lambda p: 4242,
+        )   # deliberately NO getpgrp
+
+        captured: dict = {}
+        with tempfile.TemporaryDirectory() as d:
+            with mock.patch.object(ytm, "ffmpeg_available", return_value=True), \
+                 mock.patch.object(_procgroup.subprocess, "Popen",
+                                   _fake_popen(captured, hangs=True)), \
+                 mock.patch.object(_procgroup, "os", crippled_os):
+                media, err = ytm.download_audio(self._URL, Path(d), timeout_sec=7)
+
+        # Degraded to the direct-PID kill rather than crashing the CLI.
+        self.assertEqual(captured["proc"].direct_kills, 1)
+        self.assertIsNone(media)
+        self.assertEqual(err, "timeout downloading audio (>7s)")
+        self.assertEqual(ytm.classify_failure(err), "transient")
+
+    # -- the real thing ----------------------------------------------------
+    @unittest.skipUnless(os.name == "posix", "process groups are POSIX-only")
+    def test_real_grandchild_dies_with_the_group(self) -> None:
+        """End-to-end reproduction with real processes (no yt-dlp needed).
+
+        `/bin/sh` stands in for yt-dlp and its background loop for the ffmpeg
+        child: the loop appends to a marker file, so "still running after the
+        timeout" is observable as a file that keeps growing. Under the old
+        `subprocess.run(timeout=…)` the loop survived the kill and this
+        assertion failed. The loop is self-limiting (~20 s) so a regression
+        cannot leave a permanent orphan behind.
+        """
+        with tempfile.TemporaryDirectory() as d:
+            marker = Path(d) / "grandchild-alive"
+            # The grandchild writes BEFORE any other fork (no `$(seq …)`
+            # subprocess first), so a loaded CI box cannot lose the race
+            # between the 0.6 s timeout and the first marker byte.
+            script = (
+                f"( echo x >> '{marker}'; i=0;"
+                f" while [ $i -lt 200 ]; do sleep 0.1; echo x >> '{marker}';"
+                " i=$((i+1)); done ) & sleep 30"
+            )
+            with self.assertRaises(subprocess.TimeoutExpired):
+                ytm.run_in_process_group(
+                    ["/bin/sh", "-c", script], timeout=0.6, grace_sec=0.5
+                )
+            self.assertTrue(marker.exists(), "the grandchild never started")
+            size_at_kill = marker.stat().st_size
+            time.sleep(0.8)   # several loop iterations' worth
+            self.assertEqual(
+                marker.stat().st_size, size_at_kill,
+                "ffmpeg stand-in survived the timeout and kept writing (TF-X-7)",
+            )
 
 
 class TestClassifyFailureTransient(unittest.TestCase):
@@ -240,7 +591,7 @@ class TestProbeMetadataBrowserCookies(unittest.TestCase):
             captured["argv"] = list(args)
             return _proc(0, stdout='{"id":"z","subtitles":{},"automatic_captions":{}}')
 
-        with mock.patch.object(ytm.subprocess, "run", side_effect=fake_run):
+        with mock.patch.object(ytm, "run_in_process_group", side_effect=fake_run):
             info, err = ytm.probe_metadata(
                 "https://x.com/i/broadcasts/z", cookies_from_browser="safari",
             )
@@ -282,7 +633,8 @@ class TestDownloadCaptions(unittest.TestCase):
                 (workdir / "vid.en.srt").write_text("1\n", encoding="utf-8")
                 return _proc(0)
 
-            with mock.patch.object(ytm.subprocess, "run", side_effect=fake_run):
+            with mock.patch.object(ytm, "run_in_process_group",
+                                   side_effect=fake_run):
                 ok, path, fmt, note = ytm.download_captions(
                     url="https://x.com/jack/status/20", lang="en", kind="auto",
                     workdir=workdir, pre_existing=set(),
@@ -304,7 +656,7 @@ class TestDownloadCaptions(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             workdir = Path(d)
             with mock.patch.object(
-                ytm.subprocess, "run",
+                ytm, "run_in_process_group",
                 return_value=_proc(1, stderr="ERROR: This account is protected"),
             ):
                 ok, path, fmt, note = ytm.download_captions(
@@ -318,7 +670,7 @@ class TestDownloadCaptions(unittest.TestCase):
     def test_no_file_returns_false(self) -> None:
         with tempfile.TemporaryDirectory() as d:
             workdir = Path(d)
-            with mock.patch.object(ytm.subprocess, "run", return_value=_proc(0)):
+            with mock.patch.object(ytm, "run_in_process_group", return_value=_proc(0)):
                 ok, path, fmt, note = ytm.download_captions(
                     url="https://x.com/jack/status/20", lang="en", kind="manual",
                     workdir=workdir, pre_existing=set(),

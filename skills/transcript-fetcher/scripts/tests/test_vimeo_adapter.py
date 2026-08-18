@@ -47,7 +47,8 @@ class TestSubprocessShape(unittest.TestCase):
             workdir = Path(td)
             cookies = workdir / "c.txt"
             cookies.write_text("# Netscape HTTP Cookie File\n", encoding="utf-8")
-            with mock.patch("subprocess.run", side_effect=fake_run):
+            with mock.patch.object(vm, "run_in_process_group",
+                                   side_effect=fake_run):
                 vm._try_download_vimeo_subtitle(
                     url="https://vimeo.com/76979871",
                     lang="en",
