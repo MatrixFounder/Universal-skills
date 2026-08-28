@@ -171,6 +171,12 @@ CATEGORY=development
 KEYWORDS=hooks,gemini,cli,automation
 EOF
 ;;
+        design-md) cat <<'EOF'
+TAGLINE=Author, validate and export DESIGN.md design systems — 4 lint-clean starter templates, screenshot/codebase/brief extraction, anti-slop rules, pairwise WCAG contrast
+CATEGORY=development
+KEYWORDS=design-md,design-system,design-tokens,tailwind,dtcg,wcag,contrast
+EOF
+;;
         *) cat <<EOF
 TAGLINE=Skill: $1
 CATEGORY=other

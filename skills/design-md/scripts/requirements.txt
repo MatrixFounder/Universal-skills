@@ -1,0 +1,34 @@
+# design-md skill — Python dependencies for scripts/extract-palette.
+#
+# THIS DEPENDENCY IS OPTIONAL. extract-palette runs with nothing installed:
+# it carries a self-contained PNG decoder built on zlib + struct that reads
+# non-interlaced PNG at bit depth 8 or 16, colour types 0/2/3/4/6, filter
+# types 0-4, multiple IDAT chunks and tRNS. macOS and Linux screenshots are
+# exactly that shape, so the screenshot-extraction procedure needs no install
+# at all. On the same PNG both decode paths were verified to emit an identical
+# palette, byte for byte, apart from the line naming the decoder.
+#
+# What Pillow adds, and what degrades without it:
+#
+#   input formats   With Pillow:    JPEG, WebP, TIFF, BMP, GIF, and the PNG
+#                                   variants the built-in decoder rejects
+#                                   (interlaced/Adam7, bit depth 1/2/4).
+#                   Without:        PNG only, in the subset above. Any other
+#                                   format exits 3 with an instruction to run
+#                                   install.sh or convert the file to PNG.
+#                                   Nothing is silently mis-read.
+#
+#   speed           Scanline un-filtering runs in Python on the built-in path
+#                   and in C under Pillow. Measured on this repository's
+#                   development host, on a 3024x1964 (5.9 Mpx) PNG:
+#                       --decoder stdlib-png   1.13 s wall
+#                       --decoder pillow       0.17 s wall
+#                   Both are usable interactively; the results are the same.
+#
+# Install into this skill's own venv only — never globally:
+#   bash skills/design-md/scripts/install.sh
+#
+# Floor of 11.0 rather than a pin: extract-palette uses only Image.open,
+# Image.convert and Image.tobytes, which are stable across major versions, so
+# the newest release is always acceptable. Verified against Pillow 12.3.0.
+Pillow>=11.0

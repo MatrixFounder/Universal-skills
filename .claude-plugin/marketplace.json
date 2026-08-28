@@ -1,16 +1,19 @@
 {
-  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
   "name": "universal-skills",
-  "description": "Universal-Skills marketplace: agent-agnostic skills for Claude Code. Pick and install only the skills you need — office (docx/xlsx/pptx/pdf), presentations (marp-slide), meta-skills (skill-creator/validator/enhancer), VDD verification, content writing, and more.",
   "owner": {
     "name": "Sergey K.",
     "email": "kuptsov.sergey@gmail.com",
     "url": "https://github.com/MatrixFounder"
   },
+  "metadata": {
+    "description": "Universal-Skills marketplace: agent-agnostic skills for Claude Code. Pick and install only the skills you need — office (docx/xlsx/pptx/pdf), presentations (marp-slide), meta-skills (skill-creator/validator/enhancer), VDD verification, content writing, and more.",
+    "version": "1.0.0",
+    "pluginRoot": "./plugins"
+  },
   "plugins": [
     {
       "name": "brainstorming",
-      "source": "./plugins/brainstorming",
+      "source": "brainstorming",
       "description": "Open-ended exploration partner — brainstorm, clarify requirements, design architecture, generate options",
       "category": "workflow",
       "tags": [
@@ -21,8 +24,23 @@
       ]
     },
     {
+      "name": "design-md",
+      "source": "design-md",
+      "description": "Author, validate and export DESIGN.md design systems — 4 lint-clean starter templates, screenshot/codebase/brief extraction, anti-slop rules, pairwise WCAG contrast",
+      "category": "development",
+      "tags": [
+        "design-md",
+        "design-system",
+        "design-tokens",
+        "tailwind",
+        "dtcg",
+        "wcag",
+        "contrast"
+      ]
+    },
+    {
       "name": "docx",
-      "source": "./plugins/docx",
+      "source": "docx",
       "description": "Markdown↔docx round-trip + template fill + tracked-changes accept + deep XSD validator + msoffcrypto-tool encrypt/decrypt",
       "category": "office",
       "tags": [
@@ -37,7 +55,7 @@
     },
     {
       "name": "hooks-creator",
-      "source": "./plugins/hooks-creator",
+      "source": "hooks-creator",
       "description": "Customize Gemini CLI behavior using hooks (events, blockers, loggers) with templates and patterns",
       "category": "development",
       "tags": [
@@ -48,8 +66,17 @@
       ]
     },
     {
+      "name": "html",
+      "source": "html",
+      "description": "Skill: html",
+      "category": "other",
+      "tags": [
+        "skill"
+      ]
+    },
+    {
       "name": "marp-slide",
-      "source": "./plugins/marp-slide",
+      "source": "marp-slide",
       "description": "Marp slides with 7 themes + custom themes + image layouts + mermaid preprocessing + editable PPTX export via LibreOffice",
       "category": "office",
       "tags": [
@@ -62,7 +89,7 @@
     },
     {
       "name": "mcp-builder",
-      "source": "./plugins/mcp-builder",
+      "source": "mcp-builder",
       "description": "Build production-quality MCP (Model Context Protocol) servers in Python (FastMCP) or Node/TypeScript (MCP SDK)",
       "category": "development",
       "tags": [
@@ -74,8 +101,17 @@
       ]
     },
     {
+      "name": "obsidian-cli",
+      "source": "obsidian-cli",
+      "description": "Skill: obsidian-cli",
+      "category": "other",
+      "tags": [
+        "skill"
+      ]
+    },
+    {
       "name": "pdf",
-      "source": "./plugins/pdf",
+      "source": "pdf",
       "description": "Markdown→PDF (weasyprint, Cyrillic mermaid) + pypdf merge/split + AcroForm fill (XFA detection) + PNG-grid preview",
       "category": "office",
       "tags": [
@@ -90,7 +126,7 @@
     },
     {
       "name": "post-writing",
-      "source": "./plugins/post-writing",
+      "source": "post-writing",
       "description": "Write, draft, or rewrite social-media posts (LinkedIn, Telegram, Blog) for higher engagement",
       "category": "content",
       "tags": [
@@ -103,7 +139,7 @@
     },
     {
       "name": "pptx",
-      "source": "./plugins/pptx",
+      "source": "pptx",
       "description": "Markdown→pptx (built-in or marp) + outline skeleton + orphan cleanup + deep PptxValidator + Cyrillic mermaid + encrypt/decrypt",
       "category": "office",
       "tags": [
@@ -118,8 +154,17 @@
       ]
     },
     {
+      "name": "skill-auto-improve",
+      "source": "skill-auto-improve",
+      "description": "Skill: skill-auto-improve",
+      "category": "other",
+      "tags": [
+        "skill"
+      ]
+    },
+    {
       "name": "skill-creator",
-      "source": "./plugins/skill-creator",
+      "source": "skill-creator",
       "description": "Scaffold + upgrade + eval + benchmark agent skills against the Gold-Standard structural template",
       "category": "meta",
       "tags": [
@@ -132,7 +177,7 @@
     },
     {
       "name": "skill-enhancer",
-      "source": "./plugins/skill-enhancer",
+      "source": "skill-enhancer",
       "description": "Audit, fix, or improve an existing skill to meet Gold-Standard compliance",
       "category": "meta",
       "tags": [
@@ -144,7 +189,7 @@
     },
     {
       "name": "skill-validator",
-      "source": "./plugins/skill-validator",
+      "source": "skill-validator",
       "description": "Audit a skill for security vulnerabilities (malicious bash, injection vectors) and Gold-Standard structural compliance",
       "category": "meta",
       "tags": [
@@ -157,7 +202,7 @@
     },
     {
       "name": "summarizing-meetings",
-      "source": "./plugins/summarizing-meetings",
+      "source": "summarizing-meetings",
       "description": "Auto-detects meeting type and produces a two-level pyramid Markdown summary optimized for people, AI agents, RAG, Obsidian",
       "category": "content",
       "tags": [
@@ -170,7 +215,7 @@
     },
     {
       "name": "text-humanizer",
-      "source": "./plugins/text-humanizer",
+      "source": "text-humanizer",
       "description": "Humanize AI-generated text or generate untraceable system prompts in multiple genres (Wiki, Creative, Crypto, etc.)",
       "category": "content",
       "tags": [
@@ -182,7 +227,7 @@
     },
     {
       "name": "transcript-fetcher",
-      "source": "./plugins/transcript-fetcher",
+      "source": "transcript-fetcher",
       "description": "Fetch clean plain-text transcripts from video URLs (YouTube via yt-dlp) with manual→auto language fallback, rolling-caption dedup, >> speaker turns, and a JSON stat sidecar",
       "category": "content",
       "tags": [
@@ -197,7 +242,7 @@
     },
     {
       "name": "vdd-adversarial",
-      "source": "./plugins/vdd-adversarial",
+      "source": "vdd-adversarial",
       "description": "Verification-Driven Development adversarial reviewer — destroys happy-path assumptions, finds edge cases the builder missed",
       "category": "verification",
       "tags": [
@@ -210,7 +255,7 @@
     },
     {
       "name": "vdd-sarcastic",
-      "source": "./plugins/vdd-sarcastic",
+      "source": "vdd-sarcastic",
       "description": "VDD adversarial review with a sarcastic, provocative tone — exposes lazy patterns by being uncomfortable to read",
       "category": "verification",
       "tags": [
@@ -222,8 +267,17 @@
       ]
     },
     {
+      "name": "wiki-ingest",
+      "source": "wiki-ingest",
+      "description": "Skill: wiki-ingest",
+      "category": "other",
+      "tags": [
+        "skill"
+      ]
+    },
+    {
       "name": "xlsx",
-      "source": "./plugins/xlsx",
+      "source": "xlsx",
       "description": "CSV→xlsx with styling + LibreOffice formula recalc + deep XlsxValidator + openpyxl charts + msoffcrypto-tool encrypt/decrypt",
       "category": "office",
       "tags": [

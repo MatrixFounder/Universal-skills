@@ -1,0 +1,10 @@
+# Local, per-skill build state. The repository root .gitignore already covers
+# these patterns; they are repeated here so the skill stays correct when it is
+# packaged and extracted standalone, outside this repository.
+
+# Optional Pillow venv created by install.sh (see requirements.txt).
+.venv/
+
+# Python bytecode.
+__pycache__/
+*.py[cod]

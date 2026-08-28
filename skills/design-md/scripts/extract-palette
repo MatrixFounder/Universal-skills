@@ -1,0 +1,1038 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""extract-palette — measure the dominant colours of an image.
+
+Colours read off a screenshot by eye are not reproducible: JPEG/WebP compression,
+antialiasing, gradients and display colour profiles all shift the sampled value.
+This script counts actual pixels instead. It reports measured values and their
+share of the sampled area; assigning design roles to those values (background,
+surface, on-surface, accent) remains the caller's job.
+
+Decoding order:
+  1. Pillow, if importable (ambient interpreter or this skill's scripts/.venv).
+  2. A self-contained stdlib PNG decoder (zlib + struct) — no install required.
+
+Part of the design-md skill (Universal-skills). Apache-2.0.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import math
+import os
+import struct
+import sys
+import zlib
+
+TOOL = "extract-palette"
+TOOL_VERSION = "1.0"
+
+# ---------------------------------------------------------------------------
+# Exit codes (documented in --help and in scripts/README.md)
+# ---------------------------------------------------------------------------
+EXIT_OK = 0
+EXIT_USAGE = 1  # bad arguments / out-of-range option value
+EXIT_INPUT = 2  # image missing, unreadable, corrupt, or empty after cropping
+EXIT_FORMAT = 3  # format understood but no available decoder handles it
+
+
+class UsageError(Exception):
+    """Bad argument value. -> exit 1"""
+
+
+class InputError(Exception):
+    """Missing / unreadable / corrupt image, or nothing left to sample. -> exit 2"""
+
+
+class FormatError(Exception):
+    """Recognised container that no available decoder can read. -> exit 3"""
+
+
+# ---------------------------------------------------------------------------
+# Optional Pillow, looked up in this skill's venv as well as the ambient env
+# ---------------------------------------------------------------------------
+
+def _add_skill_venv_to_path() -> None:
+    """Make scripts/.venv importable, but only if it matches this interpreter.
+
+    Adding a site-packages directory built for another minor version would load
+    an ABI-incompatible Pillow extension. The path is *appended*, so an ambient
+    Pillow keeps priority.
+    """
+    here = os.path.dirname(os.path.abspath(__file__))
+    tag = "python%d.%d" % (sys.version_info[0], sys.version_info[1])
+    candidate = os.path.join(here, ".venv", "lib", tag, "site-packages")
+    if os.path.isdir(candidate) and candidate not in sys.path:
+        sys.path.append(candidate)
+
+
+_add_skill_venv_to_path()
+
+try:  # pragma: no cover - depends on host
+    from PIL import Image as _PIL_Image  # type: ignore
+    from PIL import __version__ as _PIL_VERSION  # type: ignore
+
+    HAVE_PILLOW = True
+except Exception:  # ImportError, or a broken/mismatched install
+    _PIL_Image = None
+    _PIL_VERSION = ""
+    HAVE_PILLOW = False
+
+
+# ---------------------------------------------------------------------------
+# Decoded image: width, height, and a generator of RGBA rows
+# ---------------------------------------------------------------------------
+
+class DecodedImage:
+    """A decoded raster. ``rows()`` yields one row of w*4 RGBA bytes at a time."""
+
+    def __init__(self, width, height, decoder, detail, row_iter_factory):
+        self.width = width
+        self.height = height
+        self.decoder = decoder  # "pillow" | "stdlib-png"
+        self.detail = detail  # human-readable provenance, e.g. "Pillow 12.3.0 (RGB -> RGBA)"
+        self._row_iter_factory = row_iter_factory
+
+    def rows(self):
+        return self._row_iter_factory()
+
+
+# ---------------------------------------------------------------------------
+# Format sniffing — used only for error messages and decoder selection
+# ---------------------------------------------------------------------------
+
+PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
+
+
+def sniff_format(head: bytes) -> str:
+    if head.startswith(PNG_SIGNATURE):
+        return "PNG"
+    if head.startswith(b"\xff\xd8\xff"):
+        return "JPEG"
+    if head.startswith(b"GIF87a") or head.startswith(b"GIF89a"):
+        return "GIF"
+    if head[:4] == b"RIFF" and head[8:12] == b"WEBP":
+        return "WebP"
+    if head[:2] == b"BM":
+        return "BMP"
+    if head[:4] in (b"II\x2a\x00", b"MM\x00\x2a"):
+        return "TIFF"
+    if head[4:8] == b"ftyp":
+        brand = head[8:12].decode("ascii", "replace")
+        if brand.startswith("hei") or brand.startswith("mif") or brand.startswith("avi"):
+            return "HEIF/AVIF"
+        return "ISO-BMFF (%s)" % brand
+    return "unknown"
+
+
+# ---------------------------------------------------------------------------
+# Decoder A: Pillow
+# ---------------------------------------------------------------------------
+
+def decode_with_pillow(path: str) -> DecodedImage:
+    try:
+        im = _PIL_Image.open(path)
+        im.load()
+    except FileNotFoundError:
+        raise InputError("no such file: %s" % path)
+    except OSError as exc:
+        raise InputError("Pillow could not read %s: %s" % (path, exc))
+    except Exception as exc:  # DecompressionBombError and friends
+        raise InputError("Pillow refused %s: %s: %s" % (path, type(exc).__name__, exc))
+
+    source_mode = im.mode
+    if source_mode != "RGBA":
+        try:
+            im = im.convert("RGBA")
+        except Exception as exc:
+            raise InputError("cannot convert mode %s to RGBA: %s" % (source_mode, exc))
+
+    width, height = im.size
+    if width <= 0 or height <= 0:
+        raise InputError("image has zero area: %dx%d" % (width, height))
+
+    data = im.tobytes()
+    expected = width * height * 4
+    if len(data) != expected:
+        raise InputError(
+            "Pillow returned %d bytes for a %dx%d RGBA image (expected %d)"
+            % (len(data), width, height, expected)
+        )
+
+    view = memoryview(data)
+    row_bytes = width * 4
+
+    def row_iter():
+        for y in range(height):
+            off = y * row_bytes
+            yield view[off:off + row_bytes]
+
+    detail = "Pillow %s (%s -> RGBA)" % (_PIL_VERSION, source_mode)
+    return DecodedImage(width, height, "pillow", detail, row_iter)
+
+
+# ---------------------------------------------------------------------------
+# Decoder B: self-contained stdlib PNG reader
+#
+# Supports: non-interlaced PNG, bit depth 8 and 16, colour types
+#           0 (grey), 2 (truecolour), 3 (indexed), 4 (grey+alpha), 6 (RGBA),
+#           filter types 0-4, multiple IDAT chunks, tRNS.
+# Rejects cleanly: interlaced (Adam7), bit depth 1/2/4, unknown compression or
+#           filter method, CRC mismatch, truncated stream.
+# 16-bit samples are truncated to their high byte; an 8-bit palette is enough
+# resolution for share counting and keeps every code path on one histogram.
+# ---------------------------------------------------------------------------
+
+PNG_CHANNELS = {0: 1, 2: 3, 3: 1, 4: 2, 6: 4}
+PNG_COLOUR_NAME = {
+    0: "greyscale",
+    2: "truecolour",
+    3: "indexed",
+    4: "greyscale+alpha",
+    6: "truecolour+alpha",
+}
+
+
+def _png_chunks(data: bytes):
+    pos = 8
+    total = len(data)
+    while pos + 8 <= total:
+        length = int.from_bytes(data[pos:pos + 4], "big")
+        ctype = data[pos + 4:pos + 8]
+        pos += 8
+        end = pos + length
+        if end + 4 > total:
+            raise InputError("truncated PNG: chunk %r claims %d bytes past end of file"
+                             % (ctype.decode("ascii", "replace"), length))
+        payload = data[pos:end]
+        stored_crc = int.from_bytes(data[end:end + 4], "big")
+        pos = end + 4
+        if zlib.crc32(ctype + payload) & 0xFFFFFFFF != stored_crc:
+            raise InputError("corrupt PNG: CRC mismatch in %s chunk"
+                             % ctype.decode("ascii", "replace"))
+        yield ctype, payload
+        if ctype == b"IEND":
+            return
+    raise InputError("corrupt PNG: no IEND chunk")
+
+
+def _png_unfilter(raw: bytes, height: int, bpp: int, row_bytes: int):
+    """Yield each reconstructed scanline as a bytearray. Implements RFC 2083 §6."""
+    need = (row_bytes + 1) * height
+    if len(raw) < need:
+        raise InputError("corrupt PNG: decompressed to %d bytes, need %d" % (len(raw), need))
+    prev = bytearray(row_bytes)
+    pos = 0
+    for y in range(height):
+        ftype = raw[pos]
+        pos += 1
+        line = bytearray(raw[pos:pos + row_bytes])
+        pos += row_bytes
+        if ftype == 0:
+            pass
+        elif ftype == 1:  # Sub
+            for i in range(bpp, row_bytes):
+                line[i] = (line[i] + line[i - bpp]) & 0xFF
+        elif ftype == 2:  # Up
+            for i in range(row_bytes):
+                line[i] = (line[i] + prev[i]) & 0xFF
+        elif ftype == 3:  # Average
+            for i in range(row_bytes):
+                a = line[i - bpp] if i >= bpp else 0
+                line[i] = (line[i] + ((a + prev[i]) >> 1)) & 0xFF
+        elif ftype == 4:  # Paeth
+            for i in range(row_bytes):
+                if i >= bpp:
+                    a = line[i - bpp]
+                    c = prev[i - bpp]
+                else:
+                    a = 0
+                    c = 0
+                b = prev[i]
+                p = a + b - c
+                pa = p - a
+                if pa < 0:
+                    pa = -pa
+                pb = p - b
+                if pb < 0:
+                    pb = -pb
+                pc = p - c
+                if pc < 0:
+                    pc = -pc
+                if pa <= pb and pa <= pc:
+                    pred = a
+                elif pb <= pc:
+                    pred = b
+                else:
+                    pred = c
+                line[i] = (line[i] + pred) & 0xFF
+        else:
+            raise InputError("corrupt PNG: unknown filter type %d on row %d" % (ftype, y))
+        prev = line
+        yield line
+
+
+def decode_png_stdlib(path: str, data: bytes) -> DecodedImage:
+    if not data.startswith(PNG_SIGNATURE):
+        raise FormatError("not a PNG file")
+
+    ihdr = None
+    plte = b""
+    trns = None
+    idat_parts = []
+    for ctype, payload in _png_chunks(data):
+        if ctype == b"IHDR":
+            if len(payload) != 13:
+                raise InputError("corrupt PNG: IHDR is %d bytes, expected 13" % len(payload))
+            ihdr = struct.unpack(">IIBBBBB", payload)
+        elif ctype == b"PLTE":
+            plte = payload
+        elif ctype == b"tRNS":
+            trns = payload
+        elif ctype == b"IDAT":
+            idat_parts.append(payload)
+        elif ctype == b"IEND":
+            break
+
+    if ihdr is None:
+        raise InputError("corrupt PNG: no IHDR chunk")
+    width, height, depth, colour, comp, filt, interlace = ihdr
+
+    if width == 0 or height == 0:
+        raise InputError("corrupt PNG: dimensions %dx%d" % (width, height))
+    if comp != 0:
+        raise InputError("corrupt PNG: compression method %d is not deflate" % comp)
+    if filt != 0:
+        raise InputError("corrupt PNG: filter method %d is not the adaptive method" % filt)
+    if interlace == 1:
+        raise FormatError(
+            "interlaced (Adam7) PNG — the built-in decoder reads non-interlaced PNG only"
+        )
+    if interlace != 0:
+        raise InputError("corrupt PNG: interlace method %d" % interlace)
+    if colour not in PNG_CHANNELS:
+        raise InputError("corrupt PNG: colour type %d" % colour)
+    if depth not in (8, 16):
+        raise FormatError(
+            "PNG bit depth %d (colour type %d, %s) — the built-in decoder reads depth 8 and 16 only"
+            % (depth, colour, PNG_COLOUR_NAME[colour])
+        )
+    if colour == 3:
+        if depth != 8:
+            raise FormatError("indexed PNG at bit depth %d — the built-in decoder reads depth 8 only"
+                              % depth)
+        if not plte:
+            raise InputError("corrupt PNG: indexed image with no PLTE chunk")
+    if not idat_parts:
+        raise InputError("corrupt PNG: no IDAT chunk")
+
+    try:
+        raw = zlib.decompress(b"".join(idat_parts))
+    except zlib.error as exc:
+        raise InputError("corrupt PNG: zlib error: %s" % exc)
+
+    channels = PNG_CHANNELS[colour]
+    sample_bytes = depth // 8
+    bpp = channels * sample_bytes
+    row_bytes = width * bpp
+
+    # Palette lookup table: index -> 4 RGBA bytes.
+    palette = None
+    if colour == 3:
+        entries = len(plte) // 3
+        palette = []
+        for i in range(256):
+            if i < entries:
+                r, g, b = plte[i * 3], plte[i * 3 + 1], plte[i * 3 + 2]
+            else:
+                r = g = b = 0
+            a = trns[i] if (trns is not None and i < len(trns)) else 255
+            palette.append(bytes((r, g, b, a)))
+
+    # Single transparent colour for colour types 0 and 2 (compared on high bytes).
+    trans_key = None
+    if trns is not None and colour == 0 and len(trns) >= 2:
+        trans_key = (trns[0],)
+    elif trns is not None and colour == 2 and len(trns) >= 6:
+        trans_key = (trns[0], trns[2], trns[4])
+
+    opaque = b"\xff" * width
+
+    def row_iter():
+        for line in _png_unfilter(raw, height, bpp, row_bytes):
+            if depth == 16:
+                src = line[0::2]  # keep the high byte of every sample
+            else:
+                src = line
+            if colour == 3:
+                out = bytearray(b"".join([palette[i] for i in src[:width]]))
+            else:
+                out = bytearray(width * 4)
+                if colour == 0:
+                    grey = src[:width]
+                    out[0::4] = grey
+                    out[1::4] = grey
+                    out[2::4] = grey
+                    out[3::4] = opaque
+                elif colour == 2:
+                    out[0::4] = src[0::3]
+                    out[1::4] = src[1::3]
+                    out[2::4] = src[2::3]
+                    out[3::4] = opaque
+                elif colour == 4:
+                    grey = src[0::2]
+                    out[0::4] = grey
+                    out[1::4] = grey
+                    out[2::4] = grey
+                    out[3::4] = src[1::2]
+                else:  # colour == 6
+                    out[0::4] = src[0::4]
+                    out[1::4] = src[1::4]
+                    out[2::4] = src[2::4]
+                    out[3::4] = src[3::4]
+                if trans_key is not None:
+                    if colour == 0:
+                        key = trans_key[0]
+                        for x in range(width):
+                            if out[x * 4] == key:
+                                out[x * 4 + 3] = 0
+                    else:
+                        kr, kg, kb = trans_key
+                        for x in range(width):
+                            o = x * 4
+                            if out[o] == kr and out[o + 1] == kg and out[o + 2] == kb:
+                                out[o + 3] = 0
+            yield out
+
+    detail = "built-in PNG decoder (depth %d, colour type %d %s)" % (
+        depth, colour, PNG_COLOUR_NAME[colour])
+    return DecodedImage(width, height, "stdlib-png", detail, row_iter)
+
+
+# ---------------------------------------------------------------------------
+# Decoder selection
+# ---------------------------------------------------------------------------
+
+def load_image(path: str, prefer: str) -> DecodedImage:
+    if not os.path.exists(path):
+        raise InputError("no such file: %s" % path)
+    if os.path.isdir(path):
+        raise InputError("%s is a directory, not an image" % path)
+    try:
+        with open(path, "rb") as fh:
+            head = fh.read(32)
+    except OSError as exc:
+        raise InputError("cannot read %s: %s" % (path, exc))
+    if not head:
+        raise InputError("%s is empty (0 bytes)" % path)
+
+    kind = sniff_format(head)
+
+    if prefer == "pillow":
+        if not HAVE_PILLOW:
+            raise FormatError(
+                "--decoder pillow was requested but Pillow is not importable. "
+                "Run: bash %s" % os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                              "install.sh")
+            )
+        return decode_with_pillow(path)
+
+    if prefer == "stdlib-png":
+        if kind != "PNG":
+            raise FormatError(
+                "--decoder stdlib-png was requested but %s looks like %s. "
+                "The built-in decoder reads PNG only." % (path, kind)
+            )
+        return decode_png_stdlib(path, _read_all(path))
+
+    # prefer == "auto"
+    if HAVE_PILLOW:
+        return decode_with_pillow(path)
+    if kind == "PNG":
+        return decode_png_stdlib(path, _read_all(path))
+    raise FormatError(
+        "%s looks like %s. Without Pillow this script reads PNG only.\n"
+        "Either install Pillow:  bash %s\n"
+        "or convert the file to PNG first."
+        % (path, kind, os.path.join(os.path.dirname(os.path.abspath(__file__)), "install.sh"))
+    )
+
+
+def _read_all(path: str) -> bytes:
+    try:
+        with open(path, "rb") as fh:
+            return fh.read()
+    except OSError as exc:
+        raise InputError("cannot read %s: %s" % (path, exc))
+
+
+# ---------------------------------------------------------------------------
+# Colour maths
+# ---------------------------------------------------------------------------
+
+def srgb_to_linear(c8: int) -> float:
+    c = c8 / 255.0
+    if c <= 0.04045:
+        return c / 12.92
+    return ((c + 0.055) / 1.055) ** 2.4
+
+
+def rgb_to_lab(r: float, g: float, b: float):
+    """sRGB (0-255 floats) -> CIELAB, D65 white point."""
+    rl = srgb_to_linear(r)
+    gl = srgb_to_linear(g)
+    bl = srgb_to_linear(b)
+    x = (0.4124564 * rl + 0.3575761 * gl + 0.1804375 * bl) / 0.95047
+    y = (0.2126729 * rl + 0.7151522 * gl + 0.0721750 * bl) / 1.00000
+    z = (0.0193339 * rl + 0.1191920 * gl + 0.9503041 * bl) / 1.08883
+
+    def f(t: float) -> float:
+        if t > 216.0 / 24389.0:
+            return t ** (1.0 / 3.0)
+        return (841.0 / 108.0) * t + 4.0 / 29.0
+
+    fx, fy, fz = f(x), f(y), f(z)
+    return (116.0 * fy - 16.0, 500.0 * (fx - fy), 200.0 * (fy - fz))
+
+
+def rgb_to_hsl(r: int, g: int, b: int):
+    rf, gf, bf = r / 255.0, g / 255.0, b / 255.0
+    mx = max(rf, gf, bf)
+    mn = min(rf, gf, bf)
+    lightness = (mx + mn) / 2.0
+    delta = mx - mn
+    if delta == 0.0:
+        return (0.0, 0.0, lightness)
+    if lightness < 0.5:
+        sat = delta / (mx + mn)
+    else:
+        sat = delta / (2.0 - mx - mn)
+    if mx == rf:
+        hue = ((gf - bf) / delta) % 6.0
+    elif mx == gf:
+        hue = (bf - rf) / delta + 2.0
+    else:
+        hue = (rf - gf) / delta + 4.0
+    return (hue * 60.0, sat, lightness)
+
+
+def relative_luminance(r: int, g: int, b: int) -> float:
+    return (0.2126 * srgb_to_linear(r)
+            + 0.7152 * srgb_to_linear(g)
+            + 0.0722 * srgb_to_linear(b))
+
+
+# ---------------------------------------------------------------------------
+# Sampling + quantisation
+# ---------------------------------------------------------------------------
+
+ALPHA_FLOOR = 128  # pixels below this alpha are excluded from the counts
+
+
+def sample_histogram(img: DecodedImage, edge_pct: float, bits: int, max_samples: int):
+    """Walk the image on a stride grid and bucket every opaque pixel.
+
+    Returns (hist, stats). ``hist`` maps a quantised bucket key to
+    [count, sum_r, sum_g, sum_b] of the *exact* pixel values in that bucket, so
+    the bucket's mean keeps sub-bucket precision.
+    """
+    width, height = img.width, img.height
+    dx = int(width * edge_pct / 100.0)
+    dy = int(height * edge_pct / 100.0)
+    x0, x1 = dx, width - dx
+    y0, y1 = dy, height - dy
+    if x1 <= x0 or y1 <= y0:
+        raise InputError(
+            "--ignore-edges %.1f leaves no pixels in a %dx%d image" % (edge_pct, width, height))
+
+    crop_w = x1 - x0
+    crop_h = y1 - y0
+    area = crop_w * crop_h
+    if max_samples > 0 and area > max_samples:
+        stride = int(math.ceil(math.sqrt(area / float(max_samples))))
+    else:
+        stride = 1
+
+    shift = 8 - bits
+    gbits = bits
+    bbits = 2 * bits
+    hist = {}
+    counted = 0
+    skipped = 0
+    visited = 0
+
+    xs = range(x0, x1, stride)
+    for y, row in enumerate(img.rows()):
+        if y < y0 or y >= y1:
+            continue
+        if (y - y0) % stride:
+            continue
+        for x in xs:
+            o = x * 4
+            visited += 1
+            if row[o + 3] < ALPHA_FLOOR:
+                skipped += 1
+                continue
+            r = row[o]
+            g = row[o + 1]
+            b = row[o + 2]
+            key = ((r >> shift) << bbits) | ((g >> shift) << gbits) | (b >> shift)
+            entry = hist.get(key)
+            if entry is None:
+                hist[key] = [1, r, g, b]
+            else:
+                entry[0] += 1
+                entry[1] += r
+                entry[2] += g
+                entry[3] += b
+            counted += 1
+
+    stats = {
+        "image_width": width,
+        "image_height": height,
+        "crop_x": [x0, x1],
+        "crop_y": [y0, y1],
+        "crop_width": crop_w,
+        "crop_height": crop_h,
+        "ignore_edges_pct": edge_pct,
+        "stride": stride,
+        "sampled_pixels": visited,
+        "counted_pixels": counted,
+        "skipped_transparent": skipped,
+    }
+    if counted == 0:
+        raise InputError(
+            "no opaque pixels to measure (%d sampled, all below alpha %d)"
+            % (visited, ALPHA_FLOOR))
+    return hist, stats
+
+
+def cluster(hist, merge_distance: float):
+    """Greedy leader clustering of quantised buckets in CIELAB.
+
+    Buckets are visited most-populous first. A bucket joins the *nearest*
+    existing cluster when its CIE76 distance to that cluster's seed is within
+    ``merge_distance``; otherwise it opens a new cluster. Because the seed is
+    the first bucket taken, and buckets arrive in descending population order,
+    every cluster is seeded by its most-populous bucket.
+
+    The reported colour of a cluster is that seed bucket's mean colour: for a
+    flat region the mean equals the exact pixel value, and for a gradient it
+    stays on the dominant tone instead of drifting to a colour that appears
+    nowhere in the image.
+    """
+    buckets = []
+    for key, (count, sr, sg, sb) in hist.items():
+        mr = sr / count
+        mg = sg / count
+        mb = sb / count
+        buckets.append((count, key, mr, mg, mb))
+    buckets.sort(key=lambda t: (-t[0], t[1]))
+
+    limit_sq = merge_distance * merge_distance
+    clusters = []  # each: dict(seed_lab, rep_rgb, pixels, buckets)
+    for count, _key, mr, mg, mb in buckets:
+        lab = rgb_to_lab(mr, mg, mb)
+        best = None
+        best_d = None
+        for cl in clusters:
+            sl, sa, sb_ = cl["seed_lab"]
+            d = (lab[0] - sl) ** 2 + (lab[1] - sa) ** 2 + (lab[2] - sb_) ** 2
+            if best_d is None or d < best_d:
+                best_d = d
+                best = cl
+        if best is not None and best_d is not None and best_d <= limit_sq:
+            best["pixels"] += count
+            best["buckets"] += 1
+        else:
+            clusters.append({
+                "seed_lab": lab,
+                "rep": (int(round(mr)), int(round(mg)), int(round(mb))),
+                "pixels": count,
+                "buckets": 1,
+            })
+    clusters.sort(key=lambda c: -c["pixels"])
+    return clusters
+
+
+# ---------------------------------------------------------------------------
+# Role hints — heuristics over share + CIELAB, never a determination
+#
+# Neutrality is judged by CIELAB chroma C* = hypot(a*, b*), NOT by HSL
+# saturation. HSL saturation is inflated near both ends of the lightness axis:
+# #f5f2ec is an off-white with C* 3.2 but HSL S 0.31, and reading it as
+# "saturated" would mislabel every warm-white surface as an accent.
+# Reference points measured with this script's own rgb_to_lab():
+#   #e5e7eb C* 2.2   #2b3440 C* 8.8   #1e293b C* 13.1   #64748b C* 14.5
+#   #3b82f6 C* 66.8  #e2542c C* 73.7
+# so C* < 18 covers real neutral ramps and C* >= 40 covers real brand colours.
+# ---------------------------------------------------------------------------
+
+NEUTRAL_CHROMA = 18.0
+SATURATED_CHROMA = 40.0
+SMALL_AREA = 0.05
+
+
+def role_hint(rank: int, share: float, lab):
+    lightness, a, b = lab
+    chroma = math.hypot(a, b)
+    if rank == 1:
+        return ("background", "background candidate (largest area)")
+    if chroma >= SATURATED_CHROMA:
+        if share < SMALL_AREA:
+            return ("accent", "accent candidate (high chroma, small area)")
+        return ("brand-fill", "high chroma over a large area (brand fill or photo content)")
+    if chroma < NEUTRAL_CHROMA:
+        if lightness < 50.0:
+            return ("neutral-dark", "neutral ramp, dark end (text, or a dark surface)")
+        return ("neutral-light", "neutral ramp, light end (surface, or text on dark)")
+    if share < SMALL_AREA:
+        return ("blend", "small area, mid chroma (often an antialiasing blend)")
+    return ("tinted-surface", "tinted mid-tone (surface tint or muted fill)")
+
+
+# ---------------------------------------------------------------------------
+# Reporting
+# ---------------------------------------------------------------------------
+
+def build_report(path, img, stats, clusters, args):
+    counted = stats["counted_pixels"]
+    total_buckets = sum(c["buckets"] for c in clusters)
+    rows = []
+    rank = 0
+    for cl in clusters:
+        share = cl["pixels"] / counted
+        if share * 100.0 < args.min_share:
+            continue
+        rank += 1
+        if rank > args.colors:
+            rank -= 1
+            break
+        r, g, b = cl["rep"]
+        hsl = rgb_to_hsl(r, g, b)
+        lab = rgb_to_lab(r, g, b)
+        chroma = math.hypot(lab[1], lab[2])
+        hint_id, hint_text = role_hint(rank, share, lab)
+        rows.append({
+            "rank": rank,
+            "hex": "#%02x%02x%02x" % (r, g, b),
+            "rgb": [r, g, b],
+            "share": round(share, 6),
+            "share_pct": round(share * 100.0, 2),
+            "pixels": cl["pixels"],
+            "buckets": cl["buckets"],
+            "hsl": {
+                "h": round(hsl[0], 1),
+                "s": round(hsl[1], 3),
+                "l": round(hsl[2], 3),
+            },
+            "lab": {
+                "l": round(lab[0], 2),
+                "a": round(lab[1], 2),
+                "b": round(lab[2], 2),
+                "c": round(chroma, 2),
+            },
+            "relative_luminance": round(relative_luminance(r, g, b), 4),
+            "hint": hint_id,
+            "hint_text": hint_text,
+        })
+
+    reported_share = sum(row["share"] for row in rows)
+    return {
+        "tool": TOOL,
+        "tool_version": TOOL_VERSION,
+        "image": {
+            "path": os.path.abspath(path),
+            "width": img.width,
+            "height": img.height,
+            "decoder": img.decoder,
+            "decoder_detail": img.detail,
+        },
+        "sampling": {
+            "ignore_edges_pct": stats["ignore_edges_pct"],
+            "crop_x": stats["crop_x"],
+            "crop_y": stats["crop_y"],
+            "crop_width": stats["crop_width"],
+            "crop_height": stats["crop_height"],
+            "stride": stats["stride"],
+            "sampled_pixels": stats["sampled_pixels"],
+            "counted_pixels": counted,
+            "skipped_transparent": stats["skipped_transparent"],
+            "alpha_floor": ALPHA_FLOOR,
+        },
+        "quantization": {
+            "bits_per_channel": args.bits,
+            "levels_per_channel": 1 << args.bits,
+            "occupied_buckets": total_buckets,
+            "merge_space": "CIELAB (D65)",
+            "merge_metric": "CIE76",
+            "merge_distance": args.merge_distance,
+            "representative": "mean colour of the cluster's most-populous bucket",
+            "clusters": len(clusters),
+        },
+        "filters": {
+            "max_colors": args.colors,
+            "min_share_pct": args.min_share,
+            "max_samples": args.max_samples,
+        },
+        "reported_share": round(reported_share, 6),
+        "colors": rows,
+        "disclaimer": (
+            "Shares and hex values are measured. The hint column is a heuristic "
+            "over share and HSL, not a role assignment."
+        ),
+    }
+
+
+def _n(count: int, singular: str, plural: str = None) -> str:
+    return "%d %s" % (count, singular if count == 1 else (plural or singular + "s"))
+
+
+def render_text(report) -> str:
+    img = report["image"]
+    smp = report["sampling"]
+    q = report["quantization"]
+    f = report["filters"]
+    out = []
+    out.append("%s  %s" % (TOOL, img["path"]))
+    out.append("  decoder    %s" % img["decoder_detail"])
+    if smp["ignore_edges_pct"] > 0:
+        crop = "%dx%d after --ignore-edges %.1f%%" % (
+            smp["crop_width"], smp["crop_height"], smp["ignore_edges_pct"])
+    else:
+        crop = "%dx%d (no crop)" % (smp["crop_width"], smp["crop_height"])
+    out.append("  image      %dx%d px -> %s" % (img["width"], img["height"], crop))
+    out.append("  sampled    %d px on a stride-%d grid; %d counted, %d below alpha %d"
+               % (smp["sampled_pixels"], smp["stride"], smp["counted_pixels"],
+                  smp["skipped_transparent"], smp["alpha_floor"]))
+    out.append("  quantized  %d bits/channel (%d levels) -> %s occupied"
+               % (q["bits_per_channel"], q["levels_per_channel"],
+                  _n(q["occupied_buckets"], "bucket")))
+    out.append("  merged     %s dE <= %.1f in %s -> %s"
+               % (q["merge_metric"], q["merge_distance"], q["merge_space"],
+                  _n(q["clusters"], "cluster")))
+    out.append("  reported   %d of %s (max %d, min share %.2f%%) covering %.1f%% of counted pixels"
+               % (len(report["colors"]), _n(q["clusters"], "cluster"), f["max_colors"],
+                  f["min_share_pct"], report["reported_share"] * 100.0))
+    out.append("")
+
+    if not report["colors"]:
+        out.append("  no cluster reached the --min-share %.2f%% floor" % f["min_share_pct"])
+        out.append("")
+        return "\n".join(out)
+
+    header = ("  %-3s %-9s %8s  %-12s %5s %6s %6s  %s"
+              % ("#", "HEX", "SHARE", "BUCKETS", "HUE", "L*", "C*", "HINT (heuristic)"))
+    out.append(header)
+    out.append("  " + "-" * (len(header) - 2))
+    for row in report["colors"]:
+        out.append("  %-3d %-9s %7.2f%%  %-12s %4.0f° %6.1f %6.1f  %s"
+                   % (row["rank"], row["hex"], row["share_pct"],
+                      "%d of %d" % (row["buckets"], q["occupied_buckets"]),
+                      row["hsl"]["h"], row["lab"]["l"], row["lab"]["c"],
+                      row["hint_text"]))
+    out.append("")
+    out.append("  HUE is the HSL hue angle; L* and C* are CIELAB lightness and chroma.")
+    out.append("  Hex values and shares are MEASURED. The HINT column is a heuristic over")
+    out.append("  share, L* and C* only; deciding which measured colour is background,")
+    out.append("  surface, on-surface or accent is the reader's job, not this script's.")
+    out.append("")
+    return "\n".join(out)
+
+
+# ---------------------------------------------------------------------------
+# CLI
+# ---------------------------------------------------------------------------
+
+EPILOG = """\
+method
+  1. decode      Pillow if importable (ambient interpreter or scripts/.venv),
+                 otherwise a self-contained stdlib PNG decoder (zlib + struct)
+                 covering non-interlaced PNG, bit depth 8/16, colour types
+                 0/2/3/4/6, filter types 0-4. macOS and Linux screenshots are
+                 exactly that, so the no-install path covers the main use case.
+  2. crop        --ignore-edges PCT removes PCT of the width from the left and
+                 right and PCT of the height from the top and bottom, before
+                 anything is counted. Use it to drop browser chrome, tab bars,
+                 window shadows and OS furniture.
+  3. sample      A stride grid keeps the work bounded (--max-samples). The
+                 stride is uniform in x and y, so area proportions are
+                 preserved. A regular pixel pattern finer than the stride can
+                 alias; lower --max-samples means a coarser grid.
+  4. quantize    Each channel is reduced to 2**--bits levels (default 5 bits =
+                 32 levels, 32768 buckets). Exact pixel counting is useless on
+                 real screenshots: antialiasing alone produces thousands of
+                 near-duplicate values.
+  5. merge       Bucket means are converted to CIELAB (D65) and merged by
+                 greedy leader clustering: buckets are visited most-populous
+                 first, and each joins the nearest existing cluster whose seed
+                 is within --merge-distance (CIE76 dE), otherwise it opens a
+                 new cluster.
+
+                 The default of 6.0 is a trade-off with a measured basis. Across
+                 the ten steps of the Tailwind v3 "slate" ramp the adjacent CIE76
+                 distances run 2.20, 5.08, 7.36, 19.19, 18.25, 12.69, 8.60,
+                 10.81, 8.79. At 6.0 every step from 7.36 up stays separate while
+                 antialiasing and compression noise inside one flat region
+                 collapses. The two lightest steps (dE 2.20 and 5.08) do merge.
+                 Lower the value to separate them, at the cost of splitting
+                 gradients into many small clusters that --min-share then drops.
+  6. report      A cluster is reported as the MEAN COLOUR OF ITS MOST-POPULOUS
+                 BUCKET (not the centroid of the whole cluster). For a flat
+                 region that equals the exact pixel value; for a gradient it
+                 stays on the dominant tone instead of naming a colour that
+                 appears nowhere in the image.
+
+hint column
+  A heuristic, not a determination. It reads share, CIELAB lightness L* and
+  CIELAB chroma C* = hypot(a*, b*):
+
+    rank 1                      background candidate (it covers the most area)
+    C* >= 40, share <  5%       accent candidate
+    C* >= 40, share >= 5%       brand fill, or photo content
+    C* <  18, L* <  50          neutral ramp, dark end
+    C* <  18, L* >= 50          neutral ramp, light end
+    otherwise, share <  5%      often an antialiasing blend
+    otherwise                   tinted mid-tone
+
+  Chroma is used rather than HSL saturation because HSL saturation is inflated
+  at both ends of the lightness axis: the off-white #f5f2ec has HSL S 0.31 but
+  C* 3.2, and calling it "saturated" would mislabel every warm-white surface as
+  an accent. This script measures values; assigning design roles is the
+  caller's job. Treat every hint as a question, not an answer.
+
+pixels that are not counted
+  Pixels with alpha < 128 are excluded and reported separately. 16-bit PNG
+  samples are truncated to their high byte.
+
+exit codes
+  0  success
+  1  invalid arguments or an out-of-range option value
+  2  image missing, unreadable, corrupt, or nothing left to sample
+  3  format recognised but no available decoder handles it (JPEG/WebP/HEIF
+     without Pillow, interlaced PNG, PNG at bit depth 1/2/4)
+
+output
+  Human-readable table on stdout by default; --json prints one JSON object on
+  stdout instead. Errors always go to stderr; with --json the error is written
+  to stderr as a JSON object and stdout stays empty.
+
+examples
+  extract-palette /abs/path/shot.png
+  extract-palette /abs/path/shot.png --ignore-edges 4 --colors 8
+  extract-palette /abs/path/shot.png --min-share 1.5 --merge-distance 3
+  extract-palette /abs/path/shot.png --json > /abs/path/palette.json
+"""
+
+
+def build_parser() -> argparse.ArgumentParser:
+    p = argparse.ArgumentParser(
+        prog=TOOL,
+        description=(
+            "Measure the dominant colours of an image and report each as a hex value "
+            "with its share of the sampled pixels. Written for the design-md skill: "
+            "colours read off a screenshot by eye are distorted by compression, "
+            "antialiasing, gradients and colour profiles, so the pixels are counted "
+            "instead of estimated."
+        ),
+        epilog=EPILOG,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    p.add_argument("image", metavar="IMAGE",
+                   help="path to the image (absolute paths recommended)")
+    p.add_argument("--colors", type=int, default=12, metavar="N",
+                   help="report at most N colours, highest share first (default: 12)")
+    p.add_argument("--min-share", type=float, default=0.5, metavar="PCT",
+                   help="drop clusters below PCT%% of counted pixels (default: 0.5)")
+    p.add_argument("--ignore-edges", type=float, default=0.0, metavar="PCT",
+                   help="crop PCT%% off each side before sampling, to remove browser "
+                        "chrome and window borders (default: 0, must be < 50)")
+    p.add_argument("--bits", type=int, default=5, metavar="N",
+                   help="quantisation bits per channel, 3-8 (default: 5 = 32 levels)")
+    p.add_argument("--merge-distance", type=float, default=6.0, metavar="D",
+                   help="CIE76 dE in CIELAB below which two buckets are one colour "
+                        "(default: 6.0; raise it to collapse a ramp, lower it to split "
+                        "one; 0 disables merging)")
+    p.add_argument("--max-samples", type=int, default=400000, metavar="N",
+                   help="upper bound on sampled pixels; larger images get a coarser "
+                        "stride grid (default: 400000, 0 means sample every pixel)")
+    p.add_argument("--decoder", choices=("auto", "pillow", "stdlib-png"), default="auto",
+                   help="force a decoder instead of auto-selecting (default: auto)")
+    p.add_argument("--json", action="store_true",
+                   help="print one machine-readable JSON object on stdout")
+    p.add_argument("--version", action="version",
+                   version="%s %s" % (TOOL, TOOL_VERSION))
+    return p
+
+
+def validate(args) -> None:
+    if args.colors < 1:
+        raise UsageError("--colors must be >= 1 (got %d)" % args.colors)
+    if args.min_share < 0.0 or args.min_share > 100.0:
+        raise UsageError("--min-share must be between 0 and 100 (got %g)" % args.min_share)
+    if args.ignore_edges < 0.0 or args.ignore_edges >= 50.0:
+        raise UsageError(
+            "--ignore-edges must be >= 0 and < 50; %g would crop the whole image"
+            % args.ignore_edges)
+    if args.bits < 3 or args.bits > 8:
+        raise UsageError("--bits must be between 3 and 8 (got %d)" % args.bits)
+    if args.merge_distance < 0.0:
+        raise UsageError("--merge-distance must be >= 0 (got %g)" % args.merge_distance)
+    if args.max_samples < 0:
+        raise UsageError("--max-samples must be >= 0 (got %d)" % args.max_samples)
+
+
+def fail(code: int, kind: str, message: str, as_json: bool) -> int:
+    if as_json:
+        sys.stderr.write(json.dumps(
+            {"tool": TOOL, "ok": False, "error": kind, "exit_code": code,
+             "message": message}, indent=2) + "\n")
+    else:
+        sys.stderr.write("%s: %s: %s\n" % (TOOL, kind, message))
+    return code
+
+
+def main(argv=None) -> int:
+    parser = build_parser()
+    args = parser.parse_args(argv)
+
+    try:
+        validate(args)
+    except UsageError as exc:
+        return fail(EXIT_USAGE, "usage error", str(exc), args.json)
+
+    try:
+        img = load_image(args.image, args.decoder)
+        hist, stats = sample_histogram(img, args.ignore_edges, args.bits, args.max_samples)
+    except InputError as exc:
+        return fail(EXIT_INPUT, "input error", str(exc), args.json)
+    except FormatError as exc:
+        return fail(EXIT_FORMAT, "unsupported format", str(exc), args.json)
+    except MemoryError:
+        return fail(EXIT_INPUT, "input error",
+                    "ran out of memory decoding %s; lower --max-samples or downscale the image"
+                    % args.image, args.json)
+
+    clusters = cluster(hist, args.merge_distance)
+    report = build_report(args.image, img, stats, clusters, args)
+
+    if args.json:
+        sys.stdout.write(json.dumps(report, indent=2) + "\n")
+    else:
+        sys.stdout.write(render_text(report))
+    return EXIT_OK
+
+
+if __name__ == "__main__":
+    try:
+        sys.exit(main())
+    except KeyboardInterrupt:
+        sys.stderr.write("%s: interrupted\n" % TOOL)
+        sys.exit(EXIT_INPUT)
+    except BrokenPipeError:
+        try:
+            sys.stdout.close()
+        except Exception:
+            pass
+        sys.exit(EXIT_OK)

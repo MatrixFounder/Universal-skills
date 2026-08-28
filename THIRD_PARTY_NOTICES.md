@@ -10,6 +10,20 @@ proprietary `docx`, `pptx`, `xlsx`, or `pdf` skills has been copied into
 this repository; all implementations are original work written against
 public specifications.
 
+## Format Specifications (documents, not bundled)
+
+Published format specifications this repository implements against. The
+specification text itself is not redistributed here.
+
+- **DESIGN.md** — an open, plain-text format for design systems (YAML
+  design tokens plus a markdown rationale body).
+  Publisher: Google LLC (`google-labs-code/design.md`).
+  License: Apache License, Version 2.0.
+  Source: https://github.com/google-labs-code/design.md
+  Used by: `design-md` (the skill authors, validates and exports files in
+  this format; the specification is consulted, never copied, and no
+  upstream `examples/` file is redistributed).
+
 ## XML Schema Definitions
 
 OOXML schemas are distributed unchanged from their public sources.
@@ -64,12 +78,14 @@ None are bundled in this repository.
 
 ## JavaScript Libraries (runtime dependencies)
 
-Installed via `npm install` in each skill's `scripts/` directory. None
-are bundled in this repository.
+Installed via `npm install` in each skill's `scripts/` directory, except
+where a row states it is invoked on demand via `npx`. None are bundled in
+this repository.
 
 | Package | License | Used by |
 |---|---|---|
 | `docx` (docx-js) | MIT | docx/md2docx.js |
+| `@google/design.md` | Apache-2.0 | design-md (`scripts/lint`, `scripts/check-contrast`) — **not installed and not bundled**: the pinned version `@google/design.md@0.4.0` is fetched and run on demand via `npx --yes`, so no copy of it lives in this repository and no `package.json` depends on it |
 | `marked` | MIT | docx/md2docx.js, pptx/md2pptx.js |
 | `mammoth` | Apache-2.0 | docx/docx2md.js |
 | `turndown` | MIT | docx/docx2md.js (via the docx-mastered `html2md_core.js`); html (byte-identical replica) |

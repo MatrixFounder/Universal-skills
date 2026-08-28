@@ -1,0 +1,1107 @@
+#!/usr/bin/env python3
+# check-contrast — WCAG 2.x contrast matrix over a DESIGN.md palette.
+#
+# Part of the `design-md` skill (Universal-skills). Apache-2.0.
+# Standard library only. No third-party imports, no vendored code.
+#
+# The upstream `contrast-ratio` lint rule checks exactly one thing: a component
+# that declares BOTH backgroundColor and textColor, against WCAG AA 4.5:1.
+# It never checks the palette itself. This script does: it classifies every
+# color token as a foreground or a background candidate, pairs them, and
+# reports each pair against AA 4.5, AA-large 3.0, AAA 7.0 and the 3.0 non-text
+# threshold.
+#
+# One non-text token is deliberately NOT gated. WCAG 2.x SC 1.4.11 requires 3:1
+# only for information that identifies UI components and states, and for
+# graphical objects required to understand the content; it exempts purely
+# decorative elements. Material Design 3 splits its boundary token along that
+# same line: `outline` is functional, `outline-variant` is the subtle
+# decorative divider, shipped below 3:1 in the MD3 baseline itself. So a UI
+# token whose name ends in `-variant` is measured, printed, and exempt.
+# `--strict-decorative` gates it anyway.
+#
+# Resolved token values are obtained by shelling out to the upstream CLI
+# (`export --format json-tailwind`), which resolves `{colors.x}` references and
+# converts every CSS color notation to hex. No YAML is parsed here.
+
+import argparse
+import json
+import os
+import re
+import shutil
+import subprocess
+import sys
+
+PKG = "@google/design.md@0.4.0"
+TOOL = "check-contrast"
+TOOL_VERSION = "1.0"
+
+# --- exit codes -------------------------------------------------------------
+EXIT_OK = 0            # every intended pair meets the selected gate
+EXIT_FAIL = 1          # at least one intended pair fails the gate
+EXIT_INPUT = 2         # input file missing, unreadable, or not a file
+EXIT_EXPORT = 3        # the export CLI failed, or returned no colors
+
+# --- WCAG thresholds --------------------------------------------------------
+T_AA = 4.5             # normal text
+T_AA_LARGE = 3.0       # >= 24px, or >= 18.66px at weight >= 700
+T_AAA = 7.0            # body text, enhanced
+T_UI = 3.0             # non-text: borders, dividers, focus rings, icons
+
+# Luminance at which contrast against white equals contrast against black:
+# sqrt(1.05 * 0.05) - 0.05. Used only to classify tokens whose NAME carries no
+# role, so that a palette named `ink` / `paper` / `brand` still produces pairs.
+PIVOT_LUMINANCE = 0.1791
+
+REM_ROOT_PX = 16.0     # assumed CSS root font size; `em` stays underivable
+
+MD3_KEYS = {"primary", "secondary", "tertiary", "error"}
+UI_WORDS = {"outline", "border", "divider", "stroke", "separator", "rule"}
+FG_WORDS = {"text", "ink", "fg", "foreground", "content", "label",
+            "heading", "caption", "body", "muted", "copy"}
+BG_WORDS = {"background", "bg", "surface", "canvas", "paper", "base",
+            "sheet", "panel", "card", "page", "fill", "backdrop"}
+
+# A non-text/UI token whose name ends here is MD3's decorative divider tone
+# rather than a functional boundary. See SC 1.4.11 in the module docstring.
+DECORATIVE_UI_SUFFIX = "-variant"
+
+# The neutral families. A content colour of a neutral family is the one kind of
+# foreground a designer puts on ANY neutral background; a key-colour content
+# token (on-primary, on-error) belongs on its own key colour and nowhere else.
+NEUTRAL_FAMILIES = {"surface", "background"}
+
+HEX_RE = re.compile(r"^#(?:[0-9a-fA-F]{3,4}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$")
+DIM_RE = re.compile(r"^\s*(-?\d+(?:\.\d+)?)\s*(px|rem|em)\s*$", re.IGNORECASE)
+
+
+# ---------------------------------------------------------------------------
+# colour maths
+# ---------------------------------------------------------------------------
+
+def parse_hex(value):
+    """#rgb / #rgba / #rrggbb / #rrggbbaa -> (r, g, b, a) with a in 0.0..1.0.
+
+    Returns None if the string is not a hex colour. The upstream exporter
+    always emits hex, so anything else is a format surprise worth reporting
+    rather than guessing at.
+    """
+    if not isinstance(value, str) or not HEX_RE.match(value.strip()):
+        return None
+    h = value.strip().lstrip("#").lower()
+    if len(h) in (3, 4):
+        h = "".join(c * 2 for c in h)
+    r = int(h[0:2], 16)
+    g = int(h[2:4], 16)
+    b = int(h[4:6], 16)
+    a = int(h[6:8], 16) / 255.0 if len(h) == 8 else 1.0
+    return (r, g, b, a)
+
+
+def composite(fg, bg):
+    """Simple source-over alpha blend in encoded sRGB, as a browser does."""
+    a = fg[3]
+    return (
+        fg[0] * a + bg[0] * (1.0 - a),
+        fg[1] * a + bg[1] * (1.0 - a),
+        fg[2] * a + bg[2] * (1.0 - a),
+        1.0,
+    )
+
+
+def relative_luminance(rgb):
+    """WCAG 2.x relative luminance from an opaque sRGB triple (0..255)."""
+    chan = []
+    for raw in rgb[:3]:
+        c = raw / 255.0
+        chan.append(c / 12.92 if c <= 0.03928 else ((c + 0.055) / 1.055) ** 2.4)
+    return 0.2126 * chan[0] + 0.7152 * chan[1] + 0.0722 * chan[2]
+
+
+def contrast_ratio(rgb_a, rgb_b):
+    """(L1 + 0.05) / (L2 + 0.05), lighter over darker."""
+    la = relative_luminance(rgb_a)
+    lb = relative_luminance(rgb_b)
+    hi, lo = (la, lb) if la >= lb else (lb, la)
+    return (hi + 0.05) / (lo + 0.05)
+
+
+# ---------------------------------------------------------------------------
+# token role classification (heuristic — documented in --help)
+# ---------------------------------------------------------------------------
+
+def segments(name):
+    return [s for s in re.split(r"[-_./]+", name.lower()) if s]
+
+
+def is_decorative_ui(name):
+    """True for a non-text/UI token that MD3 defines as a decorative tone.
+
+    Only reached for tokens already classified as UI (head segment in
+    UI_WORDS), so `on-surface-variant` and `surface-variant` never land here.
+    """
+    return name.lower().endswith(DECORATIVE_UI_SUFFIX)
+
+
+def md3_family(name):
+    """Token name reduced to its MD3 colour family.
+
+    Strips a leading `on-`, then the `-container*`, `-fixed*`, `-dim`,
+    `-bright`, `-tint` and `-variant` suffixes. `on-primary-fixed-variant` and
+    `primary-container` both reduce to `primary`; `on-surface-variant` and
+    `surface-container-highest` both reduce to `surface`.
+
+    A leading `inverse-` is KEPT, so `inverse-surface` and `inverse-on-surface`
+    reduce to `inverse-surface` and not to `surface`. The inverted surface is a
+    different backdrop from the normal one, and its content colour belongs on
+    it alone.
+    """
+    low = name.lower()
+    prefix = ""
+    if low.startswith("inverse-"):
+        prefix = "inverse-"
+        low = low[len("inverse-"):]
+    if low.startswith("on-"):
+        low = low[len("on-"):]
+    low = re.sub(r"-container.*$", "", low)
+    low = re.sub(r"-fixed.*$", "", low)
+    low = re.sub(r"-(dim|bright|tint|variant)$", "", low)
+    return prefix + low
+
+
+def is_plausible(fg_name, fg_role, bg_name):
+    """Would a designer ever build this pair? Definition is echoed in --help.
+
+    Two clauses, and nothing else:
+      1. foreground and background are of the same MD3 family — the family's
+         own content colour on the family's own tones;
+      2. a foreground that is neutral content (family `surface` or
+         `background`) or a non-text/UI colour, over a neutral background.
+    The foreground must carry content (`on-*`, `inverse-on-*`) or be a
+    non-text/UI colour either way: a background token used as a foreground is
+    not a pair anyone builds.
+    `on-primary on surface` therefore does NOT qualify: `on-primary` is the
+    content colour of `primary` and belongs on `primary`.
+    """
+    low = fg_name.lower()
+    carries_content = low.startswith("on-") or low.startswith("inverse-on-")
+    is_ui = fg_role in ("ui", "ui-decorative")
+    if not (carries_content or is_ui):
+        return False
+    fg_family = md3_family(fg_name)
+    bg_family = md3_family(bg_name)
+    if fg_family == bg_family:
+        return True
+    return bg_family in NEUTRAL_FAMILIES and (is_ui or
+                                              fg_family in NEUTRAL_FAMILIES)
+
+
+def classify(name, rgba):
+    """-> ('fg'|'bg', role, basis). Precedence is fixed and total."""
+    low = name.lower()
+    segs = segments(low)
+
+    if low.startswith("on-") or low.startswith("inverse-on-"):
+        return "fg", "text", "name: on-* prefix"
+    if low == "inverse-surface":
+        return "bg", "surface", "name: inverse-surface"
+    if low.startswith("inverse-"):
+        return "fg", "text", "name: inverse-* (non-surface)"
+
+    head = segs[0] if segs else low
+    if head in UI_WORDS:
+        if is_decorative_ui(low):
+            return ("fg", "ui-decorative",
+                    "name: non-text/UI role word with a decorative -variant tone")
+        return "fg", "ui", "name: non-text/UI role word"
+    if any(s in FG_WORDS for s in segs):
+        return "fg", "text", "name: foreground role word"
+    if head in BG_WORDS or head in MD3_KEYS or "container" in segs:
+        role = "surface" if (head in BG_WORDS or "container" in segs) else "key"
+        return "bg", role, "name: background/key role word"
+
+    if rgba is None:
+        return "bg", "surface", "unclassified, colour unreadable"
+    lum = relative_luminance(rgba)
+    if lum < PIVOT_LUMINANCE:
+        return "fg", "text", "luminance %.3f < %.4f pivot" % (lum, PIVOT_LUMINANCE)
+    return "bg", "surface", "luminance %.3f >= %.4f pivot" % (lum, PIVOT_LUMINANCE)
+
+
+SURFACE_FAMILY = (
+    "surface", "surface-dim", "surface-bright", "surface-container",
+    "surface-container-lowest", "surface-container-low",
+    "surface-container-high", "surface-container-highest",
+    "surface-variant", "background",
+)
+
+
+def intended_pairs(colors):
+    """MD3 semantic pairing: which foreground is DESIGNED to sit on which
+    background. Returns (pairs, notes) where pairs is a list of
+    (fg_name, bg_name, role, why) and notes records on-* tokens with no base.
+    """
+    names = list(colors)
+    have = set(names)
+    pairs = []
+    notes = []
+    seen = set()
+
+    def add(fg, bg, role, why):
+        if fg in have and bg in have and (fg, bg) not in seen:
+            seen.add((fg, bg))
+            pairs.append((fg, bg, role, why))
+            return True
+        return False
+
+    for name in names:
+        low = name.lower()
+        if low.startswith("inverse-on-"):
+            base = "inverse-" + low[len("inverse-on-"):]
+        elif low.startswith("on-"):
+            base = low[len("on-"):]
+        else:
+            continue
+
+        placed = add(name, base, "text", "MD3: on-X sits on X")
+        if not placed:
+            # documented fallback chain, in order
+            fallbacks = []
+            if base.endswith("-fixed-variant"):
+                fallbacks.append(base[: -len("-variant")])
+            if base.endswith("-variant"):
+                fallbacks.append(base[: -len("-variant")])
+            for cand in fallbacks:
+                if add(name, cand, "text", "MD3 fallback: %s undefined" % base):
+                    placed = True
+                    break
+        if not placed:
+            notes.append("'%s' has no base token '%s' to sit on." % (name, base))
+        # a *-dim sibling of the base is the same surface at another tone
+        add(name, base + "-dim", "text", "MD3: dim tone of %s" % base)
+
+    # on-surface / on-surface-variant are the content colours for every
+    # surface role, not only for `surface` itself.
+    for fg in ("on-surface", "on-surface-variant"):
+        for bg in SURFACE_FAMILY:
+            add(fg, bg, "text", "MD3: content colour for all surface roles")
+
+    # Non-text boundaries. MD3 splits these in two: `outline` is the functional
+    # boundary (form-field borders, focus rings, dividers that carry structure)
+    # and is gated at the 3.0 non-text threshold; `outline-variant` is the
+    # subtle decorative divider, exempt under WCAG 2.x SC 1.4.11 and reported
+    # without a gate unless --strict-decorative is passed.
+    for fg in ("outline", "outline-variant"):
+        if is_decorative_ui(fg):
+            role = "ui-decorative"
+            why = "MD3: decorative divider on a surface (SC 1.4.11 exempt)"
+        else:
+            role = "ui"
+            why = "MD3: functional boundary on a surface (non-text 3:1)"
+        for bg in ("surface", "background", "surface-container"):
+            add(fg, bg, role, why)
+
+    return pairs, notes
+
+
+# ---------------------------------------------------------------------------
+# typography
+# ---------------------------------------------------------------------------
+
+def size_to_px(raw):
+    """-> (px_or_None, basis_string)."""
+    if isinstance(raw, (int, float)):
+        return float(raw), "unitless number read as px"
+    m = DIM_RE.match(str(raw or ""))
+    if not m:
+        return None, "unparseable size %r" % raw
+    val, unit = float(m.group(1)), m.group(2).lower()
+    if unit == "px":
+        return val, "px"
+    if unit == "rem":
+        return val * REM_ROOT_PX, "rem x %gpx assumed root" % REM_ROOT_PX
+    return None, "em depends on the inherited size — not derivable here"
+
+
+def read_typography(extend):
+    """theme.extend.fontSize -> list of scale dicts.
+
+    Shape observed from the CLI: {"body-md": ["16px", {"fontWeight": "400",
+    "lineHeight": "24px", "letterSpacing": "0.01em"}]}. The second element may
+    be absent or {}.
+    """
+    out = []
+    font_size = extend.get("fontSize") or {}
+    if not isinstance(font_size, dict):
+        return out
+    for name, entry in font_size.items():
+        size_raw, meta = None, {}
+        if isinstance(entry, list):
+            if entry:
+                size_raw = entry[0]
+            if len(entry) > 1 and isinstance(entry[1], dict):
+                meta = entry[1]
+        else:
+            size_raw = entry
+        px, basis = size_to_px(size_raw)
+
+        weight = meta.get("fontWeight")
+        try:
+            weight = int(str(weight).strip()) if weight is not None else None
+        except (TypeError, ValueError):
+            weight = None
+
+        if px is None:
+            large, why = None, basis
+        elif px >= 24.0:
+            large, why = True, ">= 24px"
+        elif px >= 18.66 and weight is not None and weight >= 700:
+            large, why = True, ">= 18.66px at weight >= 700"
+        elif px >= 18.66 and weight is None:
+            large, why = None, ">= 18.66px but fontWeight undeclared — bold unknown"
+        else:
+            large, why = False, "< 24px and not >= 18.66px bold"
+
+        out.append({
+            "scale": name,
+            "font_size_raw": size_raw,
+            "font_size_px": round(px, 2) if px is not None else None,
+            "font_size_basis": basis,
+            "font_weight": weight,
+            "aa_large_applies": large,
+            "aa_large_basis": why,
+        })
+    return out
+
+
+# ---------------------------------------------------------------------------
+# upstream CLI
+# ---------------------------------------------------------------------------
+
+def run_export(path, timeout):
+    """cd /tmp && npx --yes @google/design.md@0.4.0 export <abs> --format json-tailwind
+
+    /tmp is used deliberately: running npx inside a workspace that declares a
+    `design.md` bin shadows the package and the call fails.
+    Returns (extend_dict, error_string).
+    """
+    npx = shutil.which("npx")
+    if npx is None:
+        return None, ("`npx` was not found on PATH. Node.js >= 18 is required "
+                      "to resolve %s." % PKG)
+    workdir = "/tmp" if os.path.isdir("/tmp") else os.path.expanduser("~")
+    cmd = [npx, "--yes", PKG, "export", path, "--format", "json-tailwind"]
+    try:
+        proc = subprocess.run(cmd, cwd=workdir, capture_output=True,
+                              text=True, timeout=timeout)
+    except subprocess.TimeoutExpired:
+        return None, ("`%s export` exceeded %ss. The first run downloads the "
+                      "package; retry, or pass a larger --timeout."
+                      % (PKG, timeout))
+    except OSError as exc:
+        return None, "could not execute npx: %s" % exc
+
+    if proc.returncode != 0:
+        detail = (proc.stderr or proc.stdout or "").strip().splitlines()
+        detail = detail[0] if detail else "no output"
+        return None, ("`%s export` exited %d: %s"
+                      % (PKG, proc.returncode, detail))
+    try:
+        data = json.loads(proc.stdout)
+    except json.JSONDecodeError as exc:
+        return None, "could not parse the export JSON: %s" % exc
+
+    extend = ((data or {}).get("theme") or {}).get("extend")
+    if not isinstance(extend, dict):
+        return None, "export JSON has no theme.extend object"
+    return extend, None
+
+
+# ---------------------------------------------------------------------------
+# rendering
+# ---------------------------------------------------------------------------
+
+def r2(x):
+    return round(x + 1e-12, 2)
+
+
+def mark(passed):
+    return "PASS" if passed else "FAIL"
+
+
+def verdict_cells(p):
+    """(AA, AA-LG, AAA) cells for one row.
+
+    A `ui` row is a non-text boundary: AA 4.5 and AAA 7.0 do not apply to it.
+    Its governing threshold is 3.0, which is numerically the AA-large column,
+    so the verdict is printed there and the text columns read n/a.
+
+    A decorative row has no governing threshold at all unless
+    --strict-decorative supplied one, so every verdict cell reads n/a and the
+    measured ratio in the RATIO column is the whole of what is claimed.
+    """
+    if p["decorative"] and not p["gate_applies"]:
+        return ("n/a", "n/a", "n/a")
+    if p["role"] in ("ui", "ui-decorative"):
+        return ("n/a", mark(p["pass"]["ui"]), "n/a")
+    return (mark(p["pass"]["aa"]),
+            mark(p["pass"]["aa_large"]),
+            mark(p["pass"]["aaa"]))
+
+
+def role_cell(p):
+    return "decor" if p["role"] == "ui-decorative" else p["role"]
+
+
+def below_gate(p):
+    """True when a threshold governs this pair and the pair is under it.
+
+    A decorative pair that no threshold governs is not "below the gate"; it has
+    no gate. Used for the matrix counts, which are advisory.
+    """
+    return p["gate_applies"] and not p["gate_pass"]
+
+
+def is_violation(p):
+    """True only for pairs that decide the exit code and do not meet it.
+
+    This, and nothing else, earns the FAILS GATE marker.
+    """
+    return p["gated"] and not p["gate_pass"]
+
+
+PAIR_HEADER = "  RATIO    AA    AA-LG  AAA   ROLE   GATED  PAIR"
+
+
+def render_pair_rows(pairs, out):
+    out.append(PAIR_HEADER)
+    for p in pairs:
+        aa, aalg, aaa = verdict_cells(p)
+        flag = "  <-- FAILS GATE" if is_violation(p) else ""
+        out.append("  %-8s %-5s %-6s %-5s %-6s %-6s %s on %s%s" % (
+            "%.2f" % p["ratio"], aa, aalg, aaa, role_cell(p),
+            "yes" if p["gated"] else "no",
+            p["foreground"], p["background"], flag,
+        ))
+        for note in p["notes"]:
+            out.append("           note: %s" % note)
+
+
+def decorative_footnote(gate_ui, strict, out):
+    """Printed wherever a decorative pair appears. States the exemption and its
+    limit: decoration is exempt, structure is not."""
+    if strict:
+        out.append("  [decor] gated at %.2f:1 by --strict-decorative; the "
+                   "default exempts these rows." % gate_ui)
+        return
+    out.append("  [decor] not gated: WCAG 2.x SC 1.4.11 requires %.1f:1 only "
+               "for UI components, states" % T_UI)
+    out.append("          and graphical objects required to understand the "
+               "content, and exempts purely")
+    out.append("          decorative elements. A divider that is the ONLY "
+               "thing separating two regions")
+    out.append("          carries structure and is not decorative — promote "
+               "it to `outline`, which is")
+    out.append("          gated. --strict-decorative gates these rows at "
+               "%.2f:1." % gate_ui)
+
+
+def build_pair(fg_name, bg_name, colors, role, intended, why, gate_text,
+               gate_ui, strict_decorative, plausible):
+    fg = colors[fg_name]
+    bg = colors[bg_name]
+    notes = []
+    if bg[3] < 1.0:
+        return None, ("%s on %s: background alpha is %.2f — the true backdrop "
+                      "is unknown, pair skipped." % (fg_name, bg_name, bg[3]))
+    fg_eff = fg
+    if fg[3] <= 0.0:
+        return None, ("%s on %s: foreground is fully transparent, pair skipped."
+                      % (fg_name, bg_name))
+    if fg[3] < 1.0:
+        fg_eff = composite(fg, bg)
+        notes.append("foreground alpha %.2f composited over %s" % (fg[3], bg_name))
+
+    ratio = r2(contrast_ratio(fg_eff, bg))
+    decorative = role == "ui-decorative"
+    gate = gate_ui if role in ("ui", "ui-decorative") else gate_text
+    # `gate_applies`: a threshold governs this pair at all.
+    # `gated`:        this pair decides the exit code.
+    gate_applies = (not decorative) or strict_decorative
+    gated = bool(intended) and gate_applies
+    return {
+        "foreground": fg_name,
+        "background": bg_name,
+        "foreground_hex": hexof(fg),
+        "background_hex": hexof(bg),
+        "ratio": ratio,
+        "role": role,
+        "decorative": decorative,
+        "intended": intended,
+        "plausible": plausible,
+        "why": why,
+        "pass": {
+            "aa": ratio >= T_AA,
+            "aa_large": ratio >= T_AA_LARGE,
+            "aaa": ratio >= T_AAA,
+            "ui": ratio >= T_UI,
+        },
+        "gate_threshold": gate,
+        "gate_applies": gate_applies,
+        "gated": gated,
+        "gate_pass": ratio >= gate,
+        "notes": notes,
+    }, None
+
+
+def hexof(rgba):
+    r, g, b, a = rgba
+    s = "#%02x%02x%02x" % (int(round(r)), int(round(g)), int(round(b)))
+    if a < 1.0:
+        s += "%02x" % int(round(a * 255))
+    return s
+
+
+# ---------------------------------------------------------------------------
+# self-test
+# ---------------------------------------------------------------------------
+
+# Hand-derived from the WCAG 2.x formula, then checked against the widely
+# published figures for the same pairs. If any of these stops reproducing, the
+# ratio implementation is wrong — do not "fix" the expectations.
+KNOWN_ANSWERS = [
+    ("#000000", "#ffffff", 21.00),   # the formula's maximum
+    ("#767676", "#ffffff", 4.54),    # darkest grey that still clears AA on white
+    ("#808080", "#ffffff", 3.95),    # mid grey on white
+    ("#0000ff", "#ffffff", 8.59),    # pure blue on white
+    ("#ffffff", "#ffffff", 1.00),    # the formula's minimum
+]
+
+
+def self_test(as_json):
+    rows, ok = [], True
+    for fg, bg, want in KNOWN_ANSWERS:
+        got = r2(contrast_ratio(parse_hex(fg), parse_hex(bg)))
+        good = abs(got - want) < 0.005
+        ok = ok and good
+        rows.append({"foreground": fg, "background": bg,
+                     "expected": want, "actual": got,
+                     "pass": good})
+    if as_json:
+        print(json.dumps({"tool": TOOL, "self_test": rows, "pass": ok}, indent=2))
+    else:
+        print("%s --self-test (WCAG 2.x known answers)" % TOOL)
+        for r in rows:
+            print("  %-4s %s on %s  expected %.2f  actual %.2f"
+                  % ("OK" if r["pass"] else "FAIL", r["foreground"],
+                     r["background"], r["expected"], r["actual"]))
+        print("  %s" % ("all known answers reproduced" if ok
+                        else "MISMATCH — the ratio implementation is wrong"))
+    return EXIT_OK if ok else EXIT_FAIL
+
+
+# ---------------------------------------------------------------------------
+# main
+# ---------------------------------------------------------------------------
+
+EPILOG = """\
+what it does
+  The upstream `contrast-ratio` lint rule checks only components that declare
+  BOTH backgroundColor and textColor, and only against WCAG AA 4.5:1. The
+  palette itself is never checked, and AAA is never reported. This script
+  checks every plausible "text on surface" pair in the palette and reports
+  AA 4.5, AA-large 3.0, AAA 7.0 and the 3.0 non-text threshold for each.
+
+  Resolved token values come from the upstream CLI, invoked as
+  `cd /tmp && npx --yes %(pkg)s export <FILE> --format json-tailwind`,
+  which resolves {colors.x} references and converts every CSS colour notation
+  to lowercase hex. No YAML is parsed here. The first npx run may take ~30s
+  while npm fetches the package; later runs hit the npx cache.
+
+role classification — THIS IS A NAMING HEURISTIC, not a semantic analysis
+  Precedence, first match wins:
+    1. `on-*` / `inverse-on-*`          -> foreground, text
+    2. `inverse-surface`                -> background
+    3. any other `inverse-*`            -> foreground, text
+    4. head segment in {%(ui)s}
+                                        -> foreground, non-text/UI; a name
+       ending in `-variant` here is the DECORATIVE tone, see below
+    5. any segment in {text, ink, fg, foreground, content, label, heading,
+       caption, body, muted, copy}      -> foreground, text
+    6. head segment in {background, bg, surface, canvas, paper, base, sheet,
+       panel, card, page, fill, backdrop} or {primary, secondary, tertiary,
+       error}, or a `*-container*` name -> background
+    7. otherwise, by relative luminance: below %(pivot).4f -> foreground,
+       at or above -> background. %(pivot).4f is the luminance at which
+       contrast against white equals contrast against black.
+  A token named outside these conventions lands in rule 7 and may be placed on
+  the wrong side. Rename it, or read the classification table in --json.
+
+non-text roles: gated, and decorative
+  WCAG 2.x SC 1.4.11 (Non-text Contrast) requires %(ui_gate).1f:1 for visual
+  information that identifies user interface components and their states, and
+  for graphical objects required to understand the content. It exempts
+  elements that are purely decorative.
+  Material Design 3 splits its boundary token along exactly that line:
+  `outline` is the functional boundary — form-field borders, focus rings,
+  dividers that carry structure — while `outline-variant` is the subtle
+  decorative divider, which the MD3 baseline itself ships below %(ui_gate).1f:1.
+  So a non-text/UI token whose name ends in `-variant` is classified
+  DECORATIVE: its ratio is measured and printed like any other, its ROLE cell
+  reads `decor`, its GATED cell reads `no`, its verdict cells read n/a because
+  no threshold governs it, and it cannot change the exit code. Every other
+  non-text/UI token stays gated at %(ui_gate).1f:1.
+  The exemption is about decoration, not about a lower bar. If a divider is the
+  only thing separating two regions of the interface, it carries structural
+  meaning, it is not decorative, and it must be promoted to `outline` — which
+  is gated. Pass --strict-decorative to gate decorative pairs at %(ui_gate).1f:1
+  as well.
+
+intended pairs
+  Reported first. They alone decide the exit code — with the decorative rows
+  among them excepted, since no threshold governs those. Derived from the MD3
+  pairing the format's own vocabulary implies:
+    * `on-X` is intended on `X`; if `X` is undefined, on `X` minus a trailing
+      `-variant`; also on `X-dim` when that exists.
+    * `on-surface` and `on-surface-variant` are intended on every surface role
+      (surface, surface-dim, surface-bright, surface-container*, background).
+    * `outline` is intended on surface/background/surface-container as a
+      functional non-text boundary, governed by %(ui_gate).1f:1, not by 4.5:1.
+    * `outline-variant` is measured on the same backgrounds and reported as
+      decorative and not gated — see "non-text roles" above.
+  Component-declared pairs are NOT read: the export format carries no
+  components. Those are already covered by the upstream `contrast-ratio` rule
+  — run `scripts/lint` for them. This script is the palette-level complement.
+
+typography
+  `theme.extend.fontSize` is read so the AA-large 3.0 threshold is applied only
+  where it legitimately holds (>= 24px, or >= 18.66px at fontWeight >= 700).
+  `px` is exact. `rem` is multiplied by an assumed %(rem)gpx root. `em` is NOT
+  derivable from the file and is reported as undetermined rather than guessed.
+  A scale >= 18.66px with no declared fontWeight is also undetermined.
+
+the wider matrix
+  Every remaining foreground x background combination is computed, but most of
+  them are combinations nobody would ever build, and printing all of them
+  buries the intended pairs. --matrix selects how much is printed:
+    summary    the counts only.
+    plausible  the counts, plus only the pairs that are BOTH plausible AND
+               below the gate. This is the default.
+    full       every computed pair, grouped by background.
+  A pair is PLAUSIBLE when the foreground carries content (`on-*`,
+  `inverse-on-*`) or is a non-text/UI colour, AND one of:
+    1. foreground and background are of the same MD3 family, or
+    2. the background is of a neutral family (`surface` or `background`) and
+       the foreground is either neutral content or a non-text/UI colour.
+  MD3 family is the token name with a leading `on-` and the `-container*`,
+  `-fixed*`, `-dim`, `-bright`, `-tint`, `-variant` suffixes removed:
+  `on-primary-fixed-variant` and `primary-container` are both of family
+  `primary`; `on-surface-variant` and `surface-container-high` are both of
+  family `surface`. A leading `inverse-` is kept, so `inverse-on-surface`
+  belongs to `inverse-surface` and not to `surface`.
+  `on-primary on surface` is therefore NOT plausible: `on-primary` is the
+  content colour of `primary`, and reporting it against a neutral surface is
+  noise, not a finding.
+  Matrix rows are advisory in every mode: they never decide the exit code, and
+  the FAILS GATE marker is therefore never printed on one. --json carries every
+  computed pair regardless of --matrix, since machine output has no noise
+  problem.
+
+alpha
+  An 8-digit hex foreground is composited over the background under test. An
+  8-digit hex background is skipped: its real backdrop is unknown.
+
+exit codes
+  0  every gated intended pair meets the gate
+  1  at least one gated intended pair fails the gate (or --self-test mismatched)
+  2  input file missing, unreadable, or not a regular file
+  3  the export CLI failed, or the file defines no colors
+
+examples
+  scripts/check-contrast examples/fixture-clean.md
+  scripts/check-contrast examples/fixture-clean.md --level aaa
+  scripts/check-contrast examples/fixture-broken.md --json
+  scripts/check-contrast DESIGN.md --matrix full
+  scripts/check-contrast DESIGN.md --matrix summary --min 4.5
+  scripts/check-contrast DESIGN.md --strict-decorative
+  scripts/check-contrast --self-test
+""" % {"pkg": PKG, "pivot": PIVOT_LUMINANCE, "rem": REM_ROOT_PX,
+       "ui": ", ".join(sorted(UI_WORDS)), "ui_gate": T_UI}
+
+
+def build_parser():
+    p = argparse.ArgumentParser(
+        prog=TOOL,
+        description="WCAG 2.x contrast matrix over every text-on-surface pair "
+                    "in a DESIGN.md palette, at AA 4.5, AA-large 3.0, AAA 7.0 "
+                    "and the 3.0 non-text threshold.",
+        epilog=EPILOG,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    p.add_argument("file", nargs="?", metavar="DESIGN.md",
+                   help="path to the DESIGN.md file to check")
+    p.add_argument("--json", action="store_true",
+                   help="emit the full result as JSON on stdout instead of the "
+                        "human-readable report")
+    p.add_argument("--level", choices=("aa", "aaa", "both"), default="aa",
+                   help="which threshold gates the exit code for TEXT pairs: "
+                        "aa=4.5 (default), aaa=7.0, both=gate on 4.5 and list "
+                        "AAA shortfalls as advisory. UI pairs are always gated "
+                        "at 3.0")
+    p.add_argument("--min", dest="minimum", type=float, metavar="RATIO",
+                   help="override the text gate with an explicit ratio; "
+                        "supersedes --level. UI pairs stay at 3.0")
+    p.add_argument("--strict-decorative", action="store_true",
+                   help="gate decorative non-text pairs at %.1f:1 as well. A "
+                        "non-text/UI token whose name ends in `-variant` "
+                        "(outline-variant) is decorative by default: measured "
+                        "and printed, but exempt under WCAG 2.x SC 1.4.11 and "
+                        "excluded from the exit code" % T_UI)
+    p.add_argument("--matrix", choices=("summary", "plausible", "full"),
+                   default="plausible",
+                   help="how much of the wider matrix to print: summary=the "
+                        "counts only; plausible=the counts plus only the pairs "
+                        "that are both plausible and below the gate (default); "
+                        "full=every computed pair. --json emits every computed "
+                        "pair whatever this is set to. `plausible` is defined "
+                        "in the epilog below")
+    p.add_argument("--fail-only", action="store_true",
+                   help="with --matrix full, print only the pairs below the "
+                        "gate; --matrix plausible already lists only those. "
+                        "Intended pairs are always printed in full")
+    p.add_argument("--no-matrix", action="store_true",
+                   help="omit the wider matrix entirely and print only the "
+                        "intended pairs and the typography table")
+    p.add_argument("--timeout", type=float, default=300.0, metavar="SECONDS",
+                   help="seconds to wait for the npx export call (default 300)")
+    p.add_argument("--self-test", action="store_true",
+                   help="verify the ratio implementation against known answers "
+                        "(black on white = 21.00, #767676 on white = 4.54, "
+                        "blue on white = 8.59) and exit; needs no file "
+                        "and no network")
+    p.add_argument("--version", action="version",
+                   version="%s %s (upstream %s)" % (TOOL, TOOL_VERSION, PKG))
+    return p
+
+
+def fail(msg, code):
+    sys.stderr.write("%s: error: %s\n" % (TOOL, msg))
+    return code
+
+
+def main(argv):
+    args = build_parser().parse_args(argv)
+
+    if args.self_test:
+        return self_test(args.json)
+
+    if not args.file:
+        return fail("a DESIGN.md path is required (or use --self-test). "
+                    "Run `%s --help`." % TOOL, EXIT_INPUT)
+
+    path = os.path.abspath(os.path.expanduser(args.file))
+    if not os.path.exists(path):
+        return fail("no such file: %s" % path, EXIT_INPUT)
+    if os.path.isdir(path):
+        return fail("%s is a directory, not a DESIGN.md file" % path, EXIT_INPUT)
+    if not os.path.isfile(path):
+        return fail("%s is not a regular file" % path, EXIT_INPUT)
+    try:
+        with open(path, "rb") as fh:
+            fh.read(1)
+    except OSError as exc:
+        return fail("cannot read %s: %s" % (path, exc.strerror or exc), EXIT_INPUT)
+
+    extend, err = run_export(path, args.timeout)
+    if err:
+        return fail(err, EXIT_EXPORT)
+
+    raw_colors = extend.get("colors") or {}
+    if not raw_colors:
+        return fail("%s defines no colors — nothing to check. Add a `colors:` "
+                    "map to the frontmatter." % path, EXIT_EXPORT)
+
+    colors, unreadable = {}, []
+    for name, value in raw_colors.items():
+        rgba = parse_hex(value)
+        if rgba is None:
+            unreadable.append({"token": name, "value": value})
+        else:
+            colors[name] = rgba
+    if not colors:
+        return fail("no color token in %s parsed as a hex value; the export "
+                    "returned %d unreadable entries." % (path, len(unreadable)),
+                    EXIT_EXPORT)
+
+    gate_text = args.minimum if args.minimum is not None else (
+        T_AAA if args.level == "aaa" else T_AA)
+    gate_ui = T_UI
+
+    roles = {}
+    fg_names, bg_names = [], []
+    for name, rgba in colors.items():
+        side, role, basis = classify(name, rgba)
+        roles[name] = {"token": name, "hex": hexof(rgba), "side": side,
+                       "role": role, "basis": basis,
+                       "luminance": round(relative_luminance(rgba), 4)}
+        (fg_names if side == "fg" else bg_names).append(name)
+    fg_names.sort()
+    bg_names.sort()
+
+    skipped = []
+    intended, notes = intended_pairs(colors)
+    intended_rows = []
+    intended_keys = set()
+    for fg, bg, role, why in intended:
+        row, skip = build_pair(fg, bg, colors, role, True, why, gate_text,
+                               gate_ui, args.strict_decorative, True)
+        if skip:
+            skipped.append(skip)
+            continue
+        intended_rows.append(row)
+        intended_keys.add((fg, bg))
+    # violations first, then everything else by ascending ratio
+    intended_rows.sort(key=lambda r: (not is_violation(r), r["ratio"]))
+
+    matrix_rows = []
+    if not args.no_matrix:
+        for bg in bg_names:
+            for fg in fg_names:
+                if (fg, bg) in intended_keys:
+                    continue
+                fg_role = roles[fg]["role"]
+                role = fg_role if fg_role in ("ui", "ui-decorative") else "text"
+                row, skip = build_pair(fg, bg, colors, role, False,
+                                       "classified pair", gate_text, gate_ui,
+                                       args.strict_decorative,
+                                       is_plausible(fg, fg_role, bg))
+                if skip:
+                    skipped.append(skip)
+                    continue
+                matrix_rows.append(row)
+
+    typography = read_typography(extend)
+    large_ok = [t["scale"] for t in typography if t["aa_large_applies"] is True]
+    large_unknown = [t["scale"] for t in typography if t["aa_large_applies"] is None]
+
+    failing = [r for r in intended_rows if is_violation(r)]
+    decorative_rows = [r for r in intended_rows if r["decorative"]]
+    aaa_short = [r for r in intended_rows
+                 if r["role"] == "text" and r["gate_pass"] and not r["pass"]["aaa"]]
+    matrix_below = [r for r in matrix_rows if below_gate(r)]
+    matrix_plausible_below = [r for r in matrix_below if r["plausible"]]
+    code = EXIT_FAIL if failing else EXIT_OK
+
+    result = {
+        "tool": TOOL,
+        "tool_version": TOOL_VERSION,
+        "upstream": PKG,
+        "file": path,
+        "level": args.level,
+        "matrix_mode": args.matrix,
+        "gate": {"text": gate_text, "ui": gate_ui,
+                 "decorative": gate_ui if args.strict_decorative else None,
+                 "strict_decorative": args.strict_decorative,
+                 "source": "--min" if args.minimum is not None else "--level"},
+        "thresholds": {"aa": T_AA, "aa_large": T_AA_LARGE,
+                       "aaa": T_AAA, "ui": T_UI},
+        "assumptions": {
+            "rem_root_px": REM_ROOT_PX,
+            "luminance_pivot": PIVOT_LUMINANCE,
+            "verdict_rounding": "ratios are rounded to 2dp before comparison, "
+                                "so the printed number and the verdict agree",
+            "classification": "naming heuristic, see --help",
+            "decorative_exemption":
+                "a non-text/UI token whose name ends in `-variant` "
+                "(outline-variant) is MD3's decorative divider. WCAG 2.x "
+                "SC 1.4.11 exempts purely decorative elements, so the pair is "
+                "measured and reported but not gated and cannot change the "
+                "exit code. A divider that is the only separator between two "
+                "regions carries structure and must be promoted to `outline`. "
+                "--strict-decorative gates decorative pairs at the non-text "
+                "threshold too.",
+            "matrix_plausible":
+                "a content (`on-*`, `inverse-on-*`) or non-text/UI foreground "
+                "over a background of the surface or background MD3 family, or "
+                "of the foreground's own MD3 family",
+        },
+        "palette": {
+            "colors": len(raw_colors),
+            "parsed": len(colors),
+            "unreadable": unreadable,
+            "foreground_candidates": [roles[n] for n in fg_names],
+            "background_candidates": [roles[n] for n in bg_names],
+        },
+        "typography": {
+            "scales": typography,
+            "aa_large_applies_to": large_ok,
+            "aa_large_undetermined": large_unknown,
+        },
+        "intended_pairs": intended_rows,
+        "matrix": matrix_rows,
+        "skipped_pairs": skipped,
+        "unpaired_notes": notes,
+        "summary": {
+            "intended_total": len(intended_rows),
+            "intended_gated": sum(1 for r in intended_rows if r["gated"]),
+            "intended_decorative": len(decorative_rows),
+            "intended_failing": len(failing),
+            "intended_aaa_shortfall": [
+                "%s on %s (%.2f)" % (r["foreground"], r["background"], r["ratio"])
+                for r in aaa_short],
+            "matrix_total": len(matrix_rows),
+            "matrix_clearing": len(matrix_rows) - len(matrix_below),
+            "matrix_failing": len(matrix_below),
+            "matrix_plausible": sum(1 for r in matrix_rows if r["plausible"]),
+            "matrix_plausible_failing": len(matrix_plausible_below),
+        },
+        "exit_code": code,
+    }
+
+    if args.json:
+        print(json.dumps(result, indent=2))
+        return code
+
+    out = []
+    out.append("%s — %s" % (TOOL, path))
+    out.append("palette: %d colors -> %d foreground candidates, %d background "
+               "candidates" % (len(colors), len(fg_names), len(bg_names)))
+    out.append("gate: text %.2f:1, non-text/UI %.2f:1, decorative %s  (%s %s)"
+               % (gate_text, gate_ui,
+                  ("%.2f:1" % gate_ui) if args.strict_decorative
+                  else "not gated",
+                  "--min" if args.minimum is not None else "--level",
+                  args.minimum if args.minimum is not None else args.level))
+    out.append("")
+
+    out.append("TYPOGRAPHY — where the AA-large 3.0 threshold legitimately applies")
+    if not typography:
+        out.append("  no typography tokens defined; AA-large cannot be justified")
+        out.append("  from this file — treat every text pair as normal text (4.5).")
+    else:
+        out.append("  SCALE                SIZE       WEIGHT  AA-LARGE  BASIS")
+        for t in typography:
+            applies = {True: "yes", False: "no", None: "unknown"}[t["aa_large_applies"]]
+            out.append("  %-20s %-10s %-7s %-9s %s" % (
+                t["scale"],
+                ("%.2fpx" % t["font_size_px"]) if t["font_size_px"] is not None
+                else str(t["font_size_raw"]),
+                t["font_weight"] if t["font_weight"] is not None else "-",
+                applies, t["aa_large_basis"]))
+        out.append("  %d scale(s); AA-large applies to %d, undetermined for %d."
+                   % (len(typography), len(large_ok), len(large_unknown)))
+    out.append("")
+
+    out.append("INTENDED PAIRS — MD3 semantic pairing; these decide the exit code")
+    if not intended_rows:
+        out.append("  none. No `on-*` token has a base token to sit on, so this")
+        out.append("  file states no intended pairing. Exit code is 0 by default.")
+    else:
+        render_pair_rows(intended_rows, out)
+        if decorative_rows:
+            decorative_footnote(gate_ui, args.strict_decorative, out)
+    for n in notes:
+        out.append("  note: %s" % n)
+    out.append("")
+
+    if not args.no_matrix:
+        out.append("MATRIX — every other foreground x background pair "
+                   "(advisory; never gated)")
+        if not matrix_rows:
+            out.append("  no further pairs.")
+        else:
+            out.append("  %d pair(s) computed, %d at or above the gate, "
+                       "%d below it."
+                       % (len(matrix_rows),
+                          len(matrix_rows) - len(matrix_below),
+                          len(matrix_below)))
+            out.append("  %d of the pairs below the gate are plausible ones."
+                       % len(matrix_plausible_below))
+            if args.matrix == "summary":
+                out.append("  listing suppressed by --matrix summary; "
+                           "--matrix plausible lists the plausible")
+                out.append("  failures, --matrix full lists every computed "
+                           "pair.")
+                shown = []
+            elif args.matrix == "full":
+                shown = matrix_below if args.fail_only else matrix_rows
+                out.append("  listing every computed pair%s (--matrix full)."
+                           % (" below the gate" if args.fail_only else ""))
+                if not shown:
+                    out.append("  none.")
+            elif not matrix_plausible_below:
+                shown = []
+                out.append("  no plausible pair is below the gate. "
+                           "--matrix full lists every computed pair.")
+            else:
+                shown = matrix_plausible_below
+                out.append("  listing the plausible pairs below the gate. A "
+                           "pair is plausible when an")
+                out.append("  `on-*` or non-text foreground meets a token of "
+                           "its own MD3 family, or — for a")
+                out.append("  neutral or non-text foreground — a "
+                           "surface/background token; see --help.")
+            for bg in bg_names:
+                group = [r for r in shown if r["background"] == bg]
+                if not group:
+                    continue
+                group.sort(key=lambda r: -r["ratio"])
+                out.append("  on %s %s" % (bg, hexof(colors[bg])))
+                render_pair_rows(group, out)
+            if any(r["decorative"] for r in shown):
+                decorative_footnote(gate_ui, args.strict_decorative, out)
+        out.append("")
+
+    if skipped:
+        out.append("SKIPPED")
+        for s in skipped:
+            out.append("  %s" % s)
+        out.append("")
+
+    if unreadable:
+        out.append("UNREADABLE COLOR VALUES (not hex after export)")
+        for u in unreadable:
+            out.append("  %s = %r" % (u["token"], u["value"]))
+        out.append("")
+
+    out.append("SUMMARY")
+    out.append("  intended pairs: %d checked, %d gated, %d below the gate"
+               % (len(intended_rows),
+                  sum(1 for r in intended_rows if r["gated"]), len(failing)))
+    if decorative_rows:
+        out.append("  decorative pairs: %d measured, %s"
+                   % (len(decorative_rows),
+                      ("gated at %.2f:1 by --strict-decorative" % gate_ui)
+                      if args.strict_decorative
+                      else "exempt under WCAG 2.x SC 1.4.11, not gated"))
+    if args.level in ("both", "aa") and aaa_short:
+        out.append("  clears AA but misses AAA 7.0 (advisory, not gated):")
+        for r in aaa_short:
+            out.append("    %.2f  %s on %s"
+                       % (r["ratio"], r["foreground"], r["background"]))
+    if not args.no_matrix:
+        out.append("  matrix pairs:   %d checked, %d at or above the gate, "
+                   "%d below it (advisory)"
+                   % (len(matrix_rows), len(matrix_rows) - len(matrix_below),
+                      len(matrix_below)))
+        out.append("                  %d of those below the gate are "
+                   "plausible pairs%s"
+                   % (len(matrix_plausible_below),
+                      " (listed above)"
+                      if matrix_plausible_below and args.matrix == "plausible"
+                      else ""))
+    out.append("  exit %d — %s" % (code, "every gated intended pair meets the gate"
+                                   if code == EXIT_OK
+                                   else "a gated intended pair fails the gate"))
+    print("\n".join(out))
+    return code
+
+
+if __name__ == "__main__":
+    try:
+        sys.exit(main(sys.argv[1:]))
+    except KeyboardInterrupt:
+        sys.stderr.write("\n%s: interrupted\n" % TOOL)
+        sys.exit(EXIT_FAIL)
+    except BrokenPipeError:
+        os._exit(EXIT_OK)

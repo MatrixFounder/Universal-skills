@@ -102,7 +102,7 @@ Available plugins (by category):
 | `verification` | `vdd-adversarial`, `vdd-sarcastic` |
 | `content` | `post-writing`, `text-humanizer`, `summarizing-meetings`, `transcript-fetcher` |
 | `workflow` | `brainstorming` |
-| `development` | `mcp-builder`, `hooks-creator` |
+| `development` | `mcp-builder`, `hooks-creator`, `design-md` |
 
 **Managing installed plugins:**
 
@@ -171,6 +171,7 @@ specific repo.
 | :--- | :--- | :--- |
 | **[MCP Builder](skills/mcp-builder/SKILL.md)** | Comprehensive guide for building Model Context Protocol (MCP) servers in Python or TypeScript. Includes best practices for tool design. | - |
 | **[Hooks Creator](skills/hooks-creator/SKILL.md)** | Generates secure, compliant Gemini CLI hooks (Bash/Node) with automated config and VDD-verified security gates. | 2 |
+| **[DESIGN.md Design Systems](skills/design-md/SKILL.md)** | Authors, audits and exports **DESIGN.md** — the open design-system format (YAML design tokens + a markdown rationale body). Three entry routes: from a written brief, from a **screenshot** (colours measured by pixel quantization, never estimated by eye), or from an existing **codebase**. Ships four starter systems that lint with **0 errors / 0 warnings** (`skeleton`, `product-saas`, `editorial`, and a mandatory `cyrillic` one whose families are verified to actually carry Cyrillic), a worked end-to-end example, and known-good / known-bad fixtures. Three stdlib scripts: `lint` (human-readable wrapper over the pinned `@google/design.md@0.4.0`, with a remedy line per rule), `extract-palette` (Pillow **or** a built-in PNG decoder, so screenshots work with no install), and `check-contrast` (every plausible text-on-surface pair at AA 4.5 / AA-large 3.0 / AAA 7.0 plus the 3.0 non-text gate — a check the upstream linter does not provide). Carries an **anti-slop** reference of sixteen prohibitions, each with a detection command, because a file that lints clean is not thereby good. | 2 |
 
 ### Content Skills
 

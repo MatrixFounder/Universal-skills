@@ -1,6 +1,7 @@
 ---
 name: post-writing
 description: Use when the user asks to write, draft, or rewrite a post for social media (LinkedIn, Telegram, Blog) or wants content to be more engaging.
+tier: 2
 version: 2.0
 ---
 
@@ -30,6 +31,37 @@ version: 2.0
 | "Templates are optional for experienced writers" | Templates ensure structural consistency across posts |
 | "The checklist is redundant, I reviewed mentally" | Mental reviews miss items. Use the explicit checklist every time |
 
+## Execution Mode
+
+- **Mode**: `prompt-first`
+- **Rationale**: This skill ships no `scripts/` directory and no runtime dependency. Its output is prose. Hook choice, voice match, and platform formatting are judgement calls made by reading `references/` and writing Markdown — there is nothing here for an executable to decide.
+
+## Script Contract
+
+This skill ships no executable. The contract it honours is the file it writes; the values below restate `## File Conventions` as a checkable interface.
+
+- **Input**: the user's brief plus the Step 1 answers (goal, audience, key takeaway, platform, language).
+- **Output**: exactly one Markdown file per requested post.
+- **Naming**: `YYYY-MM-DD Post Title.md` — ISO date, space, human title.
+- **Destination**: `Draft Posts/RU/` or `Draft Posts/EN/` under the project path listed in `## File Conventions`. A location named by the user overrides that default.
+- **Format**: Markdown body matching the target platform — → arrows and no headings for LinkedIn, full Markdown for Telegram.
+- **Promotion**: a draft moves to `Published Posts/` ONLY on an explicit user instruction.
+
+## Safety Boundaries
+
+- **Write scope**: Create or modify ONLY the post file the user asked for. The skill's own `assets/` and `references/` are read-only inputs — never edit, extend, or overwrite them during a drafting run.
+- **No publishing**: This skill writes a file and stops. It never posts, schedules, or transmits content to LinkedIn, Telegram, a blog engine, or any API. Publication stays a human action.
+- **No invented facts**: Statistics, quotes, customer names, company names, dates, and metrics come from the user. When a hook formula needs a number the user has not supplied, ASK for it. Never fill the slot with a plausible-looking figure.
+- **No borrowed experience**: Never fabricate first-person stories, failures, launches, or results the user has not claimed. "Embed authority through details" means the user's details.
+- **Confidentiality**: Personal and client information the user supplies stays inside the requested artifact — never copied into the skill's own references, never repeated into unrelated files.
+
+## Validation Evidence
+
+- **Primary**: Every item in `references/review-checklist.md` — the Core block and the Advanced block — passes before the draft reaches the user.
+- **Secondary**: Length and formatting match the target platform's limits in `references/platform-rules.md` (LinkedIn 800-1,500 characters, → arrows, no headings; Telegram 500-2,000 characters, full Markdown).
+- **Hook gate**: The selected hook clears the Step 2 hook checklist in `references/hooks-examples.md` — specific, honest, open loop, matched to the reader's awareness level.
+- **Inspectable**: A caller confirms the pass by opening the saved `YYYY-MM-DD Post Title.md` in the drafts folder and reading it against those two checklists; worked end-to-end traces live in `examples/`.
+
 ## Workflow
 
 ### Step 1: Analyze & Clarify
@@ -46,7 +78,7 @@ If ANY of these are missing, ASK the user first. DO NOT proceed without clarity.
 
 ### Step 2: Select a Hook
 
-1. Read `resources/hooks-examples.md` for hook types and formulas.
+1. Read `references/hooks-examples.md` for hook types and formulas.
 2. Propose **3 distinct hook options** (e.g., one Story, one Problem, one Contrarian Thesis).
 3. ASK the user to choose one.
 
@@ -55,11 +87,11 @@ Apply Ogilvy's principle: "The headline is 80 cents of your dollar." Spend time 
 ### Step 3: Draft the Post
 
 1. Read the appropriate voice guide:
-   - **RU posts**: Read `resources/voice-guide-ru.md`
-   - **EN posts**: Read `resources/voice-guide-en.md`
-   - **Other languages**: Use `resources/voice-guide-en.md` as fallback. Note to the user that no brand-specific voice guide exists for this language.
-2. Read `resources/platform-rules.md` for platform-specific formatting.
-3. Optionally read `resources/templates.md` if the user wants a specific format (listicle, structured, multi-platform).
+   - **RU posts**: Read `references/voice-guide-ru.md`
+   - **EN posts**: Read `references/voice-guide-en.md`
+   - **Other languages**: Use `references/voice-guide-en.md` as fallback. Note to the user that no brand-specific voice guide exists for this language.
+2. Read `references/platform-rules.md` for platform-specific formatting.
+3. Optionally read `assets/templates.md` if the user wants a specific format (listicle, structured, multi-platform).
 
 **Structure** (Problem → Reframe → Action):
 - **Hook** — contradiction, intrigue, or personal story
@@ -79,7 +111,7 @@ Apply Ogilvy's principle: "The headline is 80 cents of your dollar." Spend time 
 
 ### Step 4: Review
 
-1. Read `resources/review-checklist.md`.
+1. Read `references/review-checklist.md`.
 2. Verify the draft against every checklist item.
 3. If ANY check fails — fix immediately before presenting to the user.
 
@@ -106,9 +138,14 @@ Default paths (if the user specifies a different location, use that instead):
 
 ## Resources
 
-- [Hook Types & Examples](resources/hooks-examples.md) — formulas and examples for 7 hook types
-- [Voice Guide — RU](resources/voice-guide-ru.md) — Russian voice, tone, lexicon, anti-patterns
-- [Voice Guide — EN](resources/voice-guide-en.md) — English voice, tone, anti-patterns
-- [Platform Rules](resources/platform-rules.md) — LinkedIn vs Telegram formatting
-- [Post Templates](resources/templates.md) — post format templates
-- [Review Checklist](resources/review-checklist.md) — pre-publish verification
+- [Hook Types & Examples](references/hooks-examples.md) — formulas and examples for 7 hook types
+- [Voice Guide — RU](references/voice-guide-ru.md) — Russian voice, tone, lexicon, anti-patterns
+- [Voice Guide — EN](references/voice-guide-en.md) — English voice, tone, anti-patterns
+- [Platform Rules](references/platform-rules.md) — LinkedIn vs Telegram formatting
+- [Post Templates](assets/templates.md) — post format templates
+- [Review Checklist](references/review-checklist.md) — pre-publish verification
+
+## Examples
+
+- [Worked Example — EN, LinkedIn](examples/linkedin-en-contrarian-thesis.md) — full four-step trace ending in a Contrarian Thesis hook, with four checklist failures and the three revisions they forced
+- [Worked Example — RU, Telegram](examples/telegram-ru-story-lead.md) — full four-step trace ending in a Story Lead hook, with the "Раньше/Сейчас" framework added at review

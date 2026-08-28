@@ -1,6 +1,8 @@
 ---
 name: marp-slide
 description: Use when users request slide creation, presentations, or Marp documents. Creates professional Marp slides with 7 themes (default, minimal, colorful, dark, gradient, tech, business). Supports custom themes, image layouts, and "make it look good" requests.
+tier: 2
+version: 1.0
 ---
 
 # Marp Slide Creator
@@ -49,7 +51,7 @@ Use this skill when the user:
 - **Output Location**: Save output to the user's working directory or the location they specify. Do not hardcode output paths.
 - **No External Fetching**: Do not download images or external resources unless the user explicitly provides URLs and requests it.
 - **Template Integrity**: Read templates from `assets/` as references. Never overwrite them.
-- **Rendering Trust**: `scripts/render.py` always invokes marp with `--allow-local-files`, so marp can embed any file the current user can read. Only render `.md` files you trust; do not run the renderer on decks from untrusted sources.
+- **Rendering Trust**: `scripts/render.py` always invokes marp with `--allow-local-files`, which puts every file readable by the current user within reach of the deck being rendered. Only render `.md` files you trust; do not run the renderer on decks from untrusted sources.
 
 ## Validation Evidence
 - **Primary**: The output `.md` file contains valid Marp frontmatter (`marp: true`, `theme`, `paginate` directives).

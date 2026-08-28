@@ -1,0 +1,476 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""Human-readable wrapper around `@google/design.md lint`.
+
+The upstream CLI emits JSON on stdout. JSON is an inefficient thing for an
+agent to read: it spends tokens on punctuation and it says what is wrong
+without saying what to change. This wrapper parses that JSON, groups the
+findings by severity, aligns them into a table, and appends a one-line
+REMEDY for every rule id that fired.
+
+Standard library only. The only network access is the `npx` invocation.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import subprocess
+import sys
+import tempfile
+
+PACKAGE = "@google/design.md"
+DEFAULT_VERSION = "0.4.0"
+
+EXIT_OK = 0
+EXIT_FINDINGS = 1
+EXIT_INPUT = 2
+EXIT_CLI = 3
+
+SEVERITY_ORDER = {"error": 0, "warning": 1, "info": 2}
+
+# Remedies keyed by rule id, and by (rule id, severity) where one rule id is
+# emitted for two different defects. Lookup tries the pair first.
+REMEDIES = {
+    ("broken-ref", "error"):
+        "Define the token the reference names, or repoint {path.to.token} at a path "
+        "that exists in the frontmatter.",
+    ("broken-ref", "warning"):
+        "Rename the component key to one of backgroundColor, textColor, typography, "
+        "rounded, padding, size, height, width — or drop it; there is no sub-token "
+        "for elevation or shadow.",
+    "missing-primary":
+        "Add a `primary` key under `colors`, or rename the accent token to `primary`.",
+    "contrast-ratio":
+        "Change one of the two colors until the pair reaches 4.5:1 (aim for 7:1 on "
+        "body text); the message quotes the measured ratio.",
+    "orphaned-tokens":
+        "Reference the token from a component, or rename it into the MD3 family "
+        "vocabulary (primary/secondary/tertiary/error/surface/background/outline "
+        "and their on-, -container, -fixed, -variant forms).",
+    "token-summary":
+        "Informational. No action; read the counts back and confirm they match what "
+        "you meant to define.",
+    "missing-sections":
+        "Define the named section (`spacing` or `rounded`), or declare it under "
+        "`omitted` with a reason.",
+    "missing-typography":
+        "Add at least one `typography` scale; a file that defines colors and no type "
+        "is half a system.",
+    "section-order":
+        "Reorder the body H2s to Overview, Colors, Typography, Layout, "
+        "Elevation & Depth, Shapes, Components, Do's and Don'ts — only the first "
+        "offending pair is reported, so rerun after fixing.",
+    "unknown-key":
+        "Rename the key to the one the message suggests; the schema keys are version, "
+        "name, description, omitted, colors, typography, rounded, spacing, components.",
+    "token-like-ignored":
+        "Move those values under a recognized section (colors, typography, spacing, "
+        "rounded, components); export commands ignore the key as written.",
+    "declared-omission":
+        "Informational. This confirms the section is deliberately unset — this is the "
+        "intended use of `omitted`.",
+    "redundant-omission":
+        "Remove the section from `omitted`, or delete the tokens it still defines; the "
+        "file currently claims both.",
+    "unknown-omission":
+        "Use one of the five valid section names under `omitted`: colors, typography, "
+        "spacing, rounded, components.",
+}
+
+# Findings the parser emits before any rule runs carry no `rule` key at all.
+NO_RULE_REMEDIES = (
+    ("No YAML content found",
+     "Add a YAML frontmatter block delimited by --- with at least `name:`; without it "
+     "the file defines no tokens and no rule can run."),
+)
+NO_RULE_FALLBACK = (
+    "The YAML frontmatter failed to parse — fix the syntax at the line and column "
+    "quoted in the message, then rerun."
+)
+
+RULE_LISTING = [
+    ("broken-ref", "error"),
+    ("broken-ref", "warning"),
+    ("missing-primary", "warning"),
+    ("contrast-ratio", "warning"),
+    ("orphaned-tokens", "warning"),
+    ("token-summary", "info"),
+    ("missing-sections", "info"),
+    ("missing-typography", "warning"),
+    ("section-order", "warning"),
+    ("unknown-key", "warning"),
+    ("token-like-ignored", "warning"),
+    ("declared-omission", "info"),
+    ("redundant-omission", "warning"),
+    ("unknown-omission", "warning"),
+]
+
+USAGE_EPILOG = """\
+exit codes
+  0  clean: no errors (and, under --strict, no warnings either)
+  1  lint errors present, or warnings present under --strict
+  2  input problem: file missing, unreadable, or a command-line usage error
+  3  npx or the design.md CLI is unavailable, or it returned output that is not JSON
+
+  With several files the worst code wins, in the order 3 > 2 > 1 > 0.
+
+notes
+  The wrapper shells out to `npx --yes @google/design.md@VERSION lint <abs path>`
+  from a neutral working directory, because a workspace that declares the same bin
+  name shadows it. Relative paths are resolved to absolute before the call.
+  The first invocation downloads the package and takes roughly 30 seconds; a notice
+  is written to stderr while that happens.
+  A file with no frontmatter is not an error: the CLI reports one warning saying no
+  YAML was found, and exits 0. Under --strict that warning fails the run.
+  Upstream reports at most one section-order finding per run, so rerun after fixing it.
+
+examples
+  scripts/lint DESIGN.md
+  scripts/lint --strict assets/template-*.md
+  scripts/lint --json DESIGN.md > lint.json
+  scripts/lint --list-rules
+"""
+
+
+class _Parser(argparse.ArgumentParser):
+    """argparse errors leave through the documented input-problem code."""
+
+    def error(self, message):  # noqa: D102
+        self.print_usage(sys.stderr)
+        sys.stderr.write("%s: usage error: %s\n" % (self.prog, message))
+        raise SystemExit(EXIT_INPUT)
+
+
+def build_parser():
+    parser = _Parser(
+        prog="lint",
+        description=(
+            "Lint one or more DESIGN.md files and print a report that says what to "
+            "change. Wraps the upstream design.md CLI and translates its JSON."
+        ),
+        epilog=USAGE_EPILOG,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    parser.add_argument(
+        "files", metavar="FILE", nargs="*",
+        help="path to a DESIGN.md file; repeat for several files",
+    )
+    parser.add_argument(
+        "--json", action="store_true", dest="as_json",
+        help=("emit the upstream JSON instead of the report: verbatim for one file, "
+              "an object keyed by absolute path for several"),
+    )
+    parser.add_argument(
+        "--strict", action="store_true",
+        help="treat warnings as failures too, for use as a gate",
+    )
+    parser.add_argument(
+        "--version", metavar="PIN", default=DEFAULT_VERSION,
+        help=("package version to run, default %(default)s (this option takes a "
+              "version argument; it does not print the wrapper's own version)"),
+    )
+    parser.add_argument(
+        "--list-rules", action="store_true", dest="list_rules",
+        help="print every rule id with its default severity and remedy, then exit",
+    )
+    return parser
+
+
+def remedy_for(rule, severity, message):
+    if not rule:
+        for prefix, text in NO_RULE_REMEDIES:
+            if message.startswith(prefix):
+                return text
+        return NO_RULE_FALLBACK
+    if (rule, severity) in REMEDIES:
+        return REMEDIES[(rule, severity)]
+    if rule in REMEDIES:
+        return REMEDIES[rule]
+    return "No remedy recorded for this rule id; read the message and the format spec."
+
+
+_NOTICE_SHOWN = [False]
+
+
+def neutral_cwd():
+    if os.path.isdir("/tmp"):
+        return "/tmp"
+    return tempfile.gettempdir()
+
+
+def check_input(path):
+    """Return an error string, or None when the path is a readable file."""
+    if not os.path.exists(path):
+        return "file not found"
+    if os.path.isdir(path):
+        return "path is a directory, not a file"
+    if not os.path.isfile(path):
+        return "path is not a regular file"
+    if not os.access(path, os.R_OK):
+        return "file is not readable (check permissions)"
+    return None
+
+
+def run_cli(path, version):
+    """Run the upstream linter on one absolute path.
+
+    Returns (status, payload) where status is one of:
+      "ok"    payload = {"raw": <stdout text>, "data": <parsed JSON>}
+      "input" payload = message string   (upstream could not read the file)
+      "cli"   payload = message string   (npx missing, or unparseable output)
+    """
+    if not _NOTICE_SHOWN[0]:
+        _NOTICE_SHOWN[0] = True
+        sys.stderr.write(
+            "[lint] running npx %s@%s — the first call downloads the package "
+            "and takes about 30 seconds\n" % (PACKAGE, version)
+        )
+        sys.stderr.flush()
+
+    cmd = ["npx", "--yes", "%s@%s" % (PACKAGE, version), "lint", path]
+    try:
+        proc = subprocess.run(
+            cmd, cwd=neutral_cwd(), capture_output=True, text=True,
+        )
+    except FileNotFoundError:
+        return "cli", (
+            "`npx` was not found on PATH. Install Node.js 18 or newer "
+            "(the upstream package declares engines: node >=18)."
+        )
+    except OSError as exc:
+        return "cli", "could not start npx: %s" % exc
+
+    out = proc.stdout or ""
+    err = (proc.stderr or "").strip()
+
+    if proc.returncode == EXIT_INPUT:
+        return "input", err or "the CLI could not read the file (exit 2)"
+
+    try:
+        data = json.loads(out)
+    except (ValueError, TypeError):
+        detail = err or out.strip() or "(no output)"
+        return "cli", (
+            "the CLI returned output that is not JSON (exit %d): %s"
+            % (proc.returncode, detail[:400])
+        )
+
+    if not isinstance(data, dict) or "findings" not in data:
+        return "cli", "the CLI returned JSON in an unexpected shape (no `findings` key)"
+
+    return "ok", {"raw": out.rstrip("\n"), "data": data}
+
+
+def summarize(data):
+    summary = data.get("summary")
+    if isinstance(summary, dict):
+        return (
+            int(summary.get("errors", 0) or 0),
+            int(summary.get("warnings", 0) or 0),
+            int(summary.get("infos", 0) or 0),
+        )
+    errors = warnings = infos = 0
+    for finding in data.get("findings", []):
+        sev = finding.get("severity")
+        if sev == "error":
+            errors += 1
+        elif sev == "warning":
+            warnings += 1
+        elif sev == "info":
+            infos += 1
+    return errors, warnings, infos
+
+
+def plural(count, noun):
+    return "%d %s" % (count, noun if count == 1 else noun + "s")
+
+
+def sorted_findings(findings):
+    """Errors first, then warnings, then infos; emitted order kept within a group."""
+    decorated = []
+    for index, finding in enumerate(findings):
+        rank = SEVERITY_ORDER.get(finding.get("severity"), 3)
+        decorated.append((rank, index, finding))
+    decorated.sort(key=lambda item: (item[0], item[1]))
+    return [item[2] for item in decorated]
+
+
+def render_file_report(path, data, strict, stream):
+    findings = sorted_findings(data.get("findings", []))
+    errors, warnings, infos = summarize(data)
+
+    stream.write("%s\n" % path)
+
+    if findings:
+        rows = []
+        for finding in findings:
+            severity = finding.get("severity") or "-"
+            rule = finding.get("rule") or "-"
+            location = finding.get("path") or "-"
+            message = (finding.get("message") or "").rstrip()
+            head, _, tail = message.partition("\n")
+            rows.append((severity, rule, location, head, tail))
+
+        w_sev = max([len("severity")] + [len(r[0]) for r in rows])
+        w_rule = max([len("rule")] + [len(r[1]) for r in rows])
+        w_path = max([len("path")] + [len(r[2]) for r in rows])
+
+        stream.write("  %-*s  %-*s  %-*s  %s\n" % (
+            w_sev, "severity", w_rule, "rule", w_path, "path", "message"))
+        for severity, rule, location, head, tail in rows:
+            stream.write("  %-*s  %-*s  %-*s  %s\n" % (
+                w_sev, severity, w_rule, rule, w_path, location, head))
+            for line in tail.split("\n") if tail else []:
+                if line.strip():
+                    stream.write("  %s  %s\n" % (" " * (w_sev + w_rule + w_path + 4),
+                                                 line.rstrip()))
+
+        seen = []
+        for finding in findings:
+            key = (finding.get("rule") or "-", finding.get("severity") or "-",
+                   finding.get("message") or "")
+            label = key[0]
+            text = remedy_for(finding.get("rule"), finding.get("severity"), key[2])
+            if (label, text) not in seen:
+                seen.append((label, text))
+        w_label = max(len(label) for label, _ in seen)
+        stream.write("\n  REMEDY\n")
+        for label, text in seen:
+            stream.write("    %-*s  %s\n" % (w_label, label, text))
+        stream.write("\n")
+    else:
+        stream.write("  no findings\n")
+
+    failed = errors > 0 or (strict and warnings > 0)
+    stream.write("  %s: %s, %s, %s%s\n" % (
+        "FAIL" if failed else "PASS",
+        plural(errors, "error"), plural(warnings, "warning"), plural(infos, "info"),
+        " (--strict: warnings fail)" if strict and warnings and not errors else "",
+    ))
+    return errors, warnings, infos, failed
+
+
+def print_rules(stream):
+    stream.write(
+        "Rule ids emitted by %s@%s lint. `broken-ref` covers two different defects,\n"
+        "one per severity. The registry name `omitted-rules` is never printed: it\n"
+        "emits declared-omission, redundant-omission and unknown-omission instead.\n\n"
+        % (PACKAGE, DEFAULT_VERSION)
+    )
+    w_rule = max(len(rule) for rule, _ in RULE_LISTING)
+    w_sev = max(len(sev) for _, sev in RULE_LISTING)
+    for rule, severity in RULE_LISTING:
+        stream.write("  %-*s  %-*s  %s\n" % (
+            w_rule, rule, w_sev, severity, remedy_for(rule, severity, "")))
+    stream.write(
+        "\nA finding with no rule id at all comes from the frontmatter parser, before\n"
+        "any rule runs (an unparseable or absent YAML block).\n"
+    )
+
+
+def main(argv):
+    parser = build_parser()
+    args = parser.parse_args(argv)
+
+    if args.list_rules:
+        print_rules(sys.stdout)
+        return EXIT_OK
+
+    if not args.files:
+        parser.print_usage(sys.stderr)
+        sys.stderr.write("lint: no input file given; pass at least one DESIGN.md path\n")
+        return EXIT_INPUT
+
+    results = {}      # abs path -> ("ok"|"input"|"cli", payload)
+    order = []
+    for raw_path in args.files:
+        abs_path = os.path.abspath(os.path.expanduser(raw_path))
+        if abs_path in results:
+            continue
+        order.append(abs_path)
+        local_problem = check_input(abs_path)
+        if local_problem:
+            results[abs_path] = ("input", local_problem)
+            continue
+        results[abs_path] = run_cli(abs_path, args.version)
+
+    if args.as_json:
+        if len(order) == 1:
+            path = order[0]
+            status, payload = results[path]
+            if status == "ok":
+                sys.stdout.write(payload["raw"] + "\n")
+            else:
+                json.dump({"error": {"kind": status, "path": path,
+                                     "message": payload}}, sys.stdout, indent=2)
+                sys.stdout.write("\n")
+        else:
+            bundle = {}
+            for path in order:
+                status, payload = results[path]
+                if status == "ok":
+                    bundle[path] = payload["data"]
+                else:
+                    bundle[path] = {"error": {"kind": status, "message": payload}}
+            json.dump(bundle, sys.stdout, indent=2)
+            sys.stdout.write("\n")
+    else:
+        for path in order:
+            status, payload = results[path]
+            if status == "ok":
+                render_file_report(path, payload["data"], args.strict, sys.stdout)
+            else:
+                reason = str(payload).rstrip().replace("\n", "\n    ")
+                sys.stdout.write("%s\n  not linted: %s\n" % (path, reason))
+            if path != order[-1]:
+                sys.stdout.write("\n")
+
+    total_e = total_w = total_i = 0
+    files_failed = files_passed = files_skipped = 0
+    worst = EXIT_OK
+    for path in order:
+        status, payload = results[path]
+        if status == "cli":
+            files_skipped += 1
+            worst = max(worst, EXIT_CLI)
+            sys.stderr.write("lint: %s: %s\n" % (path, payload))
+            continue
+        if status == "input":
+            files_skipped += 1
+            worst = max(worst, EXIT_INPUT)
+            sys.stderr.write("lint: %s: %s\n" % (path, payload))
+            continue
+        errors, warnings, infos = summarize(payload["data"])
+        total_e += errors
+        total_w += warnings
+        total_i += infos
+        if errors > 0 or (args.strict and warnings > 0):
+            files_failed += 1
+            if worst < EXIT_FINDINGS:
+                worst = EXIT_FINDINGS
+        else:
+            files_passed += 1
+
+    if len(order) > 1 and not args.as_json:
+        parts = ["%s passed" % files_passed, "%d failed" % files_failed]
+        if files_skipped:
+            parts.append("%d not linted" % files_skipped)
+        sys.stdout.write("\nTOTAL %s: %s — %s, %s, %s\n" % (
+            plural(len(order), "file"), ", ".join(parts),
+            plural(total_e, "error"), plural(total_w, "warning"),
+            plural(total_i, "info"),
+        ))
+
+    return worst
+
+
+if __name__ == "__main__":
+    try:
+        sys.exit(main(sys.argv[1:]))
+    except KeyboardInterrupt:
+        sys.stderr.write("lint: interrupted\n")
+        sys.exit(EXIT_CLI)
+    except BrokenPipeError:
+        os._exit(EXIT_OK)

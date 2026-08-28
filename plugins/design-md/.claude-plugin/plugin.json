@@ -1,0 +1,23 @@
+{
+  "name": "design-md",
+  "version": "1.0.0",
+  "description": "Author, validate and export DESIGN.md design systems — 4 lint-clean starter templates, screenshot/codebase/brief extraction, anti-slop rules, pairwise WCAG contrast",
+  "author": {
+    "name": "Sergey K.",
+    "email": "kuptsov.sergey@gmail.com"
+  },
+  "homepage": "https://github.com/MatrixFounder/Universal-skills",
+  "repository": "https://github.com/MatrixFounder/Universal-skills",
+  "license": "Apache-2.0",
+  "keywords": [
+    "design-md",
+    "design-system",
+    "design-tokens",
+    "tailwind",
+    "dtcg",
+    "wcag",
+    "contrast"
+  ],
+  "category": "development",
+  "_generator": "sync-plugins.sh@universal-skills"
+}

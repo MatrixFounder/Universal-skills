@@ -1,0 +1,446 @@
+# `design-md` — operator notes for `scripts/`
+
+Maintenance and debugging notes for the three tools in this directory. Agent-facing
+usage lives in `../SKILL.md` and `../references/`; this file is for whoever has to
+change the code or explain its output.
+
+Everything below was executed on 2026-08-28 against `@google/design.md@0.4.0`,
+Node v24.15.0, Python 3.14.4, macOS (darwin 25.5.0). Quoted output is real output.
+
+---
+
+## 1. What the three tools are for
+
+The toolchain **measures**; the agent **interprets**. That split is the reason all
+three exist as scripts rather than as prose in `SKILL.md`.
+
+`lint` wraps the upstream `design.md lint` command. Upstream emits JSON that names a
+defect but not a repair, and it emits it from a working directory that is easy to get
+wrong. The wrapper resolves paths to absolute, shells out from a neutral directory,
+groups findings by severity into an aligned table, and appends a one-line `REMEDY`
+per rule id that fired. `check-contrast` computes WCAG 2.x contrast ratios over the
+whole palette, which the upstream `contrast-ratio` rule never does — that rule only
+looks at components declaring both `backgroundColor` and `textColor`, and only against
+AA 4.5:1. `extract-palette` counts pixels in an image and reports each dominant colour
+with its share of the sampled area, because a colour read off a screenshot by eye is
+distorted by compression, antialiasing, gradients and colour profiles.
+
+None of the three decides anything. `lint` reports what upstream reported.
+`check-contrast` reports ratios and thresholds. `extract-palette` reports measured hex
+values plus a `HINT` column that is explicitly labelled a heuristic. Which measured
+colour is a background, which is an accent, and whether a failing contrast pair should
+be fixed by darkening the text or lightening the surface — those are the agent's calls.
+
+---
+
+## 2. CLI reference
+
+Every flag below was read from the script's own `--help`. Re-run `--help` after any
+change; this section is a copy, not the source of truth.
+
+### 2.1 `lint`
+
+```
+usage: lint [-h] [--json] [--strict] [--version PIN] [--list-rules] [FILE ...]
+```
+
+| Flag | Default | Effect |
+| :--- | :--- | :--- |
+| `FILE ...` | none | Paths to DESIGN.md files. Zero files is an input error (exit 2). Repeats are de-duplicated after resolving to absolute paths. |
+| `--json` | off | Emit upstream JSON instead of the report. One file: the upstream document verbatim, with trailing newlines normalised to one. Several files: one object keyed by absolute path. |
+| `--strict` | off | Warnings fail too. Turns the wrapper into a gate. |
+| `--version PIN` | `0.4.0` | The **package version to run**. It takes an argument and does not print the wrapper's own version. `lint --version` alone is a usage error. |
+| `--list-rules` | off | Print all 14 emitted rule ids with default severity and remedy, then exit 0. Reads no file and makes no network call. |
+
+`--list-rules` is the fastest way to see the rule-id inventory without a fixture:
+
+```
+  broken-ref          error    Define the token the reference names, or repoint ...
+  broken-ref          warning  Rename the component key to one of backgroundColor, ...
+  ...
+A finding with no rule id at all comes from the frontmatter parser, before
+any rule runs (an unparseable or absent YAML block).
+```
+
+Note the shape: 11 rule *descriptors* upstream, 14 rule *ids* on the wire.
+`broken-ref` is emitted at two severities for two different defects, and the descriptor
+named `omitted-rules` never prints its own name — it emits `declared-omission`,
+`redundant-omission` and `unknown-omission`. Grepping output for `omitted-rules` finds
+nothing.
+
+### 2.2 `check-contrast`
+
+```
+usage: check-contrast [-h] [--json] [--level {aa,aaa,both}] [--min RATIO]
+                      [--strict-decorative]
+                      [--matrix {summary,plausible,full}] [--fail-only]
+                      [--no-matrix] [--timeout SECONDS] [--self-test]
+                      [--version]
+                      [DESIGN.md]
+```
+
+| Flag | Default | Effect |
+| :--- | :--- | :--- |
+| `DESIGN.md` | none | The file to check. Optional only because `--self-test` needs no file. |
+| `--json` | off | Full result object on stdout instead of the report. Carries every computed pair regardless of `--matrix`. |
+| `--level {aa,aaa,both}` | `aa` | Which threshold gates the exit code for **text** pairs. `aa`=4.5, `aaa`=7.0, `both`=gate at 4.5 and list AAA shortfalls as advisory. Non-text pairs stay at 3.0. |
+| `--min RATIO` | unset | Explicit text gate; supersedes `--level`. Non-text pairs stay at 3.0. |
+| `--strict-decorative` | off | Also gate decorative non-text pairs at 3.0. A non-text token whose name ends in `-variant` (`outline-variant`) is decorative by default: measured and printed, exempt under WCAG 2.x SC 1.4.11, and excluded from the exit code. |
+| `--matrix {summary,plausible,full}` | `plausible` | How much of the wider matrix to print. `summary`=counts only; `plausible`=counts plus only the plausible pairs below the gate; `full`=every computed pair, grouped by background. |
+| `--fail-only` | off | With `--matrix full`, print only pairs below the gate. `--matrix plausible` already lists only those. |
+| `--no-matrix` | off | Omit the wider matrix; print only intended pairs and the typography table. |
+| `--timeout SECONDS` | `300` | Wall-clock budget for the one `npx export` call. |
+| `--self-test` | off | Check the ratio implementation against five known answers and exit. No file, no network. |
+| `--version` | — | Prints `check-contrast 1.0 (upstream @google/design.md@0.4.0)`. |
+
+Two things about this script surprise people, so state them when you explain its output.
+
+**It reads token values from upstream, not from the YAML.** It runs
+`npx --yes @google/design.md@0.4.0 export <FILE> --format json-tailwind` and reads
+`theme.extend`. That is how `{colors.x}` references get resolved and how `oklch()`,
+`color-mix()` and named colours all arrive as lowercase hex. No YAML parser is in this
+file. The consequence is the sixth row of §7: a reference that does not resolve is
+dropped silently by `export`, and the script then sees a palette with no colours.
+
+**The exit code is decided by "intended pairs" only.** Those are the MD3 pairings the
+format's own vocabulary implies — `on-X` on `X`, `on-surface` on every surface role,
+`outline` on a surface as a functional boundary. Everything else is printed as an
+advisory matrix and never changes the exit code. The `GATED` column says, per row,
+whether the row can fail the run.
+
+### 2.3 `extract-palette`
+
+```
+usage: extract-palette [-h] [--colors N] [--min-share PCT]
+                       [--ignore-edges PCT] [--bits N] [--merge-distance D]
+                       [--max-samples N] [--decoder {auto,pillow,stdlib-png}]
+                       [--json] [--version]
+                       IMAGE
+```
+
+| Flag | Default | Effect |
+| :--- | :--- | :--- |
+| `IMAGE` | required | Path to the image. Absolute paths recommended. |
+| `--colors N` | `12` | Report at most N colours, highest share first. Must be >= 1. |
+| `--min-share PCT` | `0.5` | Drop clusters below PCT% of counted pixels. Range 0–100. |
+| `--ignore-edges PCT` | `0` | Crop PCT% off each side before sampling — browser chrome, tab bars, window shadows. Must be >= 0 and < 50. |
+| `--bits N` | `5` | Quantisation bits per channel (5 = 32 levels = 32768 buckets). Range 3–8. |
+| `--merge-distance D` | `6.0` | CIE76 dE in CIELAB below which two buckets are one colour. Raise to collapse a ramp, lower to split one; `0` disables merging. Must be >= 0. |
+| `--max-samples N` | `400000` | Upper bound on sampled pixels; larger images get a coarser stride grid. `0` samples every pixel. |
+| `--decoder {auto,pillow,stdlib-png}` | `auto` | Force a decoder. `auto` uses Pillow when importable, otherwise the built-in PNG reader. |
+| `--json` | off | One JSON object on stdout. Errors still go to stderr, as JSON. |
+| `--version` | — | Prints `extract-palette 1.0`. |
+
+The `HINT` column is a heuristic over share, CIELAB lightness `L*` and CIELAB chroma
+`C*`. It is not a role assignment, and the report says so in its own footer. Chroma
+rather than HSL saturation is deliberate: the off-white `#f5f2ec` has HSL S 0.31 but
+`C*` 3.2, and calling it saturated would mislabel every warm-white surface as an accent.
+
+---
+
+## 3. Exit codes
+
+The three tables differ. Do not assume one from another.
+
+| Code | `lint` | `check-contrast` | `extract-palette` |
+| :--- | :--- | :--- | :--- |
+| 0 | no errors (and no warnings under `--strict`) | every gated intended pair meets the gate | success |
+| 1 | lint errors, or warnings under `--strict` | a gated intended pair fails the gate; also a `--self-test` mismatch | option value out of range (`--bits 99`, `--ignore-edges 60`) |
+| 2 | input problem: file missing, unreadable, a directory, or a command-line usage error | input file missing, a directory, not a regular file, unreadable; also a command-line usage error | image missing, a directory, unreadable, empty, corrupt, or nothing left to sample; also an argparse-level usage error |
+| 3 | `npx` or the design.md CLI is unavailable, or returned output that is not JSON | the `export` call failed, or the file defines no colors | format recognised but no available decoder handles it |
+
+With several files `lint` returns the worst code, in the order `3 > 2 > 1 > 0`.
+
+Two asymmetries are real and worth knowing before you debug an exit code:
+
+- `extract-palette` splits usage errors across **1 and 2**. Its own range checks
+  (`validate()`) exit 1; argparse's own errors — an unparseable `--bits abc`, a bad
+  `--decoder` choice, a missing `IMAGE` — exit 2, argparse's default. `lint` overrides
+  argparse to route every usage error to 2, and `check-contrast` uses argparse's
+  default 2, so those two are internally consistent and `extract-palette` is not.
+- Code 3 means "the tool could not run", not "the file is bad", in all three.
+
+---
+
+## 4. Dependencies and the install story
+
+| Script | Python | Third-party Python | Needs Node | Network |
+| :--- | :--- | :--- | :--- | :--- |
+| `lint` | stdlib only | none | yes, for `npx` | npm registry on a cold npx cache |
+| `check-contrast` | stdlib only | none | yes, for `npx` | npm registry on a cold npx cache |
+| `extract-palette` | stdlib only | Pillow, **optional** | no | none, ever |
+
+`install.sh` is **optional**. Nothing in the skill requires it. It creates
+`scripts/.venv/` and installs Pillow into it, then runs a known-answer smoke test on
+both decode paths. It installs nothing globally and installs no system packages —
+missing system tools are printed as hints.
+
+A second run on an already-bootstrapped host (excerpt; the `target:`, `venv python:`
+and `pip:` lines are omitted here, and the final absolute path is abbreviated):
+
+```text
+$ bash skills/design-md/scripts/install.sh
+[install.sh] design-md skill — local bootstrap
+[install.sh] python3: 3.14 (<the python3 on PATH>)
+[install.sh] venv: already present, reusing it
+[install.sh] Pillow: 12.3.0
+[install.sh] smoke test (built-in PNG decoder, host python3): [('#0f1419', 50.0), ('#f5f2ec', 30.0), ('#e2542c', 20.0)] -- OK
+[install.sh] smoke test (Pillow, venv python): [('#0f1419', 50.0), ('#f5f2ec', 30.0), ('#e2542c', 20.0)] -- OK
+[install.sh] node: v24.15.0 (npx will fetch @google/design.md@0.4.0 on demand)
+[install.sh] done. Nothing was installed outside .../scripts/.venv.
+```
+
+`extract-palette` appends `scripts/.venv/lib/python<major>.<minor>/site-packages` to
+`sys.path`, and only when the tag matches the running interpreter — a venv built for
+another minor version would load an ABI-incompatible extension. The path is *appended*,
+so an ambient Pillow keeps priority. `install.sh` detects a version-mismatched venv and
+recreates it.
+
+### What degrades without Pillow
+
+Exactly one thing: **input format coverage**. Nothing is silently mis-read.
+
+- **Still works**: non-interlaced PNG, bit depth 8 and 16, colour types 0/2/3/4/6,
+  filter types 0–4, multiple IDAT chunks, `tRNS`. Screenshots and exported diagrams are
+  normally exactly that shape, so the screenshot-extraction procedure usually needs no
+  install at all. Every PNG sampled on this host — five files, 768x1376 to 3080x1806 —
+  read `depth=8 interlace=0` at colour type 2 or 6, and a 3080x1806 one was processed
+  end to end by `--decoder stdlib-png`. Confirm a specific file rather than assuming:
+  the IHDR interlace byte is byte 29 of the file.
+- **Exits 3**: JPEG, WebP, HEIF/AVIF, TIFF, BMP, GIF, interlaced (Adam7) PNG, and PNG
+  at bit depth 1/2/4. The message names the format and points at `install.sh`.
+
+Verified with Pillow made unimportable (a `PIL/__init__.py` that raises, on
+`PYTHONPATH`):
+
+```
+$ PYTHONPATH=<shadow> python3 extract-palette /abs/photo.jpg
+extract-palette: unsupported format: /abs/photo.jpg looks like JPEG. Without Pillow this script reads PNG only.
+Either install Pillow:  bash /abs/skills/design-md/scripts/install.sh
+or convert the file to PNG first.
+EXIT=3
+
+$ PYTHONPATH=<shadow> python3 extract-palette /abs/flat.png
+extract-palette  /abs/flat.png
+  decoder    built-in PNG decoder (depth 8, colour type 2 truecolour)
+```
+
+The two decode paths agree. On the same PNG, `--decoder pillow` and
+`--decoder stdlib-png` produced byte-identical `--json` output once the two
+`decoder`/`decoder_detail` lines were removed:
+
+```
+$ extract-palette flat.png --decoder pillow    --json | grep -v '"decoder' > a.json
+$ extract-palette flat.png --decoder stdlib-png --json | grep -v '"decoder' > b.json
+$ diff a.json b.json && echo IDENTICAL
+IDENTICAL
+```
+
+Speed is the only other difference: scanline un-filtering runs in Python on the
+built-in path and in C under Pillow. `requirements.txt` records the measured figures.
+
+---
+
+## 5. Why `@google/design.md@0.4.0` is pinned, and how to bump it
+
+The pin is written into three places: `PACKAGE`/`DEFAULT_VERSION` in `lint`, `PKG` in
+`check-contrast`, and the hint text in `install.sh`. All three must move together.
+
+The reason for a pin rather than a floating `@latest` is that the *format* is at
+`version: alpha`:
+
+```
+$ npx --yes @google/design.md@0.4.0 spec | head -1
+<!-- Generated from spec.mdx + spec-config.ts | version: alpha -->
+```
+
+An alpha format can change its schema keys, its rule set, its severities and its
+message wording between releases. `references/linter-rules.md` quotes upstream messages
+verbatim and `assets/*.md` are hand-tuned to lint at zero errors, so a silent bump
+would rot documentation and templates at the same time with no signal. As of
+2026-08-28 the pin also *is* the latest release (`npm view @google/design.md version`
+→ `0.4.0`), so the pin costs nothing today.
+
+**Re-verification procedure after a deliberate bump.** Do this before and after, and
+compare:
+
+```bash
+cd /tmp
+skills/design-md/scripts/lint --json \
+  skills/design-md/assets/*.md skills/design-md/examples/*.md \
+| jq -S 'to_entries|map({file:(.key|split("/")|last), summary:.value.summary})'
+```
+
+Baseline at 0.4.0 (2026-08-28) — four templates and `example-saas-dashboard.md` at zero
+errors and zero warnings, `fixture-broken.md` deliberately failing:
+
+```text
+template-cyrillic.md         {errors: 0, warnings: 0, infos: 1}
+template-editorial.md        {errors: 0, warnings: 0, infos: 1}
+template-product-saas.md     {errors: 0, warnings: 0, infos: 1}
+template-skeleton.md         {errors: 0, warnings: 0, infos: 1}
+example-saas-dashboard.md    {errors: 0, warnings: 0, infos: 2}
+fixture-broken.md            {errors: 1, warnings: 6, infos: 1}
+fixture-clean.md             {errors: 0, warnings: 0, infos: 1}
+```
+
+Any movement in those numbers is a real behaviour change and must be reconciled
+against `references/linter-rules.md`, which quotes upstream messages word for word.
+Then re-run the checks in §8. Finally, re-read `npx --yes @google/design.md@<new> spec`
+and diff the canonical section list and the schema keys against
+`references/spec-anatomy.md`.
+
+---
+
+## 6. Network behaviour
+
+Stated plainly, because "it works offline" is only half true.
+
+- `npx --yes @google/design.md@0.4.0 …` reaches `https://registry.npmjs.org` the first
+  time it resolves the package, then caches it. `lint` writes a notice to stderr while
+  that happens: `[lint] running npx @google/design.md@0.4.0 — the first call downloads
+  the package and takes about 30 seconds`.
+- Beyond that one `npx` call per invocation, neither `lint` nor `check-contrast` makes
+  any network request of its own.
+- `extract-palette` makes no network calls at all, in any mode. Its complete import
+  list is `argparse, json, math, os, struct, sys, zlib` — no `urllib`, no `socket`, and
+  no `subprocess`, so it spawns nothing either.
+
+**Checking the cache.** The npx cache lives under the npm cache root, one directory per
+dependency set:
+
+```
+$ npm config get cache
+<HOME>/.npm
+$ grep -l "@google/design.md" "$(npm config get cache)"/_npx/*/package.json
+<HOME>/.npm/_npx/453056feeae89689/package.json
+```
+
+A hit means the package is resolvable offline. Verified: with that cache warm,
+`npm_config_offline=true npx --yes @google/design.md@0.4.0 lint <file>` produces the
+normal JSON.
+
+**Offline with a cold cache.** npm fails with `ENOTCACHED`, and both wrappers surface
+it as exit 3 rather than pretending the file is clean:
+
+```
+$ npm_config_cache=<empty-dir> npm_config_offline=true scripts/lint examples/fixture-clean.md
+lint: .../fixture-clean.md: the CLI returned output that is not JSON (exit 1): npm error code ENOTCACHED
+npm error request to https://registry.npmjs.org/@google%2fdesign.md failed: cache mode is 'only-if-cached' but no cached response is available.
+EXIT=3
+
+$ npm_config_cache=<empty-dir> npm_config_offline=true scripts/check-contrast examples/fixture-clean.md
+check-contrast: error: `@google/design.md@0.4.0 export` exited 1: npm error code ENOTCACHED
+EXIT=3
+```
+
+To prime a machine before it goes offline, run any `lint` once with network access.
+
+---
+
+## 7. Troubleshooting
+
+| Symptom | Cause | Fix |
+| :--- | :--- | :--- |
+| `sh: design.md: command not found`, exit 127, when calling `npx` by hand | `npx` prefers a bin declared by the surrounding workspace. Inside a checkout that declares a `design.md` bin, npx resolves the local (unbuilt) one and never fetches the package. Reproduced inside a checkout of the upstream `design.md` repository, which declares that bin. | `cd /tmp` first, and pass an absolute path to the file. Both wrappers already do this — they run the child process with `cwd=/tmp` (falling back to `tempfile.gettempdir()` in `lint` and to `~` in `check-contrast` if `/tmp` is absent), and `scripts/lint` was verified to exit 0 when invoked from inside that same workspace. |
+| First run pauses for tens of seconds with no output | Cold npx cache; npm is fetching the package. | Wait. `lint` announces it on stderr. Later runs hit the cache — see §6 for how to check. |
+| `extract-palette: unsupported format: interlaced (Adam7) PNG — the built-in decoder reads non-interlaced PNG only`, exit 3 | The PNG has IHDR interlace method 1 and Pillow is not importable. | `bash scripts/install.sh` (Pillow reads Adam7), or re-save the PNG non-interlaced. Verified: with Pillow present, `--decoder auto` reads the same file. |
+| `extract-palette: unsupported format: … looks like JPEG. Without Pillow this script reads PNG only.`, exit 3 | Any non-PNG input on the no-Pillow path. | `bash scripts/install.sh`, or convert to PNG. The message names the sniffed format and prints the exact install command. |
+| `--decoder pillow was requested but Pillow is not importable`, exit 3 | An explicit decoder request that the host cannot satisfy. | Run `install.sh`, or drop the flag and let `auto` fall back. |
+| `lint` reports `warning - - No YAML content found. Expected frontmatter (---) or fenced yaml code blocks.` and still exits 0 | A DESIGN.md with no frontmatter is not an error upstream. It defines no tokens, so no rule can run. | Add a `---` block with at least `name:`. Use `--strict` if a missing block must fail the run — verified to turn that same file into `FAIL: 0 errors, 1 warning, 0 infos` and exit 1. |
+| `lint` is clean but `check-contrast` exits 3 with `defines no colors — nothing to check` | Colour tokens are `{refs}` that resolve to nothing. `export` drops them silently (`"colors": {}`) and upstream's `broken-ref` rule does **not** fire for an unresolvable reference in the `colors` map — only for one inside `components`. Verified: a file whose colours are all `{palette.*}` refs to a non-existent section lints `PASS: 0 errors, 0 warnings, 1 info`. | Read the `token-summary` info line. It counts what upstream actually resolved; if it omits colours, the refs are dead. Then define the referenced tokens or point the refs at paths that exist. |
+| `check-contrast` exits 1 on a file that `lint` passes | The two tools check different things. `lint` never checks the palette; `check-contrast` never checks components. A common cause is a functional `outline` token below 3.0:1 against its surface. | Read the `GATED` column to see which row decided the code. Either fix the colour, or — if the token is genuinely a decorative divider — rename it into the `-variant` form, which is exempt under SC 1.4.11 by default. |
+| Every `npx`-backed run exits 3 with `` `npx` was not found on PATH `` | Node is absent or not on the PATH of the invoking process. | Install Node 18+ (`engines: node >=18` upstream). `extract-palette` is unaffected and needs no Node. |
+| Exit 3 with `ENOTCACHED` | Offline with a cold npx cache. | See §6. |
+
+---
+
+## 8. How to test a change
+
+Run all four. Checks 1 and 2 need neither network nor Node. Checks 3 and 4 shell out to
+`npx`, so they need Node and a warm cache (or one slow first run).
+
+**1. Contrast maths, against known answers.** These figures are derived from the
+WCAG 2.x formula and cross-checked against the published values for the same pairs. If
+one stops reproducing, the ratio implementation is wrong — do not edit the expectations.
+
+```
+$ cd /tmp && skills/design-md/scripts/check-contrast --self-test
+check-contrast --self-test (WCAG 2.x known answers)
+  OK   #000000 on #ffffff  expected 21.00  actual 21.00
+  OK   #767676 on #ffffff  expected 4.54  actual 4.54
+  OK   #808080 on #ffffff  expected 3.95  actual 3.95
+  OK   #0000ff on #ffffff  expected 8.59  actual 8.59
+  OK   #ffffff on #ffffff  expected 1.00  actual 1.00
+  all known answers reproduced
+EXIT=0
+```
+
+**2. Pixel counting, against a synthetic flat-region PNG.** `install.sh` builds a
+200x100 PNG of three flat bands in exact 50 / 30 / 20 proportions with the standard
+library alone, then requires both decoders to recover all three hex values and all
+three shares:
+
+```
+$ bash skills/design-md/scripts/install.sh
+[install.sh] smoke test (built-in PNG decoder, host python3): [('#0f1419', 50.0), ('#f5f2ec', 30.0), ('#e2542c', 20.0)] -- OK
+[install.sh] smoke test (Pillow, venv python): [('#0f1419', 50.0), ('#f5f2ec', 30.0), ('#e2542c', 20.0)] -- OK
+```
+
+Exact shares are the point: a flat region has one occupied bucket per band, so
+quantisation and clustering must not move the reported value off the true pixel value.
+
+**3. Lint, across every shipped file.** Absolute paths, from `/tmp`:
+
+```
+$ cd /tmp && skills/design-md/scripts/lint \
+    skills/design-md/assets/*.md skills/design-md/examples/*.md
+...
+TOTAL 7 files: 6 passed, 1 failed — 1 error, 6 warnings, 8 infos
+```
+
+Six passing files and `examples/fixture-broken.md` failing with exactly one error is
+the contract. `fixture-broken.md` failing is required, not tolerated: it is the fixture
+whose verbatim output `references/linter-rules.md` quotes.
+
+**4. Contrast, across every shipped file.** Capture `$?` into a variable on its own
+line — a command substitution such as `$(basename "$f")` in the same `echo` resets it,
+and the loop silently reports 0 for everything:
+
+```
+$ cd /tmp && for f in skills/design-md/assets/*.md skills/design-md/examples/*.md; do \
+    b=$(basename "$f"); \
+    skills/design-md/scripts/check-contrast "$f" --matrix summary >/dev/null 2>&1; \
+    rc=$?; printf '%-28s check-contrast exit %d\n' "$b" "$rc"; done
+template-cyrillic.md         check-contrast exit 0
+template-editorial.md        check-contrast exit 0
+template-product-saas.md     check-contrast exit 0
+template-skeleton.md         check-contrast exit 0
+example-saas-dashboard.md    check-contrast exit 0
+fixture-broken.md            check-contrast exit 1
+fixture-clean.md             check-contrast exit 1
+```
+
+The four templates and the worked example must stay at 0 — they are what the skill
+tells an agent to copy. Both fixtures exit 1. That is expected for `fixture-broken.md`.
+For `fixture-clean.md` it is a real, measured gap rather than a tool defect: the file is
+clean *to the linter*, and its `outline` token sits at 1.72:1 against `surface`, below
+the 3.0:1 functional-boundary gate. It is the sharpest available demonstration that
+lint-clean does not imply contrast-clean.
+
+Finally, if you changed a flag, re-run that script's `--help` and update §2. The help
+epilogs are the primary documentation; this file is a derived copy.
+
+---
+
+## 9. Licensing
+
+This skill is Apache-2.0. `@google/design.md` (Google LLC) is Apache-2.0 and is
+**invoked through `npx`, never vendored**. No upstream source and no upstream
+`examples/` content is copied into this directory. `check-contrast` and `extract-palette`
+implement WCAG 2.x, PNG (RFC 2083) and CIELAB from their published specifications, in
+this repository's own code; `lint` and `check-contrast` import the Python standard
+library only, and `extract-palette`'s single third-party import, Pillow, is optional
+and guarded. Pillow (HPND) is installed into `scripts/.venv/` by `install.sh` and is
+not redistributed here. Attribution lives in the repository-root
+`THIRD_PARTY_NOTICES.md`.
