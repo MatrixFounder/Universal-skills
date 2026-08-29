@@ -247,13 +247,38 @@ Run `scripts/extract-palette` on the image. Do not read colors off the image by
 eye, and do not transcribe a color you believe you recognise.
 
 ```bash
-scripts/extract-palette /ABS/PATH/screenshot.png
+scripts/extract-palette /ABS/PATH/screenshot.png --min-share 0.1
 ```
 
 The script returns the quantized colors with their pixel shares, one per line,
 in the columns `#`, `HEX`, `SHARE`, `BUCKETS`, `HUE`, `L*`, `C*`, `HINT`.
 `scripts/README.md` §2.3 and `extract-palette --help` document every option;
 `--json` emits the same measurement as one machine-readable object.
+
+**Lower the share floor, and do not crop a full-application capture.** The
+default `--min-share` of 0.5 sits directly on top of a one-control accent. On the
+1440x900 dashboard capture used through the rest of this section, `#e25a3c` — the
+primary button, the active nav marker and the status chips — measures `0.52%`,
+half a point above the floor. Adding `--ignore-edges 4` removes 57 px from each
+side, a quarter of the 233 px rail, and takes the same colour to `0.40%`: that run
+reports six neutrals and no accent row at all. Pass `--ignore-edges` for a browser
+screenshot with chrome to crop, never for a capture that is already only the
+application.
+
+**Recovery, when the report contradicts the image.** Both cases are silent
+failures — the report is well-formed and the missing colour leaves no trace.
+
+| What you see | What it means | What to run |
+| :--- | :--- | :--- |
+| The image has an obvious accent; no row is hinted `accent candidate` | The accent's share is under the floor, or the crop cut it | Drop `--ignore-edges`, then `--min-share 0.1`, then `--min-share 0` |
+| Two light planes are visibly different in the image; the report has one row for both | They are within `--merge-distance` and merged into one cluster | Halve `--merge-distance` and re-run |
+
+On the same capture the second case is live at the default settings: the page
+ground `#f7f4ef` is `dE 4.62` from card white in CIELAB, under the default merge
+distance of `6.0`, so both planes report as one `#ffffff` row at `71.70%`. At
+`--merge-distance 3` they separate — `#ffffff` at `58.51%` and `#f7f4ef` at
+`16.56%`. Neither number is wrong; the default answers a coarser question than
+role assignment needs.
 
 **Rationale.** Four separate distortions sit between the source color and what
 the agent perceives. Lossy compression shifts flat fills by several units per
@@ -281,20 +306,82 @@ Keep the division explicit in your own reasoning and in the hand-back:
 
 Interpretation heuristics, in order of reliability:
 
-1. The largest share is the ground: `background`.
-2. The next-largest neutral, appearing in rectangular regions inset from the
-   ground, is `surface`. Further neutrals between those two form the surface
-   ramp.
-3. The highest-chroma color with a small share, appearing on one control type,
+1. **The ground is the plane the inset rectangles sit on. Decide it by region,
+   not by share.** Measure a gutter between two cards, or the margin outside the
+   card row: whatever fills that window is `background`. This test is first
+   because it is the only one that reads the layout, and because share alone
+   inverts on exactly the input class this procedure targets (heuristic 3).
+2. `surface` is what fills the inset rectangle. Measure inside one card and
+   compare it against the ground window from step 1. Further neutrals measured
+   between the two form the surface ramp.
+3. **Share ranks area, not depth.** The largest share is the ground only when the
+   ground is mostly uncovered. A dashboard whose cards and table body carry one
+   fill inverts this: on the capture measured below, rank 1 `#ffffff` at `71.70%`
+   is the fill of the app bar, the four cards and the table body, while the ground
+   under them is `#f7f4ef`. Taking rank 1 as `background` gives every card the
+   page's own colour and erases the card as an object. Use share to *order*
+   candidates and steps 1-2 to *assign* them.
+4. The highest-chroma color with a small share, appearing on one control type,
    is `primary`. Small share plus single role is the signature of an accent.
-4. A saturated red, amber, or green with a very small share is a status color,
+5. A saturated red, amber, or green with a very small share is a status color,
    not the accent. Only red maps to a schema family (`error`); the rest belong
    in body prose or in a component reference.
-5. Text colors are the colors that appear only in glyph-shaped regions. Their
+6. Text colors are the colors that appear only in glyph-shaped regions. Their
    measured values are contaminated by antialiasing; take the darkest
    (light theme) or lightest (dark theme) cluster member, not the mean.
 
 Name the result in the MD3 vocabulary, per the constraint in A.3.
+
+**`--region X,Y,W,H` is the sanctioned way to run steps 1 and 2.** It counts only
+the named window of the decoded image — `X,Y` is the top-left corner, `W,H` the
+size, all in whole pixels — so the histogram is local instead of page-wide. A
+region that is empty, negative, or does not fit inside the image is rejected at
+exit 1 and never clamped, so a mistyped offset cannot quietly become a
+measurement of somewhere else. It cannot be combined with `--ignore-edges`.
+
+Read the coordinates off the image with the file reading tool, then measure the
+two windows. On the 1440x900 dashboard capture, the gutter between the first and
+second card:
+
+```bash
+scripts/extract-palette /ABS/PATH/screenshot.png --region 520,105,30,110
+```
+
+```text
+  image      1440x900 px -> 30x110 at x=520..550, y=105..215 from --region 520,105,30,110
+  sampled    3300 px on a stride-1 grid; 3300 counted, 0 below alpha 128
+
+  #   HEX          SHARE  BUCKETS        HUE     L*     C*  HINT (heuristic)
+  --------------------------------------------------------------------------
+  1   #f7f4ef    100.00%  1 of 1         38°   96.3    2.8  background candidate (largest area)
+```
+
+And a window wholly inside the first card:
+
+```bash
+scripts/extract-palette /ABS/PATH/screenshot.png --region 280,115,220,35
+```
+
+```text
+  image      1440x900 px -> 220x35 at x=280..500, y=115..150 from --region 280,115,220,35
+  sampled    7700 px on a stride-1 grid; 7700 counted, 0 below alpha 128
+
+  #   HEX          SHARE  BUCKETS        HUE     L*     C*  HINT (heuristic)
+  --------------------------------------------------------------------------
+  1   #ffffff     82.95%  1 of 2          0°  100.0    0.0  background candidate (largest area)
+  2   #6b7472     17.05%  1 of 2        167°   48.0    3.8  neutral ramp, dark end (text, or a dark surface)
+```
+
+Two windows settle it: `background` is `#f7f4ef`, `surface` is `#ffffff`, and the
+`#6b7472` inside the card is label text, not a third plane. The `HINT` column
+reads `background candidate` in both runs because it only ever means "rank 1 in
+this run" — inside a card that is the card, not the page.
+
+Note what the page-wide run alone could not have told you. `#f7f4ef` does not
+appear in it at all: it is `dE 4.62` from `#ffffff`, inside the default
+`--merge-distance` of `6.0`, so the two planes report as one `#ffffff` row. Where
+a region probe returns a colour absent from the global report, that is the
+merge, and `--merge-distance 3` separates them.
 
 ### B.3 Rule 3 — fonts are not guessed
 
@@ -302,13 +389,33 @@ Do not write a font family name asserted from a screenshot. Instead:
 
 1. Describe the character in the body prose: grotesque, humanist, geometric,
    transitional serif, slab, monospace.
-2. Offer two or three candidates that match that character, and say which
-   letterforms in the image support the reading — a straight-leg `R`, a
-   double-storey `g`, a single-storey `a`, the terminal angle on `e`, the
-   presence or absence of a spur on `G`.
+2. Where the letterforms are legible, offer two or three candidates that match
+   that character, and say which letterforms in the image support the reading —
+   a straight-leg `R`, a double-storey `g`, a single-storey `a`, the terminal
+   angle on `e`, the presence or absence of a spur on `G`.
 3. Write one candidate into `typography.*.fontFamily` and label it a placeholder
    in the hand-back message.
 4. Ask the user to confirm or replace it.
+
+**Where no letterform is legible, steps 2 and 3 do not apply.** A capture whose
+text is under about 12 px, heavily compressed, redacted into placeholder blocks,
+or present only inside a logo carries no evidence about the family. Offer no
+candidates — a candidate list with nothing behind it is an invitation to pick
+one, and the pick is then indistinguishable from a reading. Write no
+`fontFamily`, and declare the section instead:
+
+```yaml
+omitted:
+  - section: typography
+    reason: "The capture has no legible letterform; type is undecided."
+```
+
+The omission suppresses the `missing-typography` warning the empty map would
+otherwise raise (`references/linter-rules.md` §12), which is the point: the file
+now states that type is undecided rather than staying silent about it. Name the
+observable facts — the number of distinct sizes, the contrast between levels,
+whether the face is serif or sans where even that is readable — in body prose
+under `## Typography`.
 
 **Rationale.** A font name is a verifiable factual claim about a specific
 licensed artifact. It is also, unlike a color, unfalsifiable from the same
@@ -381,6 +488,9 @@ OMITTED — declared in the file, not guessed:
   states, the dark theme, motion, breakpoints. These are named in body prose.
 
 LINT: <E> errors, <W> warnings, <I> infos.
+CONTRAST: <component>.<backgroundColor> on <textColor> measures <R>:1, below the
+  4.5:1 gate. Both values are measured; I did not change either. Recorded under
+  Do's and Don'ts.  <or, when nothing fails: every intended pair clears 4.5:1.>
 ```
 
 **Rationale.** The failure mode of this procedure is not an inaccurate file; it
@@ -408,9 +518,16 @@ Open it before drafting your own and read it against the steps below.
 6. **Fonts.** Apply B.3. Write one placeholder family; list the candidates in
    the hand-back.
 7. **Components.** Write only the controls actually visible. If two controls are
-   visible, write two components — not a plausible library of eight. Check that
-   each component's `backgroundColor` and `textColor` pair clears 4.5:1 before
-   linting; `contrast-ratio` will otherwise report it.
+   visible, write two components — not a plausible library of eight. Compute each
+   component's `backgroundColor` / `textColor` ratio before linting, and where a
+   pair is below 4.5:1 **keep the measured values**. Do not adjust a colour the
+   script measured in order to clear `contrast-ratio`: the pair failed in the
+   product, the file is a record of that product, and an edited hex converts a
+   measurement into an invention while hiding a real accessibility defect. Record
+   the shortfall instead — name the pair and its ratio in the hand-back, and add
+   a `**Don't**` entry under `## Do's and Don'ts` that names the two tokens. The
+   lint run then carries a `contrast-ratio` warning that is explained rather than
+   silenced.
 8. **`omitted`.** Apply B.4. Give every entry a reason that names the screenshot
    as the limit.
 9. **Body prose.** Write all eight sections in canonical order. Under
@@ -430,9 +547,17 @@ names, a component list no longer than what one screen shows, and a
 Input: CSS, a Tailwind config, a token file. It carries real values. It carries
 no hierarchy and no rationale.
 
-Every command below was run against a fixture on this host. `rg` is not on the
-PATH in a non-interactive shell here, so the primary forms use POSIX `grep`.
-Where a `rg` form is given it was verified to produce byte-identical output.
+Every command below was run against a fixture on this host. The primary forms
+use POSIX `grep`; where a `rg` form is given it was run against the same fixture
+and produced byte-identical output.
+
+One environment caveat, because it changes results without changing the command:
+some agent shells define `grep` and `rg` as functions wrapping ugrep or ripgrep,
+which honour `.gitignore` where `grep -r` does not, so the identical harvest
+silently returns fewer occurrences in any repo with a build directory ignored —
+on a fixture with `dist/` ignored the wrapper dropped the only hex declared
+there. Run `type grep` once; if it reports a function or an alias, prefix every
+harvest below with `command grep` — or call `/usr/bin/grep`.
 
 ### C.1 Harvest what is used, not what is declared
 
@@ -466,25 +591,51 @@ would match the first three characters of every six-digit hex and silently
 report a different palette. The `tr` folds case so `#161B22` and `#161b22` are
 one entry.
 
-The ripgrep equivalent, verified to give the same output:
+The ripgrep equivalent, run on the same fixture and byte-identical to the block
+above:
 
 ```bash
-rg -oIN --no-heading -g '*.css' -g '*.js' \
+rg -oIN --no-heading --no-ignore \
+  -g '*.css' -g '*.scss' -g '*.js' -g '*.ts' -g '*.tsx' \
   -e '#[0-9a-fA-F]{8}\b|#[0-9a-fA-F]{6}\b|#[0-9a-fA-F]{4}\b|#[0-9a-fA-F]{3}\b' . \
   | tr 'A-F' 'a-f' | sort | uniq -c | sort -rn
 ```
+
+Two parts of that form are load-bearing. One `-g` glob is needed per `--include`
+pattern — five, not two: a form limited to `*.css` and `*.js` reads no component
+source, and on a React or TypeScript tree that is where most of the palette
+lives. And `--no-ignore` is needed because ripgrep skips `.gitignore`d paths that
+`grep -r` reads. On a four-file React fixture with `dist/` ignored, the two-glob
+form without `--no-ignore` reported a single line, `1 #b3452b`, where `grep -r`
+reported `3 #b3452b` / `2 #fbfaf8` / `1 #12181b`; the corrected form above
+reproduced the `grep` counts exactly.
 
 **Custom properties: declared, referenced, and dead.**
 
 ```bash
 cd /ABS/PATH/repo
-grep -rhoE '^[[:space:]]*--[A-Za-z0-9_-]+[[:space:]]*:' --include='*.css' . \
-  | tr -d ' \t:' | sort -u > /tmp/declared.txt
+grep -rhoE '(^|[{;])[[:space:]]*--[A-Za-z0-9_-]+[[:space:]]*:' --include='*.css' . \
+  | tr -d ' \t:{;' | sort -u > /tmp/declared.txt
 grep -rhoE 'var\([[:space:]]*--[A-Za-z0-9_-]+' --include='*.css' . \
   | sed -E 's/^var\([[:space:]]*//' | sort | uniq -c | sort -rn > /tmp/used_counts.txt
 awk '{print $2}' /tmp/used_counts.txt | sort -u > /tmp/used.txt
 comm -23 /tmp/declared.txt /tmp/used.txt
 ```
+
+The declaration pattern accepts a preceding `{` or `;` as well as start-of-line.
+Anchored at `^` alone it matches nothing in compiled or minified CSS, where a
+whole rule is one line: on a fixture whose entire `:root` is
+`:root{--color-bg:#0E1116;--color-surface:#161B22;--radius-md:8px;--space-4:16px;--dead-one:#ABCDEF}`
+the `^`-anchored form returned no declarations at all and the form above
+returned all five. The `{;` added to `tr -d` strips the character the
+alternation consumed. It is not matched inside `var(--x)`, so a reference is
+still not counted as a declaration.
+
+**Check `/tmp/declared.txt` before reading the dead list.** An empty dead list
+from an empty declared list means the scan matched nothing — a different fact
+from "every declared property is used", and the two are indistinguishable at the
+`comm` output. `wc -l < /tmp/declared.txt` against the number of `--` lines you
+can see in the source settles it.
 
 Referenced, with counts:
 
@@ -521,9 +672,20 @@ once against the whole repo before dropping it.
 **Tailwind v4 `@theme` blocks**, which the `var()` scan will not see as usage:
 
 ```bash
-awk '/@theme[[:space:]]*\{/{inb=1;next} inb&&/^[[:space:]]*--/{print} inb&&/\}/{inb=0}' \
-  /ABS/PATH/theme.css | sed -E 's/^[[:space:]]*//; s/[[:space:]]*;[[:space:]]*$//'
+awk '{gsub(/[{};]/, "\n&\n")} 1' /ABS/PATH/theme.css \
+  | awk '/@theme/{seen=1;next}
+         seen&&/^[[:space:]]*\{/{inb=1;next}
+         inb&&/^[[:space:]]*\}/{inb=0;seen=0;next}
+         inb&&/^[[:space:]]*--/{print}' \
+  | sed -E 's/^[[:space:]]*//; s/[[:space:]]*;[[:space:]]*$//'
 ```
+
+The first `awk` puts every brace and semicolon on a line of its own, which is
+what makes the block reader work on compact CSS. Without it, a one-line
+`@theme{--color-bg:#0E1116;--color-accent:#3B82F6;--radius-md:8px}` yields
+nothing: the single-line form consumes the `@theme` line with `next` and then
+finds no line starting with `--`. Both forms produce the same four lines on
+pretty-printed input; only the two-stage form also reads the compact file.
 
 ```text
 --color-bg: #0E1116
@@ -589,13 +751,9 @@ cd /ABS/PATH/repo && grep -rhoE 'class="[^"]*"' \
 For JSX, extend the `class="` pattern to `className=` and to template literals
 before trusting the counts; the form above misses `className={clsx(...)}`.
 
-**Dimensions with frequency**, for the spacing and radius systems:
-
-```bash
-cd /ABS/PATH/repo && grep -rhoE '(^|[^A-Za-z0-9_.-])[0-9]+(\.[0-9]+)?(px|rem|em)\b' \
-  --include='*.css' . | grep -oE '[0-9]+(\.[0-9]+)?(px|rem|em)' \
-  | sort | uniq -c | sort -rn
-```
+**Dimensions with frequency, one scan per property family.** A single scan over
+every length in the tree is not usable, because a length carries no meaning
+without the property it was written for. Scanning the fixture that way returns:
 
 ```text
    4 8px
@@ -609,9 +767,84 @@ cd /ABS/PATH/repo && grep -rhoE '(^|[^A-Za-z0-9_.-])[0-9]+(\.[0-9]+)?(px|rem|em)
    1 15px
 ```
 
-The leading character class prevents matching inside identifiers such as
-`grid-12px-gap`. The result mixes units; keep them separate when the codebase
-mixes `px` and `rem`, because the ratio between them depends on the root size.
+Every entry there is ambiguous. `20px` is a `font-size` and belongs to no spacing
+ladder; `9999px` is a pill and `1px` a hairline border; and the top entry, `8px`
+at four uses, is three radius declarations plus one `--space-2` token — one
+number standing for two unrelated decisions. Ranked as a spacing list
+(§C.2) and collapsed as one (§C.3), that produces a spacing step nothing uses and
+a type size that disappears from the file.
+
+Scan by family instead:
+
+```bash
+cd /ABS/PATH/repo
+BOX='(^|[^a-z-])(padding|margin|gap|row-gap|column-gap|inset|--space[a-z0-9_-]*|--gap[a-z0-9_-]*)[a-z-]*[[:space:]]*:[^;{}]*'
+TYPE='(^|[^a-z-])(font-size|line-height|letter-spacing|--font-size[a-z0-9_-]*|--leading[a-z0-9_-]*)[a-z-]*[[:space:]]*:[^;{}]*'
+RADIUS='(^|[^a-z-])(border[a-z-]*radius|--radius[a-z0-9_-]*|--rounded[a-z0-9_-]*)[a-z-]*[[:space:]]*:[^;{}]*'
+dims() { grep -rhoE "$1" --include='*.css' . \
+  | grep -oE '[0-9]+(\.[0-9]+)?(px|rem|em)' | sort | uniq -c | sort -rn; }
+echo "box metrics:";  dims "$BOX"
+echo "type metrics:"; dims "$TYPE"
+echo "radius:";       dims "$RADIUS"
+```
+
+```text
+box metrics:
+   2 16px
+   1 8px
+   1 4px
+   1 17px
+   1 15px
+   1 12px
+type metrics:
+   1 20px
+radius:
+   3 8px
+   1 9999px
+   1 4px
+   1 12px
+```
+
+Box metrics feed `spacing`, type metrics feed `typography`, radius feeds
+`rounded`. The three lists are read separately and never merged: `8px` is a
+radius three times and a spacing token once, and those are two facts, not one
+count of four. `1px` is now absent from all three, because a `border` shorthand
+is none of these families — which is the correct answer, not a gap.
+
+The `[^;{}]*` tail stops each match at the end of its own declaration, so
+`padding:12px 16px; font-size:14px` contributes `12px` and `16px` to box metrics
+and `14px` to type metrics. Two limits are worth stating in the hand-back: the
+`font` and `border` shorthands are not decomposed, and a value reached only
+through `var()` is counted where the custom property was *declared*, not at each
+use site.
+
+Custom properties whose name does not carry a family — `--gutter`, `--x` — are
+matched by none of the three. List them with the name intact and assign each by
+hand:
+
+```bash
+cd /ABS/PATH/repo && grep -rhoE '(^|[{;])[[:space:]]*--[A-Za-z0-9_-]+[[:space:]]*:[^;{}]*' \
+  --include='*.css' . | sed -E 's/^[[:space:]{;]*//; s/[[:space:]]+$//' \
+  | grep -E '[0-9](\.[0-9]+)?(px|rem|em)' | sort | uniq -c | sort -rn
+```
+
+```text
+   2 --radius-md: 8px
+   1 --space-4: 16px
+   1 --space-3: 12px
+   1 --space-2: 8px
+   1 --space-1: 4px
+   1 --radius-sm: 4px
+   1 --radius-lg: 12px
+```
+
+The scan lists every custom property that carries a length, not only the
+unfamilied ones, so read it for the names the three family patterns missed. On
+this fixture all seven carry a family and none needed hand assignment; on a tree
+holding `--gutter: 16px` and `--radius: 8px` the first is the line to assign.
+
+Every list above mixes units where the codebase does; keep `px` and `rem` apart,
+because the ratio between them depends on the root size.
 
 ### C.2 Rank by frequency
 
@@ -633,15 +866,50 @@ a codebase that separates a decision from an accident.
 4. **Exclude the mechanical values.** `#fff` and `#000` at low counts are
    usually resets. `9999px` is a pill, not a radius step. `1px` is a hairline
    border, not a spacing step.
+5. **Check every surviving hex against the framework-defaults table before it
+   enters the frontmatter.** A copied default is usually the *most* frequent hex
+   in a tree — it arrived as a framework's own value and got used everywhere —
+   so ranking by count promotes it first. Frequency establishes that a value was
+   used, never that it was chosen. Run the AS-10 alternation from
+   `references/anti-slop.md` over the harvest:
+
+   ```bash
+   cd /ABS/PATH/repo && grep -rhoE '#[0-9a-fA-F]{8}\b|#[0-9a-fA-F]{6}\b|#[0-9a-fA-F]{4}\b|#[0-9a-fA-F]{3}\b' \
+     --include='*.css' --include='*.scss' --include='*.js' --include='*.ts' --include='*.tsx' . \
+     | tr 'A-F' 'a-f' | sort | uniq -c | sort -rn \
+     | grep -E '#(3b82f6|2563eb|1d4ed8|6366f1|4f46e5|8b5cf6|7c3aed|a855f7|ef4444|dc2626|10b981|059669|22c55e|16a34a|f59e0b|d97706|0ea5e9|14b8a6|f97316|f43f5e|ec4899|06b6d4|84cc16|eab308|d946ef|f8fafc|f1f5f9|e2e8f0|cbd5e1|94a3b8|64748b|475569|334155|1e293b|0f172a|020617|f9fafb|f3f4f6|e5e7eb|d1d5db|9ca3af|6b7280|4b5563|374151|1f2937|111827|030712|71717a|737373|78716c|fafafa|0d6efd|6610f2|6f42c1|d63384|dc3545|fd7e14|ffc107|198754|20c997|0dcaf0|f8f9fa|e9ecef|dee2e6|ced4da|adb5bd|6c757d|495057|343a40|212529|6200ee|018786|b00020|3f51b5|2196f3|9c27b0|009688|f44336)\b'
+   ```
+
+   ```text
+      4 #3b82f6
+      1 #7c3aed
+   ```
+
+   `#3b82f6` is Tailwind blue-500, and on this fixture it is the top-count hex —
+   the value the threshold in rule 3 would have promoted to `primary`. Do not
+   silently keep it and do not silently substitute one. Carry it into the file as
+   measured, name it in the hand-back as a framework default with its count, and
+   ask for a brand value. `references/anti-slop.md` §AS-10 holds the full table,
+   the sources each hex was read from, and the contrast measurements.
 
 ### C.3 Collapse near values into steps, and report the collapse
 
 A codebase accumulates 15px, 16px, and 17px where one step was intended. The
 DESIGN.md gets one step. The user is told which values were folded into it.
 
+**A collapse never crosses a property family.** Run this once per family, on the
+family's own harvest from C.1 — never on the whole-tree dimension list. Two
+lengths that round to the same step are the same step only if they answer the
+same question; a `font-size` and a `padding` that both round to 16px are two
+decisions, and folding them produces a spacing step nothing uses and a type size
+that has vanished. The block below re-declares `BOX` so it stands alone; swap in
+`TYPE` or `RADIUS` and re-run for those families.
+
 ```bash
-cd /ABS/PATH/repo && grep -rhoE '(^|[^A-Za-z0-9_.-])[0-9]+(\.[0-9]+)?px\b' --include='*.css' . \
-  | grep -oE '[0-9]+(\.[0-9]+)?' | sort -n | uniq -c \
+cd /ABS/PATH/repo
+BOX='(^|[^a-z-])(padding|margin|gap|row-gap|column-gap|inset|--space[a-z0-9_-]*|--gap[a-z0-9_-]*)[a-z-]*[[:space:]]*:[^;{}]*'
+grep -rhoE "$BOX" --include='*.css' . \
+  | grep -oE '[0-9]+(\.[0-9]+)?px' | grep -oE '[0-9]+(\.[0-9]+)?' | sort -n | uniq -c \
   | awk -v base=4 '$2 >= 2 && $2 <= 128 {
       step = int(($2 / base) + 0.5) * base
       raw[step] = raw[step] sprintf(" %spx(x%s)", $2, $1)
@@ -652,12 +920,16 @@ cd /ABS/PATH/repo && grep -rhoE '(^|[^A-Za-z0-9_.-])[0-9]+(\.[0-9]+)?px\b' --inc
 ```
 
 ```text
-step 4px    used 2   from 4px(x2)
-step 8px    used 4   from 8px(x4)
-step 12px   used 2   from 12px(x2)
+step 4px    used 1   from 4px(x1)
+step 8px    used 1   from 8px(x1)
+step 12px   used 1   from 12px(x1)
 step 16px   used 4   from 15px(x1) 16px(x2) 17px(x1)
-step 20px   used 1   from 20px(x1)
 ```
+
+That is the spacing ladder: 4, 8, 12, 16 on a base of 4, with one collapse to
+report. Run over every length in the tree instead and the same command adds a
+`step 20px` — the `.old-panel h2` font size — and inflates `step 8px` from one
+use to four by counting three radius declarations as spacing.
 
 The `>= 2` guard drops hairline borders; the `<= 128` guard drops pill radii and
 container widths. Set `base` from the data — the greatest common divisor of the
@@ -681,7 +953,23 @@ DROPPED — below the frequency threshold of 3, or mechanical:
 
 DEAD — declared and never referenced in the grepped tree:
   --dead-token, --radius-sm, --radius-lg, --space-1, --space-3
+
+INFERRED — not in the codebase; I decided it:
+  - Spacing base unit <N>px, from the GCD of the high-count box metrics.
+  - Modular scale ratio ~<R>, fitted to the <k> surviving type sizes.
+  - MD3 role names: the codebase's <bg>/<surface>/<accent> became
+    background/surface/primary. The codebase asserted no roles.
+  - Frequency threshold <T>, and the <=128px / >=2px guards on the ladder.
+  - <#hex> is a framework default (<name>, <n> uses), carried as measured. It
+    is not a brand decision; confirm or replace it.
+  - Every word of the body prose. A codebase carries values and no rationale.
 ```
+
+`INFERRED` is not a courtesy. A codebase route hands back a file whose numbers
+are all harvested, which makes the decisions around them — the base unit, the
+ratio, the role names, the threshold — read as harvested too. Listed flat with
+the measured values, an inferred number is indistinguishable from one that was
+counted, which is the same failure B.5 exists to prevent on the screenshot route.
 
 Do the same for colors: near hexes within a couple of units per channel are one
 token. Do the same for type sizes: fold to the nearest step of the modular scale

@@ -297,7 +297,7 @@ by construction rather than by eye.
 | `surface-container-highest` | `#e4ddd1` | 88.36 | 37.9 | active nav item, neutral badge |
 | `surface-variant` | `#e0d9cd` | 86.94 | 37.9 | scrollbar track, progress trough |
 | `surface-dim` | `#dcd4c6` | 85.19 | 38.2 | disabled control fill |
-| `outline-variant` | `#d8d0c2` | 83.76 | 38.2 | hairline between table rows |
+| `outline-variant` | `#d8d0c2` | 83.76 | 38.2 | decorative seam over an existing plane step |
 
 Note the direction: in this light theme, containers get *darker* as their
 emphasis rises. That is the MD3 light-mode convention and it is the reason the
@@ -311,7 +311,7 @@ a surface, and there is no value in between to be ambiguous about.
 
 | Token | Hex | L* | Measured hue | Role |
 | :--- | :--- | ---: | ---: | :--- |
-| `outline` | `#8e7f65` | 53.89 | 38.0 | control borders, focus-less field edge |
+| `outline` | `#8e7f65` | 53.89 | 38.0 | table row rule, control borders, focus-less field edge |
 | `on-surface-variant` | `#625847` | 37.90 | 37.8 | column headers, metadata, ids |
 | `secondary` | `#5d5342` | 35.80 | 37.8 | form labels, nav section captions |
 | `on-secondary-container` | `#423827` | 24.11 | 37.8 | label on the quiet button |
@@ -462,14 +462,21 @@ rather than tokenised: the popover and dropdown carry `0 4px 12px` at 12 percent
 of `inverse-surface`. It is allowed because a popover overlaps content it must
 be readable against, and the plane ladder alone cannot express overlap.
 
-Boundaries do the rest of the work. `outline-variant` (`#d8d0c2`) draws the 1px
-rule between table rows. `outline` (`#8e7f65`) draws control borders. Measured
-against every plane it can sit on: 3.84:1 on `surface-bright`, 3.72:1 on
-`surface-container-lowest`, 3.56:1 on `surface`, 3.44:1 on `background`, 3.29:1
-on `surface-container-low`, 3.15:1 on `surface-container`, 3.04:1 on
+Boundaries do the rest of the work. `outline` (`#8e7f65`) draws every line that
+carries structure: the 1px rule between table rows, and control borders.
+Measured against every plane it can sit on: 3.84:1 on `surface-bright`, 3.72:1
+on `surface-container-lowest`, 3.56:1 on `surface`, 3.44:1 on `background`,
+3.29:1 on `surface-container-low`, 3.15:1 on `surface-container`, 3.04:1 on
 `surface-container-high` — all above the WCAG 3:1 minimum for non-text
 boundaries. On `surface-container-highest` it falls to 2.90:1 and stops
 qualifying, so that one plane carries no hairline — see "Do's and Don'ts".
+
+`outline-variant` (`#d8d0c2`) is the decorative counterpart: 1.40:1 on
+`surface`, 1.35:1 on `background`, 1.23:1 on `surface-container`. It clears
+nothing, so it is confined to seams where a plane step already separates the two
+sides and the line only reinforces the join — the filter bar against the sheet,
+the navigation rail against the sheet. Two adjacent table rows share one plane,
+so the rule between them is the only boundary there and takes `outline`.
 
 ## Shapes
 

@@ -86,9 +86,9 @@ report to stdout and modifies no file. Pass absolute paths.
 
 | Script | Command and flags | Output |
 | :--- | :--- | :--- |
-| `lint` | `scripts/lint FILE…` · `--strict` `--json` `--list-rules` `--version PIN` | a `severity/rule/path/message` table per file, a `REMEDY` line per rule id that fired, and a `PASS`/`FAIL` verdict carrying the upstream `summary` triple |
-| `check-contrast` | `scripts/check-contrast FILE` · `--level aa\|aaa\|both` `--min RATIO` `--matrix summary\|plausible\|full` `--strict-decorative` `--self-test` `--json` | WCAG 2.x ratios for every intended text-on-surface pair, a typography table and an advisory matrix, at AA 4.5, AA-large 3.0, AAA 7.0 and the 3.0 non-text threshold |
-| `extract-palette` | `scripts/extract-palette IMAGE` · `--colors N` `--ignore-edges PCT` `--min-share PCT` `--merge-distance D` `--json` | dominant colours as `HEX`, `SHARE`, `BUCKETS`, `HUE`, `L*`, `C*` and a heuristic `HINT` |
+| `lint` | `scripts/lint FILE…` · `--strict` `--json` `--list-rules` `--version PIN` `--timeout SECONDS` | a `severity/rule/path/message` table per file, a `REMEDY` line per rule id that fired, and a `PASS`/`FAIL` verdict carrying the upstream `summary` triple |
+| `check-contrast` | `scripts/check-contrast FILE` · `--level aa\|aaa\|both` `--min RATIO` `--matrix summary\|plausible\|full` `--strict-decorative` `--self-test` `--timeout SECONDS` `--json` | WCAG 2.x ratios for every intended text-on-surface pair, a typography table and an advisory matrix, at AA 4.5, AA-large 3.0, AAA 7.0 and the 3.0 non-text threshold |
+| `extract-palette` | `scripts/extract-palette IMAGE` · `--colors N` `--ignore-edges PCT` `--region X,Y,W,H` `--min-share PCT` `--merge-distance D` `--json` | dominant colours as `HEX`, `SHARE`, `BUCKETS`, `HUE`, `L*`, `C*` and a heuristic `HINT` |
 
 `--strict` fails `lint` on warnings, which is what makes a gate meaningful, and
 `--list-rules` prints all fourteen rule rows offline. **Exit codes differ per script:**
@@ -96,9 +96,9 @@ report to stdout and modifies no file. Pass absolute paths.
 | Code | `lint` | `check-contrast` | `extract-palette` |
 | :--- | :--- | :--- | :--- |
 | 0 | no errors (and no warnings under `--strict`) | every gated intended pair meets the gate | success |
-| 1 | errors, or warnings under `--strict` | a gated intended pair fails, or `--self-test` mismatched | an out-of-range option value |
+| 1 | errors, or warnings under `--strict` | a gated intended pair fails, or `--self-test` mismatched | an out-of-range option value, or a `--region` malformed, outside the image, or combined with `--ignore-edges` |
 | 2 | input problem, or a usage error | input problem, or a usage error | image missing, unreadable, or corrupt |
-| 3 | npx or the CLI unavailable, or non-JSON output | the `export` call failed, or no colors defined | no available decoder handles the format |
+| 3 | npx or the CLI unavailable, the call timed out, or non-JSON output | the `export` call failed, or no colors defined | no available decoder handles the format |
 
 With several files `lint` returns the worst code, ordered `3 > 2 > 1 > 0`.
 **Artifacts: none** — no script writes a file. Exit 3 means "the tool did not
@@ -122,10 +122,10 @@ cd /tmp && npx --yes @google/design.md@0.4.0 lint|diff|export|spec <ABSOLUTE-PAT
   `references/` are read-only, every template and fixture lint-verified as it
   stands. Copy a template out and edit the copy.
 - **Network**: `lint` and `check-contrast` shell out to
-  `npx --yes @google/design.md@0.4.0`, which reaches `registry.npmjs.org` on the
-  first call — roughly 30 seconds, announced on stderr — then hits the npx cache.
-  That is the skill's only network access; offline with a cold cache both exit 3
-  rather than reporting a clean file.
+  `npx --yes @google/design.md@0.4.0`, which reaches `registry.npmjs.org` on the first call
+  — roughly 30 seconds, then the npx cache, and the skill's only network access. `lint`
+  announces that wait on stderr; `check-contrast` prints nothing until its report, so a
+  cold run of it looks hung. Offline with a cold cache both exit 3, never a clean verdict.
 - **User-supplied images**: `extract-palette` decodes an image the user supplied,
   reading pixels and writing nothing; it spawns no process and makes no network
   call. Confirm the path, do not fetch an image from a URL unless asked.
@@ -137,8 +137,7 @@ cd /tmp && npx --yes @google/design.md@0.4.0 lint|diff|export|spec <ABSOLUTE-PAT
 
 - Every `assets/template-*.md` and `examples/example-saas-dashboard.md` lints at 0 errors, 0 warnings.
 - `examples/fixture-clean.md` → exit 0, `{"errors": 0, "warnings": 0, "infos": 1}`; `examples/fixture-broken.md` → exit 1, `{"errors": 1, "warnings": 6, "infos": 1}`.
-- `scripts/check-contrast --self-test` reproduces all five WCAG known answers, exit 0.
-- `scripts/check-contrast examples/fixture-clean.md` exits 1 on `outline on surface` at 1.72:1 — proof that a clean lint is not a clean file.
+- `scripts/check-contrast --self-test` reproduces all five WCAG known answers, exit 0; the same script exits 1 on `examples/fixture-clean.md` at `outline on surface` 1.72:1 — proof that a clean lint is not a clean file.
 - `scripts/extract-palette` on a 400x300 PNG: clusters covering 100.0% of counted pixels, exit 0. Detail: `references/linter-rules.md` §20–§22; `scripts/README.md` §3 and §8.
 
 ## The Linter Checks Form, Never Quality
@@ -198,15 +197,17 @@ prose; naming a populated section raises `redundant-omission`.
 ## Route 2 — from a screenshot
 
 1. Read the image. Record its character in one sentence: light or dark, dense or
-   airy, how many surface levels, borders or shadow.
+   airy, how many surface levels, borders or shadow. Start from the template that Template Selection names below: take its section order and token vocabulary from there, and author every frontmatter value from the measurements rather than from the template.
 2. **Measure the colours with the script**, never by eye:
-   `scripts/extract-palette <ABSOLUTE-IMAGE-PATH> --ignore-edges 4`
+   `scripts/extract-palette <ABSOLUTE-IMAGE-PATH> --min-share 0.1`. The default floor of 0.5 sits right on top of a one-control accent: on a 1440x900
+   dashboard capture `#e25a3c` measures 0.52%, and `--ignore-edges 4` — 57 px off each side, a quarter of the 233 px rail — pushes it to
+   0.40% and out of the report. Add that flag for a browser screenshot with chrome to crop, never for a full-app capture.
 3. Assign roles yourself: largest share is `background`, the neutral inset from
    it is `surface`, the high-chroma small-share colour on one control type is
-   `primary`. Name everything in the MD3 vocabulary.
+   `primary`. Name everything in the MD3 vocabulary. Recovery: with no `accent candidate` row, lower `--min-share` again; with the light planes collapsed into one row, lower `--merge-distance` — at 3.0 the 71.70% `#ffffff` splits into `#ffffff` 58.51% and `#f7f4ef` 16.56%.
 4. Count what the image supports (surface levels, radius steps, type sizes), not
    absolute pixels — a retina capture scales all of them by an unknown ratio.
-5. Do not name a font: offer two or three candidates, write one as a labelled placeholder, and ask.
+5. Do not name a font. Where a letterform is legible, offer two or three candidates, write one as a labelled placeholder, and ask. With no legible letterform — small text, heavy compression, a logo-only capture — offer no candidates and declare `typography` in `omitted` with that reason (`references/linter-rules.md` §12): a placeholder with no letterform behind it reads as a measured fact forever after.
 6. Write only the components actually visible: two visible controls means two
    components, not a plausible library of eight.
 7. Everything absent goes to `omitted` with a reason, or — where no section name fits (states, dark theme, motion, breakpoints) — to prose.
@@ -221,12 +222,12 @@ prose; naming a populated section raises `redundant-omission`.
    references, `@theme` blocks, tailwind config entries, utility classes,
    dimensions — each with a count. Commands: `references/extraction.md` §3 (C.1).
 2. Rank by frequency and state the threshold applied: a value used once is
-   probably an accident, not a token.
+   probably an accident, not a token. Check each value against the AS-10 table in `references/anti-slop.md` before it enters the token map: a framework default is often the top-count hex in a tree, and frequency makes it measured, never chosen — name it in the hand-back and get a brand value decided.
 3. Collapse near values into steps and **report every collapse**: silent rounding destroys deliberate optical adjustments. Rename `bg`/`accent` into MD3 families.
 4. Verify the round trip with `export --format json-tailwind` from `/tmp` against
    the project config: a value present only in the codebase is a token the
    extraction missed (`references/export-formats.md` §5).
-5. Run Route 4. Note that `export` never lints: it exits 0 on a file with errors.
+5. Run Route 4, and hand back in the Route 2 buckets — `MEASURED`, `INFERRED`, `NEEDS CONFIRMATION`, `OMITTED`: a codebase settles values and leaves intent undetermined, and an inferred value written flat is indistinguishable from a harvested one. Note that `export` never lints: it exits 0 on a file with errors.
 
 ## Route 4 — lint, fix, re-run (mandatory)
 
@@ -289,7 +290,7 @@ Tables: `references/spec-anatomy.md` §11, `references/export-formats.md` §9.
 
 ## Quality Checklist
 
-- [ ] `scripts/lint --strict FILE` exits 0, and the `summary` triple is quoted in the hand-back rather than summarised as "clean".
+- [ ] `scripts/lint --strict FILE` exits 0 — or every remaining finding is a `contrast-ratio` shortfall between two colours measured from the source, each named with its ratio and justified; no other rule is exempt, and no measured value is edited to clear a finding. The `summary` triple is quoted in the hand-back rather than summarised as "clean".
 - [ ] `scripts/check-contrast FILE` exits 0, or every failing pair is named and justified, and the `token-summary` counts equal the keys actually written in each map.
 - [ ] All eight body sections are present in canonical order at `##` level, with the ASCII apostrophe in `Do's and Don'ts` (a house rule; no linter rule enforces it).
 - [ ] Colour tokens use MD3 family names, `primary` exists, and every non-baseline name is referenced by a component.

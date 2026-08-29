@@ -805,10 +805,11 @@ companion rule §15 catches the subset of them that look like token maps.
 
 **Default severity:** warning.
 
-**Fires when:** a top-level unknown key holds an **object** whose values look
-like design tokens — a hex or CSS dimension leaf, or a typography property
-name — searched one level deep. This is the rule that catches the keys
-`unknown-key` is too far away to notice.
+**Fires when:** a top-level unknown key holds an **object** with a token-shaped
+leaf somewhere beneath it — a hex or CSS dimension value, or a typography
+property name. The search is **recursive through nested plain objects**;
+arrays are inert. This is the rule that catches the keys `unknown-key` is too
+far away to notice.
 
 **Message template:**
 
@@ -838,6 +839,32 @@ The warning is telling you something concrete about downstream behaviour, not
 about style: `export` reads only the five recognized token sections. Values
 under any other key never reach a Tailwind config, a DTCG file, or a CSS
 variable. They exist only in the YAML.
+
+**Search depth — measured.** The scan descends through nested plain objects
+with no depth limit reached in testing; a YAML list stops it. Each row is a
+whole frontmatter body under `name: Probe`, linted with
+`cd /tmp && npx --yes @google/design.md@0.4.0 lint <ABSOLUTE-PATH>`:
+
+| Frontmatter under the unknown key | Fires | `path` reported |
+| :--- | :--- | :--- |
+| `radii: {lg: 12px}` | yes | `radii` |
+| `meta: {radii: {lg: 12px}}` | yes | `meta` |
+| `meta: {a: {b: {radii: {lg: 12px}}}}` | yes | `meta` |
+| `meta: {a: {b: {c: {d: {brand: "#ff0044"}}}}}` | yes | `meta` |
+| `meta: {a: {b: {display: {fontWeight: 700}}}}` | yes | `meta` |
+| `meta: [{radii: {lg: 12px}}]` | no | — |
+| `meta: {list: [{group: {brand: "#ff0044"}}]}` | no | — |
+| `meta: {sizes: [12px, 16px]}` | no | — |
+| `meta: {inner: {note: just prose here}}` | no | — |
+
+Two consequences for an author who takes up §14's extensibility and adds a
+custom top-level key. First, depth is not shelter: a token-shaped map four
+levels below that key still fires the warning, and `path` names only the
+top-level key — `meta`, never `meta.a.b.radii` — so locating the offending leaf
+is the reader's work. A custom key is silent only when nothing beneath it looks
+like a token. Second, a token map that sits inside a YAML list is never
+reached, at any depth; that is a gap in the rule, not a supported way to hide
+metadata from it.
 
 **How §14 and §15 divide the work.** They are independent and can both fire on
 the same key:

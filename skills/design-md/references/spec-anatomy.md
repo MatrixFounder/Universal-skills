@@ -94,7 +94,7 @@ before `## Colors` and no frontmatter produced only the warning above.
 | `version` | string | no | no consumer measured; the conventional value is `alpha` |
 | `name` | string | no | `export --format dtcg`, as `$description` — but only when `description` is absent |
 | `description` | string | no | `export --format dtcg`, as `$description`, in preference to `name`; humans and agents |
-| `omitted` | array of string or of `{section, reason}` | no | `omitted-rules`, `missing-sections` |
+| `omitted` | array of string or of `{section, reason}` | no | `omitted-rules`, `missing-sections`, `missing-typography` |
 | `colors` | map: token name → Color | no | `broken-ref`, `missing-primary`, `contrast-ratio`, `orphaned-tokens`, all exports |
 | `typography` | map: token name → typography object | no | `missing-typography`; every export except `css-vars`, which emits no typography at all |
 | `rounded` | map: token name → Dimension | no | `missing-sections`, all exports |
@@ -564,7 +564,38 @@ never appears in output):
 | name outside the five | `unknown-omission` | warning |
 
 Declaring `spacing` or `rounded` in `omitted` suppresses the
-`missing-sections` info for that section.
+`missing-sections` info for that section. Declaring `typography` suppresses the
+`missing-typography` **warning**. It is the same substitution as for `spacing`
+and `rounded`, but it retires a warning rather than an info: an unexplained gap
+becomes a recorded decision. A file that genuinely does not specify type
+therefore has a clean way to say so, and there is no linter pressure to invent
+a scale. Verified on two files identical but for the `omitted` block, each
+defining `colors`, `spacing` and `rounded` and no `typography`. Without it:
+
+```text
+{
+  "severity": "warning",
+  "path": "typography",
+  "message": "No typography tokens defined. Agents will use default font choices, reducing your control over the design system's typographic identity.",
+  "rule": "missing-typography"
+}
+```
+
+With `omitted: [typography]` added, that finding is replaced by:
+
+```text
+{
+  "severity": "info",
+  "path": "omitted.typography",
+  "message": "typography intentionally omitted — no typography tokens will be validated",
+  "rule": "declared-omission"
+}
+```
+
+The run's `summary` goes from `{"errors": 0, "warnings": 1, "infos": 1}` to
+`{"errors": 0, "warnings": 0, "infos": 2}`. The difference is load-bearing
+under `scripts/lint --strict`, which exits 1 on the first file and 0 on the
+second.
 
 Verified pair. **Without** `omitted`, a colors-plus-typography file reports:
 

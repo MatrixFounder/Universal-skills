@@ -65,7 +65,7 @@ None are bundled in this repository.
 | `python-dateutil` | Apache-2.0 / BSD-3-Clause dual-licensed | xlsx (`--treat-text-as-date` opt-in date parser; xlsx-7) |
 | `ruamel.yaml` | MIT | xlsx (YAML 1.2 loader with event-stream alias rejection — PyYAML's `safe_load` does NOT block alias expansion; xlsx-7) |
 | `python-pptx` | MIT | pptx (presentation manipulation) |
-| `Pillow` | HPND | pptx (image composition for thumbnails) |
+| `Pillow` | HPND | pptx (image composition for thumbnails); design-md (**optional** image decoding for `extract-palette` — without it the script falls back to its own stdlib PNG decoder) |
 | `pypdf` | BSD-3-Clause | pdf (merge, split, metadata) |
 | `pdfplumber` | MIT | pdf (layout-aware text/table extraction) |
 | `weasyprint` | BSD-3-Clause | pdf (Markdown/HTML → PDF) |

@@ -112,7 +112,8 @@ exit codes
   0  clean: no errors (and, under --strict, no warnings either)
   1  lint errors present, or warnings present under --strict
   2  input problem: file missing, unreadable, or a command-line usage error
-  3  npx or the design.md CLI is unavailable, or it returned output that is not JSON
+  3  npx or the design.md CLI is unavailable, timed out, or returned output that
+     is not JSON
 
   With several files the worst code wins, in the order 3 > 2 > 1 > 0.
 
@@ -122,6 +123,8 @@ notes
   name shadows it. Relative paths are resolved to absolute before the call.
   The first invocation downloads the package and takes roughly 30 seconds; a notice
   is written to stderr while that happens.
+  Every call is bounded by --timeout (default 300 seconds); exceeding it is exit 3.
+  With several files the bound applies per file, not to the run as a whole.
   A file with no frontmatter is not an error: the CLI reports one warning saying no
   YAML was found, and exits 0. Under --strict that warning fails the run.
   Upstream reports at most one section-order finding per run, so rerun after fixing it.
@@ -172,6 +175,10 @@ def build_parser():
               "version argument; it does not print the wrapper's own version)"),
     )
     parser.add_argument(
+        "--timeout", type=float, default=300.0, metavar="SECONDS",
+        help="seconds to wait for each npx lint call (default 300)",
+    )
+    parser.add_argument(
         "--list-rules", action="store_true", dest="list_rules",
         help="print every rule id with its default severity and remedy, then exit",
     )
@@ -213,7 +220,7 @@ def check_input(path):
     return None
 
 
-def run_cli(path, version):
+def run_cli(path, version, timeout):
     """Run the upstream linter on one absolute path.
 
     Returns (status, payload) where status is one of:
@@ -232,7 +239,12 @@ def run_cli(path, version):
     cmd = ["npx", "--yes", "%s@%s" % (PACKAGE, version), "lint", path]
     try:
         proc = subprocess.run(
-            cmd, cwd=neutral_cwd(), capture_output=True, text=True,
+            cmd, cwd=neutral_cwd(), capture_output=True, text=True, timeout=timeout,
+        )
+    except subprocess.TimeoutExpired:
+        return "cli", (
+            "`%s@%s lint` exceeded %ss. The first run downloads the package; "
+            "retry, or pass a larger --timeout." % (PACKAGE, version, timeout)
         )
     except FileNotFoundError:
         return "cli", (
@@ -394,7 +406,7 @@ def main(argv):
         if local_problem:
             results[abs_path] = ("input", local_problem)
             continue
-        results[abs_path] = run_cli(abs_path, args.version)
+        results[abs_path] = run_cli(abs_path, args.version, args.timeout)
 
     if args.as_json:
         if len(order) == 1:

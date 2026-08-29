@@ -1097,11 +1097,54 @@ A version bump is a change to this skill, not a maintenance detail. Procedure:
 5. Re-run the five `export` formats and diff the output against the 0.4.0
    output. A changed variable prefix (§4.1) or a newly carried property (§4.2)
    invalidates the coverage matrix in §1.2.
-6. Update the pin in `SKILL.md`, `scripts/lint` (`DEFAULT_VERSION`), and every
-   `references/` file in the same commit. A split pin means two commands in one
-   session run two versions.
+6. Update the pin in **every** site listed in §8.2, in the same commit. A split
+   pin means two commands in one session run two versions.
 
-### 8.2 Licensing
+### 8.2 Every place the pin is written
+
+Two sites are **executable** — they decide which version actually runs. The
+rest are documentary: prose, quoted invocations, and measured output that
+becomes a false statement the moment the executable sites move without them.
+The pin occurs in **thirteen** tracked files. The table below is the audited
+list; regenerate it at any time, substituting the pin currently in force for
+`<PIN>`, and reconcile any file the grep finds that the table does not name:
+
+```bash
+grep -rl '<PIN>' /ABS/PATH/skills/design-md --exclude-dir=.venv
+```
+
+| File | Kind | What is written there |
+| :--- | :--- | :--- |
+| `scripts/lint` | **executable** | `DEFAULT_VERSION = "0.4.0"`, joined to `PACKAGE` in the `npx` argv. Overridable per call with `--version PIN`, so a stale constant here is maskable at the command line and easy to miss. |
+| `scripts/check-contrast` | **executable** | `PKG = "@google/design.md@0.4.0"`, used directly in the `npx` argv, plus the same string in `run_export`'s docstring and in `--version`'s output. There is **no** override flag: editing the constant is the only way to move this wrapper. |
+| `scripts/install.sh` | prose | the header comment and the two Node-version hints |
+| `scripts/README.md` | prose | thirteen occurrences: the provenance line, both wrappers' `--version` rows, quoted command and error output, the offline notes, and §5 |
+| `SKILL.md` | prose | the dependency sentence, the invocation line, the network note, and the dependency table |
+| `references/export-formats.md` | prose | this file: the provenance line, every quoted `npx` invocation, §8's decision, and this section |
+| `references/linter-rules.md` | prose | the opening line, the invocation lines, the rule-table and appendix captions, `--version`'s documented default, and the wrapper's quoted stderr notice |
+| `references/spec-anatomy.md` | prose | the opening line and one invocation |
+| `references/anti-slop.md`, `references/extraction.md` | prose | quoted invocations only |
+| `assets/template-editorial.md` | prose | the "measured against" note under its lint result |
+| `examples/fixture-clean.md`, `examples/fixture-broken.md` | prose | the version each asserted `summary` was measured with |
+
+`scripts/README.md` §5 covers the same ground from the scripts side: it lists
+the pin sites inside `scripts/` and carries the per-file `summary` baseline
+that step 2 compares against. Its scope is `scripts/`; this section is the
+skill-wide superset. The two must move together — a bump that reconciles one
+list and not the other is the exact failure this section exists to prevent.
+
+Verify completeness by grep, not by memory. After the bump, a search for the
+version you bumped **from** must print nothing:
+
+```bash
+grep -rn '<OLD PIN>' /ABS/PATH/skills/design-md --exclude-dir=.venv
+```
+
+A surviving hit is either a site you missed or a passage that deliberately
+records history. No passage records history today, so treat every hit as a
+miss until proven otherwise.
+
+### 8.3 Licensing
 
 `@google/design.md` is Apache-2.0, published by Google LLC. It is invoked
 through `npx` and is **never bundled**: this skill carries no upstream source,

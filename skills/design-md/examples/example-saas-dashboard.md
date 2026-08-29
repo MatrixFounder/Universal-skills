@@ -395,44 +395,71 @@ status colour with no chip behind it would be a warning, and correctly so.
 
 ### Contrast
 
-The linter checks component pairs at WCAG AA 4.5:1. Every pair in this file was also
-measured at AAA 7:1, because the board is read at two metres on a depot terminal:
+The linter checks component pairs at WCAG AA 4.5:1. Every text pair in this palette was
+also measured at AAA 7:1, because the board is read at two metres on a depot terminal.
+The table below is `scripts/check-contrast --level both` run on this file and
+transcribed, not a hand-tabulated selection: the first three columns are the script's
+intended-pair block for the text role, and the fourth names the component that applies
+each pair.
 
-| Pair | Ratio | Verdict |
-| :--- | ---: | :--- |
-| `on-surface` on `surface` | 17.84:1 | AAA |
-| `on-surface` on `surface-container-low` | 16.89:1 | AAA |
-| `on-background` on `background` | 16.47:1 | AAA |
-| `inverse-on-surface` on `inverse-surface` | 13.24:1 | AAA |
-| `on-error-container` on `error-container` | 12.77:1 | AAA |
-| `on-secondary-container` on `secondary-container` | 11.83:1 | AAA |
-| `on-tertiary-container` on `tertiary-container` | 10.66:1 | AAA |
-| `on-primary-container` on `primary-container` | 10.22:1 | AAA |
-| `on-status-hold` on `status-hold` | 9.44:1 | AAA |
-| `on-primary` on `primary` | 8.86:1 | AAA |
-| `primary` on `surface` | 8.86:1 | AAA |
-| `on-status-delayed` on `status-delayed` | 8.22:1 | AAA |
-| `on-surface-variant` on `surface` | 7.86:1 | AAA |
-| `on-surface-variant` on `surface-container` | 7.12:1 | AAA |
-| `on-secondary` on `secondary` | 6.90:1 | AA |
-| `on-surface-variant` on `surface-container-high` | 6.80:1 | AA |
-| `on-error` on `error` | 6.54:1 | AA |
-| `on-tertiary` on `tertiary` | 6.39:1 | AA |
+| Pair | Ratio | Verdict | Applied by |
+| :--- | ---: | :--- | :--- |
+| `on-surface` on `surface` | 17.84:1 | AAA | `app-bar`, `card-kpi`, `table-row` |
+| `on-surface` on `surface-container-low` | 16.89:1 | AAA | `input-search`, `table-row-alt` |
+| `on-background` on `background` | 16.47:1 | AAA | `board-canvas` |
+| `on-surface` on `background` | 16.47:1 | AAA | not applied |
+| `on-surface` on `surface-container` | 16.15:1 | AAA | not applied |
+| `on-surface` on `surface-container-high` | 15.43:1 | AAA | not applied |
+| `on-surface` on `surface-container-highest` | 14.59:1 | AAA | `menu-filter` |
+| `on-surface` on `surface-variant` | 14.05:1 | AAA | not applied |
+| `inverse-on-surface` on `inverse-surface` | 13.24:1 | AAA | `tooltip` |
+| `on-error-container` on `error-container` | 12.77:1 | AAA | `chip-exception`, `banner-exception` |
+| `on-secondary-container` on `secondary-container` | 11.83:1 | AAA | `badge-count` |
+| `on-tertiary-container` on `tertiary-container` | 10.66:1 | AAA | `chip-delivered` |
+| `on-primary-container` on `primary-container` | 10.22:1 | AAA | `chip-in-transit` |
+| `on-status-hold` on `status-hold` | 9.44:1 | AAA | `chip-hold` |
+| `on-primary` on `primary` | 8.86:1 | AAA | `button-primary` |
+| `on-status-delayed` on `status-delayed` | 8.22:1 | AAA | `chip-delayed` |
+| `on-surface-variant` on `surface` | 7.86:1 | AAA | `table-cell-muted` over `table-row` |
+| `on-surface-variant` on `surface-container-low` | 7.45:1 | AAA | `table-cell-muted` over `table-row-alt` |
+| `on-surface-variant` on `background` | 7.26:1 | AAA | not applied |
+| `on-surface-variant` on `surface-container` | 7.12:1 | AAA | `nav-rail` |
+| `on-secondary` on `secondary` | 6.90:1 | AA | `avatar-driver` |
+| `on-surface-variant` on `surface-container-high` | 6.80:1 | AA | `table-header`, `tag-lane` |
+| `on-error` on `error` | 6.54:1 | AA | `button-danger` |
+| `on-surface-variant` on `surface-container-highest` | 6.43:1 | AA | not applied |
+| `on-tertiary` on `tertiary` | 6.39:1 | AA | not applied |
+| `on-surface-variant` on `surface-variant` | 6.19:1 | AA | `chip-scheduled` |
 
-Four pairs sit between AA and AAA, and they are not equivalent. `on-secondary` on
+Six pairs sit between AA and AAA, and they are not equivalent. `on-secondary` on
 `secondary` and `on-error` on `error` carry 14px/600 button labels and 11px/500 avatar
-initials -- short, bold, and read in bursts. `on-tertiary` on `tertiary` is defined but
-not applied anywhere: `meter-on-time` uses the fill with no label over it, so the pair
-is a reserve, and it is the one to fix first if a label is ever put on the meter.
+initials -- short, bold, and read in bursts. Two of the six are applied nowhere:
+`meter-on-time` uses the `tertiary` fill with no label over it, and `menu-filter` puts
+`on-surface` rather than `on-surface-variant` on `surface-container-highest`. Both are
+reserves, and `on-tertiary` on `tertiary` is the one to fix first if a label is ever
+put on the meter.
 
-The pair that matters is `on-surface-variant` on `surface-container-high` at 6.80:1 --
-the column-header band, on screen for the whole shift. It is accepted only because the
-band is the lightest tint that still separates the header from row one. If the band is
-ever darkened, this pair moves first.
+The lowest applied pair is `on-surface-variant` on `surface-variant` at 6.19:1 --
+`chip-scheduled`, whose fill is the one status colour deliberately left colourless.
+Colourlessness is what costs it the ratio: the chip has no hue of its own to hold the
+label against, only a neutral one step off the row. It is accepted because *scheduled*
+is the state that must not compete for attention, and it is the first pair to recheck
+if the neutral ramp is ever re-toned.
 
-Note what this costs to know: the linter checks four of these pairs, because it only
-looks at components that set both `backgroundColor` and `textColor`, and only against
-4.5:1. The AAA column above came from checking every text-on-surface pair separately.
+Next lowest, and the one on screen longest, is `on-surface-variant` on
+`surface-container-high` at 6.80:1 -- the column-header band, present for the whole
+shift. It is accepted only because the band is the lightest tint that still separates
+the header from row one. If the band is ever darkened, this pair moves first.
+
+Note what this costs to know. The linter checks the 23 of this file's 28 components
+that set both `backgroundColor` and `textColor` -- 18 distinct pairs -- and only against
+4.5:1. The other five set one of the two and are checked against nothing:
+`table-cell-numeric`, `table-cell-muted`, `divider`, `divider-section` and
+`meter-on-time`. One applied pair is missing from the table above as well:
+`button-outline` puts `primary` on `surface`, and `primary` is not an `on-*` token, so
+the script does not offer it as a foreground. Contrast is symmetric and `on-primary`
+and `surface` are both `#FFFFFF`, so that pair's ratio is the 8.86:1 the script prints
+for `on-primary` on `primary`.
 
 `outline` (3.82:1 on `surface`) and `outline-variant` (1.56:1) are non-text tokens and
 are never a component's `textColor`. `outline` clears the 3:1 non-text threshold and is
@@ -465,6 +492,13 @@ column labels. So the file records the measured integers and documents 1.2 as th
 to extend from, rather than presenting a generated ladder as if it had been observed.
 If a future screen shows a 24px or a 34px size, the hypothesis holds; if it shows 22px,
 it does not.
+
+Step 6 of the self-audit in `references/anti-slop.md` -- type scale -- prints four
+ratio clusters for this file (centres 1.091, 1.155, 1.250, 1.400) over a 2.55x span,
+where it asks for one. That step is recorded as N/A rather than as a pass: it inspects
+a ladder generated from a ratio, and these six sizes are measurements off a screenshot,
+with 1.2 documented above as the rule for extending them and not the rule that produced
+them.
 
 ### Family
 

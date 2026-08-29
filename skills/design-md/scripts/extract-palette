@@ -530,18 +530,59 @@ def relative_luminance(r: int, g: int, b: int) -> float:
 ALPHA_FLOOR = 128  # pixels below this alpha are excluded from the counts
 
 
-def sample_histogram(img: DecodedImage, edge_pct: float, bits: int, max_samples: int):
+def parse_region(text: str):
+    """Parse ``X,Y,W,H`` into a 4-tuple of ints. Raises UsageError on anything else.
+
+    Bounds against the decoded image cannot be checked here — the image is not
+    decoded yet — so that check lives in ``sample_histogram`` and raises
+    UsageError too, to keep every bad --region on the same exit code.
+    """
+    parts = [p.strip() for p in text.split(",")]
+    if len(parts) != 4:
+        raise UsageError(
+            "--region takes exactly four comma-separated values, X,Y,W,H in pixels "
+            "(got %r, which has %d)" % (text, len(parts)))
+    try:
+        x, y, w, h = [int(p, 10) for p in parts]
+    except ValueError:
+        raise UsageError(
+            "--region takes whole pixels, X,Y,W,H (got %r)" % text)
+    if x < 0 or y < 0:
+        raise UsageError(
+            "--region origin must not be negative (got X=%d, Y=%d)" % (x, y))
+    if w <= 0 or h <= 0:
+        raise UsageError(
+            "--region width and height must both be >= 1; %d,%d,%d,%d selects no "
+            "pixels" % (x, y, w, h))
+    return (x, y, w, h)
+
+
+def sample_histogram(img: DecodedImage, edge_pct: float, bits: int, max_samples: int,
+                     region=None):
     """Walk the image on a stride grid and bucket every opaque pixel.
 
     Returns (hist, stats). ``hist`` maps a quantised bucket key to
     [count, sum_r, sum_g, sum_b] of the *exact* pixel values in that bucket, so
     the bucket's mean keeps sub-bucket precision.
+
+    ``region`` is an (X, Y, W, H) window in pixels of the decoded image, or
+    None. It is mutually exclusive with ``edge_pct`` (enforced in ``validate``).
     """
     width, height = img.width, img.height
-    dx = int(width * edge_pct / 100.0)
-    dy = int(height * edge_pct / 100.0)
-    x0, x1 = dx, width - dx
-    y0, y1 = dy, height - dy
+    if region is not None:
+        rx, ry, rw, rh = region
+        if rx + rw > width or ry + rh > height:
+            raise UsageError(
+                "--region %d,%d,%d,%d falls outside the image: it reaches x=%d, y=%d "
+                "in a %dx%d image. The region is not clamped; give one that fits."
+                % (rx, ry, rw, rh, rx + rw, ry + rh, width, height))
+        x0, x1 = rx, rx + rw
+        y0, y1 = ry, ry + rh
+    else:
+        dx = int(width * edge_pct / 100.0)
+        dy = int(height * edge_pct / 100.0)
+        x0, x1 = dx, width - dx
+        y0, y1 = dy, height - dy
     if x1 <= x0 or y1 <= y0:
         raise InputError(
             "--ignore-edges %.1f leaves no pixels in a %dx%d image" % (edge_pct, width, height))
@@ -596,6 +637,7 @@ def sample_histogram(img: DecodedImage, edge_pct: float, bits: int, max_samples:
         "crop_width": crop_w,
         "crop_height": crop_h,
         "ignore_edges_pct": edge_pct,
+        "region": list(region) if region is not None else None,
         "stride": stride,
         "sampled_pixels": visited,
         "counted_pixels": counted,
@@ -751,6 +793,7 @@ def build_report(path, img, stats, clusters, args):
         },
         "sampling": {
             "ignore_edges_pct": stats["ignore_edges_pct"],
+            "region": stats["region"],
             "crop_x": stats["crop_x"],
             "crop_y": stats["crop_y"],
             "crop_width": stats["crop_width"],
@@ -780,7 +823,9 @@ def build_report(path, img, stats, clusters, args):
         "colors": rows,
         "disclaimer": (
             "Shares and hex values are measured. The hint column is a heuristic "
-            "over share and HSL, not a role assignment."
+            "over rank, share, CIELAB lightness L* and CIELAB chroma C*, not a "
+            "role assignment. The reported HSL is descriptive only; the "
+            "heuristic does not read it."
         ),
     }
 
@@ -797,7 +842,13 @@ def render_text(report) -> str:
     out = []
     out.append("%s  %s" % (TOOL, img["path"]))
     out.append("  decoder    %s" % img["decoder_detail"])
-    if smp["ignore_edges_pct"] > 0:
+    if smp.get("region"):
+        rx, ry, rw, rh = smp["region"]
+        crop = "%dx%d at x=%d..%d, y=%d..%d from --region %d,%d,%d,%d" % (
+            smp["crop_width"], smp["crop_height"],
+            smp["crop_x"][0], smp["crop_x"][1], smp["crop_y"][0], smp["crop_y"][1],
+            rx, ry, rw, rh)
+    elif smp["ignore_edges_pct"] > 0:
         crop = "%dx%d after --ignore-edges %.1f%%" % (
             smp["crop_width"], smp["crop_height"], smp["ignore_edges_pct"])
     else:
@@ -835,8 +886,9 @@ def render_text(report) -> str:
     out.append("")
     out.append("  HUE is the HSL hue angle; L* and C* are CIELAB lightness and chroma.")
     out.append("  Hex values and shares are MEASURED. The HINT column is a heuristic over")
-    out.append("  share, L* and C* only; deciding which measured colour is background,")
-    out.append("  surface, on-surface or accent is the reader's job, not this script's.")
+    out.append("  rank, share, L* and C* only (not HUE); deciding which measured colour is")
+    out.append("  background, surface, on-surface or accent is the reader's job, not this")
+    out.append("  script's.")
     out.append("")
     return "\n".join(out)
 
@@ -852,10 +904,26 @@ method
                  covering non-interlaced PNG, bit depth 8/16, colour types
                  0/2/3/4/6, filter types 0-4. macOS and Linux screenshots are
                  exactly that, so the no-install path covers the main use case.
-  2. crop        --ignore-edges PCT removes PCT of the width from the left and
-                 right and PCT of the height from the top and bottom, before
-                 anything is counted. Use it to drop browser chrome, tab bars,
-                 window shadows and OS furniture.
+  2. crop        Two ways to narrow the sampled area, before anything is
+                 counted. They cannot be combined; passing both is a usage
+                 error, because --region is absolute and an edge percentage on
+                 top of it would be ambiguous.
+
+                 --ignore-edges PCT removes PCT of the width from the left and
+                 right and PCT of the height from the top and bottom. It is
+                 symmetric, so it drops browser chrome, tab bars, window shadows
+                 and OS furniture — nothing else.
+
+                 --region X,Y,W,H selects one explicit window in pixels of the
+                 decoded image, origin at the top-left corner. This is how you
+                 localise a measured colour: a global histogram says a neutral
+                 exists, not whether it is the table-header band, a card border
+                 or a row stripe. Measure the band, then measure the card, and
+                 the ambiguity is gone. A region that is empty, negative, or
+                 does not fit inside the image is rejected (exit 1) and never
+                 clamped, so a mistyped offset cannot quietly become a
+                 measurement of somewhere else. The applied window is printed on
+                 the `image` line and appears in --json as sampling.region.
   3. sample      A stride grid keeps the work bounded (--max-samples). The
                  stride is uniform in x and y, so area proportions are
                  preserved. A regular pixel pattern finer than the stride can
@@ -885,8 +953,9 @@ method
                  appears nowhere in the image.
 
 hint column
-  A heuristic, not a determination. It reads share, CIELAB lightness L* and
-  CIELAB chroma C* = hypot(a*, b*):
+  A heuristic, not a determination. It reads the rank, the share, CIELAB
+  lightness L* and CIELAB chroma C* = hypot(a*, b*) — and nothing else; the
+  HSL values in the output are descriptive only:
 
     rank 1                      background candidate (it covers the most area)
     C* >= 40, share <  5%       accent candidate
@@ -908,7 +977,9 @@ pixels that are not counted
 
 exit codes
   0  success
-  1  invalid arguments or an out-of-range option value
+  1  invalid arguments or an out-of-range option value, including a --region
+     that is malformed, empty, or outside the image, and --region together
+     with --ignore-edges
   2  image missing, unreadable, corrupt, or nothing left to sample
   3  format recognised but no available decoder handles it (JPEG/WebP/HEIF
      without Pillow, interlaced PNG, PNG at bit depth 1/2/4)
@@ -921,6 +992,8 @@ output
 examples
   extract-palette /abs/path/shot.png
   extract-palette /abs/path/shot.png --ignore-edges 4 --colors 8
+  extract-palette /abs/path/shot.png --region 0,0,232,900        # a left rail
+  extract-palette /abs/path/shot.png --region 264,243,1144,43    # a header band
   extract-palette /abs/path/shot.png --min-share 1.5 --merge-distance 3
   extract-palette /abs/path/shot.png --json > /abs/path/palette.json
 """
@@ -947,7 +1020,18 @@ def build_parser() -> argparse.ArgumentParser:
                    help="drop clusters below PCT%% of counted pixels (default: 0.5)")
     p.add_argument("--ignore-edges", type=float, default=0.0, metavar="PCT",
                    help="crop PCT%% off each side before sampling, to remove browser "
-                        "chrome and window borders (default: 0, must be < 50)")
+                        "chrome and window borders (default: 0, must be < 50). "
+                        "Cannot be combined with --region")
+    p.add_argument("--region", metavar="X,Y,W,H", default=None,
+                   help="sample only this window of the decoded image, in whole "
+                        "pixels with the origin at the top-left corner: X,Y is the "
+                        "corner, W,H the size. Use it to ask what colours are in one "
+                        "band (a table header, a left rail, a card) instead of the "
+                        "whole capture. A region that is empty, negative, or does not "
+                        "fit inside the image is rejected, never clamped. Mutually exclusive "
+                        "with --ignore-edges: the region is already stated in "
+                        "absolute pixels, so an edge percentage on top of it would "
+                        "be ambiguous")
     p.add_argument("--bits", type=int, default=5, metavar="N",
                    help="quantisation bits per channel, 3-8 (default: 5 = 32 levels)")
     p.add_argument("--merge-distance", type=float, default=6.0, metavar="D",
@@ -967,6 +1051,14 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def validate(args) -> None:
+    args.region_box = None
+    if args.region is not None:
+        if args.ignore_edges > 0.0:
+            raise UsageError(
+                "--region and --ignore-edges cannot be combined. --region is stated "
+                "in absolute pixels, so an edge percentage on top of it would be "
+                "ambiguous; subtract the margin from the region instead.")
+        args.region_box = parse_region(args.region)
     if args.colors < 1:
         raise UsageError("--colors must be >= 1 (got %d)" % args.colors)
     if args.min_share < 0.0 or args.min_share > 100.0:
@@ -1004,7 +1096,10 @@ def main(argv=None) -> int:
 
     try:
         img = load_image(args.image, args.decoder)
-        hist, stats = sample_histogram(img, args.ignore_edges, args.bits, args.max_samples)
+        hist, stats = sample_histogram(img, args.ignore_edges, args.bits,
+                                       args.max_samples, args.region_box)
+    except UsageError as exc:
+        return fail(EXIT_USAGE, "usage error", str(exc), args.json)
     except InputError as exc:
         return fail(EXIT_INPUT, "input error", str(exc), args.json)
     except FormatError as exc:

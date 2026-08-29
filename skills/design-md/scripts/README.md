@@ -4,8 +4,9 @@ Maintenance and debugging notes for the three tools in this directory. Agent-fac
 usage lives in `../SKILL.md` and `../references/`; this file is for whoever has to
 change the code or explain its output.
 
-Everything below was executed on 2026-08-28 against `@google/design.md@0.4.0`,
-Node v24.15.0, Python 3.14.4, macOS (darwin 25.5.0). Quoted output is real output.
+Everything below was executed on 2026-08-28, and §§2, 3, 5 and 8 re-executed unchanged
+on 2026-08-29, against `@google/design.md@0.4.0`, Node v24.15.0, Python 3.14.4, macOS
+(darwin 25.5.0). Quoted output is real output.
 
 ---
 
@@ -41,7 +42,9 @@ change; this section is a copy, not the source of truth.
 ### 2.1 `lint`
 
 ```
-usage: lint [-h] [--json] [--strict] [--version PIN] [--list-rules] [FILE ...]
+usage: lint [-h] [--json] [--strict] [--version PIN] [--timeout SECONDS]
+            [--list-rules]
+            [FILE ...]
 ```
 
 | Flag | Default | Effect |
@@ -50,7 +53,8 @@ usage: lint [-h] [--json] [--strict] [--version PIN] [--list-rules] [FILE ...]
 | `--json` | off | Emit upstream JSON instead of the report. One file: the upstream document verbatim, with trailing newlines normalised to one. Several files: one object keyed by absolute path. |
 | `--strict` | off | Warnings fail too. Turns the wrapper into a gate. |
 | `--version PIN` | `0.4.0` | The **package version to run**. It takes an argument and does not print the wrapper's own version. `lint --version` alone is a usage error. |
-| `--list-rules` | off | Print all 14 emitted rule ids with default severity and remedy, then exit 0. Reads no file and makes no network call. |
+| `--timeout SECONDS` | `300` | Wall-clock budget for each `npx lint` call. With several files the bound applies per file, not to the run as a whole. Exceeding it is exit 3, and the file is reported as `not linted`. |
+| `--list-rules` | off | Print every emitted rule id with its default severity and remedy, then exit 0 — 14 rows over 13 distinct ids, see below. Reads no file and makes no network call. |
 
 `--list-rules` is the fastest way to see the rule-id inventory without a fixture:
 
@@ -62,7 +66,8 @@ A finding with no rule id at all comes from the frontmatter parser, before
 any rule runs (an unparseable or absent YAML block).
 ```
 
-Note the shape: 11 rule *descriptors* upstream, 14 rule *ids* on the wire.
+Note the shape: 11 rule *descriptors* upstream, 13 distinct rule *ids* on the wire,
+printed as 14 rows (`references/linter-rules.md` §2 carries the same three numbers).
 `broken-ref` is emitted at two severities for two different defects, and the descriptor
 named `omitted-rules` never prints its own name — it emits `declared-omission`,
 `redundant-omission` and `unknown-omission`. Grepping output for `omitted-rules` finds
@@ -112,9 +117,10 @@ whether the row can fail the run.
 
 ```
 usage: extract-palette [-h] [--colors N] [--min-share PCT]
-                       [--ignore-edges PCT] [--bits N] [--merge-distance D]
-                       [--max-samples N] [--decoder {auto,pillow,stdlib-png}]
-                       [--json] [--version]
+                       [--ignore-edges PCT] [--region X,Y,W,H] [--bits N]
+                       [--merge-distance D] [--max-samples N]
+                       [--decoder {auto,pillow,stdlib-png}] [--json]
+                       [--version]
                        IMAGE
 ```
 
@@ -123,7 +129,8 @@ usage: extract-palette [-h] [--colors N] [--min-share PCT]
 | `IMAGE` | required | Path to the image. Absolute paths recommended. |
 | `--colors N` | `12` | Report at most N colours, highest share first. Must be >= 1. |
 | `--min-share PCT` | `0.5` | Drop clusters below PCT% of counted pixels. Range 0–100. |
-| `--ignore-edges PCT` | `0` | Crop PCT% off each side before sampling — browser chrome, tab bars, window shadows. Must be >= 0 and < 50. |
+| `--ignore-edges PCT` | `0` | Crop PCT% off each side before sampling — browser chrome, tab bars, window shadows. Must be >= 0 and < 50. Cannot be combined with `--region`; `--ignore-edges 0` is a no-op and is accepted alongside it. |
+| `--region X,Y,W,H` | unset | Sample only this window of the decoded image, in whole pixels, origin at the top-left corner. Use it to measure one band — a table header, a left rail, a card — instead of the whole capture. A region that is malformed, empty, negative or does not fit inside the image is rejected (exit 1) and never clamped. The applied window is printed on the `image` line and appears in `--json` as `sampling.region`. |
 | `--bits N` | `5` | Quantisation bits per channel (5 = 32 levels = 32768 buckets). Range 3–8. |
 | `--merge-distance D` | `6.0` | CIE76 dE in CIELAB below which two buckets are one colour. Raise to collapse a ramp, lower to split one; `0` disables merging. Must be >= 0. |
 | `--max-samples N` | `400000` | Upper bound on sampled pixels; larger images get a coarser stride grid. `0` samples every pixel. |
@@ -131,10 +138,21 @@ usage: extract-palette [-h] [--colors N] [--min-share PCT]
 | `--json` | off | One JSON object on stdout. Errors still go to stderr, as JSON. |
 | `--version` | — | Prints `extract-palette 1.0`. |
 
-The `HINT` column is a heuristic over share, CIELAB lightness `L*` and CIELAB chroma
-`C*`. It is not a role assignment, and the report says so in its own footer. Chroma
-rather than HSL saturation is deliberate: the off-white `#f5f2ec` has HSL S 0.31 but
-`C*` 3.2, and calling it saturated would mislabel every warm-white surface as an accent.
+The `HINT` column is a heuristic over the rank, the share, CIELAB lightness `L*` and
+CIELAB chroma `C*` — and nothing else. The `HUE` column is descriptive output, not an
+input to the heuristic. It is not a role assignment, and the report says so in its own
+footer. Chroma rather than HSL saturation is deliberate: the off-white `#f5f2ec` has
+HSL S 0.31 but `C*` 3.2, and calling it saturated would mislabel every warm-white
+surface as an accent.
+
+Two defaults are worth stating, because `SKILL.md` Route 2 works around both. The
+`0.5` default `--min-share` sits directly on top of the pixel share of a typical
+single-control accent: on a 1440x900 dashboard capture `#e25a3c` measures 0.52%
+uncropped — inside the report by 0.02 points — and 0.40% under `--ignore-edges 4`,
+which drops it out of the report entirely; Route 2 therefore passes `--min-share 0.1`.
+The `6.0` default `--merge-distance` merges an adjacent light-plane ladder into one
+row: on the same capture rank 1 is `#ffffff` at 71.70% built from two buckets, and at
+`--merge-distance 3` that row splits into `#ffffff` 58.51% and `#f7f4ef` 16.56%.
 
 ---
 
@@ -145,9 +163,9 @@ The three tables differ. Do not assume one from another.
 | Code | `lint` | `check-contrast` | `extract-palette` |
 | :--- | :--- | :--- | :--- |
 | 0 | no errors (and no warnings under `--strict`) | every gated intended pair meets the gate | success |
-| 1 | lint errors, or warnings under `--strict` | a gated intended pair fails the gate; also a `--self-test` mismatch | option value out of range (`--bits 99`, `--ignore-edges 60`) |
+| 1 | lint errors, or warnings under `--strict` | a gated intended pair fails the gate; also a `--self-test` mismatch | option value out of range (`--bits 99`, `--ignore-edges 60`); also a `--region` that is malformed, empty, negative or outside the image, and `--region` combined with a non-zero `--ignore-edges` |
 | 2 | input problem: file missing, unreadable, a directory, or a command-line usage error | input file missing, a directory, not a regular file, unreadable; also a command-line usage error | image missing, a directory, unreadable, empty, corrupt, or nothing left to sample; also an argparse-level usage error |
-| 3 | `npx` or the design.md CLI is unavailable, or returned output that is not JSON | the `export` call failed, or the file defines no colors | format recognised but no available decoder handles it |
+| 3 | `npx` or the design.md CLI is unavailable, timed out (`--timeout`, default 300s per file), or returned output that is not JSON | the `export` call failed or timed out (`--timeout`, default 300s), or the file defines no colors | format recognised but no available decoder handles it |
 
 With several files `lint` returns the worst code, in the order `3 > 2 > 1 > 0`.
 
@@ -243,8 +261,34 @@ built-in path and in C under Pillow. `requirements.txt` records the measured fig
 
 ## 5. Why `@google/design.md@0.4.0` is pinned, and how to bump it
 
-The pin is written into three places: `PACKAGE`/`DEFAULT_VERSION` in `lint`, `PKG` in
-`check-contrast`, and the hint text in `install.sh`. All three must move together.
+Inside `scripts/` the pin is written into four files. Two of them are **executable** —
+they decide which version actually runs; the other two are prose that becomes false the
+moment the executable sites move without them. All four must move in the same commit.
+
+| File | Kind | Where, measured by `grep -n '0\.4\.0'` |
+| :--- | :--- | :--- |
+| `lint` | **executable** | one site: `DEFAULT_VERSION = "0.4.0"`, joined to `PACKAGE = "@google/design.md"` in the `npx` argv. `--version PIN` overrides it per call, so a stale constant here is maskable at the command line. |
+| `check-contrast` | **executable** | two sites: `PKG = "@google/design.md@0.4.0"` and the same string quoted in `run_export`'s docstring. `--version` prints `PKG`, so it moves with the constant. There is no override flag. |
+| `install.sh` | prose | three sites: the header comment and both Node hints. |
+| `README.md` | prose | this file: the provenance line, both wrappers' `--version` rows, the quoted `export` invocation and the quoted error output, the `install.sh` transcript, the offline notes, and this section. Its occurrence count moves with any edit to the file, so count it with the grep below rather than quoting a number from memory. |
+
+`extract-palette` contains no site — it never calls `npx`.
+
+Skill-wide the pin occurs in **thirteen** tracked files: the four above, plus nine
+outside `scripts/` — `SKILL.md`, `references/anti-slop.md`,
+`references/export-formats.md`, `references/extraction.md`,
+`references/linter-rules.md`, `references/spec-anatomy.md`,
+`assets/template-editorial.md`, `examples/fixture-clean.md` and
+`examples/fixture-broken.md`. `references/export-formats.md` §8.2 ("Every place the pin
+is written") names those same thirteen and records what is written in each; this section
+is the `scripts/` subset with the per-site detail. The two lists must move together — a
+bump that reconciles one and not the other is the failure both exist to prevent.
+Confirm the roster by grep rather than by memory, from the skill directory, and
+reconcile any file the grep finds that neither list names:
+
+```bash
+grep -rl '0\.4\.0' . --exclude-dir=.venv | sort    # 13 files today
+```
 
 The reason for a pin rather than a floating `@latest` is that the *format* is at
 `version: alpha`:
@@ -258,30 +302,35 @@ An alpha format can change its schema keys, its rule set, its severities and its
 message wording between releases. `references/linter-rules.md` quotes upstream messages
 verbatim and `assets/*.md` are hand-tuned to lint at zero errors, so a silent bump
 would rot documentation and templates at the same time with no signal. As of
-2026-08-28 the pin also *is* the latest release (`npm view @google/design.md version`
+2026-08-29 the pin also *is* the latest release (`npm view @google/design.md version`
 → `0.4.0`), so the pin costs nothing today.
 
 **Re-verification procedure after a deliberate bump.** Do this before and after, and
-compare:
+compare. Run it from the repository root; do not `cd /tmp` first, because the paths are
+repo-root-relative and the wrapper already resolves them to absolute and shells out from
+a neutral working directory itself (§7). The summariser is stdlib `python3` — `jq` is
+not a dependency of this skill and is not assumed to be installed:
 
 ```bash
-cd /tmp
 skills/design-md/scripts/lint --json \
   skills/design-md/assets/*.md skills/design-md/examples/*.md \
-| jq -S 'to_entries|map({file:(.key|split("/")|last), summary:.value.summary})'
+| python3 -c 'import json, os, sys
+for path, doc in json.load(sys.stdin).items():
+    print("%-28s %s" % (os.path.basename(path), json.dumps(doc["summary"], sort_keys=True)))'
 ```
 
-Baseline at 0.4.0 (2026-08-28) — four templates and `example-saas-dashboard.md` at zero
-errors and zero warnings, `fixture-broken.md` deliberately failing:
+Baseline at 0.4.0 (2026-08-29) — four templates and `example-saas-dashboard.md` at zero
+errors and zero warnings, `fixture-broken.md` deliberately failing. Verbatim stdout; the
+`[lint] running npx …` notice goes to stderr and is not part of it:
 
 ```text
-template-cyrillic.md         {errors: 0, warnings: 0, infos: 1}
-template-editorial.md        {errors: 0, warnings: 0, infos: 1}
-template-product-saas.md     {errors: 0, warnings: 0, infos: 1}
-template-skeleton.md         {errors: 0, warnings: 0, infos: 1}
-example-saas-dashboard.md    {errors: 0, warnings: 0, infos: 2}
-fixture-broken.md            {errors: 1, warnings: 6, infos: 1}
-fixture-clean.md             {errors: 0, warnings: 0, infos: 1}
+template-cyrillic.md         {"errors": 0, "infos": 1, "warnings": 0}
+template-editorial.md        {"errors": 0, "infos": 1, "warnings": 0}
+template-product-saas.md     {"errors": 0, "infos": 1, "warnings": 0}
+template-skeleton.md         {"errors": 0, "infos": 1, "warnings": 0}
+example-saas-dashboard.md    {"errors": 0, "infos": 2, "warnings": 0}
+fixture-broken.md            {"errors": 1, "infos": 1, "warnings": 6}
+fixture-clean.md             {"errors": 0, "infos": 1, "warnings": 0}
 ```
 
 Any movement in those numbers is a real behaviour change and must be reconciled
@@ -360,12 +409,19 @@ To prime a machine before it goes offline, run any `lint` once with network acce
 Run all four. Checks 1 and 2 need neither network nor Node. Checks 3 and 4 shell out to
 `npx`, so they need Node and a warm cache (or one slow first run).
 
+Every command below is written to be run **from the repository root**, with no `cd`.
+The `cd /tmp` in §7 applies to calling `npx` by hand; the wrappers do it themselves for
+the child process, so a recipe that both `cd`s away and uses repo-root-relative paths
+would only exit 127. Verified from a working directory whose `package.json` declares a
+`design.md` bin: the wrapper, called there by absolute path, still exits 0 and prints
+the normal report.
+
 **1. Contrast maths, against known answers.** These figures are derived from the
 WCAG 2.x formula and cross-checked against the published values for the same pairs. If
 one stops reproducing, the ratio implementation is wrong — do not edit the expectations.
 
 ```
-$ cd /tmp && skills/design-md/scripts/check-contrast --self-test
+$ skills/design-md/scripts/check-contrast --self-test
 check-contrast --self-test (WCAG 2.x known answers)
   OK   #000000 on #ffffff  expected 21.00  actual 21.00
   OK   #767676 on #ffffff  expected 4.54  actual 4.54
@@ -390,13 +446,15 @@ $ bash skills/design-md/scripts/install.sh
 Exact shares are the point: a flat region has one occupied bucket per band, so
 quantisation and clustering must not move the reported value off the true pixel value.
 
-**3. Lint, across every shipped file.** Absolute paths, from `/tmp`:
+**3. Lint, across every shipped file.** From the repository root; the wrapper resolves
+each path to absolute before the `npx` call:
 
 ```
-$ cd /tmp && skills/design-md/scripts/lint \
+$ skills/design-md/scripts/lint \
     skills/design-md/assets/*.md skills/design-md/examples/*.md
 ...
 TOTAL 7 files: 6 passed, 1 failed — 1 error, 6 warnings, 8 infos
+EXIT=1
 ```
 
 Six passing files and `examples/fixture-broken.md` failing with exactly one error is
@@ -408,7 +466,7 @@ line — a command substitution such as `$(basename "$f")` in the same `echo` re
 and the loop silently reports 0 for everything:
 
 ```
-$ cd /tmp && for f in skills/design-md/assets/*.md skills/design-md/examples/*.md; do \
+$ for f in skills/design-md/assets/*.md skills/design-md/examples/*.md; do \
     b=$(basename "$f"); \
     skills/design-md/scripts/check-contrast "$f" --matrix summary >/dev/null 2>&1; \
     rc=$?; printf '%-28s check-contrast exit %d\n' "$b" "$rc"; done

@@ -318,8 +318,13 @@ The assignment rule is **radius scales with the element, not with the brand**:
 - `rounded.full` (999px) is reserved for elements whose shape carries meaning:
   `chip-selected` and `badge-error`. A pill says "this is a token of state", and
   it stops saying it when everything is a pill.
-- `rounded.none` and `rounded.xs` are defined for table cells and dividers,
-  which Skeleton does not specify as components.
+- `rounded.md` (8px) is defined for the overlay panels — menu, popover, dialog
+  — which float over controls instead of holding the page and so take the step
+  between `rounded.sm` and `rounded.lg` rather than either end.
+- `rounded.none` and `rounded.xs` are defined for table cells and dividers.
+
+Skeleton specifies none of those five elements as components, which is why
+three of the six radii are declared and unreferenced.
 
 ## Components
 
