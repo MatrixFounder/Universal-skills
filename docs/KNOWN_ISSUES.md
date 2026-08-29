@@ -48,6 +48,9 @@ Analysis Phase" which mandates this read.
 - **HTML2MD-11** [rewritten-fetch relative `<img>` srcs resolved against the wrong base → broken images](issues/html2md-11-rewritten-fetch-relative-img-base.md) — severity `SEV-2`, status `fixed`, opened 2026-07-09
 - **HTML2MD-11-BUG** [arXiv relative `<img>` resolution — deep-dive root-cause write-up](issues/html-arxiv-image-resolution-bug.md) — severity `SEV-2`, status `fixed`, opened 2026-07-09
 - **HTML2MD-12** [arXiv/LaTeXML MathML (`<math alttext>`) came out as garbled glyphs](issues/html2md-12-arxiv-latexml-mathml-garbled.md) — severity `SEV-2`, status `fixed`, opened 2026-07-09
+- **PDF-EXTRACT-FIGURE-PAGE-UNFLAGGED** [страница из одной схемы не помечается — колонтитул выбивает её из-под порога в 10 символов, содержимое теряется молча](issues/pdf-extract-figure-page-unflagged.md) — severity `SEV-2`, status `open`, opened 2026-08-29
+- **PDF-EXTRACT-TOLERANCE-ARTIFACTS** [`pdf_extract.py` наследует дефолты pdfplumber: маркеры списка теряют порядок, заливки фона превращаются в строки таблиц](issues/pdf-extract-tolerance-artifacts.md) — severity `SEV-2`, status `open`, opened 2026-08-29
+- **PDF-EXTRACT-UNMAPPED-FONT-TEXT-LOSS** [документ без встроенных шрифтов теряет всю нелатиницу ещё при производстве — дамп отдаёт exit 0 и выглядит здоровым](issues/pdf-extract-unmapped-font-text-loss.md) — severity `SEV-2`, status `open`, opened 2026-08-29
 
 ## dogfood
 
