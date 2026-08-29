@@ -1,0 +1,393 @@
+#!/usr/bin/env python3
+"""check-fabrication — does a DESIGN.md assert values its source cannot support?
+
+The linter checks form. `check-contrast` checks measured pairs. Neither can tell a
+measured value from an invented one, because a fabricated token is well-formed by
+construction: `fontFamily: Inter` lints exactly as clean as a font that was read off
+the source. This gate closes that opening for the case where fabrication is
+mechanically detectable — a file derived from an image.
+
+Three checks, in the order they can fire:
+
+  F3  no-frontmatter    The file carries no YAML frontmatter, so it declares no
+                        machine-readable tokens at all. The format's own words:
+                        "the tokens are the normative values". Prose alone is a
+                        design document, not a design system.
+
+  F1  unsourced-hex     A hex literal in the frontmatter that is not a colour of
+                        the source image. Needs --image.
+
+  F2  unsourced-type    The source contains no glyph-shaped ink, so no letterform,
+                        size or weight can be read from it. `typography` must then
+                        appear in `omitted` rather than being asserted. Needs
+                        --image.
+
+F2 tests SHAPE, not the number of colour clusters in a text window. A redaction bar
+and crisply aliased text both yield two flat clusters; only the spatial pattern
+separates them. A glyph does not fill its bounding box; a redaction bar does.
+
+The ink mask is built from local luminance, not from exact colour equality: real
+text is antialiased, so its glyphs occupy dozens of intermediate colours and would
+never form same-colour components. Each 32x32 tile contributes its own modal
+luminance as the local "paper", which makes the test work identically for dark text
+on a light surface and light text on a dark rail.
+
+Exit 0 nothing unsourced, 1 something unsourced, 2 usage or I/O error.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import re
+import struct
+import sys
+import zlib
+from collections import Counter, deque
+
+# Side of the tile whose modal luminance stands in for the local background. Large
+# enough to contain more paper than ink at normal UI text sizes, small enough that a
+# rail, a card and a table row each get their own reading.
+TILE = 32
+# How far a pixel's luminance must sit from its tile's modal luminance to count as
+# ink. Below this, antialiasing fringes and faint hairlines are excluded.
+INK_DELTA = 30
+# An ink component is considered as possible text only inside this band. Smaller is
+# noise; taller than 40 px is chrome, not a UI text run; very large areas are fills.
+MIN_COMPONENT_AREA = 20
+MAX_COMPONENT_AREA = 8000
+MIN_TEXT_HEIGHT = 4
+MAX_TEXT_HEIGHT = 40
+# A component filling at least this much of its bounding box is a solid block.
+# Letterforms sit far below it; measured separation on the reference captures is
+# 0.00-0.05 for redacted bars against 0.94 for rendered text.
+RECTANGLE_FILL = 0.90
+# Fraction of in-band components that must be non-rectangular before the capture is
+# judged to contain real glyphs. The gap either side of this value is wide.
+GLYPH_FRACTION = 0.30
+
+
+class ImageError(Exception):
+    pass
+
+
+def _decode_stdlib_png(path):
+    """Minimal non-interlaced PNG reader: depth 8, colour types 0/2/3/4/6.
+
+    Kept dependency-free on purpose. This gate runs in CI, where a missing Pillow
+    must not turn a real check into a skipped one.
+    """
+    data = open(path, "rb").read()
+    if data[:8] != b"\x89PNG\r\n\x1a\n":
+        raise ImageError("not a PNG file")
+    pos, idat, plte, ihdr = 8, b"", b"", None
+    while pos + 8 <= len(data):
+        (ln,) = struct.unpack(">I", data[pos : pos + 4])
+        typ = data[pos + 4 : pos + 8]
+        body = data[pos + 8 : pos + 8 + ln]
+        if typ == b"IHDR":
+            ihdr = struct.unpack(">IIBBBBB", body)
+        elif typ == b"PLTE":
+            plte = body
+        elif typ == b"IDAT":
+            idat += body
+        elif typ == b"IEND":
+            break
+        pos += 12 + ln
+    if ihdr is None:
+        raise ImageError("PNG has no IHDR chunk")
+    w, h, depth, ctype, _comp, _filt, interlace = ihdr
+    if interlace:
+        raise ImageError("interlaced PNG is not supported by the built-in decoder")
+    if depth != 8:
+        raise ImageError(f"bit depth {depth} is not supported by the built-in decoder")
+    channels = {0: 1, 2: 3, 3: 1, 4: 2, 6: 4}.get(ctype)
+    if channels is None:
+        raise ImageError(f"unsupported PNG colour type {ctype}")
+
+    raw = zlib.decompress(idat)
+    stride = w * channels
+    out = bytearray()
+    prev = bytearray(stride)
+    i = 0
+    for _ in range(h):
+        if i >= len(raw):
+            raise ImageError("PNG data ended early")
+        f = raw[i]
+        i += 1
+        line = bytearray(raw[i : i + stride])
+        i += stride
+        if len(line) < stride:
+            raise ImageError("PNG scanline truncated")
+        if f == 1:
+            for x in range(channels, stride):
+                line[x] = (line[x] + line[x - channels]) & 255
+        elif f == 2:
+            for x in range(stride):
+                line[x] = (line[x] + prev[x]) & 255
+        elif f == 3:
+            for x in range(stride):
+                a = line[x - channels] if x >= channels else 0
+                line[x] = (line[x] + ((a + prev[x]) >> 1)) & 255
+        elif f == 4:
+            for x in range(stride):
+                a = line[x - channels] if x >= channels else 0
+                c = prev[x - channels] if x >= channels else 0
+                b = prev[x]
+                p = a + b - c
+                pa, pb, pc = abs(p - a), abs(p - b), abs(p - c)
+                pr = a if (pa <= pb and pa <= pc) else (b if pb <= pc else c)
+                line[x] = (line[x] + pr) & 255
+        elif f != 0:
+            raise ImageError(f"unknown PNG filter type {f}")
+        out += line
+        prev = line
+
+    # Normalise every colour type to one RGB triple per pixel.
+    rgb = bytearray(w * h * 3)
+    for idx in range(w * h):
+        base = idx * channels
+        if ctype in (0, 4):
+            v = out[base]
+            rgb[idx * 3 : idx * 3 + 3] = bytes((v, v, v))
+        elif ctype == 3:
+            p = out[base] * 3
+            if p + 3 > len(plte):
+                raise ImageError("palette index out of range")
+            rgb[idx * 3 : idx * 3 + 3] = plte[p : p + 3]
+        else:
+            rgb[idx * 3 : idx * 3 + 3] = out[base : base + 3]
+    return w, h, bytes(rgb)
+
+
+def load_image(path):
+    """Pillow when present (it reads formats the built-in decoder does not), else stdlib."""
+    try:
+        from PIL import Image  # noqa: PLC0415
+    except ImportError:
+        return _decode_stdlib_png(path)
+    try:
+        with Image.open(path) as im:
+            im = im.convert("RGB")
+            return im.width, im.height, im.tobytes()
+    except Exception as exc:  # a corrupt file, or a format Pillow rejects
+        raise ImageError(str(exc)) from exc
+
+
+def colour_census(rgb):
+    counts = Counter()
+    for p in range(0, len(rgb), 3):
+        counts[rgb[p : p + 3]] += 1
+    return counts
+
+
+def _ink_mask(w, h, rgb):
+    """1 where a pixel departs from its local background luminance by more than INK_DELTA.
+
+    The background for a tile is the modal luminance of the 3x3 block of tiles around
+    it, not of the tile alone. A single tile can be mostly ink — four redaction bars
+    crossing one 32x32 square put 672 of its 1024 pixels on the dark side — and its
+    own mode would then be the ink, inverting the mask and turning solid blocks into
+    ragged, glyph-shaped holes. Widening the reference to ~96x96 makes that take an
+    implausibly large solid region instead of an ordinary run of text.
+    """
+    total = w * h
+    lum = bytearray(total)
+    for i in range(total):
+        lum[i] = (rgb[i * 3] * 299 + rgb[i * 3 + 1] * 587 + rgb[i * 3 + 2] * 114) // 1000
+
+    tiles_x = (w + TILE - 1) // TILE
+    tiles_y = (h + TILE - 1) // TILE
+    hist = [[None] * tiles_x for _ in range(tiles_y)]
+    for tj in range(tiles_y):
+        for ti in range(tiles_x):
+            c = Counter()
+            for y in range(tj * TILE, min(tj * TILE + TILE, h)):
+                base = y * w
+                c.update(lum[base + ti * TILE : base + min(ti * TILE + TILE, w)])
+            hist[tj][ti] = c
+
+    mask = bytearray(total)
+    for tj in range(tiles_y):
+        for ti in range(tiles_x):
+            around = Counter()
+            for dj in (-1, 0, 1):
+                for di in (-1, 0, 1):
+                    j, i = tj + dj, ti + di
+                    if 0 <= j < tiles_y and 0 <= i < tiles_x:
+                        around.update(hist[j][i])
+            bg = around.most_common(1)[0][0]
+            for y in range(tj * TILE, min(tj * TILE + TILE, h)):
+                base = y * w
+                for x in range(ti * TILE, min(ti * TILE + TILE, w)):
+                    if abs(lum[base + x] - bg) > INK_DELTA:
+                        mask[base + x] = 1
+    return mask
+
+
+def glyph_verdict(w, h, rgb):
+    """('glyphs' | 'redacted' | 'undecidable', evidence string).
+
+    'redacted' means every text-sized ink region is a solid block, so the capture
+    carries no letterform to read a typeface, size or weight from.
+    """
+    mask = _ink_mask(w, h, rgb)
+    total = w * h
+    seen = bytearray(total)
+    in_band = 0
+    glyph_like = 0
+    for start in range(total):
+        if not mask[start] or seen[start]:
+            continue
+        q = deque([start])
+        seen[start] = 1
+        area = 0
+        x0 = x1 = start % w
+        y0 = y1 = start // w
+        while q:
+            cur = q.popleft()
+            area += 1
+            cx, cy = cur % w, cur // w
+            if cx < x0:
+                x0 = cx
+            if cx > x1:
+                x1 = cx
+            if cy < y0:
+                y0 = cy
+            if cy > y1:
+                y1 = cy
+            if cx > 0 and mask[cur - 1] and not seen[cur - 1]:
+                seen[cur - 1] = 1
+                q.append(cur - 1)
+            if cx + 1 < w and mask[cur + 1] and not seen[cur + 1]:
+                seen[cur + 1] = 1
+                q.append(cur + 1)
+            if cy > 0 and mask[cur - w] and not seen[cur - w]:
+                seen[cur - w] = 1
+                q.append(cur - w)
+            if cy + 1 < h and mask[cur + w] and not seen[cur + w]:
+                seen[cur + w] = 1
+                q.append(cur + w)
+        bh = y1 - y0 + 1
+        if not (MIN_COMPONENT_AREA <= area <= MAX_COMPONENT_AREA):
+            continue
+        if not (MIN_TEXT_HEIGHT <= bh <= MAX_TEXT_HEIGHT):
+            continue
+        in_band += 1
+        if area / ((x1 - x0 + 1) * bh) < RECTANGLE_FILL:
+            glyph_like += 1
+
+    if in_band == 0:
+        return "undecidable", "no text-sized ink region found to judge"
+    frac = glyph_like / in_band
+    evidence = (
+        f"{in_band} text-sized ink region(s), {glyph_like} not rectangular "
+        f"({frac:.2f} of them)"
+    )
+    return ("glyphs" if frac > GLYPH_FRACTION else "redacted"), evidence
+
+
+def frontmatter(text):
+    m = re.match(r"^---\n(.*?)\n---\s*(?:\n|$)", text, re.S)
+    return m.group(1) if m else None
+
+
+def declared_omitted(fm):
+    """Names appearing under an `omitted:` block, however the YAML spells them."""
+    m = re.search(r"^omitted:\s*\n(?:(?:[ \t-].*|\s*)\n)*", fm + "\n", re.M)
+    if not m:
+        return set()
+    block = m.group(0)
+    names = set(re.findall(r"section:\s*[\"']?([\w-]+)", block))
+    names |= set(re.findall(r"^\s*-\s*[\"']?([\w-]+)[\"']?\s*$", block, re.M))
+    return names
+
+
+def main():
+    ap = argparse.ArgumentParser(
+        prog="check-fabrication",
+        description="Flag DESIGN.md values that the stated source cannot support.",
+    )
+    ap.add_argument("design", help="path to the DESIGN.md under test")
+    ap.add_argument("--image", help="the source capture the file claims to derive from")
+    ap.add_argument("--json", action="store_true", help="machine-readable result")
+    args = ap.parse_args()
+
+    try:
+        text = open(args.design, encoding="utf-8").read()
+    except OSError as exc:
+        print(f"check-fabrication: cannot read {args.design}: {exc}", file=sys.stderr)
+        return 2
+
+    findings = []
+    notes = []
+    fm = frontmatter(text)
+
+    if fm is None:
+        findings.append(
+            {
+                "rule": "no-frontmatter",
+                "detail": "the file declares no YAML frontmatter, so it carries no "
+                "machine-readable tokens; the format's normative values are the tokens",
+            }
+        )
+    elif args.image:
+        try:
+            w, h, rgb = load_image(args.image)
+        except (ImageError, OSError) as exc:
+            print(f"check-fabrication: cannot read image {args.image}: {exc}", file=sys.stderr)
+            return 2
+
+        present = {"#" + bytes(c).hex() for c in colour_census(rgb)}
+        claimed = {v.lower() for v in re.findall(r"#[0-9a-fA-F]{6}\b", fm)}
+        for hexv in sorted(claimed - present):
+            findings.append(
+                {
+                    "rule": "unsourced-hex",
+                    "detail": f"{hexv} is declared in the frontmatter but is not a colour "
+                    f"of {args.image}",
+                }
+            )
+
+        verdict, evidence = glyph_verdict(w, h, rgb)
+        declares_type = re.search(r"^typography:", fm, re.M) is not None
+        omitted = declared_omitted(fm)
+        if verdict == "undecidable":
+            notes.append(f"typography not judged: {evidence}")
+        elif verdict == "redacted" and declares_type and "typography" not in omitted:
+            findings.append(
+                {
+                    "rule": "unsourced-type",
+                    "detail": f"the source has no glyph-shaped ink ({evidence}), so no "
+                    "family, size or weight is readable from it; typography is asserted "
+                    "anyway and is not listed in `omitted`",
+                }
+            )
+
+    if args.json:
+        print(
+            json.dumps(
+                {"findings": findings, "notes": notes, "summary": {"unsourced": len(findings)}},
+                indent=2,
+            )
+        )
+    else:
+        if findings:
+            print(f"check-fabrication: {len(findings)} unsourced value(s) — {args.design}")
+            for f in findings:
+                print(f"  {f['rule']:16} {f['detail']}")
+            print(
+                "\n  Every finding names a value the source cannot support. The remedy is to\n"
+                "  measure it, or to move the section into `omitted` with the reason. Editing\n"
+                "  the value to another unmeasured one is not a fix."
+            )
+        else:
+            scope = "values and structure" if args.image else "structure only (pass --image to check values)"
+            print(f"check-fabrication: PASS — {args.design}\n  nothing unsourced; checked {scope}")
+        for n in notes:
+            print(f"  note: {n}")
+    return 1 if findings else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

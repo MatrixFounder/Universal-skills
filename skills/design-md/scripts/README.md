@@ -612,6 +612,77 @@ lint-clean does not imply contrast-clean.
 Finally, if you changed a flag, re-run that script's `--help` and update §2. The help
 epilogs are the primary documentation; this file is a derived copy.
 
+### 8.1 `tests/test_e2e.sh` — the four checks above, as a gate
+
+Everything in §8 is also asserted mechanically:
+
+```
+$ bash skills/design-md/scripts/tests/test_e2e.sh
+...
+design-md test_e2e: PASS (36 assertions)
+```
+
+It builds its own PNG fixtures rather than reading committed ones, so it behaves the
+same inside a packaged `.skill` archive. It is the whole content of the `design-md`
+CI job (`.github/workflows/design-md.yml`); that job is separate from `office-skills`
+because this skill replicates nothing and needs neither LibreOffice nor Poppler.
+
+Two properties are deliberate. A missing `npx` **fails** rather than skips — a green
+gate that tested nothing is worse than a red one — and the run fails if fewer than 30
+assertions execute, which catches a suite that silently stopped finding its fixtures.
+
+One assertion is worth knowing about on its own. An accent occupying **0.48%** of a
+frame sits below the default `--min-share` of 0.50, and the test asserts that the
+default *drops* it while the documented `--min-share 0.1` recovers it. Route 2's
+guidance depends on that pin; if the default ever changes, this fails loudly instead
+of Route 2 quietly losing accents.
+
+### 8.2 `tests/check-fabrication` — the check the linter cannot be
+
+The linter checks form and `check-contrast` checks measured pairs. Neither can tell a
+measured value from an invented one: `fontFamily: Inter` lints exactly as clean as a
+family read off the source. This gate closes that opening for image-derived files.
+
+```
+$ skills/design-md/scripts/tests/check-fabrication FILE.md --image /abs/shot.png
+```
+
+`no-frontmatter` — the file declares no tokens at all. `unsourced-hex` — a frontmatter
+hex that is not a colour of the image. `unsourced-type` — the capture carries no
+glyph-shaped ink, so no family, size or weight is readable from it, and `typography`
+is asserted anyway instead of appearing in `omitted`.
+
+`unsourced-type` tests **shape, not colour count**. A redaction bar and crisply
+aliased text both yield two flat clusters in a text window; only the spatial pattern
+separates them, because a glyph does not fill its bounding box and a bar does. The ink
+mask is built from local luminance against the modal luminance of a ~96×96
+neighbourhood — not of a single tile, which a few bars can dominate outright, flipping
+the mask and turning solid blocks into ragged glyph-shaped holes.
+
+Exit 0 nothing unsourced, 1 something unsourced, 2 usage or I/O error.
+
+### 8.3 `tests/trigger-eval.sh` — does the description route at all?
+
+A separate question from every check above, and upstream of all of them: the skill's
+guarantees are conditional on it being reached. The description is bilingual, so a
+regression can be silent in one language and total in the other.
+
+```
+$ bash skills/design-md/scripts/tests/trigger-eval.sh --repeat 3
+```
+
+**Manual and billed.** Every query is a real `claude -p` call, which is why it is not
+in CI. Queries live in `tests/trigger-queries.json`, each carrying what it probes, so
+a failure names the claim that broke rather than only moving a number.
+
+Two lessons are baked into that file, both learned by getting them wrong. A query must
+**supply whatever it names**: asking about "the screenshot" with no screenshot present
+measures whether the model asks for the missing file, not whether the description
+routed — `{{IMAGE}}`, `{{CSS}}` and `{{DESIGN}}` are substituted with generated
+fixtures. And routing is **not deterministic**: treat a single borderline result as
+noise and re-check with `--repeat` before editing the description on the strength of
+it. Only `description:` affects routing; the body does not.
+
 ---
 
 ## 9. Licensing

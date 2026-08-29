@@ -1,0 +1,56 @@
+name: design-md
+
+# design-md is deliberately NOT part of the office-skills matrix. That job exists to
+# police the docx→xlsx/pptx/pdf/html replication protocol and carries the whole
+# LibreOffice/Poppler/Chrome toolchain with it; design-md is Apache-2.0, standalone,
+# replicates nothing, and needs neither. Its own job stays cheap: node for the
+# upstream linter, python for the two measurement scripts.
+#
+# The trigger eval (scripts/tests/trigger-eval.sh) is NOT run here and must not be:
+# every one of its queries is a billed `claude -p` call. It stays a manual, opt-in
+# tool, matching the repository's convention that anything costing money or running
+# on a schedule is the user's explicit choice.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "skills/design-md/**"
+      - ".github/workflows/design-md.yml"
+  pull_request:
+    paths:
+      - "skills/design-md/**"
+      - ".github/workflows/design-md.yml"
+  workflow_dispatch:
+
+jobs:
+  design-md:
+    name: design-md
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      # The linter is `npx @google/design.md@0.4.0`, pinned rather than floating:
+      # the format is version `alpha` and upstream is free to change rule output.
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+
+      - name: Cache the pinned linter
+        uses: actions/cache@v4
+        with:
+          path: ~/.npm
+          key: ${{ runner.os }}-npx-design-md-0.4.0
+
+      - name: install.sh
+        run: bash skills/design-md/scripts/install.sh
+
+      - name: validate_skill
+        run: python3 skills/skill-creator/scripts/validate_skill.py skills/design-md
+
+      - name: E2E
+        run: bash skills/design-md/scripts/tests/test_e2e.sh

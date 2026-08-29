@@ -1,0 +1,84 @@
+{
+  "_comment": [
+    "Trigger set for the design-md skill description. Each entry states what the",
+    "query is probing, so a failure says which claim in the description broke rather",
+    "than only that a number moved.",
+    "",
+    "The description this set exercises:",
+    "  'Use when authoring, auditing, or exporting a DESIGN.md design system — design",
+    "   tokens, tailwind config, deslopify a generic look, дизайн-система, фирменные",
+    "   цвета, единый стиль, извлеки палитру по скриншоту, or derive one from a brief",
+    "   or a codebase.'",
+    "",
+    "Negatives are chosen to sit NEAR the boundary, not far from it. A description",
+    "that fires on everything design-shaped is as broken as one that never fires; a",
+    "distant negative ('convert this PNG to JPEG') proves nothing either way.",
+    "",
+    "A query must SUPPLY whatever it refers to. Both original misses in this set were",
+    "artifacts of asking about a screenshot and a brief that were never provided: the",
+    "model reasonably asked for the missing thing instead of routing. That measures a",
+    "reflex, not a description. {{IMAGE}}, {{CSS}} and {{DESIGN}} are substituted with\n    real generated files.",
+    "",
+    "Routing is not perfectly deterministic. A single borderline result is noise; use\n    --repeat to get a stable reading before editing the description."
+  ],
+  "positive": [
+    {
+      "q": "Собери дизайн-систему для нашего продукта: есть фирменные цвета, нужен единый стиль.",
+      "probes": "Russian: дизайн-система + фирменные цвета + единый стиль"
+    },
+    {
+      "q": "Извлеки палитру по скриншоту {{IMAGE}} и оформи как дизайн-систему.",
+      "probes": "Russian: извлеки палитру по скриншоту (Route 2)"
+    },
+    {
+      "q": "I need to author a DESIGN.md for our design system.",
+      "probes": "the format by name, authoring"
+    },
+    {
+      "q": "Audit the DESIGN.md at {{DESIGN}} and tell me what is wrong with it.",
+      "probes": "auditing (Route 4)"
+    },
+    {
+      "q": "Export our design tokens to a tailwind config.",
+      "probes": "tailwind config + export"
+    },
+    {
+      "q": "Our UI looks like every other AI-generated app. Deslopify it and give me a real design language.",
+      "probes": "deslopify a generic look (anti-slop)"
+    },
+    {
+      "q": "Here is the brief: a fintech product for small businesses, calm and trustworthy, one blue accent, dense data tables, no rounded corners. Derive a design system from it.",
+      "probes": "derive from a brief (Route 1)"
+    },
+    {
+      "q": "Read the CSS at {{CSS}} and extract the design system it already implies.",
+      "probes": "derive from a codebase (Route 3)"
+    }
+  ],
+  "negative": [
+    {
+      "q": "Center this div vertically and horizontally with flexbox.",
+      "probes": "a one-off CSS layout question is not a design system"
+    },
+    {
+      "q": "Suggest a name and a tagline for my startup.",
+      "probes": "branding without a token system"
+    },
+    {
+      "q": "Bump the font-size of the .btn-primary class from 14px to 16px.",
+      "probes": "a single mechanical CSS edit"
+    },
+    {
+      "q": "Write a README for this repository.",
+      "probes": "a markdown document that is not DESIGN.md"
+    },
+    {
+      "q": "Как настроить eslint и prettier в этом проекте?",
+      "probes": "Russian tooling question — must not fire on Russian alone"
+    },
+    {
+      "q": "Convert this SVG logo to a PNG at 512x512.",
+      "probes": "an asset conversion, adjacent to design but not a system"
+    }
+  ]
+}

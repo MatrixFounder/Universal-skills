@@ -1,6 +1,6 @@
 ---
 name: design-md
-description: "Use when authoring, auditing, or exporting a DESIGN.md design system — design tokens, tailwind config, deslopify a generic look, дизайн-система, фирменные цвета, единый стиль, извлеки палитру по скриншоту, or derive one from a brief or a codebase."
+description: "Use when authoring, auditing, or exporting a DESIGN.md design system — design tokens, tailwind config, deslopify a generic look, дизайн-система, фирменные цвета, единый стиль, извлеки палитру по скриншоту, derive one from a brief, or extract one from a codebase or its CSS."
 tier: 2
 version: 1.0
 ---
@@ -139,6 +139,7 @@ cd /tmp && npx --yes @google/design.md@0.4.0 lint|diff|export|spec <ABSOLUTE-PAT
 - `examples/fixture-clean.md` → exit 0, `{"errors": 0, "warnings": 0, "infos": 1}`; `examples/fixture-broken.md` → exit 1, `{"errors": 1, "warnings": 6, "infos": 1}`.
 - `scripts/check-contrast --self-test` reproduces all five WCAG known answers, exit 0; the same script exits 1 on `examples/fixture-clean.md` at `outline on surface` 1.72:1 — proof that a clean lint is not a clean file.
 - `scripts/extract-palette` on the 200x100 three-band PNG `scripts/install.sh` builds: `3 of 3 clusters … covering 100.0% of counted pixels`, exit 0. Detail: `references/linter-rules.md` §20–§22; `scripts/README.md` §3 and §8.
+- `bash scripts/tests/test_e2e.sh` re-checks every claim above, 36 assertions, each anchored to a defect this skill has shipped once. It includes `scripts/tests/check-fabrication`, which fails a file asserting values its source cannot support — an unsourced hex, or `typography` declared over a capture whose text is redacted. `scripts/tests/trigger-eval.sh` asks the separate question of whether the description routes at all; it is manual and billed, never CI. Detail: `scripts/README.md` §8.
 
 ## The Linter Checks Form, Never Quality
 
