@@ -1,7 +1,9 @@
 ---
-id: WI-030-carryover
+id: WI-030
 type: work-item
 status: done
+opened_at: 2026-08-14
+slug: wi-030-adversarial-carryover
 effort: M
 value: M
 source: vdd-enhanced-docx-obsidian (TASK 030, adversarial cycles 1-3)

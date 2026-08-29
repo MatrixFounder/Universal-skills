@@ -1,14 +1,22 @@
 ---
-id: WI-031-design-md-seams
+id: WI-031
 type: work-item
-status: resolved
+status: done
+opened_at: 2026-08-29
+slug: wi-031-design-md-blind-acceptance-seams
 effort: M
 value: M
 source: design-md fresh-context review, blind Route 2 acceptance re-run (2026-08-29, commit 31f53a3)
 resolved_at: 2026-08-29
+resolved_by: 4547f2b — fix(design-md): resolve all 12 WI-031 seams; blind Route 2 re-verified
 ---
 
 # WI-031 — design-md: seams found by the blind acceptance re-run
+
+> **Resolved 2026-08-29** in `4547f2b`. All 12 seams were reproduced, none was refuted, and
+> all are closed. A second blind Route 2 run — fresh context, skill-only — answered **yes** to
+> all eight targeted questions, and surfaced an amber status bar at 2.94:1 that both gates were
+> structurally blind to.
 
 ## What this is
 

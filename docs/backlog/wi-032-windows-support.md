@@ -1,7 +1,9 @@
 ---
-id: WI-032-windows-support
+id: WI-032
 type: work-item
 status: open
+opened_at: 2026-08-29
+slug: wi-032-windows-support
 effort: L
 value: M
 source: platform audit of skills/{docx,xlsx,pptx,pdf,html} (2026-08-29, commit c7b0916)
