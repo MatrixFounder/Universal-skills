@@ -1,13 +1,22 @@
 ---
 id: WI-030-carryover
 type: work-item
-status: open
+status: done
 effort: M
 value: M
 source: vdd-enhanced-docx-obsidian (TASK 030, adversarial cycles 1-3)
+resolved_at: 2026-08-29
+resolved_by: WI-030 LOW slice — skills/docx/scripts/{_obsidian_lib.js,obsidian2md.js,tests/test_obsidian2md.py}
 ---
 
 # WI-030 — TASK 030 adversarial carry-over: findings raised but never verified
+
+> **Resolved 2026-08-29.** The remaining seven LOW findings were worked, so nothing in the
+> historical table below is still carried. Two were live defects (`C5-07`, and an order
+> dependency the `C5-14` census exposed), two were already closed by the MEDIUM slice, and
+> the rest were mutation survivors. 19 tests added (157 → 176); 14 mutations applied to the source and every one
+> killed. The carry-over is closed — not because the budget ran out this time, but because
+> nothing is left carried.
 
 ## What this is
 
@@ -52,10 +61,52 @@ All seven MEDIUM findings were verified against the code as it stood, not accept
 second attempt: the first used a Cyrillic name with no decomposition, so NFD and NFC were the
 same string and it asserted nothing.
 
-## What remains unverified after cycle 5
+## LOW slice — worked and closed (2026-08-29)
+
+Seven independent verifications, each re-attacked by a second agent told to refute it. That
+second pass earned its place twice: it downgraded `C5-14`'s headline ("no test at all" was
+false — `TestCliContract` covers 8 of 11 exits) and, on `C5-07`, it found a **second door the
+first fix had left open**. Verdicts were taken from runs, not reports.
+
+| ID | Verdict | Outcome |
+|---|---|---|
+| C5-07 tab-indented ``` | **live, BOTH ends** | fixed — a fence's indent is now measured in columns against the container's bound, on the opener *and* the closer |
+| C5-08 NUL sentinel claim | **already fixed** | closed by the MEDIUM slice's `stripControlChars`; the comment that carried the false claim now states the opposite, and a test locks it |
+| C5-06 blank run in indented code | **already fixed** | the LOW restatement of the MEDIUM finding; locked by two tests, re-verified rather than re-fixed |
+| C5-09 8-pass unmask fixpoint | **unreachable, and unlocked** | the loop is kept as the exported function's contract, its false rationale comment replaced with the measured one, and a unit test on a hand-built nested store kills the `< 1` mutant |
+| C5-12 three unlocked mechanisms | **2 live gaps, 1 refuted** | R8(e) callout separation and R12(a)'s existence guard were survivors and are locked; the R3(g) size branch was already locked — but the *transport* half (consuming the alt prefix) was not, nor was R3(h)'s never-upscale invariant. Both now are |
+| C5-13 `FRONTMATTER_SUPPRESS` | **dead code, confirmed** | not wired in — a denylist after an allowlist can never fire and would veto a later addition. Kept as the R2(f) declaration, honestly documented as such, and enumerated by a test that converts a note carrying all 13 keys |
+| C5-14 CLI error paths | **headline refuted, 4-item gap live** | the census found 8 of 11 obsidian2md exits and 4 of 5 md2docx ones already covered. What it *did* surface was a live defect: `--json-errors` was read by the parse loop, so a flag standing to its left errored in plain text — a machine-readable contract that depended on argument order. Fixed by a pre-scan. Three untested exits locked, including the `realpath` arm of the exit-6 guard, whose cost is the note itself |
+
+**`C5-07` was the one worth the cycle.** The opener half froze the prose between two
+tab-indented fences. The closer half is worse and was found only by the agent sent to refute
+the fix: a tab-indented bare ``` *inside* a real fenced block ended it early, so the rest of
+that block was rewritten — `[[link]]` unwrapped, `==hi==` bolded, the mask editing the code it
+exists to protect — and the genuine column-0 closer then opened a fence that ran to EOF. The
+trailing prose reached the .docx literally and `--strict-assets` exited **0** on an unresolved
+embed sitting inside the frozen region. Same silent-loss class as cycle 1's CRITICAL, third
+door.
+
+**Honest scope on that second door.** It needs a bare ``` or `~~~` line inside an open fenced
+block whose indent is >=4 columns but <=3 characters — i.e. tab-led. Grepping every `.md` in
+this repository for that shape returns **zero** hits, so "a normal note triggers it" is not
+supported and the surviving half grades MEDIUM, not HIGH. The opener half is the broadly
+reachable one. What earns the fix anyway is the blast radius once it does trigger: the mask
+edits the code it protects, and the freeze runs to EOF with the one flag that exists to refuse
+that silently returning 0.
+
+Every fix is pinned by a mutation that was actually run: 14 applied to the source, suite
+executed, source restored, all 14 killed. Two of them were mutations of the *fix itself* — a
+flat indent limit ignoring the list context, and a closer bound pinned to the opener — and the
+first test written for each survived, so both tests were rebuilt until they did not.
+
+## What the cycles raised and carried (historical)
 
 
-Severity counts: **7 LOW** — the 7 MEDIUM were worked (see above); no CRITICAL or HIGH remains.
+Severity counts as they stood on 2026-08-14: **7 LOW** — the 7 MEDIUM were worked
+(see above); no CRITICAL or HIGH remained. **All 14 rows below are now worked** — the
+MEDIUM ones on 2026-08-14, the LOW ones on 2026-08-29. The table is kept as the record
+of what was raised, not as a list of what is open.
 
 | Severity | ID | Title |
 |---|---|---|
@@ -74,8 +125,17 @@ Severity counts: **7 LOW** — the 7 MEDIUM were worked (see above); no CRITICAL
 | LOW | `C5-13` | `FRONTMATTER_SUPPRESS` is dead code — the constant R2(f) names is never consulted; suppression is an accident of the FRONTMATTER_KEYS allowlist |
 | LOW | `C5-14` | Error paths with no test at all in obsidian2md.js and md2docx.js --obsidian |
 
-## How to work this
+## How this was worked
 
-Verify by hand in severity order, or re-run the cycle-5 workflow with the cap raised. The
-discipline that worked: build the claimed input under `/tmp`, run it, and refute unless it
-reproduces. `docs/TASK.md` (R1-R17, A1-A16) is the contract.
+Verified by hand in severity order. The discipline that worked, and that this record exists to
+pass on: build the claimed input under `/tmp`, run it, and **refute unless it reproduces** —
+then, for anything that reproduces, mutate the fix and make the new test fail before believing
+it. Two of the tests written here passed against their own mutant on the first attempt and had
+to be rebuilt; a test that cannot fail is a coverage gap wearing a green tick.
+
+Send a second agent to refute each verdict. It cost one extra pass and it is what found the
+closer half of `C5-07`, which is worse than the half that was reported.
+
+[`docs/tasks/task-030-docx-obsidian-support.md`](../tasks/task-030-docx-obsidian-support.md)
+(R1-R17, A1-A16) is the contract; every requirement touched here carries the finding inline in
+its own RTM cell.

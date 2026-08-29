@@ -93,8 +93,16 @@ const FRONTMATTER_KEYS = [
     { id: 'tags', keys: ['tags'] },
 ];
 
-// R2(f). Machine keys for the vault's own index, plus `tldr` which duplicates the body.
-// Compared case-folded, because Obsidian templates ship both `Created` and `created`.
+// R2(f) — the keys that must never render: the vault's own machine keys, plus `tldr`, which
+// duplicates the body.
+//
+// HONEST SCOPE: no code path consults this set, and none should. FRONTMATTER_KEYS above is an
+// ALLOWLIST, so every key absent from it is already suppressed; a denylist consulted after an
+// allowlist can never fire, and wiring one in would only give a future maintainer's addition
+// to FRONTMATTER_KEYS a silent veto. What this set IS, then, is the R2(f) declaration itself —
+// enumerated by `test_r2f_every_declared_suppressed_key_is_absent`, which converts a note
+// carrying all of them and proves none reaches the output. Before that test it was named by
+// the requirement, exported, and read by nothing: emptying it left 157/157 green (C5-13).
 const FRONTMATTER_SUPPRESS = new Set([
     'type', 'slug', 'vault_id', 'created', 'updated', 'sources', 'tldr', 'lang',
     'title', 'aliases', 'cssclasses', 'publish', 'permalink',
@@ -207,8 +215,19 @@ function maskAll(text, keep) {
                 continue;
             }
             fence.buf.push(line);
-            const close = /^([ \t]{0,3})(`{3,}|~{3,})[ \t]*$/.exec(rest);
-            if (close && close[2][0] === fence.char && close[2].length >= fence.len) {
+            // COLUMNS again, and this is the half that edits the code it is protecting. A
+            // tab-indented bare ``` INSIDE an open block is content — CommonMark allows a
+            // closer at most three columns past the container — but `[ \t]{0,3}` counted it
+            // as one character and closed the fence there. The rest of the real code block
+            // was then rewritten (`[[link]]` unwrapped, `==hi==` bolded), the genuine
+            // column-0 closer opened a NEW fence, and everything after it froze to EOF: the
+            // trailing prose reached the .docx literally and `--strict-assets` exited 0 with
+            // a missing attachment inside the frozen region (C5-07, closer half).
+            // The bound is the one the OPENER passed, carried on the fence, so a fence that
+            // legitimately lives at a list's content indent still closes there.
+            const close = /^([ \t]*)(`{3,}|~{3,})[ \t]*$/.exec(rest);
+            if (close && close[1].replace(/\t/g, '    ').length <= fence.limit
+                && close[2][0] === fence.char && close[2].length >= fence.len) {
                 out.push(keep(fence.buf.join('\n')));
                 fence = null;
             }
@@ -220,15 +239,25 @@ function maskAll(text, keep) {
         // in a tilde fence's. Applying the backtick rule to both meant `~~~`js` was not
         // recognised as a fence at all, and its contents were rewritten.
         const open = /^([ \t]{0,3})(?:(`{3,})([^`]*)|(~{3,})(.*))$/.exec(rest);
-        if (open) {
+        // The indent limit is COLUMNS and a tab is four of them, but `[ \t]{0,3}` counts
+        // CHARACTERS: a TAB-indented ``` opened a fence at column 4, where CommonMark reads
+        // INDENTED CODE, and everything up to the next one was masked. The prose frozen
+        // between two such lines reached the .docx with its `[[wikilinks]]`, `![[embeds]]`
+        // and `==highlights==` literal, at exit 0 — the cycle-1 silent-loss class through a
+        // different door (C5-07). Inside a list the limit rises with the item's CONTENT
+        // indent: Obsidian indents a nested bullet with a tab, and a fence there is
+        // legitimate list content. A REJECTED line is not consumed here — it falls through
+        // to the indented-code branch below, which is where CommonMark puts it.
+        const openIndent = open ? open[1].replace(/\t/g, '    ').length : 0;
+        const fenceLimit = listIndent >= 0 ? listIndent + 3 : 3;
+        if (open && openIndent <= fenceLimit) {
             flushParagraph();
             // Indent is measured on the fence itself, not on a sentinel that swallowed it —
             // that is what v3 got wrong. A fence starting left of the open list item's
             // content closes the list.
             const marker = open[2] || open[4];
-            const indent = open[1].replace(/\t/g, '    ').length;
-            if (listIndent >= 0 && indent < listIndent) listIndent = -1;
-            fence = { char: marker[0], len: marker.length, bq, buf: [line] };
+            if (listIndent >= 0 && openIndent < listIndent) listIndent = -1;
+            fence = { char: marker[0], len: marker.length, bq, buf: [line], limit: fenceLimit };
             continue;
         }
 
@@ -333,7 +362,14 @@ function maskInlineSpans(text, keep) {
 }
 
 function unmaskCode(text, store) {
-    // Repeat until stable: a masked inline span can sit inside a masked fenced block.
+    // Repeat until stable. The stated reason used to be "a masked inline span can sit inside
+    // a masked fenced block", which is not true of this state machine: the fence branch
+    // stores RAW source lines and `continue`s before flushParagraph(), so a span inside a
+    // fence is never masked in the first place. The pipeline cannot nest a sentinel at all —
+    // stripControlChars() removes the sentinel byte before either maskAll() call, and every
+    // keep() stores raw text — so the loop is a guarantee of THIS EXPORTED FUNCTION, not of a
+    // reachable path. Measured, not assumed: collapsing it to one pass left 157/157 green
+    // (C5-09), which is why the contract now has a test of its own.
     let out = text;
     for (let pass = 0; pass < 8; pass++) {
         const next = out.replace(

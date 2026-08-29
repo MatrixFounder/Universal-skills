@@ -1486,6 +1486,303 @@ class TestCarryoverMedium(unittest.TestCase):
 
 
 @unittest.skipUnless(HAVE_NODE, "node not available")
+class TestCarryoverLow(unittest.TestCase):
+    """The LOW findings the cycles raised but never verified (WI-030).
+
+    One was a live silent-loss defect (C5-07); one was a live order dependency in the
+    machine-readable error contract (C5-14); the rest were mutation survivors — mechanisms
+    the requirements name and the suite could not have noticed the loss of. Two more
+    (C5-06, C5-08) were the LOW restatements of MEDIUM findings already closed above and
+    are locked by `TestCarryoverMedium`, not re-tested here.
+
+    Every mutation quoted below was measured: applied to the source, suite run, restored.
+    """
+
+    # --- C5-07: a tab-indented ``` was read as a fence --------------------------------
+
+    def test_a_tab_indented_fence_is_indented_code_not_a_fence(self):
+        # CommonMark measures the indent in COLUMNS and a tab is four, so `\t``` ` is
+        # indented code. The opener matched `[ \t]{0,3}` CHARACTERS, so it opened a fence
+        # at column 4 and froze the prose up to the next one: the paragraph between two of
+        # them reached the .docx with its wikilinks and highlights literal, at exit 0.
+        out = convert_text(
+            "# T\n\nprose one\n\n\t```\n\n"
+            "A paragraph with [[wikilink]] and ==highlight==.\n\n\t```\n\nprose two\n")
+        self.assertNotIn("[[", out)
+        self.assertIn("**highlight**", out)
+        # ...and the two lines themselves survive verbatim, because they ARE code now.
+        self.assertEqual(out.count("\t```"), 2)
+
+    def test_an_embed_between_two_tab_indented_fences_still_resolves(self):
+        # The half that costs a reader an image rather than a link label.
+        out = convert_text("# T\n\np\n\n\t```\n\n![[diagram.png]]\n\n\t```\n")
+        self.assertIn("![diagram](", out)
+
+    def test_a_three_space_indented_fence_is_still_a_fence(self):
+        # The other side of the boundary: 3 columns is the last indent CommonMark allows.
+        out = convert_text("# T\n\n   ```\n   [[keep-me]]\n   ```\n")
+        self.assertIn("[[keep-me]]", out)
+
+    def test_a_tab_indented_fence_inside_a_list_still_protects_its_content(self):
+        # The LIST half of the same boundary, and a mutation survivor of the fix itself:
+        # collapsing the limit to a flat `openIndent <= 3` passed 169/169. Inside a list a
+        # fence is legitimate content up to the item's own content indent plus three, and
+        # Obsidian indents nested content with a TAB — four columns. Under a flat limit the
+        # block stops being masked and the code inside it is rewritten.
+        # test_tab_indented_fence_inside_a_list_is_also_safe asserts only what comes AFTER.
+        # The block carries a BLANK LINE on purpose. Without one, the two ``` lines end up
+        # in a single paragraph and maskInlineSpans pairs them as a code span, protecting
+        # the content by accident — a flat limit passes such a test. A blank line ends the
+        # paragraph, the runs no longer pair, and only real fence handling saves the block.
+        out = convert_text(
+            "# T\n\n- Step:\n\n\t```md\n\t[[keep-me]]\n\n\t==raw== stays\n\t```\n\n\tafter\n")
+        self.assertIn("[[keep-me]]", out)
+        self.assertIn("==raw==", out)
+
+    def test_a_tab_indented_closer_does_not_end_the_block_early(self):
+        # The CLOSER half of the same character-vs-column bug, and the half that edits the
+        # code it is protecting. `[ \t]{0,3}` read a tab-indented bare ``` INSIDE an open
+        # block as the closing fence: the rest of the real code block was rewritten, the
+        # genuine column-0 closer opened a NEW fence, and the document froze to EOF.
+        note = ("# T\n\n```md\nreal code [[link]] and ==hi==\n\t```\n"
+                "still code [[link2]] and ==hi2==\n```\n\nTail [[other]].\n")
+        out = convert_text(note)
+        # Every line of the block is content, the tab-indented one included.
+        self.assertIn("real code [[link]] and ==hi==", out)
+        self.assertIn("still code [[link2]] and ==hi2==", out)
+        self.assertIn("\t```", out)
+        # ...and the prose after the block is live again.
+        self.assertIn("Tail other.", out)
+
+    def test_strict_assets_still_sees_an_embed_after_such_a_block(self):
+        # The consequence that makes it silent loss rather than a cosmetic quirk: the tail
+        # was frozen, so the missing attachment inside it was invisible and the run exited 0
+        # with --strict-assets — the flag whose whole job is to refuse that.
+        tmp = tempfile.mkdtemp(dir=VAULT, prefix=".t-")
+        try:
+            src = os.path.join(tmp, "n.md")
+            with open(src, "w", encoding="utf-8") as fh:
+                fh.write("# T\n\n```md\ncode\n\t```\nmore code\n```\n\n"
+                         "Tail ![[missing.png]].\n")
+            proc = run_convert(src, os.path.join(tmp, "o.md"),
+                               "--vault-root", VAULT, "--strict-assets")
+            self.assertEqual(proc.returncode, 8, proc.stderr or proc.stdout)
+            self.assertIn("missing.png", proc.stderr)
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    def test_a_closer_indented_past_the_opener_inside_a_list_still_closes(self):
+        # The over-strict side of the closer bound, which costs a whole document: the limit
+        # is the container's, carried on the fence, NOT the opening fence's own indent.
+        # Pinning it to the opener leaves this fence unterminated and masks to EOF.
+        out = convert_text(
+            "# T\n\n- Step:\n\n  ```md\n  [[keep]]\n    ```\n\nTail [[other]].\n")
+        self.assertIn("[[keep]]", out)
+        self.assertIn("Tail other.", out)
+
+    # --- C5-09: the unmask fixpoint was unreachable AND unlocked ----------------------
+
+    def test_unmask_resolves_a_sentinel_stored_inside_another_region(self):
+        # MUTATION SURVIVOR — `for (let pass = 0; pass < 8; pass++)` -> `< 1` left 157/157
+        # green. HONEST SCOPE: the pipeline cannot currently build a nested store —
+        # stripControlChars() removes the sentinel byte from the source, and every keep()
+        # call stores RAW lines — so the loop is a guarantee of the EXPORTED function, not
+        # of a reachable path. That contract is what this asserts.
+        script = (
+            'const l=require(process.argv[1]);'
+            'const O="\\u0000obsmask", C="\\u0000";'
+            'const store=[O+"1"+C+" inner", "DEEP"];'
+            'process.stdout.write(l.unmaskCode(O+"0"+C, store));')
+        proc = subprocess.run(
+            ["node", "-e", script, os.path.join(SCRIPTS, "_obsidian_lib.js")],
+            capture_output=True, text=True)
+        self.assertEqual(proc.stdout, "DEEP inner", proc.stderr)
+
+    # --- C5-12: three mechanisms with no test at all ----------------------------------
+
+    def test_r8e_a_blank_quote_line_separates_the_title_from_the_body(self):
+        # MUTATION SURVIVOR — dropping the `\n${indent}>` from rewriteCallouts() left
+        # 157/157 green. Without it the bold title and the body lazily continue as ONE
+        # blockquote paragraph, so Word renders `**Title** First. Second.` on one line.
+        # test_callout_body_stays_a_blockquote asserts only that "> First." occurs, which
+        # is true either way.
+        out = convert_text("# T\n\n> [!note] Title\n> First.\n> Second.\n")
+        self.assertIn("> **Title**\n>\n> First.", out)
+
+    def test_r12a_re_rooting_leaves_a_destination_that_is_not_a_file_alone(self):
+        # MUTATION SURVIVOR — deleting `if (!isFile(abs)) return whole;` from
+        # absolutiseRelativeImages() left 157/157 green. The guard is what keeps a
+        # transcluded note's ordinary CommonMark image resolvable against the PARENT's
+        # directory when it does not exist beside the child: re-rooting it unconditionally
+        # produces an absolute path to nothing, and md2docx.js throws `Local image not
+        # found` on a document that converted fine before.
+        base = tempfile.mkdtemp()
+        try:
+            vault = os.path.join(base, "vault")
+            os.makedirs(os.path.join(vault, ".obsidian"))
+            os.makedirs(os.path.join(vault, "sub"))
+            with open(os.path.join(vault, ".obsidian", "app.json"), "w") as fh:
+                json.dump({}, fh)
+            # The image sits beside the PARENT, not beside the child that names it.
+            shutil.copy(os.path.join(VAULT, "_attachments", "diagram.png"),
+                        os.path.join(vault, "shared.png"))
+            with open(os.path.join(vault, "sub", "child.md"), "w", encoding="utf-8") as fh:
+                fh.write("# Child\n\n![a](shared.png)\n")
+            src = os.path.join(vault, "parent.md")
+            with open(src, "w", encoding="utf-8") as fh:
+                fh.write("# T\n\n![[sub/child.md]]\n")
+            dst = os.path.join(vault, "o.md")
+            proc = run_convert(src, dst, "--vault-root", vault, "--transclude")
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            with open(dst, encoding="utf-8") as fh:
+                out = fh.read()
+            self.assertIn("![a](shared.png)", out)
+            self.assertNotIn(os.path.join(vault, "sub", "shared.png"), out)
+        finally:
+            shutil.rmtree(base, ignore_errors=True)
+
+    # --- C5-13: FRONTMATTER_SUPPRESS was named by R2(f) and read by nothing ------------
+
+    def test_r2f_every_declared_suppressed_key_is_absent(self):
+        # MUTATION SURVIVOR — emptying the set left 157/157 green, because no code path
+        # reads it: FRONTMATTER_KEYS is an allowlist and suppression falls out of it.
+        # The set is now the R2(f) DECLARATION, and this is what reads it: every declared
+        # key goes into a note with a recognisable value, and none may reach the output.
+        lib = os.path.join(SCRIPTS, "_obsidian_lib.js")
+        with open(lib, encoding="utf-8") as fh:
+            block = re.search(r"FRONTMATTER_SUPPRESS = new Set\(\[(.*?)\]\)",
+                              fh.read(), re.S)
+        keys = re.findall(r"'([\w]+)'", block.group(1))
+        self.assertGreaterEqual(len(keys), 13, "R2(f) declares 13 keys")
+        fm = ["---", "title: Displayed Title"]
+        for i, key in enumerate(keys):
+            if key != "title":
+                fm.append("%s: SUPPRESSED%d" % (key, i))
+        fm += ["author: Ada Lovelace", "---", "", "# T", "", "body", ""]
+        out = convert_text("\n".join(fm))
+        for i, key in enumerate(keys):
+            self.assertNotIn("SUPPRESSED%d" % i, out, key)
+        self.assertNotIn("Displayed Title", out, "title")
+        # ...and the allowlist still renders what R2(e) says it should.
+        self.assertIn("Ada Lovelace", out)
+
+    # --- C5-14: error paths in the two CLIs -------------------------------------------
+
+    def test_json_errors_is_honoured_wherever_it_sits_in_the_argv(self):
+        # LIVE — the parse loop reported usage errors AS IT WENT, so a `--json-errors` to
+        # the RIGHT of the offending flag had not been read yet and the caller got plain
+        # text. A machine-readable contract that depends on argument order is not one;
+        # md2docx.js's own test_flag_order_does_not_matter says as much for its flags.
+        with tempfile.TemporaryDirectory() as tmp:
+            src = os.path.join(tmp, "n.md")
+            with open(src, "w", encoding="utf-8") as fh:
+                fh.write("# T\n")
+            dst = os.path.join(tmp, "o.md")
+            for flags in (("--json-errors", "--nonsense"), ("--nonsense", "--json-errors")):
+                proc = run_convert(src, dst, *flags)
+                self.assertEqual(proc.returncode, 2, flags)
+                env = json.loads(proc.stderr.strip())
+                self.assertEqual(env["type"], "UsageError", flags)
+                self.assertEqual(env["details"]["flag"], "--nonsense", flags)
+
+    def test_an_invalid_choice_reports_the_expected_values(self):
+        # R15(c) — the exit code was asserted; the envelope that tells a caller WHAT was
+        # expected was not.
+        with tempfile.TemporaryDirectory() as tmp:
+            src = os.path.join(tmp, "n.md")
+            with open(src, "w", encoding="utf-8") as fh:
+                fh.write("# T\n")
+            proc = run_convert(src, os.path.join(tmp, "o.md"),
+                               "--json-errors", "--frontmatter", "bogus")
+            self.assertEqual(proc.returncode, 2)
+            env = json.loads(proc.stderr.strip())
+            self.assertEqual(env["type"], "UsageError")
+            self.assertEqual(env["details"]["expected"], ["table", "render", "strip"])
+
+    def test_an_unwritable_output_is_exit_1_with_an_envelope(self):
+        # The write is the LAST thing the CLI does, so this path is reached only after a
+        # successful conversion — it had no test at all.
+        with tempfile.TemporaryDirectory() as tmp:
+            src = os.path.join(tmp, "n.md")
+            with open(src, "w", encoding="utf-8") as fh:
+                fh.write("# T\n")
+            proc = run_convert(src, os.path.join(tmp, "no-such-dir", "o.md"),
+                               "--json-errors")
+            self.assertEqual(proc.returncode, 1)
+            env = json.loads(proc.stderr.strip())
+            self.assertEqual(env["type"], "IOError")
+
+    def test_help_exits_zero_and_prints_the_usage(self):
+        proc = subprocess.run(["node", OBSIDIAN2MD, "--help"],
+                              capture_output=True, text=True)
+        self.assertEqual(proc.returncode, 0)
+        self.assertIn("--transclude", proc.stdout)
+        self.assertEqual(proc.stderr, "")
+
+    def test_a_symlinked_output_is_also_refused_with_exit_6(self):
+        # R1(d) has TWO arms and only one was tested. test_same_path_is_refused_with_exit_6
+        # passes the same string twice, which the `inputAbs === outputAbs` short-circuit
+        # answers before the realpath comparison is ever reached — deleting that second arm
+        # left 170/170 green, and it is the arm that catches `out.md` being a symlink to the
+        # note. The consequence of losing it is the note itself, overwritten.
+        with tempfile.TemporaryDirectory() as tmp:
+            src = os.path.join(tmp, "n.md")
+            body = "# T\n\nSee [[Other]].\n"
+            with open(src, "w", encoding="utf-8") as fh:
+                fh.write(body)
+            alias = os.path.join(tmp, "alias.md")
+            os.symlink(src, alias)
+            proc = run_convert(src, alias, "--json-errors")
+            self.assertEqual(proc.returncode, 6, proc.stderr)
+            self.assertEqual(json.loads(proc.stderr.strip())["type"],
+                             "SelfOverwriteRefused")
+            with open(src, encoding="utf-8") as fh:
+                self.assertEqual(fh.read(), body)
+
+    def test_an_invalid_obsidian_choice_is_rejected_on_the_one_command_route(self):
+        # The md2docx.js half of R15(c). Its OBSIDIAN_CHOICES check is a separate site from
+        # obsidian2md.js's, and `grep -rn "Invalid value" tests/` found nothing anywhere in
+        # the repository: disabling the whole branch left 170/170 green, and `--frontmatter
+        # bogus` would then reach the library and be silently treated as `strip`.
+        with tempfile.TemporaryDirectory() as tmp:
+            src = os.path.join(tmp, "n.md")
+            with open(src, "w", encoding="utf-8") as fh:
+                fh.write("# T\n")
+            proc = subprocess.run(
+                ["node", MD2DOCX, src, os.path.join(tmp, "o.docx"),
+                 "--obsidian", "--frontmatter", "bogus"],
+                capture_output=True, text=True)
+            self.assertNotEqual(proc.returncode, 0)
+            self.assertIn("table|render|strip", proc.stderr)
+            self.assertFalse(os.path.exists(os.path.join(tmp, "o.docx")))
+
+    # --- C5-12 (b), second half: the hint is an UPPER BOUND ---------------------------
+
+    def test_a_size_hint_larger_than_the_source_never_upscales(self):
+        # R3(h), and the honest-scope departure from Obsidian that the requirement calls
+        # out by name: Obsidian upscales on `|800`, this does not. Both arms of the geometry
+        # were mutation survivors — `Math.min(hint.w, w)` -> `hint.w` and the explicit
+        # `WxH` pair -> the literals — each left 170/170 green while inflating every hinted
+        # image past its own pixels. test_a13 only ever hints DOWNWARD from 400x300.
+        with tempfile.TemporaryDirectory() as tmp:
+            out = os.path.join(tmp, "o.docx")
+            src = os.path.join(VAULT, ".t-upscale.md")
+            try:
+                with open(src, "w", encoding="utf-8") as fh:
+                    fh.write("# T\n\n![[diagram.png|800]]\n\n![[diagram.png|800x600]]\n")
+                proc = subprocess.run(
+                    ["node", MD2DOCX, src, out, "--obsidian", "--vault-root", VAULT],
+                    capture_output=True, text=True)
+                self.assertEqual(proc.returncode, 0, proc.stderr)
+            finally:
+                if os.path.exists(src):
+                    os.remove(src)
+            px = [(int(a) // 9525, int(b) // 9525) for a, b in
+                  re.findall(r'<wp:extent cx="(\d+)" cy="(\d+)"', _unzip(out))]
+            self.assertEqual(px, [(400, 300), (400, 300)], "diagram.png is 400x300")
+
+
+@unittest.skipUnless(HAVE_NODE, "node not available")
 class TestIdempotenceAndRegression(unittest.TestCase):
     """R14 — the two properties that make this safe to ship."""
 
@@ -1656,6 +1953,17 @@ class TestOneCommandRoute(unittest.TestCase):
         self.assertIn((120, 90), px)
         self.assertIn((100, 50), px)     # photo.jpg via `|100x50`
         self.assertIn((400, 300), px)    # the un-hinted embed keeps its natural size
+
+    def test_the_size_hint_prefix_never_reaches_the_document(self):
+        # MUTATION SURVIVOR (C5-12) — `alt: altText.slice(m[0].length)` -> `alt: altText`
+        # in parseSizeHint() left the whole suite green. The hint is TRANSPORT: R3(g) parks
+        # it on a reserved alt-text prefix that buildImageRun() must consume, and the alt
+        # text becomes the image's `descr` in the package. Unconsumed, every hinted image
+        # in the .docx is described to a screen reader as "w=120|diagram". The geometry
+        # assertions above cannot see it — they read <wp:extent>, which is right either way.
+        xml = _unzip(self.docx)
+        self.assertIn('descr="diagram"', xml)
+        self.assertNotIn('descr="w=', xml)
 
     def test_a8_package_validates(self):
         # A8.

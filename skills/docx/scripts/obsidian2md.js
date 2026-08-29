@@ -33,7 +33,13 @@ const CHOICES = {
     '--inline-tags': ['strip', 'keep'],
 };
 
-let jsonErrors = false;
+// Decided BEFORE the parse loop, not inside it. This loop reports usage errors as it goes,
+// so a `--json-errors` sitting to the RIGHT of the offending flag had not been read yet and
+// the error came back as plain text — the machine-readable contract depended on argument
+// ORDER, which is exactly what md2docx.js's own flag-order test forbids. html2docx.js never
+// hit this because its loop cannot fail: an unknown option there becomes a positional and
+// every error is raised after the parse (C5-14).
+let jsonErrors = process.argv.slice(2).includes('--json-errors');
 
 // Same shape as html2docx.js:95 and scripts/_errors.py: one line, schema-versioned.
 function reportError(msg, code, type, details) {
