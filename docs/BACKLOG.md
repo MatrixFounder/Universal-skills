@@ -9,7 +9,7 @@ Skill-scoped roadmap items live in
 cross-cutting work-items that do not belong to one skill's roadmap row.
 
 <!-- feedback:discovered-issues -->
-- [WI-031 — design-md blind-acceptance seams](backlog/wi-031-design-md-blind-acceptance-seams.md) — 10 gaps a fresh-context Route 2 run hit after the majors were fixed; (a) radius plurality vs "never invent", (c) a component with no rendered text silences every contrast rule, (h) the `-variant` suffix is an unadvertised contrast exemption.
+- [WI-031 — design-md blind-acceptance seams](backlog/wi-031-design-md-blind-acceptance-seams.md) — **resolved 2026-08-29**; all 12 reproduced, none refuted, all closed. A second blind Route 2 run answered yes to all eight targeted questions and found an amber status bar at 2.94:1 that both gates were structurally blind to.
 
 ## Closed
 

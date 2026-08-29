@@ -142,6 +142,36 @@ do when a value is unknown:
 - What a value being **unknown** means: put the section in `omitted` (§7).
   Do not fabricate.
 
+**When `name` itself has no source.** No supplied product name and a redacted
+logo leave `name` with nothing to hold, and `omitted` is not the escape: it
+takes only the five token-map names (§7.3), so `- name` is rejected. Verified
+on a file declaring `name`, `version` and `description` under `omitted` — one
+warning each:
+
+```text
+{
+  "severity": "warning",
+  "path": "omitted",
+  "message": "unknown section name 'name' in omitted key",
+  "rule": "unknown-omission"
+}
+```
+
+The convention, so that every extraction resolves this the same way:
+
+- **Keep the key and mark it.** Write
+  `name: "UNCONFIRMED — product name not supplied; drafted from <source-file>"`.
+  Do not invent a product name. Do not drop the key either: a file with no
+  `name` lints clean (verified, 0 errors 0 warnings), but an absent key reads as
+  an oversight, while a marked value reads as a request.
+- **Know where the string travels.** `export --format dtcg` emits `name` as
+  `$description` when `description` is absent (§2), so the marker reaches the
+  exported token file. That is intended. Setting `description` overrides it.
+- **Say it in the hand-back.** `name` is a placeholder, never an observation, so
+  it belongs in the `NEEDS CONFIRMATION` bucket, not `MEASURED` or `INFERRED`:
+  *"`name` — placeholder, not observed. No product name was supplied and the
+  logo was redacted. Replace it before this file is published or exported."*
+
 ### 2.2 Unknown top-level keys
 
 Unknown keys are allowed — the schema is extensible by design. Two rules

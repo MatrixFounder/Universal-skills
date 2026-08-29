@@ -5,8 +5,10 @@ usage lives in `../SKILL.md` and `../references/`; this file is for whoever has 
 change the code or explain its output.
 
 Everything below was executed on 2026-08-28, and §§2, 3, 5 and 8 re-executed unchanged
-on 2026-08-29, against `@google/design.md@0.4.0`, Node v24.15.0, Python 3.14.4, macOS
-(darwin 25.5.0). Quoted output is real output.
+on 2026-08-29. The `--pair` and `UNCHECKED FILLS` material in §§1, 2, 3, 7 and 8 was
+executed on 2026-08-29 against the current `check-contrast`. All of it against
+`@google/design.md@0.4.0`, Node v24.15.0, Python 3.14.4, macOS (darwin 25.5.0). Quoted
+output is real output.
 
 ---
 
@@ -22,15 +24,18 @@ groups findings by severity into an aligned table, and appends a one-line `REMED
 per rule id that fired. `check-contrast` computes WCAG 2.x contrast ratios over the
 whole palette, which the upstream `contrast-ratio` rule never does — that rule only
 looks at components declaring both `backgroundColor` and `textColor`, and only against
-AA 4.5:1. `extract-palette` counts pixels in an image and reports each dominant colour
-with its share of the sampled area, because a colour read off a screenshot by eye is
-distorted by compression, antialiasing, gradients and colour profiles.
+AA 4.5:1. It also names the components that declare a fill and no `textColor` — the
+ones that rule can never reach. `extract-palette` counts pixels in an image and
+reports each dominant colour with its share of the sampled area, because a colour read
+off a screenshot by eye is distorted by compression, antialiasing, gradients and colour
+profiles.
 
 None of the three decides anything. `lint` reports what upstream reported.
-`check-contrast` reports ratios and thresholds. `extract-palette` reports measured hex
-values plus a `HINT` column that is explicitly labelled a heuristic. Which measured
-colour is a background, which is an accent, and whether a failing contrast pair should
-be fixed by darkening the text or lightening the surface — those are the agent's calls.
+`check-contrast` reports ratios, thresholds, and the fills no rule reaches.
+`extract-palette` reports measured hex values plus a `HINT` column that is explicitly
+labelled a heuristic. Which measured colour is a background, which is an accent, and
+whether a failing contrast pair should be fixed by darkening the text or lightening the
+surface — those are the agent's calls.
 
 ---
 
@@ -77,7 +82,7 @@ nothing.
 
 ```
 usage: check-contrast [-h] [--json] [--level {aa,aaa,both}] [--min RATIO]
-                      [--strict-decorative]
+                      [--pair FG,BG] [--strict-decorative]
                       [--matrix {summary,plausible,full}] [--fail-only]
                       [--no-matrix] [--timeout SECONDS] [--self-test]
                       [--version]
@@ -87,9 +92,10 @@ usage: check-contrast [-h] [--json] [--level {aa,aaa,both}] [--min RATIO]
 | Flag | Default | Effect |
 | :--- | :--- | :--- |
 | `DESIGN.md` | none | The file to check. Optional only because `--self-test` needs no file. |
-| `--json` | off | Full result object on stdout instead of the report. Carries every computed pair regardless of `--matrix`. |
+| `--json` | off | Full result object on stdout instead of the report. Carries every computed pair regardless of `--matrix`. Under `--pair` it emits the smaller pair-query object instead. |
 | `--level {aa,aaa,both}` | `aa` | Which threshold gates the exit code for **text** pairs. `aa`=4.5, `aaa`=7.0, `both`=gate at 4.5 and list AAA shortfalls as advisory. Non-text pairs stay at 3.0. |
 | `--min RATIO` | unset | Explicit text gate; supersedes `--level`. Non-text pairs stay at 3.0. |
+| `--pair FG,BG` | unset | Report exactly the two named colour tokens as one pair — its ratio and all four verdict columns — and nothing else. Repeatable. Applies no role classification and no MD3 pairing. `--matrix`, `--fail-only`, `--no-matrix` and `--strict-decorative` are inert in this mode; `--json`, `--level` and `--min` are not. Gate and exit code come from the **text** gate. See below. |
 | `--strict-decorative` | off | Also gate decorative non-text pairs at 3.0. A non-text token whose name ends in `-variant` (`outline-variant`) is decorative by default: measured and printed, exempt under WCAG 2.x SC 1.4.11, and excluded from the exit code. |
 | `--matrix {summary,plausible,full}` | `plausible` | How much of the wider matrix to print. `summary`=counts only; `plausible`=counts plus only the plausible pairs below the gate; `full`=every computed pair, grouped by background. |
 | `--fail-only` | off | With `--matrix full`, print only pairs below the gate. `--matrix plausible` already lists only those. |
@@ -98,20 +104,116 @@ usage: check-contrast [-h] [--json] [--level {aa,aaa,both}] [--min RATIO]
 | `--self-test` | off | Check the ratio implementation against five known answers and exit. No file, no network. |
 | `--version` | — | Prints `check-contrast 1.0 (upstream @google/design.md@0.4.0)`. |
 
-Two things about this script surprise people, so state them when you explain its output.
+Four things about this script surprise people, so state them when you explain its output.
 
 **It reads token values from upstream, not from the YAML.** It runs
 `npx --yes @google/design.md@0.4.0 export <FILE> --format json-tailwind` and reads
 `theme.extend`. That is how `{colors.x}` references get resolved and how `oklch()`,
-`color-mix()` and named colours all arrive as lowercase hex. No YAML parser is in this
-file. The consequence is the sixth row of §7: a reference that does not resolve is
+`color-mix()` and named colours all arrive as lowercase hex. No colour value is parsed
+here, and there is still no YAML parser in this file: the one thing read from the file
+directly is the *key names* of its `components:` block, by the shallow scan described
+below, and the colour behind each of those keys still comes from the export. The
+consequence is the `defines no colors` row of §7: a reference that does not resolve is
 dropped silently by `export`, and the script then sees a palette with no colours.
 
 **The exit code is decided by "intended pairs" only.** Those are the MD3 pairings the
 format's own vocabulary implies — `on-X` on `X`, `on-surface` on every surface role,
 `outline` on a surface as a functional boundary. Everything else is printed as an
 advisory matrix and never changes the exit code. The `GATED` column says, per row,
-whether the row can fail the run.
+whether the row can fail the run. `--pair` is the one exception: in that mode the
+queried pairs decide the exit code alone, and no intended pair, matrix row or component
+is computed at all.
+
+**`--pair` bypasses every heuristic in the file.** Nothing else in `check-contrast`
+reports a pair whose foreground the naming heuristic put on the *background* side:
+`tertiary` is a background under classification rule 6, so `tertiary` on `surface` is
+printed by no matrix, at any `--matrix` setting. `--pair FG,BG` names the two tokens
+directly and reports that pair and nothing else. Both names must be tokens the file
+defines, and their values still come from the one `export` call, so this is not an
+offline calculator. The ratio is independently derivable from the WCAG 2.x formula —
+`#176b5a` on `#ffffff` is 6.3885, so 6.39:
+
+```text
+$ scripts/check-contrast examples/example-saas-dashboard.md --pair tertiary,surface
+check-contrast — /abs/.../examples/example-saas-dashboard.md
+pair query: 1 pair(s) named on the command line; gate 4.50:1 (--level aa)
+
+  RATIO    AA    AA-LG  AAA   UI-3.0  GATE   PAIR
+  6.39     PASS  PASS   FAIL  PASS    PASS   tertiary #176b5a on surface #ffffff
+
+  --pair reports exactly the pair named, whatever either token's name implies about
+  its role; no classification and no MD3 pairing is applied. The GATE column, and
+  the exit code, use the TEXT gate. For a non-text pair (a border, a divider, an
+  icon) read the UI-3.0 column instead, or pass --min 3.0.
+  exit 0 — every queried pair meets the gate
+EXIT=0
+```
+
+The `GATE` column and the exit code use the **text** gate, because a queried pair
+carries no role and none is assumed for it. For a border or a divider read the `UI-3.0`
+column, or move the gate: on the same measured 3.82, `--pair outline,surface` exits 1
+at the default 4.50 gate and 0 under `--min 3.0`. A token name the file does not define
+is rejected by name and never substituted — the nearest defined token is named back, or
+the file's own tokens are listed when nothing is near:
+
+```text
+$ scripts/check-contrast examples/example-saas-dashboard.md --pair tertiery,surface
+check-contrast: error: --pair: `tertiery` is not a color token in this file; closest color token in this file is `tertiary`
+EXIT=2
+
+$ scripts/check-contrast examples/example-saas-dashboard.md --pair tertiary
+check-contrast: error: --pair takes exactly two color token names separated by one comma, as --pair FG,BG; got 'tertiary'
+EXIT=2
+```
+
+A pair with a translucent *background* has no ratio at all, because the real backdrop is
+unknown; it is reported under `NOT ANSWERABLE` and exits 2 rather than being invented. A
+translucent *foreground* is composited over the named background and noted. Exit 2 takes
+precedence: one unanswerable pair makes the run exit 2 even when another queried pair is
+below the gate. Under `--json` the object is a different shape from the normal report —
+`"mode": "pair-query"`, with `queried_pairs[]`, `unanswerable_pairs[]` and no
+`intended_pairs`, `matrix` or `components` key.
+
+**It names the component fills that nothing checks.** The upstream `contrast-ratio` rule
+fires only when a component declares BOTH `backgroundColor` and `textColor`, and this
+script checks the palette rather than components. A component that declares a fill and no
+`textColor` is therefore checked by neither, and that silence is indistinguishable from a
+pass — on the fill that is often the most saturated area of the product. Such components
+are listed under `UNCHECKED FILLS` and counted in `SUMMARY` on every run:
+
+```text
+UNCHECKED FILLS — components that declare a backgroundColor and no textColor
+  divider                  fill {colors.outline-variant} #c7d0d8
+  divider-section          fill {colors.outline} #78848f
+  meter-on-time            fill {colors.tertiary} #176b5a
+  No contrast rule can fire on these: the upstream `contrast-ratio` rule needs BOTH
+  a backgroundColor and a textColor, and this script checks the palette, not
+  components. ...
+
+SUMMARY
+  component fills: 28 component(s) declared, 3 with a backgroundColor and no
+                   textColor (listed above; checked by nothing, not gated)
+```
+
+It is a naming, not a verdict: **no ratio is invented and the exit code never moves.**
+That is deliberate — this tool's exit 1 asserts one thing, that a *measured* ratio is
+below its gate, and an undeclared `textColor` produces no ratio to measure. It is not
+folded into `--strict-decorative` either. A build that must fail on these should gate on
+`components.unchecked_fills` in `--json`. Two of the shipped files hit it legitimately:
+`assets/template-editorial.md` (`section-rule`) and `examples/example-saas-dashboard.md`
+(`divider`, `divider-section`, `meter-on-time`) name components that render no text.
+
+Because no export format carries components, the `components:` block is read from the
+file itself by a shallow two-level scan of **key names only** — not a YAML parser. It
+reports what it did rather than claiming a count it does not have — of the four possible
+`SUMMARY` lines, only the first states a count:
+
+| `components.scan_status` | `SUMMARY` line | When |
+| :--- | :--- | :--- |
+| `read` | `N component(s) declared, M with a backgroundColor and no textColor` | the normal path |
+| `absent` | `no components block in the frontmatter` | frontmatter with no `components:` key |
+| `no-frontmatter` | ``no `---` frontmatter to read components from`` | tokens declared in a fenced `yaml` code block instead |
+| `unreadable` | `components block not in a shape this scan reads (flow mapping or tab indentation) — the check did not run` | `components: {a: {…}}`, or tab-indented |
 
 ### 2.3 `extract-palette`
 
@@ -163,14 +265,18 @@ The three tables differ. Do not assume one from another.
 | Code | `lint` | `check-contrast` | `extract-palette` |
 | :--- | :--- | :--- | :--- |
 | 0 | no errors (and no warnings under `--strict`) | every gated intended pair meets the gate | success |
-| 1 | lint errors, or warnings under `--strict` | a gated intended pair fails the gate; also a `--self-test` mismatch | option value out of range (`--bits 99`, `--ignore-edges 60`); also a `--region` that is malformed, empty, negative or outside the image, and `--region` combined with a non-zero `--ignore-edges` |
-| 2 | input problem: file missing, unreadable, a directory, or a command-line usage error | input file missing, a directory, not a regular file, unreadable; also a command-line usage error | image missing, a directory, unreadable, empty, corrupt, or nothing left to sample; also an argparse-level usage error |
+| 1 | lint errors, or warnings under `--strict` | a gated intended pair fails the gate; under `--pair`, a queried pair below the text gate; also a `--self-test` mismatch | option value out of range (`--bits 99`, `--ignore-edges 60`); also a `--region` that is malformed, empty, negative or outside the image, and `--region` combined with a non-zero `--ignore-edges` |
+| 2 | input problem: file missing, unreadable, a directory, or a command-line usage error | input file missing, a directory, not a regular file, unreadable; also a command-line usage error, a `--pair` naming a token the file does not define, and a queried pair whose ratio does not exist (translucent background) | image missing, a directory, unreadable, empty, corrupt, or nothing left to sample; also an argparse-level usage error |
 | 3 | `npx` or the design.md CLI is unavailable, timed out (`--timeout`, default 300s per file), or returned output that is not JSON | the `export` call failed or timed out (`--timeout`, default 300s), or the file defines no colors | format recognised but no available decoder handles it |
 
 With several files `lint` returns the worst code, in the order `3 > 2 > 1 > 0`.
 
-Two asymmetries are real and worth knowing before you debug an exit code:
+Three things about these codes are worth knowing before you debug one:
 
+- Under `--pair`, the queried pairs decide the code alone, and 2 outranks 1: one
+  unanswerable pair exits 2 even when another queried pair is below the gate. An
+  `UNCHECKED FILLS` finding never moves the code at all — it is an absent declaration,
+  not a measured failure.
 - `extract-palette` splits usage errors across **1 and 2**. Its own range checks
   (`validate()`) exit 1; argparse's own errors — an unparseable `--bits abc`, a bad
   `--decoder` choice, a missing `IMAGE` — exit 2, argparse's default. `lint` overrides
@@ -398,7 +504,8 @@ To prime a machine before it goes offline, run any `lint` once with network acce
 | `--decoder pillow was requested but Pillow is not importable`, exit 3 | An explicit decoder request that the host cannot satisfy. | Run `install.sh`, or drop the flag and let `auto` fall back. |
 | `lint` reports `warning - - No YAML content found. Expected frontmatter (---) or fenced yaml code blocks.` and still exits 0 | A DESIGN.md with no frontmatter is not an error upstream. It defines no tokens, so no rule can run. | Add a `---` block with at least `name:`. Use `--strict` if a missing block must fail the run — verified to turn that same file into `FAIL: 0 errors, 1 warning, 0 infos` and exit 1. |
 | `lint` is clean but `check-contrast` exits 3 with `defines no colors — nothing to check` | Colour tokens are `{refs}` that resolve to nothing. `export` drops them silently (`"colors": {}`) and upstream's `broken-ref` rule does **not** fire for an unresolvable reference in the `colors` map — only for one inside `components`. Verified: a file whose colours are all `{palette.*}` refs to a non-existent section lints `PASS: 0 errors, 0 warnings, 1 info`. | Read the `token-summary` info line. It counts what upstream actually resolved; if it omits colours, the refs are dead. Then define the referenced tokens or point the refs at paths that exist. |
-| `check-contrast` exits 1 on a file that `lint` passes | The two tools check different things. `lint` never checks the palette; `check-contrast` never checks components. A common cause is a functional `outline` token below 3.0:1 against its surface. | Read the `GATED` column to see which row decided the code. Either fix the colour, or — if the token is genuinely a decorative divider — rename it into the `-variant` form, which is exempt under SC 1.4.11 by default. |
+| `check-contrast` exits 1 on a file that `lint` passes | The two tools check different things. `lint` never checks the palette; `check-contrast` contrast-checks no component — it only names the fills nothing can check. A common cause is a functional `outline` token below 3.0:1 against its surface. | Read the `GATED` column to see which row decided the code, then fix the colour. Renaming the token into the `-variant` form also clears the run, because the exemption is triggered by the **name** — but the name is then an unverified claim that the element is purely decorative, and a divider that is the only thing separating two regions is not. The same hexes under the two names give different exit codes. |
+| `check-contrast` prints a component under `UNCHECKED FILLS` and still exits 0 | The component declares a `backgroundColor` and no `textColor`, so nothing can check it: upstream's `contrast-ratio` rule needs both, and this script checks the palette. No ratio exists, so the exit code does not move. | Intended, and not a defect to silence. Declare the `textColor` and re-run, or state in prose that the component renders no text. If a build must fail on it, gate on `components.unchecked_fills` in `--json`; the exit code will not do it for you. |
 | Every `npx`-backed run exits 3 with `` `npx` was not found on PATH `` | Node is absent or not on the PATH of the invoking process. | Install Node 18+ (`engines: node >=18` upstream). `extract-palette` is unaffected and needs no Node. |
 | Exit 3 with `ENOTCACHED` | Offline with a cold npx cache. | See §6. |
 
@@ -419,6 +526,8 @@ the normal report.
 **1. Contrast maths, against known answers.** These figures are derived from the
 WCAG 2.x formula and cross-checked against the published values for the same pairs. If
 one stops reproducing, the ratio implementation is wrong — do not edit the expectations.
+`--pair` reports through the same ratio function; §2.2's worked example (`tertiary` on
+`surface` = 6.39, WCAG-derived 6.3885) is the spot-check for that path.
 
 ```
 $ skills/design-md/scripts/check-contrast --self-test
@@ -445,6 +554,20 @@ $ bash skills/design-md/scripts/install.sh
 
 Exact shares are the point: a flat region has one occupied bucket per band, so
 quantisation and clustering must not move the reported value off the true pixel value.
+
+`install.sh` builds that PNG in a temp directory and deletes it on exit. To point
+`extract-palette` at it directly — this is the run `SKILL.md` cites — rebuild it from
+`install.sh`'s own generator:
+
+```
+$ sed -n '/^import struct/,/fh.write(png)/p' skills/design-md/scripts/install.sh > /tmp/mkpng.py
+$ python3 /tmp/mkpng.py /tmp/smoke.png
+$ skills/design-md/scripts/extract-palette /tmp/smoke.png
+  image      200x100 px -> 200x100 (no crop)
+  ...
+  reported   3 of 3 clusters (max 12, min share 0.50%) covering 100.0% of counted pixels
+EXIT=0
+```
 
 **3. Lint, across every shipped file.** From the repository root; the wrapper resolves
 each path to absolute before the `npx` call:

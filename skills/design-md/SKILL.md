@@ -87,7 +87,7 @@ report to stdout and modifies no file. Pass absolute paths.
 | Script | Command and flags | Output |
 | :--- | :--- | :--- |
 | `lint` | `scripts/lint FILE…` · `--strict` `--json` `--list-rules` `--version PIN` `--timeout SECONDS` | a `severity/rule/path/message` table per file, a `REMEDY` line per rule id that fired, and a `PASS`/`FAIL` verdict carrying the upstream `summary` triple |
-| `check-contrast` | `scripts/check-contrast FILE` · `--level aa\|aaa\|both` `--min RATIO` `--matrix summary\|plausible\|full` `--strict-decorative` `--self-test` `--timeout SECONDS` `--json` | WCAG 2.x ratios for every intended text-on-surface pair, a typography table and an advisory matrix, at AA 4.5, AA-large 3.0, AAA 7.0 and the 3.0 non-text threshold |
+| `check-contrast` | `scripts/check-contrast FILE` · `--level aa\|aaa\|both` `--min RATIO` `--pair FG,BG` `--matrix summary\|plausible\|full` `--strict-decorative` `--self-test` `--timeout SECONDS` `--json` | WCAG 2.x ratios for every intended text-on-surface pair, a typography table and an advisory matrix, at AA 4.5, AA-large 3.0, AAA 7.0 and the 3.0 non-text threshold; `--pair` answers one pair the matrix never prints, `UNCHECKED FILLS` every component fill with no `textColor` |
 | `extract-palette` | `scripts/extract-palette IMAGE` · `--colors N` `--ignore-edges PCT` `--region X,Y,W,H` `--min-share PCT` `--merge-distance D` `--json` | dominant colours as `HEX`, `SHARE`, `BUCKETS`, `HUE`, `L*`, `C*` and a heuristic `HINT` |
 
 `--strict` fails `lint` on warnings, which is what makes a gate meaningful, and
@@ -95,9 +95,9 @@ report to stdout and modifies no file. Pass absolute paths.
 
 | Code | `lint` | `check-contrast` | `extract-palette` |
 | :--- | :--- | :--- | :--- |
-| 0 | no errors (and no warnings under `--strict`) | every gated intended pair meets the gate | success |
-| 1 | errors, or warnings under `--strict` | a gated intended pair fails, or `--self-test` mismatched | an out-of-range option value, or a `--region` malformed, outside the image, or combined with `--ignore-edges` |
-| 2 | input problem, or a usage error | input problem, or a usage error | image missing, unreadable, or corrupt |
+| 0 | no errors (and no warnings under `--strict`) | every gated intended pair meets the gate — under `--pair`, every queried pair | success |
+| 1 | errors, or warnings under `--strict` | a gated intended pair fails — under `--pair`, a queried pair does — or `--self-test` mismatched | an out-of-range option value, or a `--region` malformed, outside the image, or combined with `--ignore-edges` |
+| 2 | input problem, or a usage error | input problem, a usage error, or a `--pair` token name that is unknown or has no ratio | image missing, unreadable, or corrupt |
 | 3 | npx or the CLI unavailable, the call timed out, or non-JSON output | the `export` call failed, or no colors defined | no available decoder handles the format |
 
 With several files `lint` returns the worst code, ordered `3 > 2 > 1 > 0`.
@@ -138,7 +138,7 @@ cd /tmp && npx --yes @google/design.md@0.4.0 lint|diff|export|spec <ABSOLUTE-PAT
 - Every `assets/template-*.md` and `examples/example-saas-dashboard.md` lints at 0 errors, 0 warnings.
 - `examples/fixture-clean.md` → exit 0, `{"errors": 0, "warnings": 0, "infos": 1}`; `examples/fixture-broken.md` → exit 1, `{"errors": 1, "warnings": 6, "infos": 1}`.
 - `scripts/check-contrast --self-test` reproduces all five WCAG known answers, exit 0; the same script exits 1 on `examples/fixture-clean.md` at `outline on surface` 1.72:1 — proof that a clean lint is not a clean file.
-- `scripts/extract-palette` on a 400x300 PNG: clusters covering 100.0% of counted pixels, exit 0. Detail: `references/linter-rules.md` §20–§22; `scripts/README.md` §3 and §8.
+- `scripts/extract-palette` on the 200x100 three-band PNG `scripts/install.sh` builds: `3 of 3 clusters … covering 100.0% of counted pixels`, exit 0. Detail: `references/linter-rules.md` §20–§22; `scripts/README.md` §3 and §8.
 
 ## The Linter Checks Form, Never Quality
 
@@ -204,12 +204,11 @@ prose; naming a populated section raises `redundant-omission`.
    0.40% and out of the report. Add that flag for a browser screenshot with chrome to crop, never for a full-app capture.
 3. Assign roles yourself: largest share is `background`, the neutral inset from
    it is `surface`, the high-chroma small-share colour on one control type is
-   `primary`. Name everything in the MD3 vocabulary. Recovery: with no `accent candidate` row, lower `--min-share` again; with the light planes collapsed into one row, lower `--merge-distance` — at 3.0 the 71.70% `#ffffff` splits into `#ffffff` 58.51% and `#f7f4ef` 16.56%.
-4. Count what the image supports (surface levels, radius steps, type sizes), not
-   absolute pixels — a retina capture scales all of them by an unknown ratio.
+   `primary`. Name everything in the MD3 vocabulary; a boundary named `outline-variant` is exempt from the 3:1 non-text gate in `check-contrast`, so that suffix asserts the element is decorative — a divider that is the only thing separating two regions is structural and takes `outline`, which stays gated.
+   Recovery: with no `accent candidate` row, lower `--min-share` again; with the light planes collapsed into one row, lower `--merge-distance` — at 3.0 the 71.70% `#ffffff` splits into `#ffffff` 58.51% and `#f7f4ef` 16.56%.
+4. Count what the image supports (surface levels, radius steps, type sizes), not absolute pixels — a retina capture scales all of them by an unknown ratio.
 5. Do not name a font. Where a letterform is legible, offer two or three candidates, write one as a labelled placeholder, and ask. With no legible letterform — small text, heavy compression, a logo-only capture — offer no candidates and declare `typography` in `omitted` with that reason (`references/linter-rules.md` §12): a placeholder with no letterform behind it reads as a measured fact forever after.
-6. Write only the components actually visible: two visible controls means two
-   components, not a plausible library of eight.
+6. Write only the components actually visible: two visible controls means two components, not a plausible library of eight. Give every component that renders a label a `textColor`: with a `backgroundColor` alone no contrast rule fires anywhere and `check-contrast` names it under `UNCHECKED FILLS`, a silence that reads exactly like a pass. `--pair FG,BG` measures a declared pair the matrix never prints, such as `tertiary` on `surface`.
 7. Everything absent goes to `omitted` with a reason, or — where no section name fits (states, dark theme, motion, breakpoints) — to prose.
 8. Run Route 4, then hand back a **hypothesis** with `MEASURED`, `INFERRED`,
    `NEEDS CONFIRMATION` and `OMITTED` separated. Hand-back template and

@@ -1,10 +1,11 @@
 ---
 id: WI-031-design-md-seams
 type: work-item
-status: open
+status: resolved
 effort: M
 value: M
 source: design-md fresh-context review, blind Route 2 acceptance re-run (2026-08-29, commit 31f53a3)
+resolved_at: 2026-08-29
 ---
 
 # WI-031 — design-md: seams found by the blind acceptance re-run
@@ -64,3 +65,40 @@ and cheap. (j) needs no action.
 
 Related: [[project-init-skill-path-trap]] for the scaffolding gotcha in the same skill's
 history.
+
+## Resolution (2026-08-29)
+
+All twelve items were reproduced with a real command before being touched; none was
+refuted. Every one is now closed, and a second blind Route 2 tester — fresh context,
+skill-only — answered **yes** to all eight targeted questions.
+
+| # | Resolution |
+|---|---|
+| a | Steps 10, 12 and 13 moved into the measurement carve-out; 11-13 were re-read one by one rather than moved as a range. Only steps 3 and 11 now apply on every route. |
+| b | AS-13's threshold scoped to an authored system; a screenshot extraction is not held to it. |
+| c | `check-contrast` gained an `UNCHECKED FILLS` section naming every component with a `backgroundColor` and no `textColor`, plus a SUMMARY line and a `--json` field. `extraction.md` B.4 gained a titled subsection with five handling steps. The warning now appears in four places. Exit code deliberately unmoved: this tool's exit 1 asserts that a *measured* ratio is below its gate, and an undeclared `textColor` produces no ratio. |
+| d | Convention for an unsourced `name` stated in `spec-anatomy.md` §2.1, with what the hand-back must say. |
+| e | The 1-px strip technique is now `extraction.md` B.2 "Counting geometry with a 1-px strip", with worked invocations and four stated limits. The blind tester reproduced all three examples verbatim and reported "I invented nothing". |
+| f | `extraction.md` B.6 step 5 now says emit only measured rungs ("do not complete the ladder") and name each step for the measurement it came from, not for its rank. |
+| g | AS-9's detection regrouped by VALUE rather than by name, so two differently-named tokens holding one hex no longer pass. |
+| h | The exemption now names itself as the reader's claim at the moment it is taken, in the `[decor]` footnote, the epilog, `--json`, and `SKILL.md` Route 2. Measured: the same hexes under `outline-variant` vs `outline` give exit 0 vs exit 1, and the name is the only difference. |
+| i | `check-contrast --pair FG,BG` — repeatable, bypasses classification and MD3 pairing, rejects an unknown name with the closest match and exit 2. |
+| j | No action; recorded so it is not simplified away. |
+| gate nit | `SKILL.md:141` re-pointed at the 200x100 fixture `install.sh` actually builds. |
+| REMEDY conflict | Split by route in `linter-rules.md` and in `extraction.md` §4 — Route 1 changes the colour, Routes 2 and 3 keep the measurement. |
+
+The regression gate raised two MEDIUM divergences introduced by this remediation
+itself, both fixed in the same commit: the `SKILL.md` exit-code table did not hold in
+`--pair` mode (`--pair` on a file whose intended pair fails exits 0), and the
+`extraction.md` §4 remedy row was left unqualified while `linter-rules.md` was fixed —
+and B.6 step 10 routes the reader straight into §4.
+
+What the blind tester found that nothing else had: the amber status bar measures
+2.94:1 and is invisible to **both** gates — the linter never sees it (the component
+declares no label) and the palette matrix never pairs it (both names classify as
+backgrounds). It surfaced only through `--pair`, which exists because of item (i).
+
+One honest caveat it recorded, worth carrying forward: Route 2's guidance quotes this
+fixture's numbers to the digit, so "worked first try" on this image is weaker evidence
+of generality than it looks. The `--min-share 0.1` reasoning stands on its own; the
+threshold has not been blind-tested against a second capture.

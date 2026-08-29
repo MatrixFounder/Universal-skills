@@ -33,7 +33,7 @@ severity the rule emits; only `error` affects the exit code (§3).
 | `broken-ref` | error | Define the token the reference names, or repoint `{path.to.token}` at a path that exists. | §5 |
 | `broken-ref` | warning | Rename the component key to one of the eight valid sub-tokens, or move the idea into the prose body. | §6 |
 | `missing-primary` | warning | Add a `primary` key under `colors`, or rename the accent token to `primary`. | §7 |
-| `contrast-ratio` | warning | Change one of the two colors until the pair reaches 4.5:1. | §8 |
+| `contrast-ratio` | warning | Route 1: change one of the two colors until the pair reaches 4.5:1. Routes 2 and 3: keep the measured hex, leave the warning standing, explain it. | §8 |
 | `orphaned-tokens` | warning | Reference the token from a component, or rename it into the MD3 family vocabulary. | §9 |
 | `token-summary` | info | No action. Read the counts back and confirm they match what you wrote. | §10 |
 | `missing-sections` | info | Define `spacing` / `rounded`, or declare the name under `omitted`. | §11 |
@@ -325,10 +325,26 @@ not):
 }
 ```
 
-**REMEDY.** Change one of the two colors until the pair clears 4.5:1. The
-message gives you the measured ratio, so you know how far you are. Darken the
-text or lighten the background — do not split the difference, which usually
-lands on a muddy mid-tone that fails against everything else in the file.
+**REMEDY — check the route before you edit a hex.** There are two remedies and
+the tool prints only one of them. `scripts/lint` prints `Change one of the two
+colors until the pair reaches 4.5:1 (aim for 7:1 on body text); the message
+quotes the measured ratio.` That sentence is the wrapper's own text, not
+upstream's (§22.3 — the upstream CLI prints findings and no remedy at all), and
+it is correct for **Route 1 only**.
+
+| Route | What to do with the failing pair |
+| :--- | :--- |
+| **Route 1 — an authored system.** The two colors were *chosen*, from a brief or a template. | **Change one of them** until the pair clears 4.5:1, then re-lint. The message gives you the measured ratio, so you know how far you are. Darken the text or lighten the background — do not split the difference, which usually lands on a muddy mid-tone that fails against everything else in the file. |
+| **Routes 2 and 3 — the file documents an existing product.** The two colors were *measured* from a screenshot or *harvested* from a codebase. | **Keep both hexes unchanged.** Leave the warning standing and explain it: name the pair and its measured ratio in the hand-back, and add a `**Don't**` entry under `## Do's and Don'ts` naming the two tokens. `extraction.md` B.6 step 7 is the governing text. |
+
+The asymmetry is not stylistic. On Route 1 nothing is being recorded, so a
+failing pair is a design defect and editing it is the fix. On Routes 2 and 3 the
+pair fails *in the product*: editing the hex clears the warning without fixing
+anything, converts a measurement into an invention, and hides a real
+accessibility defect from the only people who could correct it. A Route 2 or
+Route 3 file that reports zero `contrast-ratio` warnings because a hex was
+edited is worse than one that carries the warning with a reason — on those two
+routes the finding is the deliverable, not the obstacle.
 
 **Honest limits — this rule checks far less than it appears to.**
 
@@ -1640,6 +1656,9 @@ emits declared-omission, redundant-omission and unknown-omission instead.
 A finding with no rule id at all comes from the frontmatter parser, before
 any rule runs (an unparseable or absent YAML block).
 ```
+
+The `contrast-ratio` line in that listing is the **Route 1** remedy and the
+listing does not say so; on Routes 2 and 3 keep the measured hex (§8).
 
 That closing paragraph is the wrapper's own text and it covers only half the
 case. §19.2 is the other half: the model builder also emits rule-less

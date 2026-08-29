@@ -22,9 +22,19 @@
 #
 # Resolved token values are obtained by shelling out to the upstream CLI
 # (`export --format json-tailwind`), which resolves `{colors.x}` references and
-# converts every CSS color notation to hex. No YAML is parsed here.
+# converts every CSS color notation to hex. No colour value is parsed here.
+#
+# One thing the export cannot supply is components: no export format carries
+# them. A component that declares a backgroundColor and no textColor is
+# therefore invisible to every instrument in this skill — the upstream
+# `contrast-ratio` rule needs both colours to fire, and this script checks the
+# palette. So the `components:` block of the file's own frontmatter is read
+# directly, by a shallow two-level key scan (`read_components`), for the sole
+# purpose of NAMING those components in the report. No ratio is invented for
+# them and they never decide the exit code.
 
 import argparse
+import difflib
 import json
 import os
 import re
@@ -488,22 +498,31 @@ def render_pair_rows(pairs, out):
 
 
 def decorative_footnote(gate_ui, strict, out):
-    """Printed wherever a decorative pair appears. States the exemption and its
-    limit: decoration is exempt, structure is not."""
+    """Printed wherever a decorative pair appears. States the exemption, whose
+    claim it is, and its limit: decoration is exempt, structure is not."""
     if strict:
-        out.append("  [decor] gated at %.2f:1 by --strict-decorative; the "
-                   "default exempts these rows." % gate_ui)
+        out.append("  [decor] gated at %.2f:1 by --strict-decorative. By "
+                   "default these rows are exempted on" % gate_ui)
+        out.append("          the strength of the token's NAME alone; this "
+                   "run does not take that exemption.")
         return
     out.append("  [decor] not gated: WCAG 2.x SC 1.4.11 requires %.1f:1 only "
                "for UI components, states" % T_UI)
     out.append("          and graphical objects required to understand the "
                "content, and exempts purely")
-    out.append("          decorative elements. A divider that is the ONLY "
-               "thing separating two regions")
-    out.append("          carries structure and is not decorative — promote "
-               "it to `outline`, which is")
-    out.append("          gated. --strict-decorative gates these rows at "
-               "%.2f:1." % gate_ui)
+    out.append("          decorative elements.")
+    out.append("          THE EXEMPTION IS TRIGGERED BY THE NAME, AND THE "
+               "NAME IS A CLAIM YOU ARE MAKING.")
+    out.append("          Ending a non-text token in `%s` asserts that its "
+               "role is decorative. This" % DECORATIVE_UI_SUFFIX)
+    out.append("          script cannot see the interface and does not verify "
+               "the assertion; you are")
+    out.append("          the only one who can. The test: a divider that is "
+               "the ONLY thing separating")
+    out.append("          two regions carries structure, is not decorative, "
+               "and must be renamed to")
+    out.append("          `outline` — which is gated. --strict-decorative "
+               "gates these rows at %.2f:1." % gate_ui)
 
 
 def build_pair(fg_name, bg_name, colors, role, intended, why, gate_text,
@@ -563,6 +582,359 @@ def hexof(rgba):
 
 
 # ---------------------------------------------------------------------------
+# components — the fills nothing can check
+# ---------------------------------------------------------------------------
+
+KEY_RE = re.compile(
+    r"^(\s*)(\"[^\"]*\"|'[^']*'|[A-Za-z0-9_][A-Za-z0-9_.\-]*)\s*:\s*(.*)$")
+COLOR_REF_RE = re.compile(r"^\{colors\.([^}]+)\}$")
+
+
+def read_components(path):
+    """Shallow scan of the `components:` block in the file's own frontmatter.
+
+    Returns (components, status). `components` maps a component name to a dict
+    of the sub-token names it declares -> their literal text. `status` is:
+      "read"           the block was found and scanned
+      "absent"         the frontmatter declares no components block
+      "no-frontmatter" the file opens with no `---` frontmatter
+      "unreadable"     a components block exists in a shape this scan does not
+                       read (flow mapping, tab indentation, unreadable file)
+
+    This is NOT a YAML parser and does not become one. It reads key names at
+    two indentation levels; the text after a colon is kept verbatim and is
+    interpreted only by `resolve_fill`. Colour VALUES still come from the
+    export CLI. The scan exists because no export format carries components,
+    so this is the only way to name a component that declares a fill and no
+    label colour. A status other than "read" is reported as such: an
+    unreadable block produces no claim about the file.
+    """
+    try:
+        with open(path, "r", encoding="utf-8", errors="replace") as fh:
+            text = fh.read()
+    except OSError:
+        return {}, "unreadable"
+
+    lines = text.splitlines()
+    start = None
+    for i, line in enumerate(lines):
+        if not line.strip():
+            continue
+        if line.strip().lstrip("\ufeff").rstrip() == "---":
+            start = i
+        break
+    if start is None:
+        return {}, "no-frontmatter"
+    end = None
+    for j in range(start + 1, len(lines)):
+        if lines[j].rstrip() in ("---", "..."):
+            end = j
+            break
+    if end is None:
+        return {}, "no-frontmatter"
+    body = lines[start + 1:end]
+
+    idx, trailing = None, ""
+    for i, line in enumerate(body):
+        m = re.match(r"^components\s*:\s*(.*)$", line)
+        if m:
+            idx, trailing = i, m.group(1).strip()
+            break
+    if idx is None:
+        return {}, "absent"
+    if trailing and not trailing.startswith("#"):
+        return {}, "unreadable"
+
+    comps = {}
+    sub_indent = {}
+    current, child_indent = None, None
+    for line in body[idx + 1:]:
+        if not line.strip() or line.lstrip().startswith("#"):
+            continue
+        if line.startswith("\t"):
+            return comps, "unreadable"
+        indent = len(line) - len(line.lstrip(" "))
+        if indent == 0:
+            break
+        m = KEY_RE.match(line)
+        if not m:
+            continue
+        key, value = unquote(m.group(2)), m.group(3).strip()
+        if child_indent is None:
+            child_indent = indent
+        if indent == child_indent:
+            if value and not value.startswith("#"):
+                return comps, "unreadable"
+            current = key
+            comps.setdefault(current, {})
+        elif indent > child_indent and current is not None:
+            if current not in sub_indent:
+                sub_indent[current] = indent
+            if indent == sub_indent[current]:
+                comps[current][key] = value
+    return comps, "read"
+
+
+def unquote(raw):
+    """One layer of YAML quoting off a scalar, for display and for matching."""
+    value = (raw or "").strip()
+    if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
+        value = value[1:-1].strip()
+    return value
+
+
+def resolve_fill(raw, colors):
+    """A component's backgroundColor text -> (token_name_or_None, hex_or_None).
+
+    Handles the two forms the spec defines: a `{colors.x}` reference, and a
+    literal colour. A literal in any notation other than hex is left
+    unresolved rather than guessed at.
+    """
+    value = unquote(raw)
+    m = COLOR_REF_RE.match(value)
+    if m:
+        token = m.group(1)
+        rgba = colors.get(token)
+        return token, (hexof(rgba) if rgba is not None else None)
+    rgba = parse_hex(value)
+    if rgba is not None:
+        return None, hexof(rgba)
+    return None, None
+
+
+def unchecked_fills(components, colors):
+    """Components declaring a backgroundColor and no textColor.
+
+    Each entry names the component, the fill it declares, and — when the name
+    is an extension of another declared component that DOES declare a
+    textColor — that component. The prefix relation is reported as an
+    observation about the NAMES: the format spec describes variants as
+    "a different but related key" and defines no inheritance, so this script
+    states the relation and draws no conclusion from it.
+    """
+    out = []
+    names = sorted(components)
+    for name in names:
+        keys = components[name]
+        if "backgroundColor" not in keys or "textColor" in keys:
+            continue
+        token, hexval = resolve_fill(keys.get("backgroundColor"), colors)
+        base = None
+        for other in names:
+            if other == name or not name.startswith(other + "-"):
+                continue
+            if "textColor" in components.get(other, {}):
+                if base is None or len(other) > len(base):
+                    base = other
+        out.append({
+            "component": name,
+            "background_declared": (keys.get("backgroundColor") or "").strip(),
+            "background_token": token,
+            "background_hex": hexval,
+            "text_color_declared": False,
+            "name_extends": base,
+            "why_it_matters":
+                "no contrast rule can fire on this component: the upstream "
+                "`contrast-ratio` rule needs both a backgroundColor and a "
+                "textColor, and this script checks the palette, not "
+                "components. The fill is measured by nothing.",
+        })
+    return out
+
+
+COMPONENT_STATUS_TEXT = {
+    "absent": "no components block in the frontmatter",
+    "no-frontmatter": "no `---` frontmatter to read components from",
+    "unreadable": "components block not in a shape this scan reads "
+                  "(flow mapping or tab indentation) — the check did not run",
+}
+
+
+def render_unchecked_fills(fills, out):
+    out.append("UNCHECKED FILLS — components that declare a backgroundColor "
+               "and no textColor")
+    for f in fills:
+        fill = unquote(f["background_declared"]) or "(none)"
+        if f["background_hex"] and f["background_hex"].lower() != fill.lower():
+            fill = "%s %s" % (fill, f["background_hex"])
+        out.append("  %-24s fill %s" % (f["component"], fill))
+        if f["name_extends"]:
+            out.append("      name extends `%s`, which declares a textColor; "
+                       "the format spec defines" % f["name_extends"])
+            out.append("      variants as related keys and no inheritance, so "
+                       "this is a fact about the names.")
+    out.append("  No contrast rule can fire on %s: the upstream "
+               "`contrast-ratio` rule needs BOTH" % ("these" if len(fills) > 1
+                                                     else "it"))
+    out.append("  a backgroundColor and a textColor, and this script checks "
+               "the palette, not")
+    out.append("  components. Whether that is correct cannot be read from the "
+               "file. A divider or a")
+    out.append("  bar carries no label and has nothing to check; a button or a "
+               "chip does, and its")
+    out.append("  fill — often the most saturated area of the product — is "
+               "then measured by nothing")
+    out.append("  at all, which reads exactly like a pass. Declare the "
+               "textColor and re-run, or")
+    out.append("  state in prose that the component renders no text. Not "
+               "gated — an absent")
+    out.append("  declaration is not a measured failure; see --help.")
+
+
+# ---------------------------------------------------------------------------
+# --pair: one explicitly named pair, whatever the names imply
+# ---------------------------------------------------------------------------
+
+PAIR_QUERY_HEADER = "  RATIO    AA    AA-LG  AAA   UI-3.0  GATE   PAIR"
+
+
+def parse_pair_args(specs, colors):
+    """['fg,bg', ...] -> (list of (fg, bg), error_message).
+
+    An unknown token name is rejected by name, with the closest palette token
+    named back. Nothing is guessed and no substitution is made.
+    """
+    pairs = []
+    known = sorted(colors)
+    for spec in specs:
+        parts = [s.strip() for s in str(spec).split(",")]
+        if len(parts) != 2 or not all(parts):
+            return None, ("--pair takes exactly two color token names "
+                          "separated by one comma, as --pair FG,BG; got %r"
+                          % spec)
+        for name in parts:
+            if name in colors:
+                continue
+            near = difflib.get_close_matches(name, known, n=1, cutoff=0.4)
+            if near:
+                hint = "closest color token in this file is `%s`" % near[0]
+            else:
+                hint = ("this file defines: %s"
+                        % ", ".join(known[:12])
+                        + (", ..." if len(known) > 12 else ""))
+            return None, ("--pair: `%s` is not a color token in this file; %s"
+                          % (name, hint))
+        pairs.append((parts[0], parts[1]))
+    return pairs, None
+
+
+def pair_query_rows(pairs, colors, gate_text):
+    """-> (rows, blocked) where a blocked row states why no ratio exists."""
+    rows, blocked = [], []
+    for fg_name, bg_name in pairs:
+        fg, bg = colors[fg_name], colors[bg_name]
+        if bg[3] < 1.0:
+            blocked.append("%s on %s: background alpha is %.2f — the true "
+                           "backdrop is unknown, so no ratio exists to report."
+                           % (fg_name, bg_name, bg[3]))
+            continue
+        if fg[3] <= 0.0:
+            blocked.append("%s on %s: the foreground is fully transparent, so "
+                           "no ratio exists to report." % (fg_name, bg_name))
+            continue
+        notes = []
+        fg_eff = fg
+        if fg[3] < 1.0:
+            fg_eff = composite(fg, bg)
+            notes.append("foreground alpha %.2f composited over %s"
+                         % (fg[3], bg_name))
+        ratio = r2(contrast_ratio(fg_eff, bg))
+        rows.append({
+            "foreground": fg_name,
+            "background": bg_name,
+            "foreground_hex": hexof(fg),
+            "background_hex": hexof(bg),
+            "ratio": ratio,
+            "pass": {"aa": ratio >= T_AA, "aa_large": ratio >= T_AA_LARGE,
+                     "aaa": ratio >= T_AAA, "ui": ratio >= T_UI},
+            "gate_threshold": gate_text,
+            "gate_pass": ratio >= gate_text,
+            "notes": notes,
+        })
+    return rows, blocked
+
+
+def pair_query(specs, colors, gate_text, gate_source, gate_label, path,
+               as_json):
+    """--pair mode: report the named pairs and nothing else.
+
+    Exit code: 0 when every queried pair meets the gate in force, 1 when one
+    does not, 2 when an argument names a token the file does not define or a
+    pair whose ratio does not exist. The gate in force is the TEXT gate
+    (--level / --min): a queried pair carries no role, so none is assumed.
+    """
+    pairs, err = parse_pair_args(specs, colors)
+    if err:
+        return fail(err, EXIT_INPUT)
+    rows, blocked = pair_query_rows(pairs, colors, gate_text)
+    below = [r for r in rows if not r["gate_pass"]]
+    if blocked:
+        code = EXIT_INPUT
+    elif below:
+        code = EXIT_FAIL
+    else:
+        code = EXIT_OK
+
+    if as_json:
+        print(json.dumps({
+            "tool": TOOL,
+            "tool_version": TOOL_VERSION,
+            "upstream": PKG,
+            "file": path,
+            "mode": "pair-query",
+            "gate": {"text": gate_text, "source": gate_source,
+                     "applies_to_query":
+                         "the text gate; --pair applies no role "
+                         "classification, so no non-text threshold is assumed"},
+            "thresholds": {"aa": T_AA, "aa_large": T_AA_LARGE,
+                           "aaa": T_AAA, "ui": T_UI},
+            "queried_pairs": rows,
+            "unanswerable_pairs": blocked,
+            "summary": {"queried": len(pairs), "reported": len(rows),
+                        "below_gate": len(below),
+                        "unanswerable": len(blocked)},
+            "exit_code": code,
+        }, indent=2))
+        return code
+
+    out = ["%s — %s" % (TOOL, path)]
+    out.append("pair query: %d pair(s) named on the command line; gate %.2f:1 "
+               "(%s %s)" % (len(pairs), gate_text, gate_source, gate_label))
+    out.append("")
+    if rows:
+        out.append(PAIR_QUERY_HEADER)
+        for r in rows:
+            out.append("  %-8s %-5s %-6s %-5s %-7s %-6s %s %s on %s %s" % (
+                "%.2f" % r["ratio"], mark(r["pass"]["aa"]),
+                mark(r["pass"]["aa_large"]), mark(r["pass"]["aaa"]),
+                mark(r["pass"]["ui"]), mark(r["gate_pass"]),
+                r["foreground"], r["foreground_hex"],
+                r["background"], r["background_hex"]))
+            for note in r["notes"]:
+                out.append("           note: %s" % note)
+        out.append("")
+    if blocked:
+        out.append("NOT ANSWERABLE")
+        for b in blocked:
+            out.append("  %s" % b)
+        out.append("")
+    out.append("  --pair reports exactly the pair named, whatever either "
+               "token's name implies about")
+    out.append("  its role; no classification and no MD3 pairing is applied. "
+               "The GATE column, and")
+    out.append("  the exit code, use the TEXT gate. For a non-text pair "
+               "(a border, a divider, an")
+    out.append("  icon) read the UI-3.0 column instead, or pass --min 3.0.")
+    out.append("  exit %d — %s" % (code, {
+        EXIT_OK: "every queried pair meets the gate",
+        EXIT_FAIL: "a queried pair is below the gate",
+        EXIT_INPUT: "a queried pair has no ratio to report",
+    }[code]))
+    print("\n".join(out))
+    return code
+
+
+# ---------------------------------------------------------------------------
 # self-test
 # ---------------------------------------------------------------------------
 
@@ -615,8 +987,11 @@ what it does
   Resolved token values come from the upstream CLI, invoked as
   `cd /tmp && npx --yes %(pkg)s export <FILE> --format json-tailwind`,
   which resolves {colors.x} references and converts every CSS colour notation
-  to lowercase hex. No YAML is parsed here. The first npx run may take ~30s
-  while npm fetches the package; later runs hit the npx cache.
+  to lowercase hex. No colour value is parsed here. The one thing read from the
+  file directly is the `components:` block of its frontmatter, because no
+  export format carries components — see "components with a fill and no label
+  colour". The first npx run may take ~30s while npm fetches the package;
+  later runs hit the npx cache.
 
 role classification — THIS IS A NAMING HEURISTIC, not a semantic analysis
   Precedence, first match wins:
@@ -651,11 +1026,16 @@ non-text roles: gated, and decorative
   reads `decor`, its GATED cell reads `no`, its verdict cells read n/a because
   no threshold governs it, and it cannot change the exit code. Every other
   non-text/UI token stays gated at %(ui_gate).1f:1.
+  The exemption is triggered by the token's NAME, and the name is a claim the
+  author of the file is making, not a finding of this script: it reads a
+  palette and cannot see the interface. Ending a non-text token in `-variant`
+  asserts that the token's role is decorative, and nothing here verifies that.
   The exemption is about decoration, not about a lower bar. If a divider is the
   only thing separating two regions of the interface, it carries structural
-  meaning, it is not decorative, and it must be promoted to `outline` — which
-  is gated. Pass --strict-decorative to gate decorative pairs at %(ui_gate).1f:1
-  as well.
+  meaning, it is not decorative, and it must be renamed to `outline` — which is
+  gated. The same hexes under the two names give different exit codes, and the
+  name is the only thing that differs. Pass --strict-decorative to gate
+  decorative pairs at %(ui_gate).1f:1 as well.
 
 intended pairs
   Reported first. They alone decide the exit code — with the decorative rows
@@ -669,9 +1049,51 @@ intended pairs
       functional non-text boundary, governed by %(ui_gate).1f:1, not by 4.5:1.
     * `outline-variant` is measured on the same backgrounds and reported as
       decorative and not gated — see "non-text roles" above.
-  Component-declared pairs are NOT read: the export format carries no
-  components. Those are already covered by the upstream `contrast-ratio` rule
-  — run `scripts/lint` for them. This script is the palette-level complement.
+  Component-declared pairs are NOT turned into rows here: the export format
+  carries no components, and a component that declares both colours is already
+  covered by the upstream `contrast-ratio` rule — run `scripts/lint` for those.
+  This script is the palette-level complement. A component that declares a fill
+  and NO textColor is covered by neither, and is named under UNCHECKED FILLS.
+
+querying one pair
+  --pair FG,BG reports exactly the pair named and nothing else. Both names must
+  be color tokens defined by the file; an unknown name is rejected by name,
+  with the closest defined token named back, and exit 2. The flag is
+  repeatable, and combines with --json.
+  It applies NO classification and NO MD3 pairing, which is the point: the
+  matrix reports pairs whose foreground the naming heuristic put on the
+  foreground side, so a pair a file declares in prose — `tertiary` on
+  `surface`, say — is otherwise reported by nothing, at any --matrix setting.
+  Every verdict column is printed for the queried pair: AA %(aa).1f, AA-large
+  %(aa_large).1f, AAA %(aaa).1f and the %(ui_gate).1f non-text threshold.
+  The GATE column and the exit code use the TEXT gate (--level, or --min). A
+  queried pair carries no role, so no non-text threshold is assumed for it: if
+  the pair is a border or a divider, read the UI-%(ui_gate).1f column, or pass
+  --min %(ui_gate).1f. A query exits 0 when every queried pair meets that gate,
+  1 when one does not, and 2 when a name is unknown or the pair has no ratio
+  (a translucent background has no known backdrop).
+
+components with a fill and no label colour
+  Reported under UNCHECKED FILLS, and counted in SUMMARY on every run.
+  A component that declares a backgroundColor and no textColor is checked by
+  NOTHING: the upstream `contrast-ratio` rule fires only when both are
+  declared, and this script checks the palette rather than components. The
+  silence is indistinguishable from a pass, and the token most often affected
+  is the product's most saturated fill.
+  No export format carries components, so the `components:` block of the file's
+  own frontmatter is read directly by a shallow two-level key scan. Only key
+  NAMES are read; colour values still come from the export. A block the scan
+  cannot read (flow mapping, tab indentation) is reported as unread rather than
+  reported as empty.
+  These rows never change the exit code and no ratio is invented for them. The
+  exit code of this tool asserts one thing — a measured ratio is below its gate
+  — and an undeclared textColor produces no ratio to measure; folding it in
+  would make exit 1 mean two different things and would fail on variant
+  components that legitimately restate only a fill. It is not folded into
+  --strict-decorative either: that flag declines one specific WCAG SC 1.4.11
+  judgement about decorative tokens, and overloading it would make its name a
+  lie. --json carries `components.unchecked_fills`; gate on that list if a
+  build should fail on it.
 
 typography
   `theme.extend.fontSize` is read so the AA-large 3.0 threshold is applied only
@@ -716,6 +1138,8 @@ exit codes
   1  at least one gated intended pair fails the gate (or --self-test mismatched)
   2  input file missing, unreadable, or not a regular file
   3  the export CLI failed, or the file defines no colors
+  With --pair the exit code is decided by the queried pairs alone: 0 all meet
+  the text gate, 1 one does not, 2 a name is unknown or the pair has no ratio.
 
 examples
   scripts/check-contrast examples/fixture-clean.md
@@ -724,9 +1148,13 @@ examples
   scripts/check-contrast DESIGN.md --matrix full
   scripts/check-contrast DESIGN.md --matrix summary --min 4.5
   scripts/check-contrast DESIGN.md --strict-decorative
+  scripts/check-contrast DESIGN.md --pair tertiary,surface
+  scripts/check-contrast DESIGN.md --pair outline-variant,surface --min 3.0
+  scripts/check-contrast DESIGN.md --pair on-primary,primary --json
   scripts/check-contrast --self-test
 """ % {"pkg": PKG, "pivot": PIVOT_LUMINANCE, "rem": REM_ROOT_PX,
-       "ui": ", ".join(sorted(UI_WORDS)), "ui_gate": T_UI}
+       "ui": ", ".join(sorted(UI_WORDS)), "ui_gate": T_UI,
+       "aa": T_AA, "aa_large": T_AA_LARGE, "aaa": T_AAA}
 
 
 def build_parser():
@@ -751,6 +1179,13 @@ def build_parser():
     p.add_argument("--min", dest="minimum", type=float, metavar="RATIO",
                    help="override the text gate with an explicit ratio; "
                         "supersedes --level. UI pairs stay at 3.0")
+    p.add_argument("--pair", action="append", metavar="FG,BG",
+                   help="query one explicit pair of color tokens by name and "
+                        "report nothing else: its ratio and every verdict "
+                        "column, whatever either token's name implies about "
+                        "its role. Repeatable. Combines with --json, --level "
+                        "and --min. See `querying one pair` in the epilog for "
+                        "the gate and the exit code")
     p.add_argument("--strict-decorative", action="store_true",
                    help="gate decorative non-text pairs at %.1f:1 as well. A "
                         "non-text/UI token whose name ends in `-variant` "
@@ -837,6 +1272,13 @@ def main(argv):
         T_AAA if args.level == "aaa" else T_AA)
     gate_ui = T_UI
 
+    if args.pair:
+        return pair_query(
+            args.pair, colors, gate_text,
+            "--min" if args.minimum is not None else "--level",
+            args.minimum if args.minimum is not None else args.level,
+            path, args.json)
+
     roles = {}
     fg_names, bg_names = [], []
     for name, rgba in colors.items():
@@ -880,6 +1322,10 @@ def main(argv):
                     continue
                 matrix_rows.append(row)
 
+    components, components_status = read_components(path)
+    fills = unchecked_fills(components, colors) if components_status == "read" \
+        else []
+
     typography = read_typography(extend)
     large_ok = [t["scale"] for t in typography if t["aa_large_applies"] is True]
     large_unknown = [t["scale"] for t in typography if t["aa_large_applies"] is None]
@@ -916,8 +1362,11 @@ def main(argv):
                 "(outline-variant) is MD3's decorative divider. WCAG 2.x "
                 "SC 1.4.11 exempts purely decorative elements, so the pair is "
                 "measured and reported but not gated and cannot change the "
-                "exit code. A divider that is the only separator between two "
-                "regions carries structure and must be promoted to `outline`. "
+                "exit code. The exemption is triggered by the token's NAME "
+                "and is an unverified role claim by the author of the file, "
+                "not a finding of this script: it cannot see the interface. A "
+                "divider that is the only separator between two regions "
+                "carries structure and must be promoted to `outline`. "
                 "--strict-decorative gates decorative pairs at the non-text "
                 "threshold too.",
             "matrix_plausible":
@@ -937,6 +1386,20 @@ def main(argv):
             "aa_large_applies_to": large_ok,
             "aa_large_undetermined": large_unknown,
         },
+        "components": {
+            "scan_status": components_status,
+            "scan_status_note": COMPONENT_STATUS_TEXT.get(
+                components_status,
+                "the `components:` block of the frontmatter was read"),
+            "declared": len(components),
+            "unchecked_fills": fills,
+            "unchecked_fills_note":
+                "a component that declares a backgroundColor and no textColor "
+                "is checked by nothing: the upstream `contrast-ratio` rule "
+                "needs both colours, and this script checks the palette. No "
+                "ratio is invented for it and it never changes the exit code "
+                "— gate on this list yourself if a build should fail on it.",
+        },
         "intended_pairs": intended_rows,
         "matrix": matrix_rows,
         "skipped_pairs": skipped,
@@ -954,6 +1417,8 @@ def main(argv):
             "matrix_failing": len(matrix_below),
             "matrix_plausible": sum(1 for r in matrix_rows if r["plausible"]),
             "matrix_plausible_failing": len(matrix_plausible_below),
+            "components_declared": len(components),
+            "components_unchecked_fills": len(fills),
         },
         "exit_code": code,
     }
@@ -1003,6 +1468,10 @@ def main(argv):
     for n in notes:
         out.append("  note: %s" % n)
     out.append("")
+
+    if fills:
+        render_unchecked_fills(fills, out)
+        out.append("")
 
     if not args.no_matrix:
         out.append("MATRIX — every other foreground x background pair "
@@ -1065,6 +1534,15 @@ def main(argv):
         out.append("")
 
     out.append("SUMMARY")
+    if components_status != "read":
+        out.append("  component fills: %s"
+                   % COMPONENT_STATUS_TEXT[components_status])
+    else:
+        out.append("  component fills: %d component(s) declared, %d with a "
+                   "backgroundColor and no" % (len(components), len(fills)))
+        out.append("                   textColor%s"
+                   % (" (listed above; checked by nothing, not gated)"
+                      if fills else " — every declared fill has a label colour"))
     out.append("  intended pairs: %d checked, %d gated, %d below the gate"
                % (len(intended_rows),
                   sum(1 for r in intended_rows if r["gated"]), len(failing)))

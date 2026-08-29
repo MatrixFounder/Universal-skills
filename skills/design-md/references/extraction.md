@@ -383,6 +383,93 @@ appear in it at all: it is `dE 4.62` from `#ffffff`, inside the default
 a region probe returns a colour absent from the global report, that is the
 merge, and `--merge-distance 3` separates them.
 
+**Counting geometry with a 1-px strip.** A region one pixel thick turns `SHARE`
+into a pixel count: `SHARE` times the strip's length is how many pixels of that
+colour lie along the strip. This is the only instrument in the skill that
+recovers a border width, a gutter, a padding or a bar height. B.0 still governs
+what may be done with the number afterwards.
+
+Pass `--min-share 0`. The floor is a share of the strip, so on a 1440-px strip
+the default `0.5` discards every feature under 7.2 px — which is every hairline
+in the capture. A strip through the table header band of the dashboard,
+`--region 0,264,1440,1`, reports four neutrals at the default floor and no
+border colour at all; with `--min-share 0` a fifth row appears, `#ded8ce` at
+`0.14%`, and `0.14% of 1440 = 2` px is the table container's own left and right
+1-px edges. Two pixels is a real border, and `0.14%` is below `0.5%`.
+
+A horizontal strip across the card row of the same 1440x900 dashboard, at
+`y=160`:
+
+```bash
+scripts/extract-palette /ABS/PATH/screenshot.png --region 0,160,1440,1 --min-share 0
+```
+
+```text
+  image      1440x900 px -> 1440x1 at x=0..1440, y=160..161 from --region 0,160,1440,1
+  sampled    1440 px on a stride-1 grid; 1440 counted, 0 below alpha 128
+
+  #   HEX          SHARE  BUCKETS        HUE     L*     C*  HINT (heuristic)
+  --------------------------------------------------------------------------
+  1   #ffffff     61.88%  2 of 6          0°  100.0    0.0  background candidate (largest area)
+  2   #1b2226     23.06%  2 of 6        202°   12.7    4.2  neutral ramp, dark end (text, or a dark surface)
+  3   #1e3332     14.51%  1 of 6        177°   19.5    8.9  neutral ramp, dark end (text, or a dark surface)
+  4   #ded8ce      0.56%  1 of 6         38°   86.5    5.7  neutral ramp, light end (surface, or text on dark)
+```
+
+`0.56% of 1440 = 8.06`, so eight pixels of `#ded8ce` lie on that row. The strip
+crosses four cards and a card has a left and a right edge: eight edges, eight
+pixels, so the border is 1 px and `#ded8ce` is a border colour rather than a
+third plane. Round the product to a whole pixel — the printed `SHARE` carries
+two decimals, which on a 1440-px strip is about 0.07 px of slack.
+
+Rotate the strip and the same arithmetic returns a height. One pixel wide,
+through the second card, clear of its dark value block:
+
+```bash
+scripts/extract-palette /ABS/PATH/screenshot.png --region 700,100,1,120 --min-share 0 --merge-distance 3
+```
+
+```text
+  1   #ffffff     90.83%  1 of 3          0°  100.0    0.0  background candidate (largest area)
+  2   #f7f4ef      7.50%  1 of 3         38°   96.3    2.8  neutral ramp, light end (surface, or text on dark)
+  3   #ded8ce      1.67%  1 of 3         38°   86.5    5.7  neutral ramp, light end (surface, or text on dark)
+```
+
+`90.83% of 120 = 109` px of card fill between `1.67% of 120 = 2` px of border,
+so the card is 111 px tall and 9 px of the 120-px window is ground.
+
+**Four limits, none optional.**
+
+1. **A strip returns a total, not a position.** Eight pixels of border is eight
+   1-px borders, four 2-px borders, or one 8-px block. Only counting the
+   elements the strip crosses — in the image, with the file reading tool —
+   turns the total into a width.
+2. **A strip that crosses two different things of one colour sums them.** Re-run
+   the same strip with `--merge-distance 3` and `#f7f4ef` measures
+   `12.99% of 1440 = 187` px. That is five separate windows of two different
+   kinds — a 31-px left margin, three 31-px inter-card gutters and a 63-px right
+   margin, `4 x 31 + 63 = 187` — and no arithmetic on the total separates them.
+   Shorten the strip to one window instead. `--region 519,160,31,1` returns
+   `#f7f4ef` at `100.00%`: that window is all ground, it is bounded by two of the
+   1-px card edges counted above, so the gutter is 31 px. `--region
+   1377,160,63,1` settles the right margin the same way.
+3. **`--merge-distance` applies here too.** At the default `6.0` the `y=160`
+   strip reports one `#ffffff` row of `61.88% of 1440 = 891` px — card fill and
+   page ground added together, because the two planes are `dE 4.62` apart.
+   Lower it before counting on any strip that crosses two near neutrals.
+4. **The result is still an absolute pixel measurement**, which B.0 puts in the
+   not-extractable column. A retina capture multiplies every count by a device
+   pixel ratio the image does not record, and antialiased edges bleed edge
+   pixels into intermediate clusters, so a count is a lower bound on a soft
+   edge. The capture used here has flat fills and crisp edges, which is why its
+   counts land on integers; a photographed or rescaled screen will not.
+   Report the count and the ratio caveat. B.6 step 5 governs what reaches
+   `spacing`.
+
+Read the `sampled` line before trusting a count: it must say `stride-1`. A 1-px
+strip is far under the 400000-sample bound so it always does, but a count taken
+on a coarser grid is scaled by the stride.
+
 ### B.3 Rule 3 — fonts are not guessed
 
 Do not write a font family name asserted from a screenshot. Instead:
@@ -456,6 +543,63 @@ Declaring `spacing` or `rounded` in `omitted` also suppresses the
 `missing-sections` info for that name, which is the correct outcome: the file
 states that the value is undecided rather than staying silent about it.
 
+**A component whose text was never rendered.** `omitted` is section-granular and
+nothing finer. The five names above are section names; a token path is rejected
+by the same rule that rejects `states`:
+
+```text
+    {
+      "severity": "warning",
+      "path": "omitted",
+      "message": "unknown section name 'rounded.xl' in omitted key",
+      "rule": "unknown-omission"
+    }
+```
+
+So one missing sub-token has no slot in the field built for absences. The case
+is routine: a capture that redacts its labels into blocks, renders a control
+below the size at which a glyph survives, or shows a control carrying no text at
+all yields a fill and no label colour.
+
+The consequence is not cosmetic. **A component that declares `backgroundColor`
+and no `textColor` is checked by nothing.** The upstream `contrast-ratio` rule
+fires only when a component declares both (`references/linter-rules.md` §8), and
+`scripts/check-contrast` measures the palette rather than components. Verified:
+a file whose `button-primary` declares `backgroundColor: "{colors.primary}"` and
+says nothing about its text lints `0 errors, 0 warnings, 1 info`, and that
+silence is indistinguishable from a pass on the most saturated area of the
+product.
+
+Handling, in order:
+
+1. **Do not invent the `textColor`.** A guessed label colour over a measured
+   fill is the fabrication B.1 refuses for a hex, with a contrast claim
+   attached to it.
+2. **Write the component with the sub-tokens the image does support** —
+   `backgroundColor`, `typography`, `rounded`, `padding`. Do not delete the
+   component instead: that hides the fill as well as the gap.
+3. **Run `scripts/check-contrast /ABS/PATH/DESIGN.md`.** Every such component is
+   listed by name, with its fill token and value, and counted in `SUMMARY`:
+
+   ```text
+   UNCHECKED FILLS — components that declare a backgroundColor and no textColor
+     button-primary           fill {colors.primary} #e25a3c
+   ```
+
+   The rows are advisory and never move the exit code; `--json` carries them as
+   `components.unchecked_fills`, which is the field to gate a build on.
+   `check-contrast --help` documents the section.
+4. **Name it in prose under `## Components`**: the component, the fill token,
+   and the sentence that no contrast rule can fire on it. Add a `**Don't**`
+   entry under `## Do's and Don'ts` naming the same component. Prose is the only
+   place this fact can be recorded, because neither `omitted` nor any lint rule
+   will carry it.
+5. **Carry it into the hand-back.** B.5 has the slot.
+
+`omitted: [components]` is not the alternative. It is correct only when no
+component is written at all; against a populated `components` map it emits
+`redundant-omission` (A.5).
+
 ### B.5 Rule 5 — hand the result back as a hypothesis
 
 Do not present the file as extracted. Present it as a hypothesis, with measured
@@ -491,6 +635,10 @@ LINT: <E> errors, <W> warnings, <I> infos.
 CONTRAST: <component>.<backgroundColor> on <textColor> measures <R>:1, below the
   4.5:1 gate. Both values are measured; I did not change either. Recorded under
   Do's and Don'ts.  <or, when nothing fails: every intended pair clears 4.5:1.>
+UNCHECKED: <component> declares a <backgroundColor> fill of <#hex> and no
+  textColor — the capture rendered no label on it, so no contrast rule can fire
+  on that fill. Listed by scripts/check-contrast under UNCHECKED FILLS.  <or,
+  when every component declaring a fill also declares a textColor: none.>
 ```
 
 **Rationale.** The failure mode of this procedure is not an inaccurate file; it
@@ -512,9 +660,34 @@ Open it before drafting your own and read it against the steps below.
 4. **Count, do not measure.** From the reliable column: the number of surface
    levels, the number of radius steps, the number of type sizes. These become
    the shape of the system.
-5. **Infer the rhythm.** Divide the visible gaps by their greatest common
-   divisor to get a candidate base unit, then state it as inferred. Do not
-   present it as measured.
+5. **Infer the rhythm, and emit only what you measured.** Recover the visible
+   gaps with the 1-px strip in B.2, divide them by their greatest common divisor
+   to get a candidate base unit, and state the unit as inferred, never as
+   measured.
+
+   **Do not complete the ladder.** A conventional 4/8/12/16/24/32 series answers
+   a different question from "which of these did this screen show". Emit the
+   measured values and nothing else: a rung nobody rendered is an invention with
+   the surface form of a measurement, and `SKILL.md` §Red Flags refuses the
+   identical move on the brief route. Where fewer than two distinct
+   gaps are recoverable, declare `spacing` in `omitted` and record component
+   padding as literal values instead — `examples/example-saas-dashboard.md`
+   takes that route and states why in its omission reason.
+
+   **Name each emitted step for the measurement it came from**, not for its rank
+   — `card-padding`, `card-gutter`, `row-gap`. The `xs`/`sm`/`md`/`lg` vocabulary
+   in `assets/template-*` belongs to procedure A, where the template supplies a
+   complete ladder and the ranks are real. Here they are not: `md` sitting
+   between an `sm` and an `lg` asserts a position in a scale, and B.0 puts
+   "whether a value is a token or a one-off" in the not-extractable column. A
+   role name carries the same number and claims only what the region probe
+   showed. Nothing constrains the choice mechanically — `orphaned-tokens`
+   inspects colour names only, and `export` carries spacing keys through
+   verbatim under either convention — so it is the author's to get right. Pick
+   one convention and use it for every step in the file. Name the base unit and
+   the origin of each step in body prose under `## Layout`, and say in the
+   hand-back that the ladder is partial.
+
 6. **Fonts.** Apply B.3. Write one placeholder family; list the candidates in
    the hand-back.
 7. **Components.** Write only the controls actually visible. If two controls are
@@ -527,7 +700,10 @@ Open it before drafting your own and read it against the steps below.
    the shortfall instead — name the pair and its ratio in the hand-back, and add
    a `**Don't**` entry under `## Do's and Don'ts` that names the two tokens. The
    lint run then carries a `contrast-ratio` warning that is explained rather than
-   silenced.
+   silenced. A component whose label colour the capture never rendered takes no
+   invented `textColor`: apply the handling in B.4 and run
+   `scripts/check-contrast`, so the component is named under `UNCHECKED FILLS`
+   instead of passing in silence.
 8. **`omitted`.** Apply B.4. Give every entry a reason that names the screenshot
    as the limit.
 9. **Body prose.** Write all eight sections in canonical order. Under
@@ -1165,7 +1341,7 @@ handing one back as finished is the failure this skill exists to prevent.
    | :--- | :--- | :--- |
    | `broken-ref` | error | The `{path}` resolves to nothing. Define the token or correct the path. |
    | `broken-ref` | warning | An unrecognised component sub-token. The closed set is `backgroundColor`, `textColor`, `typography`, `rounded`, `padding`, `size`, `height`, `width`. There is no sub-token for elevation or border color; move it to body prose. |
-   | `contrast-ratio` | warning | A component pair is below 4.5:1. Change one of the two colors. Do not silence it by deleting `textColor`. |
+   | `contrast-ratio` | warning | A component pair is below 4.5:1. **Route 1** (authoring a system): change one of the two colors. **Routes 2 and 3** (documenting an existing product): keep the measured hex, leave the warning standing and explain it — B.6 step 7. Never silence it by deleting `textColor`: that hides the pair from every check (B.4). |
    | `orphaned-tokens` | warning | A color is neither MD3-family-named nor referenced by a component. Rename it to the MD3 family, or reference it, or delete it. |
    | `missing-primary` | warning | `colors` has no `primary` key. Name the accent `primary`. |
    | `missing-typography` | warning | `colors` is populated and `typography` is empty. Define type or declare `typography` in `omitted`. |
