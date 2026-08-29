@@ -27,7 +27,7 @@
 # skills/ won't propagate without re-running this script).
 set -euo pipefail
 
-REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd -P)"
 SKILLS_DIR="$REPO_ROOT/skills"
 PLUGINS_DIR="$REPO_ROOT/plugins"
 CATALOG="$REPO_ROOT/.claude-plugin/marketplace.json"
@@ -38,8 +38,16 @@ AUTHOR_NAME="Sergey K."
 AUTHOR_EMAIL="kuptsov.sergey@gmail.com"
 VERSION="1.0.0"
 
+# `[ -d "$SKILLS_DIR" ]` alone is not enough: the most likely mis-resolved
+# root is ~/.claude, which HAS a skills/ dir (it is where the install
+# symlinks live). Require a marker only the repository has, so a bad root
+# fails loudly instead of generating a plugin tree in the wrong place.
 if [ ! -d "$SKILLS_DIR" ]; then
     echo "ERROR: $SKILLS_DIR not found" >&2
+    exit 1
+fi
+if [ ! -f "$REPO_ROOT/.claude-plugin/marketplace.json" ] && [ ! -d "$REPO_ROOT/.git" ]; then
+    echo "ERROR: $REPO_ROOT does not look like the repository checkout" >&2
     exit 1
 fi
 

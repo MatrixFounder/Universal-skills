@@ -10,13 +10,13 @@
 # Or:   from anywhere; the script cd's to its own directory first.
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-SKILL_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
-ROOT="$(cd "$SKILL_DIR/../../.." && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd -P)"
+SKILL_DIR="$(cd "$SCRIPT_DIR/.." && pwd -P)"
+ROOT="$(cd "$SKILL_DIR/../../.." && pwd -P)"
 SKILL=pdf
 PY="$SKILL_DIR/.venv/bin/python"
 TMP="$(mktemp -d -t pdf_e2e_XXXX)"
-trap 'rm -rf "$TMP"' EXIT
+trap 'rc=$?; rm -rf "$TMP"; [ "${FINISHED:-0}" = 1 ] || rc=1; exit $rc' EXIT
 
 cd "$SKILL_DIR"
 pass=0; fail=0
@@ -27,7 +27,18 @@ skip() { printf '  ⊘ %s\n'   "$1"; }
 
 # q-2 visual regression helper (soft-skips when golden/IM missing unless
 # STRICT_VISUAL=1; see tests/visual/_visual_helper.sh)
-source "$ROOT/tests/visual/_visual_helper.sh"
+VISUAL_HELPER="$ROOT/tests/visual/_visual_helper.sh"
+[ -r "$VISUAL_HELPER" ] || { echo "FATAL: visual helper not found at $VISUAL_HELPER" >&2; exit 1; }
+source "$VISUAL_HELPER"
+
+# Path-resolution self-test hook (tests/test_symlink_invocation.sh).
+# Must be an `if`, not `[ ] && { }`: under set -e a false test would abort.
+if [ -n "${E2E_PREAMBLE_ONLY:-}" ]; then
+    echo "E2E_SELFTEST_PATH ROOT=$ROOT"
+    echo "E2E_SELFTEST_PATH SKILL_DIR=$SKILL_DIR"
+    FINISHED=1
+    exit 0
+fi
 
 # --- md2pdf -----------------------------------------------------------------
 echo "md2pdf:"
@@ -418,6 +429,17 @@ set -e
     && echo "$err" | "$PY" -c "import sys, json; j=json.loads(sys.stdin.read()); assert j['type']=='SelfOverwriteRefused', j" 2>/dev/null \
     && ok "html2pdf: same-path I/O → exit 6 / SelfOverwriteRefused" \
     || nok "html2pdf same-path" "exit=$rc msg=$err"
+
+# cross-7 H1, symlink arm. $TMP/same_link.html was previously created and then
+# never used, so the "resolution catches symlinks too" claim above was untested.
+set +e
+err=$("$PY" html2pdf.py "$TMP/same_link.html" "$TMP/same.html" --json-errors 2>&1 >/dev/null)
+rc=$?
+set -e
+[ "$rc" -eq 6 ] \
+    && echo "$err" | "$PY" -c "import sys, json; j=json.loads(sys.stdin.read()); assert j['type']=='SelfOverwriteRefused', j" 2>/dev/null \
+    && ok "html2pdf: symlinked input resolving to output → exit 6" \
+    || nok "html2pdf same-path via symlink" "exit=$rc msg=$err"
 
 # --css pointing to a missing file → exit 1 / FileNotFound (not a raw
 # weasyprint traceback). Validates the explicit pre-flight check added
@@ -951,4 +973,5 @@ fi
 
 echo
 echo "$pass passed, $fail failed"
+FINISHED=1
 [ "$fail" -eq 0 ]

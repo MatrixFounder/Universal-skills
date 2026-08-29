@@ -12,7 +12,7 @@
 # Exit 0 iff every suite was green.
 set -u
 
-ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+ROOT="$(cd "$(dirname "$0")/.." && pwd -P)"
 cd "$ROOT"
 
 results=()
@@ -20,8 +20,11 @@ overall=0
 for skill in docx pptx xlsx pdf; do
     suite="skills/$skill/scripts/tests/test_e2e.sh"
     if [ ! -x "$suite" ]; then
-        printf '\n=== %s ===\n%s\n' "$skill" "skipped (no test_e2e.sh)"
-        results+=("$skill: SKIPPED")
+        # A runner that executed nothing must not exit 0 — that is the same
+        # false-green this file exists to prevent.
+        printf '\n=== %s ===\n%s\n' "$skill" "MISSING (no runnable test_e2e.sh at $suite)"
+        results+=("$skill: MISSING")
+        overall=1
         continue
     fi
     printf '\n=== %s ===\n' "$skill"

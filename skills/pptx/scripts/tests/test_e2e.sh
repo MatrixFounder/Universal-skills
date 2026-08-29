@@ -4,20 +4,31 @@
 # Run:  bash skills/pptx/scripts/tests/test_e2e.sh
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-SKILL_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
-ROOT="$(cd "$SKILL_DIR/../../.." && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd -P)"
+SKILL_DIR="$(cd "$SCRIPT_DIR/.." && pwd -P)"
+ROOT="$(cd "$SKILL_DIR/../../.." && pwd -P)"
 SKILL=pptx
 PY="$SKILL_DIR/.venv/bin/python"
 TMP="$(mktemp -d -t pptx_e2e_XXXX)"
-trap 'rm -rf "$TMP"' EXIT
+trap 'rc=$?; rm -rf "$TMP"; [ "${FINISHED:-0}" = 1 ] || rc=1; exit $rc' EXIT
 
 cd "$SKILL_DIR"
 pass=0; fail=0
 ok()  { printf '  ✓ %s\n'   "$1"; pass=$((pass+1)); }
 nok() { printf '  ✗ %s\n  → %s\n' "$1" "$2"; fail=$((fail+1)); }
 
-source "$ROOT/tests/visual/_visual_helper.sh"
+VISUAL_HELPER="$ROOT/tests/visual/_visual_helper.sh"
+[ -r "$VISUAL_HELPER" ] || { echo "FATAL: visual helper not found at $VISUAL_HELPER" >&2; exit 1; }
+source "$VISUAL_HELPER"
+
+# Path-resolution self-test hook (tests/test_symlink_invocation.sh).
+# Must be an `if`, not `[ ] && { }`: under set -e a false test would abort.
+if [ -n "${E2E_PREAMBLE_ONLY:-}" ]; then
+    echo "E2E_SELFTEST_PATH ROOT=$ROOT"
+    echo "E2E_SELFTEST_PATH SKILL_DIR=$SKILL_DIR"
+    FINISHED=1
+    exit 0
+fi
 
 # --- md2pptx ---------------------------------------------------------------
 echo "md2pptx:"
@@ -470,4 +481,5 @@ fi
 
 echo
 echo "$pass passed, $fail failed"
+FINISHED=1
 [ "$fail" -eq 0 ]

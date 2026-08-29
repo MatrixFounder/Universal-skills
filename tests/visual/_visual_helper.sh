@@ -2,7 +2,7 @@
 #
 # Usage from skills/<skill>/scripts/tests/test_e2e.sh:
 #
-#   ROOT="$(cd "$SKILL_DIR/../../.." && pwd)"        # repo root
+#   ROOT="$(cd "$SKILL_DIR/../../.." && pwd -P)"     # repo root (physical!)
 #   SKILL=docx                                       # or pptx/xlsx/pdf
 #   source "$ROOT/tests/visual/_visual_helper.sh"
 #   visual_check "$TMP/out.pdf" "fixture-base"       # PDF path → golden name
@@ -13,7 +13,10 @@
 #   missing UNLESS STRICT_VISUAL=1 (set by CI). That keeps `bash
 #   test_e2e.sh` green on a fresh local checkout while still failing
 #   loudly in CI on real visual drift.
-# - Caller must set ROOT, SKILL, PY, ok, nok before sourcing.
+# - Caller must set ROOT, SKILL, PY, ok, nok before sourcing. ROOT must be
+#   PHYSICALLY resolved (pwd -P): skills are installed as symlinks
+#   (~/.claude/skills/<skill> -> repo), and a logical pwd makes
+#   "$SKILL_DIR/../../.." escape the repository entirely.
 
 visual_check() {
     # NOTE: this function MUST always `return 0`. Per-skill test_e2e.sh
@@ -24,6 +27,10 @@ visual_check() {
     # `[ "$fail" -eq 0 ]` at the end of each suite decides the exit code.
     local pdf="$1" name="$2"
     local golden="$ROOT/tests/visual/goldens/$SKILL/$name.png"
+    local out rc _errexit
+    # Restore the caller's errexit rather than forcing it on: html and
+    # design-md deliberately run under `set -uo pipefail` with no -e.
+    case $- in *e*) _errexit=1 ;; *) _errexit=0 ;; esac
     if [ ! -s "$pdf" ]; then
         nok "visual: $name" "PDF input missing or empty: $pdf"
         return 0
@@ -32,7 +39,7 @@ visual_check() {
     out=$("$PY" "$ROOT/tests/visual/visual_compare.py" \
               --pdf "$pdf" --golden "$golden" --page 1 --dpi 80 2>&1)
     rc=$?
-    set -e
+    if [ "$_errexit" = 1 ]; then set -e; fi
     if [ "$rc" -eq 0 ]; then
         ok "visual: $name"
     else

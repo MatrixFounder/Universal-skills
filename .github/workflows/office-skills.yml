@@ -10,6 +10,11 @@ on:
       - "skills/pptx/**"
       - "skills/pdf/**"
       - "skills/html/**"
+      # design-md has no office code, but the `harness` job below covers
+      # its suite too, so a design-md-only PR must still trigger this
+      # workflow or that guard is unreachable for it.
+      - "skills/design-md/**"
+      - "scripts/sync-plugins.sh"
       - "tests/**"
       - ".github/workflows/office-skills.yml"
   workflow_dispatch:
@@ -125,6 +130,19 @@ jobs:
         # full battery and we just want the artifacts).
         if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.update_goldens == 'true') }}
         run: bash skills/${{ matrix.skill }}/scripts/tests/test_e2e.sh
+
+  harness:
+    # Guards the symlinked-invocation class of defect. The matrix job above
+    # always runs the suites from the repo root, where logical and physical
+    # pwd coincide — so it cannot catch a harness that breaks when the skill
+    # is reached through the ~/.claude/skills/<skill> symlink it is actually
+    # installed as. Pure bash: no venv, no system deps.
+    name: test harness
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v5
+      - name: symlinked-invocation guard
+        run: bash tests/test_symlink_invocation.sh
 
   property:
     name: property fuzz

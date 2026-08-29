@@ -20,11 +20,19 @@
 # than a red one.
 set -uo pipefail
 
-HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"   # scripts/
-SKILL="$(cd "$HERE/.." && pwd)"                            # skills/design-md/
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"   # scripts/
+SKILL="$(cd "$HERE/.." && pwd -P)"                            # skills/design-md/
 WORK="$(mktemp -d)"
-trap 'rm -rf "$WORK"' EXIT
+trap 'rc=$?; rm -rf "$WORK"; [ "${FINISHED:-0}" = 1 ] || rc=1; exit $rc' EXIT
 cd "$HERE"
+
+# Path-resolution self-test hook (tests/test_symlink_invocation.sh).
+if [ -n "${E2E_PREAMBLE_ONLY:-}" ]; then
+    echo "E2E_SELFTEST_PATH SKILL=$SKILL"
+    echo "E2E_SELFTEST_PATH HERE=$HERE"
+    FINISHED=1
+    exit 0
+fi
 
 fail=0
 checks=0
@@ -259,4 +267,5 @@ if [ "$fail" -eq 0 ]; then
 else
   echo "design-md test_e2e: FAIL ($checks assertions)"
 fi
+FINISHED=1
 exit $fail

@@ -6,9 +6,16 @@
 #   - _errors.py / _venv_bootstrap.py byte-identical to the docx master
 #   - the weasyprint/playwright carriers are NOT replicated (G-2 trap)
 set -uo pipefail
-HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"   # scripts/
-ROOT="$(cd "$HERE/../../.." && pwd)"                        # repo root
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"   # scripts/
+ROOT="$(cd "$HERE/../../.." && pwd -P)"                        # repo root
 cd "$HERE"
+
+# Path-resolution self-test hook (tests/test_symlink_invocation.sh).
+if [ -n "${E2E_PREAMBLE_ONLY:-}" ]; then
+    echo "E2E_SELFTEST_PATH ROOT=$ROOT"
+    echo "E2E_SELFTEST_PATH HERE=$HERE"
+    exit 0
+fi
 PY="./.venv/bin/python"; [ -x "$PY" ] || PY=python3
 # Hermetic: never auto-load a developer's skill .env during tests.
 export HTML_NO_DOTENV=1
