@@ -203,6 +203,17 @@ Note the last row: table ruling clusters into most of a sheet, so without the
 character cap the signal would fire on 24 of 29 pages of a perfectly healthy
 document.
 
+**`vector_coverage` measures spanned area, not ink, and ignores background
+washes.** Path objects are painted onto a ~4 pt grid and each connected cluster
+contributes its bounding box — summing the boxes directly would report ~0 for a
+table, whose ruling lines each have near-zero area. One consequence is worth
+knowing: a page-sized `fill=True, stroke=False` rectangle — the background wash
+several producers (Google Docs Renderer among them) paint behind every sheet —
+is **excluded**, because counting it reads a page of plain prose as 100 %
+artwork. Shading and ruling that merely *span* a page still read high, so on
+such documents the char-count conjunct is what keeps the signal quiet, exactly
+as the table above shows.
+
 `figure_dominant` and `scanned` are **disjoint** — a scanned page is never also
 `figure_dominant`. They name the same loss with different repairs: OCR for a
 scan, image extraction or a visual read for a figure. Neither `doc_scanned` nor
@@ -285,10 +296,16 @@ code is unchanged (stderr warning only) for the same reason as §3.4.
 
 Two consequences worth keeping straight:
 
-- **OCR does not fix this.** The glyphs were never drawn — Poppler renders those
-  places blank. OCR would only recover text that lives inside raster
-  illustrations. The repair is re-exporting the source with embedded fonts;
-  if you cannot, say so rather than shipping the skeleton.
+- **OCR does not fix the text layer** — the glyphs were never drawn, so Poppler
+  renders those places blank and there is nothing to recognise. The repair is
+  re-exporting the source with embedded fonts; if you cannot, say so rather
+  than shipping the skeleton.
+- **But check the images before you give up.** Text drawn *inside* an embedded
+  image is untouched by this failure — it renders normally. On the document
+  that prompted this signal, every diagram and screenshot kept its Russian
+  while the prose around them was gone, and rendering those pages recovered
+  most of the document's actual content. Extract the images (or render the
+  pages and read them) before reporting the document as unconvertible.
 - **The flag is a capability, not a proof.** It says the file cannot represent
   non-Latin text, not that some was lost — what was lost is unknowable from the
   file, which is precisely why the signal has to exist. A genuinely Latin-only

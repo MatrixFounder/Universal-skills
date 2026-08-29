@@ -114,6 +114,7 @@ class TestStubUnits(unittest.TestCase):
         self.assertEqual(pdf_extract._EXIT_SCANNED, 10)
         self.assertEqual(pdf_extract._FIGURE_COVERAGE_THRESHOLD, 0.25)
         self.assertEqual(pdf_extract._FIGURE_CHAR_THRESHOLD, 200)
+        self.assertEqual(pdf_extract._VECTOR_BACKDROP_RATIO, 0.9)
         self.assertEqual(pdf_extract._DEFAULT_TABLE_STRATEGY, "lines")
         self.assertEqual(
             pdf_extract._TABLE_STRATEGIES, ("lines", "lines_strict"))
@@ -881,8 +882,11 @@ class TestLossyTextLayer(unittest.TestCase):
         self.assertIs(dump["doc_scanned"], False)
         self.assertIn("warning:", r.stderr)
         self.assertIn("/ToUnicode", r.stderr)
-        self.assertIn("OCR does not help", r.stderr)
+        self.assertIn("OCR cannot bring it back", r.stderr)
         self.assertIn("Re-export", r.stderr)
+        # The warning must not overstate the damage: text inside embedded
+        # images survives and is recoverable by rendering the page.
+        self.assertIn("inside embedded images", r.stderr)
 
     def test_cli_silent_on_embedded_fonts(self):
         """TC-E2E-20 — the control emits no lossy warning at all."""
@@ -890,6 +894,17 @@ class TestLossyTextLayer(unittest.TestCase):
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertIs(json.loads(r.stdout)["text_layer_lossy"], False)
         self.assertNotIn("/ToUnicode", r.stderr)
+
+    def test_lossy_warning_scopes_the_damage_to_the_text_layer(self):
+        """TC-LTL-15 — dogfooding correction: the warning used to read "OCR does
+        not help" flat, which reads as "nothing here is recoverable". The prose
+        is gone, but text drawn inside embedded images is untouched — on the
+        document that prompted this signal, the diagrams carried most of the
+        content. The warning must say so rather than send the caller away."""
+        r = _run_cli([str(self.unmapped)])
+        self.assertIn("glyphs were never drawn", r.stderr)
+        self.assertIn("inside embedded images", r.stderr)
+        self.assertIn("render the pages", r.stderr)
 
 
 class TestLineTolerance(unittest.TestCase):
@@ -1204,6 +1219,42 @@ class TestFigurePages(unittest.TestCase):
         coverage = pdf_extract._vector_coverage(lines, 612, 792)
         self.assertAlmostEqual(coverage, (300 * 300) / (612 * 792), delta=0.02)
 
+    def test_page_backdrop_is_not_artwork(self):
+        """TC-FIG-13 — the regression this fix exists for: several producers
+        paint a page-sized unstroked fill behind every sheet. Counting it read
+        a page of plain prose as 100 % artwork (measured: 29 of 29 pages of a
+        real Google Docs export), which left the char cap carrying the whole
+        signal. The wash must measure as nothing."""
+        page = self.pages[5]
+        self.assertEqual(page["vector_coverage"], 0.0)
+        self.assertGreater(page["char_count"],
+                           pdf_extract._FIGURE_CHAR_THRESHOLD)
+        self.assertIs(page["figure_dominant"], False)
+
+    def test_backdrop_does_not_hide_a_real_figure(self):
+        """TC-FIG-14 — the other direction: dropping the wash must not cost us
+        the artwork on top of it. Page 7 is page 3's figure over a backdrop and
+        must measure identically."""
+        with_backdrop = self.pages[6]
+        without = self.pages[2]
+        self.assertEqual(with_backdrop["vector_coverage"],
+                         without["vector_coverage"])
+        self.assertIs(with_backdrop["figure_dominant"], True)
+        self.assertIn(7, self.dump["figure_pages"])
+
+    def test_is_backdrop_truth_table(self):
+        """TC-FIG-15 — only a page-sized *unstroked fill* is a backdrop. A
+        stroked page-sized rect is a frame someone drew, a small fill is a
+        highlight, and an unfilled box is an outline — none are washes."""
+        area = 612 * 792
+        full = {"x0": 0, "top": 0, "x1": 612, "bottom": 792}
+        half = {"x0": 0, "top": 0, "x1": 612, "bottom": 396}
+        ib = pdf_extract._is_backdrop
+        self.assertIs(ib({**full, "stroke": False, "fill": True}, area), True)
+        self.assertIs(ib({**full, "stroke": True, "fill": True}, area), False)
+        self.assertIs(ib({**full, "stroke": False, "fill": False}, area), False)
+        self.assertIs(ib({**half, "stroke": False, "fill": True}, area), False)
+
     def test_cli_warns_without_changing_exit_code(self):
         """TC-E2E-24 — the loud signal: exit stays 0 (exit 10 means the whole
         document is a scan) and stderr names the affected pages and the
@@ -1214,7 +1265,9 @@ class TestFigurePages(unittest.TestCase):
         self.assertEqual(dump["figure_pages"], fixtures.FIGURE_DOMINANT_PAGES)
         self.assertIn("warning:", r.stderr)
         self.assertIn("mostly figure", r.stderr)
-        self.assertIn("2, 3", r.stderr)
+        self.assertIn(
+            ", ".join(str(n) for n in fixtures.FIGURE_DOMINANT_PAGES),
+            r.stderr)
 
     def test_cli_silent_on_a_text_document(self):
         """TC-E2E-25 — no figure warning on a document that has none."""

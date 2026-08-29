@@ -91,6 +91,9 @@ Honest scope (v1):
   - ``vector_coverage`` is a quantised approximation: path objects are painted
     onto a ~4 pt grid and each connected cluster contributes its bounding box,
     so it measures "how much of the sheet the artwork spans", not exact ink.
+    Page-sized background fills are excluded (see ``_is_backdrop``), but ruling
+    and shading that merely *span* a page still read high — the char-count
+    conjunct, not this number, is what keeps such pages unflagged.
   - Font-metadata collection is best-effort. A font dictionary that cannot be
     parsed is skipped, which can only *suppress* ``text_layer_lossy``, never
     raise a false alarm.
@@ -180,6 +183,14 @@ _FIGURE_CHAR_THRESHOLD = 200
 # the scan stays bounded on an oversized page.
 _VECTOR_CELL_PT = 4.0
 _VECTOR_GRID_MAX_CELLS = 200
+# A page-sized *unstroked fill* is a background wash, not artwork. Several
+# producers (Google Docs Renderer among them) paint one on every page; counting
+# it saturates `vector_coverage` to 1.0 on pages that hold nothing but prose,
+# which is the same mistake the `lines` table strategy makes when it builds
+# table edges out of background shading. Anything at or above this fraction of
+# the sheet that is filled and NOT stroked is excluded from the measurement.
+# The ONLY site that reads this constant is `_is_backdrop`.
+_VECTOR_BACKDROP_RATIO = 0.9
 
 # --- lossy-text-layer detection ---------------------------------------------
 # Single-byte encodings whose code space is Latin: a font using one cannot
@@ -488,6 +499,16 @@ def _image_coverage(images, width: float, height: float) -> float:
     return min(1.0, total / page_area)
 
 
+def _is_backdrop(obj: dict, page_area: float) -> bool:
+    """True for a page-sized unstroked fill — a background wash rather than
+    artwork. Excluding it is what keeps `vector_coverage` from reading 1.0 on a
+    page of plain prose. The ONLY site that reads `_VECTOR_BACKDROP_RATIO`."""
+    if obj.get("stroke") or not obj.get("fill"):
+        return False
+    x0, top, x1, bottom = _obj_box(obj)
+    return abs(x1 - x0) * abs(bottom - top) >= _VECTOR_BACKDROP_RATIO * page_area
+
+
 def _vector_coverage(objects, width: float, height: float) -> float:
     """Fraction of the sheet spanned by clustered vector artwork.
 
@@ -498,9 +519,16 @@ def _vector_coverage(objects, width: float, height: float) -> float:
     cluster contributes its bounding box. That answers the question the figure
     signal actually asks: how much of the sheet does the artwork span. It is an
     approximation quantised to the cell size, and clusters whose boxes overlap
-    double-count, hence the clamp."""
+    double-count, hence the clamp.
+
+    Page-sized background fills are dropped first (`_is_backdrop`) — one such
+    rect would otherwise mark every cell and report a prose page as wholly
+    artwork."""
     page_area = width * height
     if page_area <= 0 or not objects:
+        return 0.0
+    objects = [obj for obj in objects if not _is_backdrop(obj, page_area)]
+    if not objects:
         return 0.0
     cell = max(_VECTOR_CELL_PT,
                width / _VECTOR_GRID_MAX_CELLS, height / _VECTOR_GRID_MAX_CELLS)
@@ -867,9 +895,11 @@ def main(argv: list[str] | None = None) -> int:
             "and every encoding is single-byte Latin — the file cannot "
             "represent a non-Latin alphabet. If the source had non-Latin "
             "text, the producer dropped it while writing the file: it is "
-            "absent from the PDF and unrecoverable (OCR does not help — the "
-            "glyphs were never drawn). Re-export the source with embedded "
-            "fonts. See the dump's `fonts` list.\n"
+            "absent from the PDF and unrecoverable — OCR cannot bring it back, "
+            "because the glyphs were never drawn. Re-export the source with "
+            "embedded fonts. (Text inside embedded images is unaffected and "
+            "still readable — render the pages to recover it.) See the dump's "
+            "`fonts` list.\n"
         )
     return _EXIT_OK
 

@@ -131,7 +131,12 @@ SHADED_NOTE_LINE = "Shaded note, not a table row"
 FIGURE_HEADER = "Confidential - Example Corp LLC"
 FIGURE_CAPTION = "Figure 2. Component interaction overview for the platform."
 # Page indices (1-based) that must come back `figure_dominant`.
-FIGURE_DOMINANT_PAGES = [2, 3]
+FIGURE_DOMINANT_PAGES = [2, 3, 7]
+# Pages 6 and 7 carry a page-sized unstroked fill behind their content — the
+# background wash Google Docs Renderer (and others) paint on every page. Page 6
+# is prose behind it (must stay unflagged), page 7 is a real figure behind it
+# (must still be flagged).
+FIGURE_BACKDROP_PAGES = [6, 7]
 
 
 def build_digital_pdf(path: Path) -> None:
@@ -350,6 +355,15 @@ def build_shaded_pdf(path: Path) -> None:
     c.save()
 
 
+def _draw_page_backdrop(c) -> None:
+    """Paint the page-sized `stroke=0, fill=1` rectangle that several
+    producers (Google Docs Renderer among them) put behind every page. It is a
+    background wash, not artwork — `vector_coverage` must ignore it."""
+    c.setFillColor(colors.Color(0.99, 0.99, 0.99))
+    c.rect(0, 0, letter[0], letter[1], stroke=0, fill=1)
+    c.setFillColor(colors.black)
+
+
 def _diagram_png(path: Path) -> None:
     """A small raster diagram — boxes and connectors, no text — for the figure
     fixture's raster pages."""
@@ -378,7 +392,13 @@ def build_figure_pdf(path: Path) -> None:
        false positive the coverage threshold must reject;
     5. a heavily ruled table page (ruling clusters into ~58 % of the sheet,
        ~1.1k chars) — the false positive only the char-count conjunct rejects,
-       which is why that conjunct is load-bearing rather than cosmetic."""
+       which is why that conjunct is load-bearing rather than cosmetic;
+    6. prose behind a page-sized unstroked fill — the background wash many
+       producers paint on every sheet. Counting it as artwork reads a plain
+       text page as 100 % artwork, so this page must measure ~0 and stay
+       unflagged;
+    7. the same background wash with a real vector figure on top and little
+       text — excluding the wash must not cost us the figure."""
     path.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp:
         png_path = tmp.name
@@ -446,6 +466,36 @@ def build_figure_pdf(path: Path) -> None:
             for col in range(n_cols):
                 c.drawString(x0 + col * cell_w + 3, y0 + r * row_h + 9,
                              f"cell{r}-{col}")
+        c.showPage()
+
+        # 6 — prose sitting on a page-sized unstroked background fill
+        _draw_page_backdrop(c)
+        c.setFont("Helvetica", 11)
+        y = 720
+        for i in range(30):
+            c.drawString(72, y, f"Line {i} of prose on a page that carries a "
+                                f"full-sheet background wash.")
+            y -= 20
+        c.showPage()
+
+        # 7 — the same wash, but a real vector figure on top of it
+        _draw_page_backdrop(c)
+        c.setFont("Helvetica", 10)
+        c.drawString(72, 760, FIGURE_HEADER)
+        c.drawString(72, 250, FIGURE_CAPTION)
+        c.setStrokeColor(colors.black)
+        c.setLineWidth(2)
+        for j in range(rows):
+            for i in range(cols):
+                x = 80 + i * (box_w + gap_x)
+                y = 300 + j * (box_h + gap_y)
+                c.rect(x, y, box_w, box_h, stroke=1, fill=0)
+                if i < cols - 1:
+                    c.line(x + box_w, y + box_h / 2,
+                           x + box_w + gap_x, y + box_h / 2)
+                if j < rows - 1:
+                    c.line(x + box_w / 2, y + box_h,
+                           x + box_w / 2, y + box_h + gap_y)
         c.showPage()
         c.save()
     finally:

@@ -638,10 +638,15 @@ set -e
     && "$PY" -c "
 import json, sys
 d = json.load(open('$TMP/figure.json'))
-assert d['figure_pages'] == [2, 3], d['figure_pages']
+assert d['figure_pages'] == [2, 3, 7], d['figure_pages']
 assert d['doc_scanned'] is False and d['scanned_pages'] == [], d
 assert d['pages'][2]['image_coverage'] == 0.0, 'p3 must be pure vector'
 assert d['pages'][2]['vector_coverage'] >= 0.25, d['pages'][2]
+# p6 = prose behind a page-sized background wash: the wash is not artwork
+assert d['pages'][5]['vector_coverage'] == 0.0, d['pages'][5]
+assert d['pages'][5]['figure_dominant'] is False, d['pages'][5]
+# p7 = the same wash under a real figure: dropping it must not cost the figure
+assert d['pages'][6]['vector_coverage'] == d['pages'][2]['vector_coverage'], d['pages'][6]
 " 2>/dev/null \
     && ok "pdf_extract: figure page → exit 0 + warning, scan contract intact" \
     || nok "pdf_extract figure_pages" "exit=$rc msg=$err"
@@ -652,7 +657,8 @@ err=$("$PY" pdf_extract.py "$FX/unmapped.pdf" -o "$TMP/unmapped.json" 2>&1)
 rc=$?
 set -e
 [ "$rc" -eq 0 ] \
-    && echo "$err" | grep -q "OCR does not help" \
+    && echo "$err" | grep -q "OCR cannot bring it back" \
+    && echo "$err" | grep -q "inside embedded images" \
     && "$PY" -c "
 import json
 d = json.load(open('$TMP/unmapped.json'))
@@ -667,7 +673,7 @@ set +e
 err=$("$PY" pdf_extract.py "$FX/embedded.pdf" 2>&1 >/dev/null)
 rc=$?
 set -e
-[ "$rc" -eq 0 ] && ! echo "$err" | grep -q "OCR does not help" \
+[ "$rc" -eq 0 ] && ! echo "$err" | grep -q "OCR cannot bring it back" \
     && ok "pdf_extract: embedded-font PDF → no lossy warning (control)" \
     || nok "pdf_extract lossy control" "exit=$rc msg=$err"
 

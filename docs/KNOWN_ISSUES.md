@@ -50,6 +50,7 @@ Analysis Phase" which mandates this read.
 - **HTML2MD-12** [arXiv/LaTeXML MathML (`<math alttext>`) came out as garbled glyphs](issues/html2md-12-arxiv-latexml-mathml-garbled.md) — severity `SEV-2`, status `fixed`, opened 2026-07-09
 - **PDF-EXTRACT-FIGURE-PAGE-UNFLAGGED** [страница из одной схемы не помечается — колонтитул выбивает её из-под порога в 10 символов, содержимое теряется молча](issues/pdf-extract-figure-page-unflagged.md) — severity `SEV-2`, status `fixed`, opened 2026-08-29, resolved 2026-08-29
 - **PDF-EXTRACT-TOLERANCE-ARTIFACTS** [`pdf_extract.py` наследует дефолты pdfplumber: маркеры списка теряют порядок, заливки фона превращаются в строки таблиц](issues/pdf-extract-tolerance-artifacts.md) — severity `SEV-2`, status `fixed`, opened 2026-08-29, resolved 2026-08-29
+- **PDF-EXTRACT-VECTOR-COVERAGE-BACKDROP** [`vector_coverage` считает подложку страницы графикой и насыщается в 1.0 на сплошном тексте](issues/pdf-extract-vector-coverage-backdrop.md) — severity `SEV-3`, status `fixed`, opened 2026-08-30, resolved 2026-08-30
 - **PDF-EXTRACT-UNMAPPED-FONT-TEXT-LOSS** [документ без встроенных шрифтов теряет всю нелатиницу ещё при производстве — дамп отдаёт exit 0 и выглядит здоровым](issues/pdf-extract-unmapped-font-text-loss.md) — severity `SEV-2`, status `fixed`, opened 2026-08-29, resolved 2026-08-29
 
 ## dogfood
