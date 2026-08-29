@@ -1,6 +1,6 @@
 """Generate the `pdf_extract.py` test fixtures.
 
-Three fixtures, all built deterministically from code (no opaque binary blobs —
+Nine fixtures, all built deterministically from code (no opaque binary blobs —
 this builder IS the provenance, per TASK 013 R11.3):
 
   digital.pdf    — 2 pages of real selectable text + one ruled 3x3 table.
@@ -13,9 +13,41 @@ this builder IS the provenance, per TASK 013 R11.3):
                    (``ASurveyonBlockchain``) while the font-relative
                    ``x_tolerance_ratio`` splits them correctly. A second line of
                    real-space text is the no-regression control.
+  unmapped.pdf   — PDF-EXTRACT-UNMAPPED-FONT-TEXT-LOSS: base-14 Helvetica (not
+                   embedded, WinAnsiEncoding, no /ToUnicode) asked to draw
+                   Cyrillic. The producer substitutes a placeholder glyph, so
+                   the dump reads as plausible text (``nnnnnn 1. nnnnn``) — the
+                   nastier of the two degradation modes, and the reason the
+                   detector reads font metadata rather than text shape.
+  embedded.pdf   — the no-regression control for the above: the same page drawn
+                   in reportlab's bundled Bitstream Vera TrueType, which is
+                   embedded (FontFile2) AND carries /ToUnicode, so
+                   `text_layer_lossy` must stay False.
+  bullets.pdf    — PDF-EXTRACT-TOLERANCE-ARTIFACTS half A: list markers set at
+                   ``BULLET_SIZE`` against ``BULLET_BODY_SIZE`` body text put
+                   the marker's box top ~4 pt below the line's, over
+                   pdfplumber's absolute 3 pt ``y_tolerance`` — so each marker
+                   is read as its own line and sorted AFTER the line it belongs
+                   to. ``--y-tolerance 5`` reunites them; a trailing paragraph
+                   is the no-merge control.
+  shaded.pdf     — PDF-EXTRACT-TOLERANCE-ARTIFACTS half B, both symptoms:
+                   page 1 is zebra-shaded paragraphs with NO ruled table, which
+                   the default ``lines`` strategy returns as a phantom table;
+                   page 2 is a real ruled 3x3 table with an x-aligned shaded
+                   paragraph beneath it, which ``lines`` glues on as a bogus
+                   4th row. ``lines_strict`` returns 0 tables and the correct
+                   3 rows respectively.
+  figure.pdf     — PDF-EXTRACT-FIGURE-PAGE-UNFLAGGED, one page per measured
+                   case: (1) prose, (2) a raster diagram under a running header
+                   only, (3) a *vector* diagram under a running header + short
+                   caption, (4) a screenshot beside plenty of live prose,
+                   (5) a heavily ruled table page. Only pages 2 and 3 are
+                   figure-dominant; 4 and 5 are the false-positive controls for
+                   the coverage and char-count conjuncts respectively.
 
-The fixtures are committed under ``tests/fixtures/`` for test speed; re-run this
-module (``python3 _pdf_extract_fixtures.py``) to regenerate them in place.
+The fixtures live under ``tests/fixtures/`` (gitignored — the skill ignores
+``*.pdf``); re-run this module (``python3 _pdf_extract_fixtures.py``) to
+regenerate them in place.
 """
 
 from __future__ import annotations
@@ -24,12 +56,15 @@ import os
 import tempfile
 from pathlib import Path
 
+import reportlab  # type: ignore
 from PIL import Image, ImageDraw, ImageFont  # type: ignore
 from pypdf import PdfReader, PdfWriter  # type: ignore
 from reportlab.lib import colors  # type: ignore
 from reportlab.lib.pagesizes import letter  # type: ignore
 from reportlab.lib.styles import getSampleStyleSheet  # type: ignore
+from reportlab.pdfbase import pdfmetrics  # type: ignore
 from reportlab.pdfbase.pdfmetrics import stringWidth  # type: ignore
+from reportlab.pdfbase.ttfonts import TTFont  # type: ignore
 from reportlab.pdfgen import canvas  # type: ignore
 from reportlab.platypus import (  # type: ignore
     PageBreak,
@@ -60,6 +95,43 @@ DIGITAL_TABLE = [
     ["North", "100", "120"],
     ["South", "90", "95"],
 ]
+
+# --- unmapped.pdf / embedded.pdf --------------------------------------------
+# A Latin line (survives) and a Cyrillic line (does NOT — base-14 Helvetica has
+# no Cyrillic code point, so reportlab writes a placeholder glyph). Tests assert
+# the Latin line comes back and the Cyrillic one does not.
+UNMAPPED_LATIN_LINE = "Section 1. Overview"
+UNMAPPED_CYRILLIC_LINE = "Раздел 1. Обзор системы"
+# reportlab bundles the Bitstream Vera faces; embedding one is how `embedded.pdf`
+# gets a font with FontFile2 + /ToUnicode without depending on a system font.
+EMBEDDED_FONT_NAME = "VeraFixture"
+EMBEDDED_FONT_PATH = (
+    Path(reportlab.__file__).resolve().parent / "fonts" / "Vera.ttf")
+
+# --- bullets.pdf ------------------------------------------------------------
+# 7 pt marker against 12 pt body text puts the marker's box top ~3.97 pt below
+# the line's — over pdfplumber's absolute 3 pt y_tolerance, under the 5 pt the
+# fix uses. An ASCII marker keeps the assertions readable (the geometry, not the
+# glyph, is what reproduces the defect).
+BULLET_SIZE = 7
+BULLET_BODY_SIZE = 12
+BULLET_MARKER = "*"
+BULLET_ITEMS = [
+    "First bullet item.",
+    "Second bullet item.",
+    "Third bullet item.",
+]
+BULLET_TRAILING_LINE = "Trailing paragraph line."
+
+# --- shaded.pdf -------------------------------------------------------------
+SHADED_ZEBRA_ROWS = ["Alpha paragraph.", "Beta paragraph.", "Gamma paragraph."]
+SHADED_NOTE_LINE = "Shaded note, not a table row"
+
+# --- figure.pdf -------------------------------------------------------------
+FIGURE_HEADER = "Confidential - Example Corp LLC"
+FIGURE_CAPTION = "Figure 2. Component interaction overview for the platform."
+# Page indices (1-based) that must come back `figure_dominant`.
+FIGURE_DOMINANT_PAGES = [2, 3]
 
 
 def build_digital_pdf(path: Path) -> None:
@@ -168,19 +240,241 @@ def build_encrypted_pdf(path: Path, password: str = ENCRYPTED_PASSWORD) -> None:
         os.unlink(plain_path)
 
 
+def build_unmapped_pdf(path: Path) -> None:
+    """A 1-page PDF whose non-Latin text was destroyed *when the file was
+    written* (PDF-EXTRACT-UNMAPPED-FONT-TEXT-LOSS).
+
+    base-14 Helvetica is not embedded and is addressed through
+    `WinAnsiEncoding`, which has no Cyrillic code points, so reportlab
+    substitutes a placeholder glyph for every Cyrillic character. Extraction
+    then returns `nnnnnn 1. nnnnn nnnnnnn` — indistinguishable from prose by any
+    statistic over the text, which is exactly why the detector reads font
+    metadata instead."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    c = canvas.Canvas(str(path), pagesize=letter)
+    c.setFont("Helvetica", 12)
+    c.drawString(72, 700, UNMAPPED_LATIN_LINE)
+    c.drawString(72, 680, UNMAPPED_CYRILLIC_LINE)
+    c.showPage()
+    c.save()
+
+
+def build_embedded_pdf(path: Path) -> None:
+    """The no-regression control for `unmapped.pdf`: the same Latin line drawn
+    in reportlab's bundled Bitstream Vera TrueType, which reportlab embeds
+    (FontFile2) with a /ToUnicode CMap. `text_layer_lossy` must stay False."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    pdfmetrics.registerFont(TTFont(EMBEDDED_FONT_NAME, str(EMBEDDED_FONT_PATH)))
+    c = canvas.Canvas(str(path), pagesize=letter)
+    c.setFont(EMBEDDED_FONT_NAME, 12)
+    c.drawString(72, 700, UNMAPPED_LATIN_LINE)
+    c.showPage()
+    c.save()
+
+
+def build_bullets_pdf(path: Path) -> None:
+    """A 1-page PDF reproducing the orphaned-list-marker defect
+    (PDF-EXTRACT-TOLERANCE-ARTIFACTS half A).
+
+    Each marker is drawn on its item's baseline at `BULLET_SIZE` while the item
+    text is `BULLET_BODY_SIZE`. The smaller font's ascent puts the marker's box
+    top ~3.97 pt below the text's — past pdfplumber's absolute 3 pt
+    `y_tolerance` — so the marker becomes its own line and, having the larger
+    `doctop`, sorts AFTER the item it introduces. `BULLET_TRAILING_LINE` is the
+    control: raising the tolerance to 5 must not merge it into anything."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    c = canvas.Canvas(str(path), pagesize=letter)
+    y = 700
+    for item in BULLET_ITEMS:
+        c.setFont("Helvetica", BULLET_SIZE)
+        c.drawString(72, y, BULLET_MARKER)
+        c.setFont("Helvetica", BULLET_BODY_SIZE)
+        c.drawString(90, y, item)
+        y -= 30
+    c.setFont("Helvetica", BULLET_BODY_SIZE)
+    c.drawString(72, y - 20, BULLET_TRAILING_LINE)
+    c.showPage()
+    c.save()
+
+
+def _draw_ruled_table(c, x0: float, y0: float, cell_w: float,
+                      row_h: float, rows: list[list[str]]) -> None:
+    """Draw `rows` as a genuinely *stroked* grid — real ruling lines, the kind
+    `lines_strict` must keep."""
+    c.setStrokeColor(colors.black)
+    c.setLineWidth(1)
+    for r in range(len(rows) + 1):
+        c.line(x0, y0 + r * row_h, x0 + cell_w * len(rows[0]), y0 + r * row_h)
+    for col in range(len(rows[0]) + 1):
+        c.line(x0 + col * cell_w, y0,
+               x0 + col * cell_w, y0 + len(rows) * row_h)
+    for r, row in enumerate(rows):
+        for col, cell in enumerate(row):
+            c.drawString(x0 + col * cell_w + 4,
+                         y0 + (len(rows) - 1 - r) * row_h + 8, cell)
+
+
+def build_shaded_pdf(path: Path) -> None:
+    """A 2-page PDF reproducing BOTH phantom-table symptoms
+    (PDF-EXTRACT-TOLERANCE-ARTIFACTS half B).
+
+    Every shaded box is drawn `stroke=0, fill=1` — a background fill, not a
+    border. The default `lines` strategy builds table edges from every rect
+    regardless, so page 1 (zebra-shaded paragraphs, no table at all) comes back
+    as a 3-row phantom table, and page 2's shaded paragraph — x-aligned with the
+    real table above it — is glued on as a bogus 4th row, silently putting text
+    into a structured table that was never in one."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    c = canvas.Canvas(str(path), pagesize=letter)
+
+    c.setFont("Helvetica", 11)
+    c.drawString(72, 740, "Zebra-shaded paragraphs, no ruled table here.")
+    y = 620
+    for text in SHADED_ZEBRA_ROWS:
+        c.setFillColor(colors.lightgrey)
+        c.rect(72, y, 400, 40, stroke=0, fill=1)
+        c.setFillColor(colors.black)
+        c.drawString(80, y + 15, text)
+        y += 40
+    c.showPage()
+
+    c.setFont("Helvetica", 11)
+    c.drawString(72, 740, "Real ruled table plus an x-aligned shaded note.")
+    x0, y0, cell_w, row_h = 72, 640, 120, 24
+    _draw_ruled_table(c, x0, y0, cell_w, row_h, DIGITAL_TABLE)
+    c.setFillColor(colors.lightgrey)
+    c.rect(x0, y0 - row_h, cell_w * 3, row_h, stroke=0, fill=1)
+    c.setFillColor(colors.black)
+    c.drawString(x0 + 4, y0 - row_h + 8, SHADED_NOTE_LINE)
+    c.showPage()
+    c.save()
+
+
+def _diagram_png(path: Path) -> None:
+    """A small raster diagram — boxes and connectors, no text — for the figure
+    fixture's raster pages."""
+    img = Image.new("RGB", (900, 700), "white")
+    draw = ImageDraw.Draw(img)
+    for i in range(5):
+        draw.rectangle([60 + i * 150, 200, 180 + i * 150, 320],
+                       outline="black", width=6)
+        draw.line([180 + i * 150, 260, 210 + i * 150, 260],
+                  fill="black", width=6)
+    img.save(path)
+
+
+def build_figure_pdf(path: Path) -> None:
+    """A 5-page PDF, one page per case measured in
+    PDF-EXTRACT-FIGURE-PAGE-UNFLAGGED.
+
+    1. ordinary prose — no coverage, no flag;
+    2. a raster diagram under a running header only (~35 % of the sheet, 33
+       chars) — the case the old absolute-char heuristic misses because the
+       header alone clears the 10-char threshold;
+    3. a *vector* diagram under a header + caption (~31 % of the sheet, 90
+       chars, zero images) — the case that a coverage signal counting only
+       `page.images` misses entirely;
+    4. a screenshot beside plenty of live prose (~14 %, ~1.6k chars) — the
+       false positive the coverage threshold must reject;
+    5. a heavily ruled table page (ruling clusters into ~58 % of the sheet,
+       ~1.1k chars) — the false positive only the char-count conjunct rejects,
+       which is why that conjunct is load-bearing rather than cosmetic."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp:
+        png_path = tmp.name
+    try:
+        _diagram_png(Path(png_path))
+        c = canvas.Canvas(str(path), pagesize=letter)
+
+        # 1 — prose
+        c.setFont("Helvetica", 11)
+        y = 720
+        for i in range(30):
+            c.drawString(72, y, f"Line {i} of ordinary body prose that fills "
+                                f"this page with real text.")
+            y -= 20
+        c.showPage()
+
+        # 2 — raster diagram under a running header only
+        c.setFont("Helvetica", 9)
+        c.drawString(72, 760, FIGURE_HEADER)
+        c.drawString(540, 40, "2")
+        c.drawImage(png_path, 72, 250, width=468, height=364)
+        c.showPage()
+
+        # 3 — vector diagram (paths only) + header + caption
+        c.setFont("Helvetica", 10)
+        c.drawString(72, 760, FIGURE_HEADER)
+        c.drawString(72, 250, FIGURE_CAPTION)
+        c.setStrokeColor(colors.black)
+        c.setLineWidth(2)
+        cols, rows, box_w, box_h, gap_x, gap_y = 4, 3, 95, 70, 30, 55
+        for j in range(rows):
+            for i in range(cols):
+                x = 80 + i * (box_w + gap_x)
+                y = 300 + j * (box_h + gap_y)
+                c.rect(x, y, box_w, box_h, stroke=1, fill=0)
+                if i < cols - 1:      # connectors keep the diagram one cluster
+                    c.line(x + box_w, y + box_h / 2,
+                           x + box_w + gap_x, y + box_h / 2)
+                if j < rows - 1:
+                    c.line(x + box_w / 2, y + box_h,
+                           x + box_w / 2, y + box_h + gap_y)
+        c.showPage()
+
+        # 4 — screenshot beside plenty of live prose
+        c.setFont("Helvetica", 10)
+        y = 740
+        for i in range(22):
+            c.drawString(72, y, f"Paragraph line {i} describing the screenshot "
+                                f"in real narrative prose here.")
+            y -= 16
+        c.drawImage(png_path, 72, 120, width=300, height=233)
+        c.showPage()
+
+        # 5 — heavily ruled table page
+        c.setFont("Helvetica", 9)
+        x0, y0, cell_w, row_h, n_rows, n_cols = 60, 120, 82, 26, 22, 6
+        c.setStrokeColor(colors.black)
+        c.setLineWidth(0.7)
+        for r in range(n_rows + 1):
+            c.line(x0, y0 + r * row_h, x0 + cell_w * n_cols, y0 + r * row_h)
+        for col in range(n_cols + 1):
+            c.line(x0 + col * cell_w, y0,
+                   x0 + col * cell_w, y0 + n_rows * row_h)
+        for r in range(n_rows):
+            for col in range(n_cols):
+                c.drawString(x0 + col * cell_w + 3, y0 + r * row_h + 9,
+                             f"cell{r}-{col}")
+        c.showPage()
+        c.save()
+    finally:
+        os.unlink(png_path)
+
+
 def build_all(fixtures_dir: Path) -> dict[str, Path]:
-    """Build all three fixtures into `fixtures_dir`; return the path map."""
+    """Build every fixture into `fixtures_dir`; return the path map."""
     fixtures_dir.mkdir(parents=True, exist_ok=True)
     paths = {
         "digital": fixtures_dir / "digital.pdf",
         "scanlike": fixtures_dir / "scanlike.pdf",
         "encrypted": fixtures_dir / "encrypted.pdf",
         "glued": fixtures_dir / "glued.pdf",
+        "unmapped": fixtures_dir / "unmapped.pdf",
+        "embedded": fixtures_dir / "embedded.pdf",
+        "bullets": fixtures_dir / "bullets.pdf",
+        "shaded": fixtures_dir / "shaded.pdf",
+        "figure": fixtures_dir / "figure.pdf",
     }
     build_digital_pdf(paths["digital"])
     build_scanlike_pdf(paths["scanlike"])
     build_encrypted_pdf(paths["encrypted"])
     build_glued_pdf(paths["glued"])
+    build_unmapped_pdf(paths["unmapped"])
+    build_embedded_pdf(paths["embedded"])
+    build_bullets_pdf(paths["bullets"])
+    build_shaded_pdf(paths["shaded"])
+    build_figure_pdf(paths["figure"])
     return paths
 
 

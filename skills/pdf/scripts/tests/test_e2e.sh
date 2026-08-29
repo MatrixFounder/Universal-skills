@@ -628,6 +628,83 @@ set -e
     && ok "pdf_extract: scan-like PDF → exit 10 / DocumentScanned" \
     || nok "pdf_extract scanned" "exit=$rc msg=$err"
 
+# figure-dominant page → exit 0 + stderr warning, scan contract untouched
+set +e
+err=$("$PY" pdf_extract.py "$FX/figure.pdf" -o "$TMP/figure.json" 2>&1)
+rc=$?
+set -e
+[ "$rc" -eq 0 ] \
+    && echo "$err" | grep -q "mostly figure" \
+    && "$PY" -c "
+import json, sys
+d = json.load(open('$TMP/figure.json'))
+assert d['figure_pages'] == [2, 3], d['figure_pages']
+assert d['doc_scanned'] is False and d['scanned_pages'] == [], d
+assert d['pages'][2]['image_coverage'] == 0.0, 'p3 must be pure vector'
+assert d['pages'][2]['vector_coverage'] >= 0.25, d['pages'][2]
+" 2>/dev/null \
+    && ok "pdf_extract: figure page → exit 0 + warning, scan contract intact" \
+    || nok "pdf_extract figure_pages" "exit=$rc msg=$err"
+
+# unmapped-font PDF → exit 0 + text_layer_lossy warning that rules OCR out
+set +e
+err=$("$PY" pdf_extract.py "$FX/unmapped.pdf" -o "$TMP/unmapped.json" 2>&1)
+rc=$?
+set -e
+[ "$rc" -eq 0 ] \
+    && echo "$err" | grep -q "OCR does not help" \
+    && "$PY" -c "
+import json
+d = json.load(open('$TMP/unmapped.json'))
+assert d['text_layer_lossy'] is True, d['text_layer_lossy']
+assert d['fonts'] and not any(f['embedded'] or f['has_tounicode'] for f in d['fonts']), d['fonts']
+" 2>/dev/null \
+    && ok "pdf_extract: unmapped-font PDF → exit 0 + text_layer_lossy warning" \
+    || nok "pdf_extract text_layer_lossy" "exit=$rc msg=$err"
+
+# embedded-font control → no lossy warning
+set +e
+err=$("$PY" pdf_extract.py "$FX/embedded.pdf" 2>&1 >/dev/null)
+rc=$?
+set -e
+[ "$rc" -eq 0 ] && ! echo "$err" | grep -q "OCR does not help" \
+    && ok "pdf_extract: embedded-font PDF → no lossy warning (control)" \
+    || nok "pdf_extract lossy control" "exit=$rc msg=$err"
+
+# --y-tolerance reunites orphaned list markers with their items
+set +e
+out=$("$PY" pdf_extract.py "$FX/bullets.pdf" --y-tolerance 5 2>/dev/null)
+rc=$?
+set -e
+[ "$rc" -eq 0 ] \
+    && echo "$out" | "$PY" -c "
+import json, sys
+d = json.load(sys.stdin)
+lines = d['pages'][0]['text'].splitlines()
+assert d['y_tolerance'] == 5, d['y_tolerance']
+assert '*' not in lines, lines
+assert '* First bullet item.' in lines, lines
+" 2>/dev/null \
+    && ok "pdf_extract: --y-tolerance 5 reunites orphaned list markers" \
+    || nok "pdf_extract --y-tolerance" "exit=$rc"
+
+# --table-strategy lines_strict drops phantom tables built from background fills
+set +e
+out=$("$PY" pdf_extract.py "$FX/shaded.pdf" --table-strategy lines_strict 2>/dev/null)
+rc=$?
+set -e
+[ "$rc" -eq 0 ] \
+    && echo "$out" | "$PY" -c "
+import json, sys
+d = json.load(sys.stdin)
+assert d['table_strategy'] == 'lines_strict', d['table_strategy']
+assert d['pages'][0]['tables'] == [], d['pages'][0]['tables']
+assert len(d['pages'][1]['tables']) == 1, d['pages'][1]['tables']
+assert len(d['pages'][1]['tables'][0]) == 3, d['pages'][1]['tables']
+" 2>/dev/null \
+    && ok "pdf_extract: --table-strategy lines_strict drops phantom tables" \
+    || nok "pdf_extract --table-strategy" "exit=$rc"
+
 # full unit + E2E suite for pdf_extract.py
 set +e
 out=$("$PY" -m unittest tests.test_pdf_extract 2>&1)

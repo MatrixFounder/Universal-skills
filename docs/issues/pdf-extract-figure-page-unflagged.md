@@ -1,8 +1,10 @@
 ---
 id: PDF-EXTRACT-FIGURE-PAGE-UNFLAGGED
 type: known-issue
-status: open
+status: fixed
 opened_at: 2026-08-29
+resolved_at: 2026-08-29
+resolved_by: manual fix 2026-08-29 (pdf_extract.py v1.2 loss signals)
 category: correctness
 severity: SEV-2
 component: pdf
@@ -11,7 +13,39 @@ slug: pdf-extract-figure-page-unflagged
 
 # PDF-EXTRACT-FIGURE-PAGE-UNFLAGGED — страница, состоящая из одной схемы, не помечается: колонтитул выбивает её из-под порога в 10 символов
 
-**Status:** OPEN (SEV-2 — беззвучная потеря содержимого целой страницы, не искажение разметки).
+> **Resolved 2026-08-29.** В дамп добавлены постраничные **`image_coverage`** и
+> **`vector_coverage`** (доли площади листа) и отдельный флаг **`figure_dominant`**:
+> `(image_coverage + vector_coverage) >= 0.25 AND char_count < 200`, пороги вынесены в
+> константы `_FIGURE_COVERAGE_THRESHOLD` / `_FIGURE_CHAR_THRESHOLD` рядом с
+> `_SCANNED_CHAR_THRESHOLD` и описаны в docstring. Учтено уточнение от 2026-08-29: считается
+> **сумма** растровой и векторной площади, иначе векторная фигура пропускается.
+> `vector_coverage` — не сумма bbox'ов (у линовки площадь bbox'а ≈ 0), а площадь **кластеров**:
+> path-объекты наносятся на сетку ~4 pt, ищутся связные компоненты (8-связность), каждая
+> вносит свой bbox; это и даёт замеренные 42–85 % на страницах с таблицами, где несущим
+> становится порог по `char_count`.
+> Страницы перечислены в топ-левел **`figure_pages`** с предупреждением на stderr;
+> **код возврата не тронут**, `doc_scanned` / `scanned_pages` не расширены. `figure_dominant`
+> и `scanned` сделаны **взаимоисключающими**: скан уже помечен и чинится иначе (OCR, а не
+> выгрузка картинки) — инвариант `figure_pages == [n for n in pages if figure_dominant]`
+> сохраняется.
+> Документация: `references/pdf-to-markdown.md` §3.4 («страница-иллюстрация ≠ скан», таблица
+> замеров, что делать), §2, §5, §6 (почему подъём порога в 10 символов — неверный ремонт),
+> SKILL.md, `scripts/.AGENTS.md`. Оговорка «пометить — половина решения, картинку всё равно
+> надо выгрузить (`pdf-13`)» вписана и в §3.4, и в honest scope скрипта.
+> Фикстура `figure.pdf` — по странице на каждый замеренный случай: (1) проза, (2) растровая
+> схема под одним колонтитулом (35 %/33 символа — ровно тот случай, который старая эвристика
+> пропускает), (3) **векторная** схема, изображений ноль (31 %/90 символов), (4) скриншот
+> рядом с живым текстом (14 %/1617) — контроль порога площади, (5) плотно линованная таблица
+> (58 %/1127) — контроль несущего порога по тексту.
+> Тесты: `TestFigurePages` (14 кейсов, включая границы предиката, дизъюнктность со `scanned`,
+> вырожденные входы и отдельный тест на то, почему меряются кластеры, а не сумма bbox'ов) +
+> кейс в `tests/test_e2e.sh`. Мутационная проверка: выброс векторной составляющей, выброс
+> порога по тексту, откат к старой эвристике и замена кластеризации на счёт клеток — все
+> четыре мутации убиты.
+> Гейты: `tests.test_pdf_extract` 94 OK, `test_e2e.sh` 90/90, `validate_skill.py` PASSED.
+
+**Status:** FIXED 2026-08-29 (был SEV-2 — беззвучная потеря содержимого целой страницы,
+не искажение разметки).
 **Location:** [`skills/pdf/scripts/pdf_extract.py:159-163`](../../skills/pdf/scripts/pdf_extract.py)
 (`_classify_page`), порог `_SCANNED_CHAR_THRESHOLD = 10` — [строка 85](../../skills/pdf/scripts/pdf_extract.py).
 **Related:** `references/pdf-to-markdown.md` §3.4 («Image-only pages inside a digital PDF» —

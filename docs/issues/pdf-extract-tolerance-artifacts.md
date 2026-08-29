@@ -1,8 +1,10 @@
 ---
 id: PDF-EXTRACT-TOLERANCE-ARTIFACTS
 type: known-issue
-status: open
+status: fixed
 opened_at: 2026-08-29
+resolved_at: 2026-08-29
+resolved_by: manual fix 2026-08-29 (pdf_extract.py v1.2 loss signals)
 category: correctness
 severity: SEV-2
 component: pdf
@@ -11,7 +13,30 @@ slug: pdf-extract-tolerance-artifacts
 
 # PDF-EXTRACT-TOLERANCE-ARTIFACTS — `pdf_extract.py` наследует два дефолта pdfplumber, которые ломают порядок маркеров списка и выдумывают строки таблиц
 
-**Status:** OPEN (SEV-2 — таблица-половина молча подмешивает чужой текст в реальную таблицу).
+> **Resolved 2026-08-29.** Обе половины закрыты флагами, оба дефолта — пдфпламберовские,
+> ровно как требует «Путь исправления» (новый дефолт только после прогона на корпусе).
+> **A:** `--y-tolerance PT` (абсолютный, ratio здесь не работает) — на фикстуре с маркером
+> 7 pt против текста 12 pt (Δ верхов 3.97 pt) значение `5` возвращает все маркеры в начало
+> своих строк; на `digital.pdf` и `glued.pdf` вывод при `y_tolerance=5` совпадает с дефолтным
+> символ в символ (текст и таблицы) — это зафиксировано отдельным тестом как замер
+> безрегрессионности. Работает и под `--layout`.
+> **B:** `--table-strategy lines|lines_strict` — `lines_strict` игнорирует незаштрихованные
+> заливки. Оба симптома воспроизведены на фикстуре: страница 1 (зебра-подсветка, реальной
+> таблицы нет) даёт фантомную таблицу при `lines` и ноль при `lines_strict`; страница 2
+> (реальная линованная таблица + x-выровненный затенённый абзац под ней) при `lines` получает
+> абзац **лишней 4-й строкой**, при `lines_strict` — ровно 3 верные строки. Реальные
+> линованные таблицы под `lines_strict` не деградируют (проверено на двух фикстурах).
+> Оба значения (плюс `x_tolerance_ratio`) эхом уходят в топ-левел дампа.
+> Документация: `references/pdf-to-markdown.md` §3.1 (артефакт «маркер после строки»), §3.2
+> (обратный случай — фантомные таблицы из заливок фона, с проверкой `stroke=False, fill=True`),
+> §5, SKILL.md, `scripts/.AGENTS.md`.
+> Тесты: `TestLineTolerance` (7) + `TestTableStrategy` (8), включая безрегрессионные замеры и
+> отказ CLI на неизвестной стратегии (exit 2); 2 кейса в `tests/test_e2e.sh`. Мутационная
+> проверка: игнорирование любого из двух флагов убивает тесты.
+> Гейты: `tests.test_pdf_extract` 94 OK, `test_e2e.sh` 90/90, `validate_skill.py` PASSED.
+
+**Status:** FIXED 2026-08-29 (был SEV-2 — таблица-половина молча подмешивает чужой текст
+в реальную таблицу).
 **Location:** [`skills/pdf/scripts/pdf_extract.py:239-245`](../../skills/pdf/scripts/pdf_extract.py)
 (`page.extract_text(...)` / `page.extract_tables(...)`).
 **Related:** `references/pdf-to-markdown.md` §3.1 (порядок чтения), §3.2 (таблицы без

@@ -1,8 +1,10 @@
 ---
 id: PDF-EXTRACT-UNMAPPED-FONT-TEXT-LOSS
 type: known-issue
-status: open
+status: fixed
 opened_at: 2026-08-29
+resolved_at: 2026-08-29
+resolved_by: manual fix 2026-08-29 (pdf_extract.py v1.2 loss signals)
 category: correctness
 severity: SEV-2
 component: pdf
@@ -11,8 +13,31 @@ slug: pdf-extract-unmapped-font-text-loss
 
 # PDF-EXTRACT-UNMAPPED-FONT-TEXT-LOSS — документ без встроенных шрифтов теряет всю нелатиницу, а дамп выглядит здоровым
 
-**Status:** OPEN (SEV-2 — беззвучно теряется бо́льшая часть содержимого документа; дамп при
-этом отдаёт exit `0` и тысячи правдоподобных символов).
+> **Resolved 2026-08-29.** `pdf_extract.py` собирает документный список **`fonts`**
+> (`name` / `subtype` / `embedded` / `encoding` / `has_tounicode`) — дедуплицированный и
+> отсортированный — и выставляет **`text_layer_lossy`**, когда документ отдаёт какой-то текст
+> И ни один шрифт не встроен И ни один не несёт `/ToUnicode` И все кодировки однобайтовые
+> латинские. Детектор построен на метаданных шрифтов, а не на форме текста, как и предписано;
+> порогов нет. Предупреждение уходит на stderr **с неизменным кодом возврата** (`exit 0`), в
+> формулировке прямо сказано, что OCR не лечит и нужен переэкспорт с встроенными шрифтами.
+> Обход Form XObject'ов рекурсивный (шрифт, использованный только внутри формы, тоже
+> считается), с защитой от циклов по objid и потолком глубины; сбор метаданных best-effort —
+> непарсящийся словарь шрифта пропускается, что может только *подавить* флаг, но не поднять
+> ложную тревогу. Конъюнкт «есть текст» не даёт скану получить ещё и этот флаг.
+> Документация: `references/pdf-to-markdown.md` §3.9 (новый), §2, §5 (таблица трёх сигналов
+> потери + форма дампа), SKILL.md, `scripts/.AGENTS.md`.
+> Фикстуры (детерминированные, из кода): `unmapped.pdf` — base-14 Helvetica + кириллица,
+> воспроизводит именно вариант «правдоподобный мусор» (`nnnnnn 1. nnnnn nnnnnnn`);
+> `embedded.pdf` — контроль на встроенном Bitstream Vera (FontFile2 + `/ToUnicode`).
+> Тесты: `TestLossyTextLayer` (14 кейсов — дефект, контроль, форма записи, дедуп/порядок,
+> обе таблицы истинности, Type0-потомок, Type3, рекурсия по XObject, потолок глубины,
+> нефатальность, 2 E2E) + 3 кейса в `tests/test_e2e.sh`. Мутационная проверка: снятие
+> детектора и снятие escape-hatch'ей убивают тесты.
+> Гейты: `tests.test_pdf_extract` 94 OK, `test_e2e.sh` 90/90, `validate_skill.py` PASSED
+> (docx/xlsx/pptx/pdf/html).
+
+**Status:** FIXED 2026-08-29 (был SEV-2 — беззвучно теряется бо́льшая часть содержимого
+документа; дамп при этом отдаёт exit `0` и тысячи правдоподобных символов).
 **Location:** [`skills/pdf/scripts/pdf_extract.py`](../../skills/pdf/scripts/pdf_extract.py) —
 дамп не проверяет метаданные шрифтов и не имеет сигнала о непредставимом тексте.
 **Related:** [PDF-EXTRACT-FIGURE-PAGE-UNFLAGGED](pdf-extract-figure-page-unflagged.md) и
