@@ -368,6 +368,42 @@ def build_shaded_pdf(path: Path) -> None:
     c.save()
 
 
+def build_orphanfar_pdf(path: Path) -> None:
+    """Bare markers that `--y-tolerance` cannot rescue — the arXiv shape.
+
+    Dogfooding an arXiv HTML-to-PDF export found bullets sitting alone not
+    because of the 3 pt line grouping but because the exporter interposes a
+    "Report issue for preceding element" line BETWEEN the marker and its item.
+    No line-grouping tolerance merges across that, so the hint's advice is
+    wrong there — and this fixture is what makes the hint say so instead of
+    naming a flag that does nothing."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    c = canvas.Canvas(str(path), pagesize=letter)
+    # Page 1 carries no markers at all, so the probe has to *find* page 2
+    # rather than read the first pages it is handed — a mutation that dropped
+    # the "affected pages only" filter survived until this page existed.
+    c.setFont("Helvetica", 11)
+    c.drawString(72, 740, "Ordinary prose, no list and no markers on this page.")
+    c.drawString(72, 720, "It exists so the affected page is not page 1.")
+    c.showPage()
+
+    c.setFont("Helvetica", 11)
+    c.drawString(72, 740, "List whose markers are cut off from their items.")
+    y = 700
+    for item in ("Quantitative analysis of related work.",
+                 "Analysis of governance mechanisms.",
+                 "Proposals to improve deliberation."):
+        # `*`, not `\u2022`: the core Helvetica of a reportlab fixture has no
+        # bullet glyph, and the extractor would see `(cid:127)` — a fixture
+        # artefact that would quietly stop this fixture reproducing anything.
+        c.drawString(72, y, "*")
+        c.drawString(72, y - 16, "Report issue for preceding element")
+        c.drawString(72, y - 32, item)
+        y -= 60
+    c.showPage()
+    c.save()
+
+
 ONECOL_TABLE = [["Показатель"], ["Доступность"], ["RTO"], ["RPO"]]
 
 
@@ -755,6 +791,7 @@ def build_all(fixtures_dir: Path) -> dict[str, Path]:
         "nested": fixtures_dir / "nested.pdf",
         "hugedecl": fixtures_dir / "hugedecl.pdf",
         "onecol": fixtures_dir / "onecol.pdf",
+        "orphanfar": fixtures_dir / "orphanfar.pdf",
     }
     build_digital_pdf(paths["digital"])
     build_scanlike_pdf(paths["scanlike"])
@@ -771,6 +808,7 @@ def build_all(fixtures_dir: Path) -> dict[str, Path]:
     build_nested_pdf(paths["nested"])
     build_hugedecl_pdf(paths["hugedecl"])
     build_onecol_pdf(paths["onecol"])
+    build_orphanfar_pdf(paths["orphanfar"])
     return paths
 
 

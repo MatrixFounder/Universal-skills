@@ -39,7 +39,7 @@ NEEDED_FIXTURES = [
     "digital.pdf", "scanlike.pdf", "encrypted.pdf", "glued.pdf",
     "unmapped.pdf", "embedded.pdf", "bullets.pdf", "shaded.pdf", "figure.pdf",
     "shifted.pdf", "flatfill.pdf", "shadowed.pdf", "nested.pdf",
-    "hugedecl.pdf", "onecol.pdf",
+    "hugedecl.pdf", "onecol.pdf", "orphanfar.pdf",
 ]
 
 
@@ -2442,11 +2442,51 @@ class TestLayoutHints(unittest.TestCase):
 
     def test_layout_hints_are_always_in_the_dump(self):
         """Like `figure_pages` / `scanned_pages`: a wrapper can branch on the
-        numbers even when the stderr line was suppressed."""
+        numbers even when the stderr line was suppressed. The `*_probe`
+        sub-keys are the exception — they exist only where a hint fired, which
+        is also what keeps the probe off the cost of a clean document."""
         dump, _ = self._run("digital.pdf")
         self.assertEqual(
             sorted(dump["layout_hints"]),
             ["orphan_list_markers", "single_column_tables", "tables"])
+
+    def test_the_marker_hint_measures_its_own_advice_before_giving_it(self):
+        """`bullets.pdf` is the case where the advice works: the probe re-reads
+        the affected pages with the value it is about to recommend, and the
+        line quotes the reduction it actually got."""
+        dump, stderr = self._run("bullets.pdf")
+        probe = dump["layout_hints"]["y_tolerance_probe"]
+        self.assertEqual((probe["before"], probe["after"]), (3, 0))
+        self.assertEqual(probe["pages"], [1])
+        self.assertIn("reunited 3 of 3", stderr)
+        self.assertIn("--y-tolerance 5", stderr)
+
+    def test_the_marker_hint_says_when_its_advice_does_not_help(self):
+        """`orphanfar.pdf` is the arXiv shape found by dogfooding: an
+        interposed "Report issue for preceding element" line sits between the
+        marker and its item, and no line-grouping tolerance merges across it.
+
+        A hint that names a flag which changes nothing is worse than no hint —
+        it costs a run and teaches the reader to ignore the next one. This is
+        the test that keeps the hint honest on such documents."""
+        dump, stderr = self._run("orphanfar.pdf")
+        probe = dump["layout_hints"]["y_tolerance_probe"]
+        self.assertEqual(probe["before"], probe["after"])
+        self.assertIn("changes NOTHING", stderr)
+        self.assertNotIn("re-run with it", stderr)
+        # …and it probed the page that has the markers, not the first page it
+        # was handed: the fixture's page 1 is deliberately plain prose. A
+        # mutation that dropped the "affected pages only" filter survived the
+        # whole suite until this assertion existed — the probe would still
+        # report a verdict, just having measured the wrong pages.
+        self.assertEqual(probe["pages"], [2])
+
+    def test_the_probe_does_not_run_when_no_hint_would_fire(self):
+        """The probe re-reads pages, so it must cost nothing on the documents
+        that have neither problem — which is most of them."""
+        dump, _ = self._run("digital.pdf")
+        self.assertNotIn("y_tolerance_probe", dump["layout_hints"])
+        self.assertNotIn("lines_strict_probe", dump["layout_hints"])
 
     def test_a_document_with_neither_problem_gets_no_hint(self):
         """The negative control: hints that fire on clean documents get
@@ -2514,8 +2554,15 @@ class TestLayoutHints(unittest.TestCase):
         comparison shows the table surviving `lines_strict`, which is the
         answer."""
         dump, stderr = self._run("onecol.pdf")
+        probe = dump["layout_hints"]["lines_strict_probe"]
         self.assertEqual(dump["layout_hints"]["single_column_tables"], 1)
-        self.assertIn("--table-strategy lines_strict", stderr)
+        self.assertEqual(probe["before"], probe["after"])
+        # …and having measured that, it says so instead of naming the flag as
+        # a fix. Dogfooding an arXiv export found a third cause behind the same
+        # shape — a fragment of a wider table that detection split — which is
+        # why the line points at the pages, not at a knob.
+        self.assertIn("keeps every one of them", stderr)
+        self.assertNotIn("re-run with it", stderr)
 
     def test_a_hint_never_moves_the_exit_code(self):
         """Advisory means advisory: exit 0 stays exit 0, and exit 10 keeps

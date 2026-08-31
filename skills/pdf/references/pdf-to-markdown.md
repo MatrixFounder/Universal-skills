@@ -125,10 +125,21 @@ tolerance merges genuinely separate lines, and a new default needs a corpus
 run, not one document. Raise it when you see orphaned markers; leave it alone
 otherwise. The dump echoes the effective value in top-level `y_tolerance`.
 
-**You no longer have to notice it yourself.** Every dump carries
-`layout_hints.orphan_list_markers` — lines that hold a bare marker glyph and
-nothing else — and while `--y-tolerance` is still at its default and the count
-reaches 2, the script says so on stderr and names the flag. Measured: 32 on
+**You no longer have to notice it yourself, and the hint checks its own
+advice.** Every dump carries `layout_hints.orphan_list_markers` — lines that
+hold a bare marker glyph and nothing else — and while `--y-tolerance` is still
+at its default and the count reaches 2, the script re-reads up to three of the
+affected pages *with* the value it is about to recommend and quotes what it
+measured **on those pages** — either "reunited 3 of 3 on page(s) 1 — re-run
+with it" (the `bullets.pdf` fixture) or "changes NOTHING on page(s) 2, 3, 15"
+(an arXiv export). The second branch is not hypothetical — it is
+what an arXiv HTML-to-PDF export does, interposing a "Report issue for
+preceding element" line between marker and item, which no line-grouping
+tolerance merges across; a Confluence export separates them by more than 5 pt.
+On those, the hint tells you to read the pages instead of burning a run on a
+flag. The probe (`layout_hints.y_tolerance_probe`) measured ≤0.12 s on the
+20-document dogfood corpus (24-48 page exports included) and does not run at
+all when no hint would fire. Measured: 32 on
 that Google Docs export, 3 on the `bullets.pdf` fixture, 0 on every other
 fixture and on three of the four dogfood documents. It is a *hint*: the exit
 code never moves, and the count stays in the dump even when the line is
@@ -186,7 +197,13 @@ you are looking at before trusting either — `stroke=False, fill=True` in
 The dump echoes the strategy in top-level `table_strategy`, and carries
 `layout_hints.single_column_tables` / `layout_hints.tables`. While the strategy
 is `lines` and either two tables or half of them come back one column wide, the
-script points at `lines_strict` on stderr. Read that number as a **floor, not a
+script runs `lines_strict` on up to three affected pages and reports what
+changed (`layout_hints.lines_strict_probe`). When the phantoms disappear it
+says so and names the flag; when they survive it says *that*, because a
+one-column table can also be a real one, a ruled layout box, or — measured on
+an arXiv export — a fragment of a wider table that detection split, arriving as
+`[["Bitcoin"], ["Accomp"], ["lishment"]]`. Neither knob fixes that one; only
+reading the page does. Read that number as a **floor, not a
 census**: a one-column "table" is unmistakably shading, but the same export
 also produced multi-column phantoms that look exactly like data from here — on
 the 29-page document `lines_strict` dropped 45 of 61 tables while only 23 were

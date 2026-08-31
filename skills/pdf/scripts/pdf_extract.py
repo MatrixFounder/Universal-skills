@@ -50,9 +50,16 @@ emit, both have a documented remedy, and dogfooding showed a caller finds that
 remedy only by reading the reference — so the dump now says it. Every dump
 carries ``layout_hints`` (``orphan_list_markers`` / ``single_column_tables`` /
 ``tables``), and while the matching knob is still at its default the script
-names it on stderr: ``--y-tolerance 5`` for markers a smaller point size pushed
-onto their own line, ``--table-strategy lines_strict`` for background shading
-read as a table. Advisory in the strict sense — the exit code never moves, and
+**tries that knob on up to three affected pages and reports what it measured**
+rather than naming a flag on faith: ``--y-tolerance 5`` for markers a smaller
+point size pushed onto their own line, ``--table-strategy lines_strict`` for
+background shading read as a table. The probe exists because dogfooding found
+documents where the advice is simply wrong — an arXiv export interposes a
+"Report issue for preceding element" line between marker and item, so no
+line-grouping tolerance merges them, and a Confluence export's gap is wider
+than 5 pt. There the hint says the flag changes nothing and points at the
+pages instead. Cost, measured: ≤0.12 s, and zero on a document with neither
+problem (the probe runs only when a hint would fire). Advisory in the strict sense — the exit code never moves, and
 the counters stay in the dump when the line is suppressed (it is, once the flag
 has been passed: repeating advice the caller has taken is noise). Measured on
 four real documents: 32 orphaned markers and 23-of-61 one-column tables on one
@@ -414,6 +421,8 @@ _DEFAULT_TABLE_STRATEGY = "lines"
 # `_orphan_list_markers` / `_single_column_tables`.
 _LIST_MARKERS = frozenset("•●▪‣◦○□◆➔▸*-–—·+")
 _ORPHAN_MARKER_HINT = 2      # one stray glyph is noise; a broken list repeats
+_HINT_PROBE_PAGES = 3        # how many affected pages a hint re-reads to check
+_HINT_Y_TOLERANCE = 5.0      # the value the marker hint advises, and probes with
 _PHANTOM_TABLE_HINT = 2      # …or half the tables, whichever comes first
 _PHANTOM_TABLE_RATIO = 0.5
 
@@ -1665,6 +1674,17 @@ def extract_pdf(
                 images=images)
             record["n"] = index
             pages.append(record)
+        # Computed while the document is still open: the remedy probe re-reads
+        # a few pages, and re-opening the PDF for that would cost more than the
+        # probe itself.
+        hints = {
+            "orphan_list_markers": _orphan_list_markers(pages),
+            "single_column_tables": _single_column_tables(pages),
+            "tables": sum(len(p["tables"]) for p in pages),
+        }
+        hints.update(_probe_remedy(
+            pdf, pages, hints, layout=layout, x_tolerance_ratio=ratio,
+            y_tolerance=y_tol, table_strategy=table_strategy))
     doc_scanned, scanned_pages = _classify_document(pages)
     fonts = [font_acc[key] for key in sorted(font_acc)]
     dump = {
@@ -1679,12 +1699,10 @@ def extract_pdf(
         "table_strategy": table_strategy,
         # Always present, like `figure_pages` / `scanned_pages`: a wrapper can
         # branch on the numbers even when the stderr hint was suppressed
-        # (which happens once the caller has already turned the knob).
-        "layout_hints": {
-            "orphan_list_markers": _orphan_list_markers(pages),
-            "single_column_tables": _single_column_tables(pages),
-            "tables": sum(len(p["tables"]) for p in pages),
-        },
+        # (which happens once the caller has already turned the knob). The
+        # `*_probe` sub-keys appear only when a hint fired and its advice was
+        # actually tried — see `_probe_remedy`.
+        "layout_hints": hints,
         "fonts": fonts,
         "pages": pages,
     }
@@ -1765,6 +1783,60 @@ def _single_column_tables(pages: list[dict]) -> int:
         for table in (page.get("tables") or [])
         if table and all(len(row) == 1 for row in table)
     )
+
+
+def _probe_remedy(pdf, pages: list[dict], hints: dict, *, layout: bool,
+                  x_tolerance_ratio: float | None, y_tolerance: float | None,
+                  table_strategy: str) -> dict:
+    """Try each hint's own advice on a few affected pages, and report whether it
+    actually helped.
+
+    A hint that names a flag which changes nothing is worse than no hint: it
+    costs the caller a run and it teaches them to ignore the next one.
+    Dogfooding found exactly that — on an arXiv HTML-to-PDF export the bullets
+    sit alone because the layout interposes a "Report issue for preceding
+    element" line between marker and item, and on a Confluence export the gap
+    is simply wider than 5 pt; in both, `--y-tolerance 5` reunites nothing. So
+    the advice is measured on this document before it is given.
+
+    Bounded on purpose: only when a hint would fire at all, and only over the
+    first `_HINT_PROBE_PAGES` affected pages — enough to tell "this remedy
+    works here" from "it does not", cheap enough to leave on by default. The
+    probe re-reads text (or tables) for those pages and nothing else: no
+    images, no fonts, no re-classification.
+    """
+    result: dict = {}
+    if _hint_orphan_markers(hints, y_tolerance):
+        affected = [p for p in pages
+                    if _orphan_list_markers([p])][:_HINT_PROBE_PAGES]
+        before = _orphan_list_markers(affected)
+        after = 0
+        for record in affected:
+            probed = _extract_page(
+                pdf.pages[record["n"] - 1], layout=layout,
+                x_tolerance_ratio=x_tolerance_ratio,
+                y_tolerance=_HINT_Y_TOLERANCE, table_strategy=table_strategy)
+            after += _orphan_list_markers([probed])
+        result["y_tolerance_probe"] = {
+            "pages": [r["n"] for r in affected],
+            "value": _HINT_Y_TOLERANCE, "before": before, "after": after,
+        }
+    if _hint_phantom_tables(hints, table_strategy):
+        affected = [p for p in pages
+                    if _single_column_tables([p])][:_HINT_PROBE_PAGES]
+        before = _single_column_tables(affected)
+        after = 0
+        for record in affected:
+            probed = _extract_page(
+                pdf.pages[record["n"] - 1], layout=layout,
+                x_tolerance_ratio=x_tolerance_ratio, y_tolerance=y_tolerance,
+                table_strategy="lines_strict")
+            after += _single_column_tables([probed])
+        result["lines_strict_probe"] = {
+            "pages": [r["n"] for r in affected],
+            "before": before, "after": after,
+        }
+    return result
 
 
 def _hint_orphan_markers(hints: dict, y_tolerance: float | None) -> bool:
@@ -2132,23 +2204,55 @@ def main(argv: list[str] | None = None) -> int:
     # advice would be noise, and the counts stay in `layout_hints` regardless.
     hints = dump["layout_hints"]
     if _hint_orphan_markers(hints, dump["y_tolerance"]):
-        sys.stderr.write(
-            f"hint: {hints['orphan_list_markers']} line(s) contain nothing but "
-            f"a list marker. pdfplumber groups lines with an absolute 3 pt "
-            f"tolerance, so a bullet in a smaller point size becomes its own "
-            f"line and sorts AFTER the item it belongs to — composing Markdown "
-            f"from this dump puts the marker under its text. Re-run with "
-            f"--y-tolerance 5 and compare.\n"
-        )
+        probe = hints["y_tolerance_probe"]
+        pages = ", ".join(str(n) for n in probe["pages"])
+        if probe["after"] < probe["before"]:
+            sys.stderr.write(
+                f"hint: {hints['orphan_list_markers']} line(s) contain nothing "
+                f"but a list marker — a bullet in a smaller point size falls "
+                f"outside pdfplumber's absolute 3 pt line grouping, becomes "
+                f"its own line and sorts AFTER the item it introduces. "
+                f"--y-tolerance {probe['value']:g} reunited "
+                f"{probe['before'] - probe['after']} of {probe['before']} on "
+                f"page(s) {pages}; re-run with it.\n"
+            )
+        else:
+            sys.stderr.write(
+                f"hint: {hints['orphan_list_markers']} line(s) contain nothing "
+                f"but a list marker, and --y-tolerance {probe['value']:g} "
+                f"changes NOTHING on page(s) {pages} — measured, not assumed. "
+                f"The marker is separated by something the line-grouping "
+                f"tolerance does not control: an element interposed between "
+                f"marker and item (an arXiv-style 'Report issue' line), an "
+                f"empty list item, or a gap wider than the tolerance. Read "
+                f"those pages before composing their lists.\n"
+            )
     if _hint_phantom_tables(hints, dump["table_strategy"]):
-        sys.stderr.write(
-            f"hint: {hints['single_column_tables']} of {hints['tables']} "
-            f"extracted table(s) have a single column, which is what a shaded "
-            f"paragraph looks like once its background rectangle is read as a "
-            f"table edge. Re-run with --table-strategy lines_strict to see "
-            f"which of them survive; that count is a floor, multi-column "
-            f"phantoms are indistinguishable from real tables here.\n"
-        )
+        probe = hints["lines_strict_probe"]
+        pages = ", ".join(str(n) for n in probe["pages"])
+        if probe["after"] < probe["before"]:
+            sys.stderr.write(
+                f"hint: {hints['single_column_tables']} of {hints['tables']} "
+                f"extracted table(s) have a single column — the shape a shaded "
+                f"paragraph takes once its background rectangle is read as a "
+                f"table edge. --table-strategy lines_strict removed "
+                f"{probe['before'] - probe['after']} of {probe['before']} on "
+                f"page(s) {pages}; re-run with it. That count is a floor: "
+                f"multi-column phantoms are indistinguishable from data here.\n"
+            )
+        else:
+            sys.stderr.write(
+                f"hint: {hints['single_column_tables']} of {hints['tables']} "
+                f"extracted table(s) have a single column, but "
+                f"--table-strategy lines_strict keeps every one of them on "
+                f"page(s) {pages} — measured, not assumed. Their edges are "
+                f"stroked, so this is not shading, and neither knob helps: it "
+                f"is a real one-column table, a ruled layout box, or a "
+                f"fragment of a wider table that detection split (seen on an "
+                f"arXiv export: a column of a 3-column table arriving as "
+                f"[['Bitcoin'], ['Accomp'], ['lishment']]). Read those pages "
+                f"before treating them as data.\n"
+            )
     return _EXIT_OK
 
 
