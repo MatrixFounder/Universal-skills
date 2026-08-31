@@ -65,6 +65,20 @@ Run the dump:
 python3 scripts/pdf_extract.py report.pdf -o dump.json
 ```
 
+**Where to put the two outputs.** The dump is an *intermediate* — step 2 reads
+it, step 3 does not ship it — so keep it out of the folder you are delivering.
+Without `-o` it goes to stdout, which is the cleanest form of all:
+
+```bash
+python3 scripts/pdf_extract.py report.pdf --extract-images out/report-img \
+    > /tmp/report-dump.json
+```
+
+The image directory is the opposite case: the Markdown references those files
+by relative path, so it has to sit **next to the `.md`**. `--extract-images`
+has no default and refuses an empty string precisely so nothing is ever
+scattered into the current directory by accident.
+
 When the default table detection misses a table (see §3.2), skip the script for
 that table and write inline `pdfplumber` code with tuned `table_settings`.
 
@@ -110,6 +124,16 @@ default. It is **not** the default all the same — on a dense layout a raised
 tolerance merges genuinely separate lines, and a new default needs a corpus
 run, not one document. Raise it when you see orphaned markers; leave it alone
 otherwise. The dump echoes the effective value in top-level `y_tolerance`.
+
+**You no longer have to notice it yourself.** Every dump carries
+`layout_hints.orphan_list_markers` — lines that hold a bare marker glyph and
+nothing else — and while `--y-tolerance` is still at its default and the count
+reaches 2, the script says so on stderr and names the flag. Measured: 32 on
+that Google Docs export, 3 on the `bullets.pdf` fixture, 0 on every other
+fixture and on three of the four dogfood documents. It is a *hint*: the exit
+code never moves, and the count stays in the dump even when the line is
+suppressed (which it is once you have passed the flag — repeating advice you
+have already taken is noise).
 
 ### 3.2 Tables without ruling lines
 `extract_tables()` defaults to the `lines` strategy — it finds tables drawn
@@ -159,7 +183,15 @@ you are looking at before trusting either — `stroke=False, fill=True` in
 [(r["stroke"], r["fill"]) for r in page.rects]   # (False, True) → shading
 ```
 
-The dump echoes the strategy in top-level `table_strategy`.
+The dump echoes the strategy in top-level `table_strategy`, and carries
+`layout_hints.single_column_tables` / `layout_hints.tables`. While the strategy
+is `lines` and either two tables or half of them come back one column wide, the
+script points at `lines_strict` on stderr. Read that number as a **floor, not a
+census**: a one-column "table" is unmistakably shading, but the same export
+also produced multi-column phantoms that look exactly like data from here — on
+the 29-page document `lines_strict` dropped 45 of 61 tables while only 23 were
+single-column. The hint tells you to compare the two runs; it does not do the
+comparing.
 
 Beyond these two knobs `pdf_extract.py` uses default settings — it is a dump,
 not a tuning console. Borderless-table tuning is inline-agent work.
@@ -451,6 +483,8 @@ Output — a structured JSON **dump** (not Markdown):
   "x_tolerance_ratio": 0.15,
   "y_tolerance": null,
   "table_strategy": "lines",
+  "layout_hints": {"orphan_list_markers": 0,
+                   "single_column_tables": 0, "tables": 3},
   "fonts": [{"name": "ABCDEF+NotoSans", "subtype": "Type0",
              "embedded": true, "encoding": "Identity-H",
              "has_tounicode": true}],

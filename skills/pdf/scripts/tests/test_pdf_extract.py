@@ -39,7 +39,7 @@ NEEDED_FIXTURES = [
     "digital.pdf", "scanlike.pdf", "encrypted.pdf", "glued.pdf",
     "unmapped.pdf", "embedded.pdf", "bullets.pdf", "shaded.pdf", "figure.pdf",
     "shifted.pdf", "flatfill.pdf", "shadowed.pdf", "nested.pdf",
-    "hugedecl.pdf",
+    "hugedecl.pdf", "onecol.pdf",
 ]
 
 
@@ -131,15 +131,20 @@ class TestStubUnits(unittest.TestCase):
     # TestScanClassifier (TC-UNIT-13..20).
 
     def test_extract_pdf_sentinel(self):
-        """TC-UNIT-05 — the DumpDocument carries exactly its 10 top-level keys,
-        so a consumer can rely on the shape and a dropped signal is caught."""
+        """TC-UNIT-05 — the DumpDocument carries exactly its 11 top-level keys,
+        so a consumer can rely on the shape and a dropped signal is caught.
+
+        `layout_hints` joined the set when the advisory counters landed; the
+        `--extract-images` keys (`images_dir` / `image_dpi` / `images_summary`)
+        are deliberately NOT here — they appear only with the flag, and this
+        run does not pass it."""
         dump = pdf_extract.extract_pdf(
             FIXTURES_DIR / "digital.pdf", password=None, layout=False)
         self.assertEqual(
             set(dump),
             {"page_count", "doc_scanned", "scanned_pages", "figure_pages",
              "text_layer_lossy", "x_tolerance_ratio", "y_tolerance",
-             "table_strategy", "fonts", "pages"})
+             "table_strategy", "layout_hints", "fonts", "pages"})
 
     def test_fixtures_exist_and_valid(self):
         """TC-UNIT-06 — every fixture is present and well-formed."""
@@ -2418,6 +2423,153 @@ class TestStdoutChannel(unittest.TestCase):
                 pdf_extract._emit({"pages": [{"text": "ok"}],
                                    "bad": object()}, None)
         self.assertEqual(fake.buffer.getvalue(), b"")
+
+
+class TestLayoutHints(unittest.TestCase):
+    """The two pdfplumber defaults that misread real documents are documented
+    in the reference — and dogfooding showed a caller only finds out by reading
+    it. These hints say the same thing at the moment it matters, without
+    touching the exit code."""
+
+    @classmethod
+    def setUpClass(cls):
+        _ensure_fixtures()
+
+    def _run(self, fixture, *flags):
+        proc = _run_cli([str(FIXTURES_DIR / fixture), *flags])
+        self.assertEqual(proc.returncode, 0, proc.stderr[-400:])
+        return json.loads(proc.stdout), proc.stderr
+
+    def test_layout_hints_are_always_in_the_dump(self):
+        """Like `figure_pages` / `scanned_pages`: a wrapper can branch on the
+        numbers even when the stderr line was suppressed."""
+        dump, _ = self._run("digital.pdf")
+        self.assertEqual(
+            sorted(dump["layout_hints"]),
+            ["orphan_list_markers", "single_column_tables", "tables"])
+
+    def test_a_document_with_neither_problem_gets_no_hint(self):
+        """The negative control: hints that fire on clean documents get
+        ignored, and then they are worse than none."""
+        dump, stderr = self._run("digital.pdf")
+        self.assertEqual(dump["layout_hints"]["orphan_list_markers"], 0)
+        self.assertEqual(dump["layout_hints"]["single_column_tables"], 0)
+        self.assertNotIn("hint:", stderr)
+
+    def test_orphaned_list_markers_are_counted_and_named(self):
+        """`bullets.pdf` is the fixture for §3.1: its markers are a smaller
+        point size, so pdfplumber's absolute 3 pt grouping puts each on its own
+        line AFTER its item."""
+        dump, stderr = self._run("bullets.pdf")
+        self.assertEqual(dump["layout_hints"]["orphan_list_markers"], 3)
+        self.assertIn("hint:", stderr)
+        self.assertIn("--y-tolerance 5", stderr)
+
+    def test_the_marker_hint_is_silent_once_the_knob_is_turned(self):
+        """Repeating advice the caller has already taken is noise.
+
+        `3.5` is deliberate, and the first version of this test was wrong for
+        using `5`: at `5` the markers are reunited, the count falls to 0 and the
+        hint would be silent even with the gate deleted — a mutation proved it
+        (the test passed against the mutant). At `3.5` the tolerance is raised
+        but too little to fix anything, so the count stays at 3 and the gate is
+        the only thing that can silence the line."""
+        dump, stderr = self._run("bullets.pdf", "--y-tolerance", "3.5")
+        self.assertEqual(dump["layout_hints"]["orphan_list_markers"], 3)
+        self.assertNotIn("hint:", stderr)
+
+    def test_the_marker_count_drops_to_zero_at_the_advised_value(self):
+        """The other half: the advice the hint gives has to actually work."""
+        dump, stderr = self._run("bullets.pdf", "--y-tolerance", "5")
+        self.assertEqual(dump["layout_hints"]["orphan_list_markers"], 0)
+        self.assertNotIn("hint:", stderr)
+
+    def test_shading_phantom_tables_are_counted_and_named(self):
+        """`shaded.pdf` is the fixture for §3.2: a filled background rectangle
+        is read as a table edge, so the paragraph comes back as a one-column
+        table."""
+        dump, stderr = self._run("shaded.pdf")
+        hints = dump["layout_hints"]
+        self.assertGreaterEqual(hints["single_column_tables"], 1)
+        self.assertGreater(hints["tables"], 0)
+        self.assertIn("--table-strategy lines_strict", stderr)
+
+    def test_the_table_hint_is_silent_under_lines_strict(self):
+        """`onecol.pdf`, not `shaded.pdf`: under `lines_strict` the shaded
+        fixture's count falls to 0, so that version of this test passed against
+        a mutant with the strategy gate deleted. The one-column fixture is
+        genuinely ruled, so strict KEEPS it — the count stays 1 and only the
+        gate can silence the hint."""
+        dump, stderr = self._run("onecol.pdf", "--table-strategy",
+                                 "lines_strict")
+        self.assertEqual(dump["layout_hints"]["single_column_tables"], 1)
+        self.assertNotIn("hint:", stderr)
+
+    def test_the_table_hint_also_fires_on_a_real_one_column_table(self):
+        """The hint's honest failure mode, pinned so nobody 'fixes' it blind.
+
+        Shading read as a table and a real one-column table are the same shape
+        by the time extraction is done. The hint says "compare the two runs"
+        rather than "this is shading" precisely because of this case: here the
+        comparison shows the table surviving `lines_strict`, which is the
+        answer."""
+        dump, stderr = self._run("onecol.pdf")
+        self.assertEqual(dump["layout_hints"]["single_column_tables"], 1)
+        self.assertIn("--table-strategy lines_strict", stderr)
+
+    def test_a_hint_never_moves_the_exit_code(self):
+        """Advisory means advisory: exit 0 stays exit 0, and exit 10 keeps
+        meaning `DocumentScanned` and nothing else."""
+        proc = _run_cli([str(FIXTURES_DIR / "bullets.pdf")])
+        self.assertEqual(proc.returncode, 0)
+        self.assertIn("hint:", proc.stderr)
+
+    def test_the_marker_count_ignores_markers_that_are_not_alone(self):
+        """A marker glued to its item is the CORRECT layout — counting it
+        would fire the hint on every well-formed bulleted document."""
+        pages = [{"text": "• First item\n•\n• Third item\n*\nplain line"}]
+        self.assertEqual(pdf_extract._orphan_list_markers(pages), 2)
+
+    def test_the_marker_count_ignores_ordinary_one_character_lines(self):
+        """`1`, `A`, `#` are not list markers; only the bullet glyphs are."""
+        pages = [{"text": "1\nA\n#\nx"}]
+        self.assertEqual(pdf_extract._orphan_list_markers(pages), 0)
+
+    def test_the_table_count_ignores_real_multi_column_tables(self):
+        """The signal is EVERY row being one cell, not any of them.
+
+        The ragged table here is the case that matters and the one the first
+        version of this test missed: extraction routinely returns a table whose
+        last row has a single cell (a totals line, a merged footer). Counting
+        `any` such row instead of `all` would flag it as shading — a mutation
+        proved the earlier data could not tell the two apart."""
+        ragged = [["a", "b"], ["c", "d"], ["total"]]
+        pages = [{"tables": [[["a"], ["b"]], ragged,
+                             [["a", "b"], ["c", "d"]], []]}]
+        self.assertEqual(pdf_extract._single_column_tables(pages), 1)
+
+    def test_the_table_hint_fires_on_count_or_on_ratio(self):
+        """The threshold pair, tested as numbers because no fixture covers the
+        count-without-ratio corner: 23 of 61 (ratio 0.38) is the measured shape
+        of the Google Docs export, and it has to fire."""
+        fire = lambda single, total: pdf_extract._hint_phantom_tables(
+            {"single_column_tables": single, "tables": total}, "lines")
+        self.assertTrue(fire(23, 61))    # count wins, ratio 0.38
+        self.assertTrue(fire(1, 2))      # ratio wins, count 1 (shaded.pdf)
+        self.assertFalse(fire(1, 3))     # neither: 1 table, ratio 0.33
+        self.assertFalse(fire(0, 9))     # nothing to say
+        self.assertFalse(fire(0, 0))     # no tables at all — no division
+        self.assertFalse(pdf_extract._hint_phantom_tables(
+            {"single_column_tables": 23, "tables": 61}, "lines_strict"))
+
+    def test_the_marker_hint_needs_more_than_one_stray_glyph(self):
+        """A lone `*` on its own line happens in real prose; a broken list
+        repeats. The gate on `y_tolerance` is tested here as a number too."""
+        fire = pdf_extract._hint_orphan_markers
+        self.assertTrue(fire({"orphan_list_markers": 2}, None))
+        self.assertFalse(fire({"orphan_list_markers": 1}, None))
+        self.assertFalse(fire({"orphan_list_markers": 32}, 5))
+
 
 
 if __name__ == "__main__":

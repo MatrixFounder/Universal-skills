@@ -368,6 +368,29 @@ def build_shaded_pdf(path: Path) -> None:
     c.save()
 
 
+ONECOL_TABLE = [["Показатель"], ["Доступность"], ["RTO"], ["RPO"]]
+
+
+def build_onecol_pdf(path: Path) -> None:
+    """A genuinely *ruled* one-column table — the false positive the
+    `single_column_tables` hint cannot avoid.
+
+    Shading read as a table and a real single-column table are indistinguishable
+    once extraction is done: both arrive as rows of one cell. This fixture is
+    the honest half of that pair — the hint fires here and is WRONG, and the
+    tests say so out loud rather than pretending the signal is precise. It is
+    also the only fixture where the count survives `--table-strategy
+    lines_strict` (the ruling is stroked, so strict keeps it), which is what
+    makes it the test for the hint's strategy gate."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    c = canvas.Canvas(str(path), pagesize=letter)
+    c.setFont("Helvetica", 11)
+    c.drawString(72, 740, "A real one-column table, drawn with stroked rules.")
+    _draw_ruled_table(c, 72, 620, 160, 24, ONECOL_TABLE)
+    c.showPage()
+    c.save()
+
+
 def _draw_page_backdrop(c) -> None:
     """Paint the page-sized `stroke=0, fill=1` rectangle that several
     producers (Google Docs Renderer among them) put behind every page. It is a
@@ -731,6 +754,7 @@ def build_all(fixtures_dir: Path) -> dict[str, Path]:
         "shadowed": fixtures_dir / "shadowed.pdf",
         "nested": fixtures_dir / "nested.pdf",
         "hugedecl": fixtures_dir / "hugedecl.pdf",
+        "onecol": fixtures_dir / "onecol.pdf",
     }
     build_digital_pdf(paths["digital"])
     build_scanlike_pdf(paths["scanlike"])
@@ -746,6 +770,7 @@ def build_all(fixtures_dir: Path) -> dict[str, Path]:
     build_shadowed_pdf(paths["shadowed"])
     build_nested_pdf(paths["nested"])
     build_hugedecl_pdf(paths["hugedecl"])
+    build_onecol_pdf(paths["onecol"])
     return paths
 
 

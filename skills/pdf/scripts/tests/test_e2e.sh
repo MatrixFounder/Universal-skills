@@ -788,6 +788,31 @@ assert len(d['pages'][1]['tables'][0]) == 3, d['pages'][1]['tables']
     && ok "pdf_extract: --table-strategy lines_strict drops phantom tables" \
     || nok "pdf_extract --table-strategy" "exit=$rc"
 
+# layout hints: the dump names the knob the caller would otherwise have to
+# find in the reference — advisory, so the exit code must not move
+set +e
+out=$("$PY" pdf_extract.py "$FX/bullets.pdf" 2>"$TMP/hint.err")
+rc=$?
+set -e
+[ "$rc" -eq 0 ] \
+    && echo "$out" | "$PY" -c "
+import json, sys
+d = json.load(sys.stdin)
+assert d['layout_hints']['orphan_list_markers'] == 3, d['layout_hints']
+" 2>/dev/null \
+    && grep -q -- "--y-tolerance 5" "$TMP/hint.err" \
+    && ok "pdf_extract: orphaned markers → stderr hint naming the knob, exit 0" \
+    || nok "pdf_extract layout hint" "exit=$rc"
+
+# and it goes quiet once the caller has turned that knob
+set +e
+"$PY" pdf_extract.py "$FX/bullets.pdf" --y-tolerance 5 >/dev/null 2>"$TMP/quiet.err"
+rc=$?
+set -e
+[ "$rc" -eq 0 ] && ! grep -q "^hint:" "$TMP/quiet.err" \
+    && ok "pdf_extract: hint silent once --y-tolerance is set (control)" \
+    || nok "pdf_extract hint gate" "exit=$rc"
+
 # full unit + E2E suite for pdf_extract.py
 set +e
 out=$("$PY" -m unittest tests.test_pdf_extract 2>&1)

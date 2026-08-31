@@ -45,6 +45,23 @@ top-level ``figure_pages`` with an stderr warning; it deliberately does NOT
 feed ``doc_scanned`` and does NOT change the exit code, because exit ``10``
 means "the whole document is a scan" and that contract is public.
 
+Layout hints (v1.4): two pdfplumber defaults misread documents real producers
+emit, both have a documented remedy, and dogfooding showed a caller finds that
+remedy only by reading the reference — so the dump now says it. Every dump
+carries ``layout_hints`` (``orphan_list_markers`` / ``single_column_tables`` /
+``tables``), and while the matching knob is still at its default the script
+names it on stderr: ``--y-tolerance 5`` for markers a smaller point size pushed
+onto their own line, ``--table-strategy lines_strict`` for background shading
+read as a table. Advisory in the strict sense — the exit code never moves, and
+the counters stay in the dump when the line is suppressed (it is, once the flag
+has been passed: repeating advice the caller has taken is noise). Measured on
+four real documents: 32 orphaned markers and 23-of-61 one-column tables on one
+Google Docs export, silence on the other three. ``single_column_tables`` is a
+*floor*, not a phantom census — ``lines_strict`` dropped 45 of those 61 tables,
+and the multi-column phantoms among them are indistinguishable from data here —
+and it fires on a genuinely ruled one-column table too, which the ``onecol.pdf``
+fixture pins deliberately.
+
 Lossy-text-layer detection (v1.2): a producer that embeds no fonts and writes
 in an alphabet its single-byte Latin encoding cannot express drops those
 characters *when the file is written* — the content stream holds spaces where
@@ -390,6 +407,16 @@ _MAX_RESOURCE_DEPTH = 8
 
 _TABLE_STRATEGIES = ("lines", "lines_strict")
 _DEFAULT_TABLE_STRATEGY = "lines"
+
+# Layout hints (advisory, exit code untouched). A caller who never reads the
+# reference gets the same two remedies the reference documents, at the moment
+# they are needed. Both thresholds are measured, not guessed — see
+# `_orphan_list_markers` / `_single_column_tables`.
+_LIST_MARKERS = frozenset("•●▪‣◦○□◆➔▸*-–—·+")
+_ORPHAN_MARKER_HINT = 2      # one stray glyph is noise; a broken list repeats
+_PHANTOM_TABLE_HINT = 2      # …or half the tables, whichever comes first
+_PHANTOM_TABLE_RATIO = 0.5
+
 
 _EXIT_OK = 0
 _EXIT_FAIL = 1
@@ -1650,6 +1677,14 @@ def extract_pdf(
         "x_tolerance_ratio": ratio,
         "y_tolerance": y_tol,
         "table_strategy": table_strategy,
+        # Always present, like `figure_pages` / `scanned_pages`: a wrapper can
+        # branch on the numbers even when the stderr hint was suppressed
+        # (which happens once the caller has already turned the knob).
+        "layout_hints": {
+            "orphan_list_markers": _orphan_list_markers(pages),
+            "single_column_tables": _single_column_tables(pages),
+            "tables": sum(len(p["tables"]) for p in pages),
+        },
         "fonts": fonts,
         "pages": pages,
     }
@@ -1683,6 +1718,81 @@ def _same_path(a: Path, b: Path) -> bool:
         return a.resolve() == b.resolve()
     except OSError:
         return False
+
+
+def _orphan_list_markers(pages: list[dict]) -> int:
+    """Count lines that hold a bare list marker and nothing else.
+
+    pdfplumber groups words into lines with an *absolute* 3 pt tolerance. A
+    bullet set a couple of points smaller than its item — the default in Google
+    Docs and Confluence exports — falls outside that band, becomes its own
+    line, and sorts AFTER the text it belongs to, so the Markdown a caller
+    composes has the marker under the item instead of before it. Measured: 32
+    such lines in a 29-page Google Docs export, 3 in the `bullets.pdf` fixture,
+    0 in every other fixture; `--y-tolerance 5` takes all of them to 0.
+
+    Counting is deliberately dumb — a stripped line of exactly one marker
+    character — because that is the shape of the defect. It cannot see a marker
+    glued to a wrong item, and a document that legitimately puts a lone `*` on
+    its own line is counted here too; that is why the hint needs
+    `_ORPHAN_MARKER_HINT` of them before it says anything.
+    """
+    return sum(
+        1
+        for page in pages
+        for line in (page.get("text") or "").split("\n")
+        if len(line.strip()) == 1 and line.strip() in _LIST_MARKERS
+    )
+
+
+def _single_column_tables(pages: list[dict]) -> int:
+    """Count extracted tables whose every row holds exactly one cell.
+
+    Under the default `lines` strategy pdfplumber treats a filled background
+    rectangle as a table edge, so a shaded paragraph comes back as a "table" of
+    one column. Measured: 23 of 61 tables in the Google Docs export, 5 of 6 on
+    a Wikipedia print, 1 of 2 in the `shaded.pdf` fixture, 0 in every clean
+    one; `--table-strategy lines_strict` takes all of them to 0.
+
+    This is a *floor*, not the phantom count: the same export also produced
+    multi-column phantoms, which look exactly like real tables from here (the
+    strict run dropped 45 tables, of which only 23 were single-column). The
+    hint says what was measured and points at the strategy that settles it.
+    """
+    return sum(
+        1
+        for page in pages
+        for table in (page.get("tables") or [])
+        if table and all(len(row) == 1 for row in table)
+    )
+
+
+def _hint_orphan_markers(hints: dict, y_tolerance: float | None) -> bool:
+    """Should the orphaned-marker hint be printed?
+
+    Two conditions, and the second is not cosmetic: once the caller has passed
+    `--y-tolerance`, the decision is theirs and repeating the advice is noise.
+    The count stays in the dump either way, so a wrapper can still see it.
+    """
+    return (hints["orphan_list_markers"] >= _ORPHAN_MARKER_HINT
+            and y_tolerance is None)
+
+
+def _hint_phantom_tables(hints: dict, table_strategy: str) -> bool:
+    """Should the single-column-table hint be printed?
+
+    Fires on `_PHANTOM_TABLE_HINT` tables **or** on half of them, whichever
+    comes first: two one-column tables in a 60-table document is already worth
+    a look (measured: 23 of 61 on a Google Docs export, a ratio of 0.38), and
+    so is one of two (the `shaded.pdf` fixture). One of three is neither, and
+    stays quiet. Silent under `lines_strict` for the same reason as above — the
+    caller has already run the experiment this hint asks for.
+    """
+    if table_strategy != "lines" or not hints["tables"]:
+        return False
+    return (hints["single_column_tables"] >= _PHANTOM_TABLE_HINT
+            or hints["single_column_tables"] / hints["tables"]
+            >= _PHANTOM_TABLE_RATIO)
 
 
 def _emit(dump: dict, out_path: Path | None) -> None:
@@ -2015,6 +2125,29 @@ def main(argv: list[str] | None = None) -> int:
             "embedded fonts. (Text inside embedded images is unaffected and "
             "still readable — render the pages to recover it.) See the dump's "
             "`fonts` list.\n"
+        )
+    # Layout hints, last because they are advisory: both leave the exit code
+    # alone, and each fires only while its remedy is still on the table. A
+    # caller who already passed the flag has made the call; repeating the
+    # advice would be noise, and the counts stay in `layout_hints` regardless.
+    hints = dump["layout_hints"]
+    if _hint_orphan_markers(hints, dump["y_tolerance"]):
+        sys.stderr.write(
+            f"hint: {hints['orphan_list_markers']} line(s) contain nothing but "
+            f"a list marker. pdfplumber groups lines with an absolute 3 pt "
+            f"tolerance, so a bullet in a smaller point size becomes its own "
+            f"line and sorts AFTER the item it belongs to — composing Markdown "
+            f"from this dump puts the marker under its text. Re-run with "
+            f"--y-tolerance 5 and compare.\n"
+        )
+    if _hint_phantom_tables(hints, dump["table_strategy"]):
+        sys.stderr.write(
+            f"hint: {hints['single_column_tables']} of {hints['tables']} "
+            f"extracted table(s) have a single column, which is what a shaded "
+            f"paragraph looks like once its background rectangle is read as a "
+            f"table edge. Re-run with --table-strategy lines_strict to see "
+            f"which of them survive; that count is a floor, multi-column "
+            f"phantoms are indistinguishable from real tables here.\n"
         )
     return _EXIT_OK
 
