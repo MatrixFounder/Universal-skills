@@ -1,6 +1,6 @@
 """Generate the `pdf_extract.py` test fixtures.
 
-Nine fixtures, all built deterministically from code (no opaque binary blobs —
+Fourteen fixtures, all built deterministically from code (no opaque binary blobs —
 this builder IS the provenance, per TASK 013 R11.3):
 
   digital.pdf    — 2 pages of real selectable text + one ruled 3x3 table.
@@ -43,7 +43,19 @@ this builder IS the provenance, per TASK 013 R11.3):
                    caption, (4) a screenshot beside plenty of live prose,
                    (5) a heavily ruled table page. Only pages 2 and 3 are
                    figure-dominant; 4 and 5 are the false-positive controls for
-                   the coverage and char-count conjuncts respectively.
+                   the coverage and char-count conjuncts respectively. Pages 6
+                   and 7 add the page-sized background wash, without and with a
+                   figure on top. It doubles as the `--extract-images` fixture:
+                   one raster page, two vector-figure pages, the same raster
+                   placed twice (the sha1-dedup case) and two pages that must
+                   yield nothing.
+  shifted.pdf    — a vector figure on a page whose MediaBox does not start at
+                   (0, 0): the crop-geometry regression for pdf-13, where an
+                   uncorrected transform silently frames the wrong region.
+  flatfill.pdf   — a pie chart of unoutlined filled wedges: the measured COST of
+                   pdf-13's stroked-path test. Neither extracted nor flagged
+                   `figure_dominant`; the fixture pins that honest-scope claim
+                   so it cannot quietly become false.
 
 The fixtures live under ``tests/fixtures/`` (gitignored — the skill ignores
 ``*.pdf``); re-run this module (``python3 _pdf_extract_fixtures.py``) to
@@ -59,6 +71,7 @@ from pathlib import Path
 import reportlab  # type: ignore
 from PIL import Image, ImageDraw, ImageFont  # type: ignore
 from pypdf import PdfReader, PdfWriter  # type: ignore
+from pypdf.generic import NameObject, NumberObject  # type: ignore
 from reportlab.lib import colors  # type: ignore
 from reportlab.lib.pagesizes import letter  # type: ignore
 from reportlab.lib.styles import getSampleStyleSheet  # type: ignore
@@ -378,7 +391,7 @@ def _diagram_png(path: Path) -> None:
 
 
 def build_figure_pdf(path: Path) -> None:
-    """A 5-page PDF, one page per case measured in
+    """A 7-page PDF, one page per case measured in
     PDF-EXTRACT-FIGURE-PAGE-UNFLAGGED.
 
     1. ordinary prose — no coverage, no flag;
@@ -502,6 +515,204 @@ def build_figure_pdf(path: Path) -> None:
         os.unlink(png_path)
 
 
+# Declared side length for hugedecl.pdf: 40000x40000 = 1.6 G pixels, far
+# past any real image and past `_IMAGE_MAX_PIXELS`.
+HUGE_DECL_SIDE = 40000
+
+SHIFTED_MEDIABOX = (20, -30, 632, 762)
+# A CropBox deliberately DIFFERENT from the MediaBox. Poppler renders the
+# MediaBox by default (`pdftocairo` needs `-cropbox` to do otherwise) and
+# pdfplumber measures against it too, so the correct crop transform reads the
+# MediaBox — reaching for the CropBox is the intuitive wrong choice, and
+# without this divergence the two are indistinguishable.
+SHIFTED_CROPBOX = (70, 20, 582, 692)
+
+
+def build_shifted_pdf(path: Path) -> None:
+    """A 1-page vector figure on a page whose MediaBox does NOT start at (0, 0).
+
+    The regression fixture for the crop geometry (pdf-13). pdfplumber reports a
+    path's `x` in absolute PDF space and its `y` relative to the page, while
+    Poppler renders the MediaBox with its origin at the image's top-left, so the
+    two frames drift apart by exactly the MediaBox origin. On the usual `(0, 0)`
+    page the correction is the identity, which is why an uncorrected crop passes
+    every other fixture and silently frames the wrong region here: measured on
+    this box, a path pdfplumber puts at `(100, 142)` renders at `(78.7, 170.4)`.
+
+    The page also carries a CropBox that differs from the MediaBox, so the
+    fixture separates the two: Poppler renders the MediaBox unless asked
+    otherwise, so a transform that reads `page.cropbox` — the intuitive choice
+    for "the visible page" — mis-crops here and nowhere else.
+
+    The figure is drawn well inside the shifted box so the crop has room, and it
+    is the same stroked box-and-connector diagram as `figure.pdf` page 3 so the
+    only variable between the two is the page geometry."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp:
+        raw_path = tmp.name
+    try:
+        c = canvas.Canvas(raw_path, pagesize=letter)
+        c.setFont("Helvetica", 10)
+        c.drawString(100, 700, FIGURE_HEADER)
+        c.setStrokeColor(colors.black)
+        c.setLineWidth(2)
+        for i in range(3):
+            x = 120 + i * 140
+            c.rect(x, 380, 110, 80, stroke=1, fill=0)
+            if i < 2:
+                c.line(x + 110, 420, x + 140, 420)
+        c.showPage()
+        c.save()
+
+        reader = PdfReader(raw_path)
+        writer = PdfWriter()
+        page = reader.pages[0]
+        page.mediabox.lower_left = SHIFTED_MEDIABOX[:2]
+        page.mediabox.upper_right = SHIFTED_MEDIABOX[2:]
+        page.cropbox.lower_left = SHIFTED_CROPBOX[:2]
+        page.cropbox.upper_right = SHIFTED_CROPBOX[2:]
+        writer.add_page(page)
+        with open(path, "wb") as fh:
+            writer.write(fh)
+    finally:
+        os.unlink(raw_path)
+
+
+def build_flatfill_pdf(path: Path) -> None:
+    """A flat-fill pie chart: the measured cost of the stroked-path test.
+
+    Four filled wedges with NO outline — matplotlib's and Excel's default pie —
+    on an otherwise sparse page. `_is_figure_cluster` rejects it (0 stroked
+    members) and it is too small a share of the sheet for `figure_dominant`
+    (measured `vector_coverage` 0.0749 against the 0.25 threshold), so the
+    figure appears nowhere in the dump. This fixture pins that honest-scope
+    claim: if a future change starts extracting it, or starts flagging its
+    page, the docstring and the reference are out of date and the test says so.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    c = canvas.Canvas(str(path), pagesize=letter)
+    c.setFont("Helvetica", 11)
+    c.drawString(72, 730, "Market share by segment")
+    palette = [colors.Color(0.20, 0.45, 0.75), colors.Color(0.85, 0.35, 0.20),
+               colors.Color(0.25, 0.60, 0.30), colors.Color(0.60, 0.45, 0.75)]
+    start = 0
+    for index, extent in enumerate((120, 95, 80, 65)):
+        c.setFillColor(palette[index])
+        wedge = c.beginPath()
+        wedge.moveTo(300, 500)
+        wedge.arcTo(200, 400, 400, 600, start, extent)
+        wedge.close()
+        c.drawPath(wedge, stroke=0, fill=1)
+        start += extent
+    c.setFillColor(colors.black)
+    c.setFont("Helvetica", 9)
+    c.drawString(72, 360, "Figure 1. Share of revenue by segment, FY24.")
+    c.showPage()
+    c.save()
+
+
+def build_shadowed_pdf(path: Path) -> None:
+    """An image XObject carrying `/W` and `/H` ALONGSIDE `/Width`/`/Height`.
+
+    The parser-differential fixture. pdfminer resolves the size through
+    ``get_any(("W", "Width"))`` — first key present wins — while pypdf reads
+    ``/Width`` only, so a 14-byte edit makes pdfplumber report 1x1 for an image
+    pypdf decodes at full size. Anything that sizes the decode guard from
+    pdfplumber's ``srcsize`` is therefore reading a number the attacker chose
+    independently of the allocation. Measured on this file: srcsize (1, 1),
+    real 400x300."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp:
+        png_path = tmp.name
+    try:
+        Image.new("RGB", (400, 300), (120, 40, 160)).save(png_path)
+        with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp:
+            raw_path = tmp.name
+        try:
+            c = canvas.Canvas(raw_path, pagesize=letter)
+            c.drawImage(png_path, 60, 500, width=200, height=150)
+            c.showPage()
+            c.save()
+            reader = PdfReader(raw_path)
+            writer = PdfWriter()
+            page = reader.pages[0]
+            xobjects = page["/Resources"]["/XObject"]
+            for key in list(xobjects.keys()):
+                entry = xobjects[key].get_object()
+                if entry.get("/Subtype") == "/Image":
+                    entry[NameObject("/W")] = NumberObject(1)
+                    entry[NameObject("/H")] = NumberObject(1)
+            writer.add_page(page)
+            with open(path, "wb") as fh:
+                writer.write(fh)
+        finally:
+            os.unlink(raw_path)
+    finally:
+        os.unlink(png_path)
+
+
+def build_nested_pdf(path: Path) -> None:
+    """A raster that lives inside a Form XObject rather than at page level.
+
+    The enumeration must walk into forms. A hand-rolled scan of
+    ``/Resources/XObject`` sees only the form (``/Subtype /Form``) and loses the
+    image entirely — verified — which is why enumeration goes through pypdf's
+    own recursive key list."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp:
+        png_path = tmp.name
+    try:
+        Image.new("RGB", (300, 200), (30, 160, 90)).save(png_path)
+        c = canvas.Canvas(str(path), pagesize=letter)
+        c.beginForm("innerform")
+        c.drawImage(png_path, 0, 0, width=200, height=133)
+        c.endForm()
+        c.saveState()
+        c.translate(80, 500)
+        c.doForm("innerform")
+        c.restoreState()
+        c.showPage()
+        c.save()
+    finally:
+        os.unlink(png_path)
+
+
+def build_hugedecl_pdf(path: Path) -> None:
+    """An image declaring an absurd `/Width` x `/Height` over a tiny stream.
+
+    The decode allocation is driven by the declaration, so this is the file
+    that separates "the guard runs before the decode" from "the guard runs
+    after and merely declines to write the result"."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp:
+        png_path = tmp.name
+    try:
+        Image.new("RGB", (40, 30), (200, 80, 20)).save(png_path)
+        with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp:
+            raw_path = tmp.name
+        try:
+            c = canvas.Canvas(raw_path, pagesize=letter)
+            c.drawImage(png_path, 60, 500, width=200, height=150)
+            c.showPage()
+            c.save()
+            reader = PdfReader(raw_path)
+            writer = PdfWriter()
+            page = reader.pages[0]
+            xobjects = page["/Resources"]["/XObject"]
+            for key in list(xobjects.keys()):
+                entry = xobjects[key].get_object()
+                if entry.get("/Subtype") == "/Image":
+                    entry[NameObject("/Width")] = NumberObject(HUGE_DECL_SIDE)
+                    entry[NameObject("/Height")] = NumberObject(HUGE_DECL_SIDE)
+            writer.add_page(page)
+            with open(path, "wb") as fh:
+                writer.write(fh)
+        finally:
+            os.unlink(raw_path)
+    finally:
+        os.unlink(png_path)
+
+
 def build_all(fixtures_dir: Path) -> dict[str, Path]:
     """Build every fixture into `fixtures_dir`; return the path map."""
     fixtures_dir.mkdir(parents=True, exist_ok=True)
@@ -515,6 +726,11 @@ def build_all(fixtures_dir: Path) -> dict[str, Path]:
         "bullets": fixtures_dir / "bullets.pdf",
         "shaded": fixtures_dir / "shaded.pdf",
         "figure": fixtures_dir / "figure.pdf",
+        "shifted": fixtures_dir / "shifted.pdf",
+        "flatfill": fixtures_dir / "flatfill.pdf",
+        "shadowed": fixtures_dir / "shadowed.pdf",
+        "nested": fixtures_dir / "nested.pdf",
+        "hugedecl": fixtures_dir / "hugedecl.pdf",
     }
     build_digital_pdf(paths["digital"])
     build_scanlike_pdf(paths["scanlike"])
@@ -525,6 +741,11 @@ def build_all(fixtures_dir: Path) -> dict[str, Path]:
     build_bullets_pdf(paths["bullets"])
     build_shaded_pdf(paths["shaded"])
     build_figure_pdf(paths["figure"])
+    build_shifted_pdf(paths["shifted"])
+    build_flatfill_pdf(paths["flatfill"])
+    build_shadowed_pdf(paths["shadowed"])
+    build_nested_pdf(paths["nested"])
+    build_hugedecl_pdf(paths["hugedecl"])
     return paths
 
 

@@ -12,6 +12,7 @@ Run:
 from __future__ import annotations
 
 import contextlib
+import hashlib
 import io
 import json
 import os
@@ -36,6 +37,8 @@ SCRIPT = SCRIPTS_DIR / "pdf_extract.py"
 NEEDED_FIXTURES = [
     "digital.pdf", "scanlike.pdf", "encrypted.pdf", "glued.pdf",
     "unmapped.pdf", "embedded.pdf", "bullets.pdf", "shaded.pdf", "figure.pdf",
+    "shifted.pdf", "flatfill.pdf", "shadowed.pdf", "nested.pdf",
+    "hugedecl.pdf",
 ]
 
 
@@ -1274,6 +1277,1053 @@ class TestFigurePages(unittest.TestCase):
         r = _run_cli([str(FIXTURES_DIR / "digital.pdf")])
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertNotIn("mostly figure", r.stderr)
+
+class TestImageExtraction(unittest.TestCase):
+    """`--extract-images DIR` — the raster and vector branches (pdf-13).
+
+    `figure.pdf` is the ground-truth fixture: page 1 prose (nothing), page 2 a
+    raster diagram, page 3 a vector diagram, page 4 the SAME raster as page 2
+    beside prose (the sha1-dedup case), page 5 a heavily ruled table (nothing —
+    table ruling is stroked, so only the table test rejects it), page 6 prose
+    behind a page-sized wash (nothing), page 7 a vector figure ON that wash
+    (the wash must not cost us the figure)."""
+
+    @classmethod
+    def setUpClass(cls):
+        _ensure_fixtures()
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.out = Path(self.tmp.name) / "images"
+        self.addCleanup(self.tmp.cleanup)
+
+    def _extract(self, name="figure.pdf", **kwargs):
+        kwargs.setdefault("images_dir", self.out)
+        return pdf_extract.extract_pdf(
+            FIXTURES_DIR / name, password=None, layout=False, **kwargs)
+
+    def _images(self, dump, page):
+        return dump["pages"][page - 1]["images"]
+
+    # --- the flag is off by default -------------------------------------
+    def test_no_flag_leaves_the_dump_shape_untouched(self):
+        """Without the flag nothing about the dump changes — no per-page
+        `images` key, no top-level image keys, no directory created."""
+        dump = pdf_extract.extract_pdf(
+            FIXTURES_DIR / "figure.pdf", password=None, layout=False)
+        for page in dump["pages"]:
+            self.assertNotIn("images", page)
+        for key in ("images_dir", "image_dpi", "images_summary"):
+            self.assertNotIn(key, dump)
+        self.assertFalse(self.out.exists())
+
+    def test_empty_list_means_looked_and_found_nothing(self):
+        """With the flag, a page with no artwork carries `images: []` — which
+        is a different statement from the key being absent."""
+        dump = self._extract()
+        self.assertEqual(self._images(dump, 1), [])
+        self.assertIn("images", dump["pages"][0])
+
+    # --- raster branch ---------------------------------------------------
+    def test_raster_placement_extracted_verbatim(self):
+        dump = self._extract()
+        records = self._images(dump, 2)
+        self.assertEqual(len(records), 1)
+        record = records[0]
+        self.assertEqual(record["kind"], "raster")
+        path = Path(record["file"])
+        self.assertTrue(path.is_file())
+        self.assertEqual(path.stat().st_size, record["bytes"])
+        self.assertEqual(
+            hashlib.sha1(path.read_bytes()).hexdigest(), record["sha1"])
+
+    def test_raster_record_carries_placement_geometry(self):
+        """bbox is the *placement* on the page (points); width/height are the
+        source image's pixels. They answer different questions and a caller
+        needs both."""
+        record = self._images(self._extract(), 2)[0]
+        x0, top, x1, bottom = record["bbox"]
+        self.assertGreater(x1 - x0, 100)
+        self.assertGreater(bottom - top, 100)
+        self.assertEqual((record["width"], record["height"]), (900, 700))
+        self.assertIsNotNone(record["name"])
+
+    def test_identical_images_share_one_file(self):
+        """The dedup guard. Pages 2 and 4 place the same PNG: two placements,
+        one file. A naive extractor writes it twice — the measured document
+        behind this guard placed one raster 31 times."""
+        dump = self._extract()
+        first = self._images(dump, 2)[0]
+        second = self._images(dump, 4)[0]
+        self.assertEqual(first["sha1"], second["sha1"])
+        self.assertEqual(first["file"], second["file"])
+        self.assertEqual(dump["images_summary"]["deduplicated"], 1)
+        self.assertLess(dump["images_summary"]["files_written"],
+                        dump["images_summary"]["placements"])
+
+    def test_page_sized_raster_is_not_a_figure(self):
+        """`scanlike.pdf` is one page-sized raster — a scan, whose repair is
+        OCR (exit 10), not a figure file. Nothing is written."""
+        dump = self._extract("scanlike.pdf")
+        self.assertEqual(self._images(dump, 1), [])
+        self.assertEqual(dump["images_summary"]["page_sized_skipped"], 1)
+        self.assertEqual(list(self.out.iterdir()), [])
+
+    def test_smask_planes_are_not_emitted_as_images(self):
+        """pypdf enumerates a page's image *resources*, which includes /SMask
+        alpha planes and images the page never paints. Going through
+        pdfplumber's placements is what keeps them out: page 2 paints one
+        image, so exactly one file appears for it."""
+        dump = self._extract()
+        self.assertEqual(len(self._images(dump, 2)), 1)
+
+    def test_one_bad_key_does_not_cost_the_rest_of_the_page(self):
+        """Enumeration resolves keys one at a time; a key that cannot be
+        resolved must not discard the keys that could."""
+        class _Broken:
+            def get_object(self):
+                raise ValueError("corrupt object")
+
+        class _Node(dict):
+            def raw_get(self, key):
+                return _Ref(7 if key == "/good" else 9)
+
+        class _Ref:
+            def __init__(self, idnum):
+                self.idnum = idnum
+
+        class _Images:
+            @staticmethod
+            def keys():
+                return ["/bad", "/good"]
+
+        class _Page(dict):
+            images = _Images()
+
+        node = _Node()
+        node["/bad"] = _Broken()
+        node["/good"] = mock.Mock(**{
+            "get_object.return_value": {"/Subtype": "/Image",
+                                        "/Width": 40, "/Height": 30}})
+        page = _Page()
+        page["/Resources"] = {"/XObject": node}
+
+        class _Reader:
+            pages = [page]
+
+        streams = pdf_extract._raster_streams(_Reader(), 0)
+        self.assertIn(7, streams,
+                      "the resolvable key was discarded with the broken one")
+
+    def test_oversized_raster_is_refused_BEFORE_it_is_decoded(self):
+        """The allocation is driven by the DECLARED dimensions, so the guard is
+        worthless unless it runs first. Asserted by making the decode itself
+        fail the test if it is ever reached — the previous version of this test
+        used a `property` on a Mock *instance*, which never fires, so its
+        negative control could not detect the ordering it advertised."""
+        def _boom(*args, **kwargs):
+            raise AssertionError("the image was decoded despite the cap")
+
+        with mock.patch.object(pdf_extract, "_fetch_raster", _boom):
+            dump = self._extract("hugedecl.pdf")
+        self.assertEqual(self._images(dump, 1), [])
+        self.assertEqual(dump["images_summary"]["oversized"], 1)
+        self.assertEqual(dump["images_summary"]["files_written"], 0)
+
+    def test_declared_size_is_read_where_the_decoder_reads_it(self):
+        """`/W`,`/H` shadow `/Width`,`/Height` for pdfminer but not for pypdf.
+        Sizing the guard from pdfplumber's `srcsize` therefore reads a number
+        the file can set independently of the allocation — and reports it in
+        the dump as the image's size."""
+        import pdfplumber
+        with pdfplumber.open(FIXTURES_DIR / "shadowed.pdf") as pdf:
+            srcsize = pdf.pages[0].images[0].get("srcsize")
+        self.assertEqual(tuple(srcsize), (1, 1),
+                         "fixture no longer carries the shadow keys")
+        record = self._images(self._extract("shadowed.pdf"), 1)[0]
+        self.assertEqual((record["width"], record["height"]), (400, 300),
+                         "the dump reported the shadowed size, not the real one")
+
+    def test_shadowed_declaration_cannot_slip_past_the_cap(self):
+        with mock.patch.object(pdf_extract, "_IMAGE_MAX_PIXELS", 1000):
+            def _boom(*args, **kwargs):
+                raise AssertionError("decoded despite the cap")
+            with mock.patch.object(pdf_extract, "_fetch_raster", _boom):
+                dump = self._extract("shadowed.pdf")
+        self.assertEqual(dump["images_summary"]["oversized"], 1)
+
+    def test_image_nested_in_a_form_xobject_is_still_found(self):
+        """Enumeration must walk into Form XObjects. A scan of the page's own
+        `/Resources/XObject` sees only the form and loses the image."""
+        dump = self._extract("nested.pdf")
+        records = self._images(dump, 1)
+        self.assertEqual(len(records), 1, "the nested image was lost")
+        self.assertEqual(records[0]["kind"], "raster")
+        self.assertEqual((records[0]["width"], records[0]["height"]), (300, 200))
+        self.assertTrue(Path(records[0]["file"]).is_file())
+
+    def test_a_planted_symlink_is_refused_not_followed(self):
+        """Every component of the filename is predictable to whoever supplied
+        the PDF, so a symlink planted in the destination would redirect the
+        write to its target with attacker-chosen bytes."""
+        self.out.mkdir(parents=True, exist_ok=True)
+        victim = Path(self.tmp.name) / "victim.txt"
+        victim.write_text("ORIGINAL", encoding="utf-8")
+        sink = pdf_extract._ImageSink(self.out, dpi=150)
+        digest = pdf_extract._sha1(b"payload")
+        planted = self.out / f"p001-r01-{digest[:8]}.png"
+        planted.symlink_to(victim)
+        with self.assertRaises(OSError):
+            sink.store(b"payload", page_number=1, kind="raster", suffix=".png")
+        self.assertEqual(victim.read_text(encoding="utf-8"), "ORIGINAL",
+                         "the write followed the symlink to its target")
+
+    def test_rewriting_identical_bytes_is_accepted(self):
+        """The idempotent re-run must stay idempotent under O_EXCL."""
+        sink = pdf_extract._ImageSink(self.out, dpi=150)
+        self.out.mkdir(parents=True, exist_ok=True)
+        first, _ = sink.store(b"same", page_number=1, kind="raster",
+                              suffix=".png")
+        again = pdf_extract._ImageSink(self.out, dpi=150)
+        second, _ = again.store(b"same", page_number=1, kind="raster",
+                                suffix=".png")
+        self.assertEqual(first, second)
+        self.assertEqual(Path(first).read_bytes(), b"same")
+
+    def test_an_image_branch_failure_never_costs_the_dump(self):
+        """`extract_pdf` promises the text and tables are the contract. An
+        exception from the artwork branch must be contained, counted and
+        reported — not propagated into a lost dump."""
+        with mock.patch.object(pdf_extract, "_extract_rasters",
+                               side_effect=RuntimeError("hostile image")):
+            dump = self._extract()
+        self.assertEqual(dump["page_count"], 7)
+        self.assertTrue(any(p["text"] for p in dump["pages"]),
+                        "the text extraction was lost")
+        self.assertGreaterEqual(dump["images_summary"]["page_failed"], 1)
+        for page in dump["pages"]:
+            self.assertEqual(page["images"], [])
+
+    def test_document_file_budget_is_bounded_and_reported(self):
+        """A per-page cap bounds one page; a document with many pages bounds
+        nothing. The budget stops unbounded output and says what it dropped."""
+        with mock.patch.object(pdf_extract, "_MAX_FILES_PER_DOCUMENT", 2):
+            dump = self._extract()
+        summary = dump["images_summary"]
+        self.assertEqual(summary["files_written"], 2)
+        self.assertGreaterEqual(summary["over_document_cap"], 1)
+        self.assertEqual(len(list(self.out.iterdir())), 2)
+        # A spent budget is not a page failure.
+        self.assertEqual(summary["page_failed"], 0)
+
+    def test_digest_dedup_covers_two_distinct_objects(self):
+        """The objid short-circuit handles the same object placed twice; the
+        DIGEST path is what collapses two *different* PDF objects that happen to
+        hold identical bytes. `figure.pdf` pages 2 and 4 share one object, so
+        nothing there exercises this — hence the explicit case."""
+        sink = pdf_extract._ImageSink(self.out, dpi=150)
+        self.out.mkdir(parents=True, exist_ok=True)
+        first, digest_a = sink.store(b"identical", page_number=1,
+                                     kind="raster", suffix=".png", objid=11)
+        second, digest_b = sink.store(b"identical", page_number=2,
+                                      kind="raster", suffix=".png", objid=22)
+        self.assertEqual(digest_a, digest_b)
+        self.assertEqual(first, second, "two distinct objects wrote two files")
+        self.assertEqual(sink.written, 1)
+        self.assertEqual(sink.deduped, 1)
+        self.assertEqual(len(list(self.out.iterdir())), 1)
+
+    def test_dedup_short_circuits_on_object_number(self):
+        """Hashing every placement re-hashes the same buffer once per
+        placement; an object already stored cannot have different bytes."""
+        sink = pdf_extract._ImageSink(self.out, dpi=150)
+        self.out.mkdir(parents=True, exist_ok=True)
+        sink.store(b"payload", page_number=1, kind="raster", suffix=".png",
+                   objid=42)
+        with mock.patch.object(pdf_extract, "_sha1",
+                               side_effect=AssertionError("re-hashed")):
+            path, _ = sink.store(b"payload", page_number=2, kind="raster",
+                                 suffix=".png", objid=42)
+        self.assertIn("p001-r01-", path)
+        self.assertEqual(sink.deduped, 1)
+
+
+    def test_undecodable_image_is_counted_never_faked(self):
+        with mock.patch.object(pdf_extract, "_raster_streams",
+                               return_value={}):
+            dump = self._extract()
+        self.assertEqual(self._images(dump, 2), [])
+        self.assertGreaterEqual(dump["images_summary"]["undecodable"], 1)
+
+    # --- vector branch ---------------------------------------------------
+    def test_vector_figure_is_rendered(self):
+        dump = self._extract()
+        records = self._images(dump, 3)
+        self.assertEqual(len(records), 1)
+        record = records[0]
+        self.assertEqual(record["kind"], "vector")
+        self.assertIsNone(record["name"])
+        self.assertTrue(Path(record["file"]).is_file())
+
+    def test_recorded_pixel_size_matches_the_written_png(self):
+        """The record's width/height are computed from the crop rectangle, not
+        read back from the file — so assert they agree with the real PNG."""
+        record = self._images(self._extract(), 3)[0]
+        data = Path(record["file"]).read_bytes()
+        self.assertEqual(data[:8], b"\x89PNG\r\n\x1a\n")
+        width = int.from_bytes(data[16:20], "big")
+        height = int.from_bytes(data[20:24], "big")
+        self.assertEqual((width, height), (record["width"], record["height"]))
+
+    def test_table_page_yields_no_figure(self):
+        """Page 5's ruling is *stroked*, so the stroke test cannot reject it;
+        only the table-overlap test can. Deleting that test resurrects this
+        false positive."""
+        self.assertEqual(self._images(self._extract(), 5), [])
+
+    def test_prose_behind_a_backdrop_yields_no_figure(self):
+        self.assertEqual(self._images(self._extract(), 6), [])
+
+    def test_backdrop_does_not_swallow_a_real_figure(self):
+        """Page 7 is page 3's figure drawn on the page-sized wash. Excluding
+        the wash must not cost us the figure."""
+        records = self._images(self._extract(), 7)
+        self.assertEqual(len(records), 1)
+        self.assertEqual(records[0]["kind"], "vector")
+
+    def test_the_phantom_table_fixture_yields_no_figure(self):
+        """`shaded.pdf` is the worst false-positive trap in the fixture set:
+        page 1 is zebra shading the `lines` strategy already misreads as a
+        table, page 2 a real ruled table with shading glued under it. Neither
+        is artwork, and nothing may be written for either."""
+        dump = self._extract("shaded.pdf")
+        self.assertEqual(self._images(dump, 1), [])
+        self.assertEqual(self._images(dump, 2), [])
+        self.assertEqual(dump["images_summary"]["files_written"], 0)
+
+    def test_an_ordinary_ruled_table_yields_no_figure(self):
+        dump = self._extract("digital.pdf")
+        self.assertEqual([i for p in dump["pages"] for i in p["images"]], [])
+
+    def test_shifted_mediabox_crop_frames_the_figure(self):
+        """The crop-geometry regression. On a MediaBox that does not start at
+        (0, 0) an uncorrected transform crops the wrong region — and does so
+        silently, since the file is still a valid PNG. The figure is drawn well
+        inside the sheet, so a correct crop touches neither edge; an
+        uncorrected one runs off the top."""
+        dump = self._extract("shifted.pdf")
+        records = self._images(dump, 1)
+        self.assertEqual(len(records), 1)
+        x0, top, x1, bottom = records[0]["bbox"]
+        self.assertGreater(top, 0.0)
+        self.assertGreater(x0, 0.0)
+        page_height = 792.0
+        self.assertLess(bottom, page_height)
+        # The drawn figure is 3 boxes 110 pt wide with 30 pt connectors, so
+        # 390 pt across and 80 pt tall, plus 4 pt of padding on each side.
+        # Literal numbers on purpose: reading the padding constant back would
+        # make the assertion agree with any value the code happens to hold.
+        self.assertAlmostEqual(x1 - x0, 398.0, delta=2.0)
+        self.assertAlmostEqual(bottom - top, 88.0, delta=2.0)
+
+    def _ink_margins(self, path):
+        """(left, top, right, bottom) whitespace, in points, around the drawing
+        inside a rendered crop."""
+        from PIL import Image, ImageOps
+        with Image.open(path) as image:
+            grey = image.convert("L")
+        ink = ImageOps.invert(grey).getbbox()
+        self.assertIsNotNone(ink, "the crop is blank — it framed nothing")
+        scale = 72.0 / pdf_extract._DEFAULT_IMAGE_DPI
+        width, height = grey.size
+        return (ink[0] * scale, ink[1] * scale,
+                (width - ink[2]) * scale, (height - ink[3]) * scale)
+
+    def test_crop_is_centred_on_the_figure_in_both_axes(self):
+        """The assertion that actually pins the crop geometry. A translation
+        error — dropping either MediaBox correction, or swapping them — moves
+        the crop off the figure while leaving its WIDTH and HEIGHT correct, so
+        a size assertion cannot see it. Measuring the whitespace on all four
+        sides can: a correct crop leaves `_FIGURE_PAD_PT` of margin all round
+        (less half a stroke width, which bleeds outside the path box).
+
+        Run on the shifted-MediaBox fixture, where every correction is
+        non-zero, so no term can silently drop out."""
+        record = self._images(self._extract("shifted.pdf"), 1)[0]
+        # 4.0 pt hardcoded on purpose: reading `_FIGURE_PAD_PT` back would make
+        # the assertion agree with whatever value the code happens to hold, so
+        # a changed pad would pass silently.
+        for side, margin in zip(("left", "top", "right", "bottom"),
+                                self._ink_margins(record["file"])):
+            with self.subTest(side):
+                self.assertAlmostEqual(
+                    margin, 4.0, delta=2.5,
+                    msg=f"{side} margin {margin:.1f}pt != ~4.0pt — the crop "
+                        f"is translated off the figure")
+
+    def test_vector_bbox_is_in_page_coordinates(self):
+        """A vector record's bbox must be in the same frame as a raster's, not
+        in pdftocairo's crop frame. They differ by the MediaBox origin, so on
+        an ordinary page the two are indistinguishable — only this fixture
+        separates them."""
+        import pdfplumber
+        dump = self._extract("shifted.pdf")
+        record = self._images(dump, 1)[0]
+        with pdfplumber.open(FIXTURES_DIR / "shifted.pdf") as pdf:
+            page = pdf.pages[0]
+            origin_x = float(page.mediabox[0])
+            cluster = pdf_extract._vector_clusters(
+                [*page.lines, *page.rects, *page.curves],
+                float(page.width), float(page.height))[0][0]
+        self.assertNotEqual(origin_x, 0.0, "fixture no longer shifted")
+        # The reported bbox is the cluster's own frame (padded), NOT the frame
+        # the crop was taken in — those differ by exactly the MediaBox origin.
+        pad = pdf_extract._FIGURE_PAD_PT
+        self.assertAlmostEqual(record["bbox"][0], cluster["bbox"][0] - pad,
+                               delta=0.01)
+        self.assertAlmostEqual(record["bbox"][1], cluster["bbox"][1] - pad,
+                               delta=0.01)
+
+    def test_crop_padding_keeps_the_stroke_off_the_edge(self):
+        """A path's bounding box is its *centreline* box, so half the stroke
+        width sits outside it. Without padding the crop clips the outer half of
+        the frame — measured at 1.3-1.6 pt on a 3 pt stroke — and the figure
+        comes out with shaved edges. Every border pixel of the crop must be
+        background."""
+        from PIL import Image
+        record = self._images(self._extract(), 3)[0]
+        with Image.open(record["file"]) as image:
+            pixels = image.convert("L")
+        width, height = pixels.size
+        data = pixels.load()
+        border = (
+            [data[x, 0] for x in range(width)]
+            + [data[x, height - 1] for x in range(width)]
+            + [data[0, y] for y in range(height)]
+            + [data[width - 1, y] for y in range(height)]
+        )
+        self.assertGreater(min(border), 200,
+                           "the figure's stroke reaches the crop border — "
+                           "the crop is clipping the drawing")
+
+    def test_figure_boxes_are_the_identity_on_an_ordinary_page(self):
+        """The MediaBox correction must not perturb the common case."""
+        import pdfplumber
+        with pdfplumber.open(FIXTURES_DIR / "figure.pdf") as pdf:
+            page = pdf.pages[2]
+            box = (100.0, 200.0, 300.0, 400.0)
+            page_box, render_box = pdf_extract._figure_boxes(page, box)
+        pad = pdf_extract._FIGURE_PAD_PT
+        expected = (100.0 - pad, 200.0 - pad, 300.0 + pad, 400.0 + pad)
+        self.assertEqual(render_box, expected)
+        self.assertEqual(page_box, expected)
+
+    # --- the figure predicate, directly ---------------------------------
+    def _cluster(self, bbox, *, stroked=1, filled=0):
+        members = [{"x0": bbox[0], "top": bbox[1], "x1": bbox[2],
+                    "bottom": bbox[3], "stroke": True, "fill": False}
+                   for _ in range(stroked)]
+        members += [{"x0": bbox[0], "top": bbox[1], "x1": bbox[2],
+                     "bottom": bbox[3], "stroke": False, "fill": True}
+                    for _ in range(filled)]
+        return {"bbox": bbox, "cells": 1, "members": members}
+
+    def test_is_figure_cluster_truth_table(self):
+        page = (612.0, 792.0)
+        big = (100.0, 100.0, 400.0, 400.0)
+        cases = [
+            ("stroked, roomy, no table", self._cluster(big), [], True),
+            ("fill-only shading", self._cluster(big, stroked=0, filled=3),
+             [], False),
+            ("mixed, at least one stroke",
+             self._cluster(big, stroked=1, filled=5), [], True),
+            ("inside a table", self._cluster(big), [big], False),
+            ("beside a table", self._cluster(big),
+             [(0.0, 500.0, 600.0, 700.0)], True),
+            ("too small", self._cluster((10.0, 10.0, 30.0, 30.0)), [], False),
+            # 40x40 pt clears the min-side test (24 pt) but covers 0.0033 of
+            # the sheet, under the 0.01 floor — the case that isolates the area
+            # test from the side test.
+            ("wide enough, still a speck",
+             self._cluster((10.0, 10.0, 50.0, 50.0)), [], False),
+            ("hairline rule", self._cluster((10.0, 10.0, 500.0, 20.0)),
+             [], False),
+            ("degenerate", {"bbox": None, "cells": 0, "members": []},
+             [], False),
+        ]
+        for label, cluster, tables, expected in cases:
+            with self.subTest(label):
+                self.assertEqual(
+                    pdf_extract._is_figure_cluster(cluster, *page, tables),
+                    expected)
+
+    def test_both_rejection_tests_are_load_bearing(self):
+        """Neither the stroke test nor the table test subsumes the other: a
+        shaded card overlaps no table (only the stroke test rejects it) and
+        table ruling is stroked (only the table test rejects it)."""
+        page = (612.0, 792.0)
+        box = (60.0, 60.0, 550.0, 400.0)
+        card = self._cluster(box, stroked=0, filled=8)
+        ruling = self._cluster(box, stroked=40)
+        self.assertFalse(pdf_extract._is_figure_cluster(card, *page, []))
+        self.assertFalse(pdf_extract._is_figure_cluster(ruling, *page, [box]))
+        # …and each is admitted by the test that does not target it.
+        self.assertFalse(pdf_extract._is_figure_cluster(card, *page, [box]))
+        self.assertTrue(pdf_extract._is_figure_cluster(ruling, *page, []))
+
+    def test_overlap_ratio_of_a_degenerate_box_is_zero(self):
+        self.assertEqual(
+            pdf_extract._overlap_ratio((5.0, 5.0, 5.0, 5.0),
+                                       (0.0, 0.0, 10.0, 10.0)), 0.0)
+
+    def test_table_strategy_does_not_change_which_figures_come_out(self):
+        """The figure filter always uses pdfplumber's default table detection,
+        so `--table-strategy lines_strict` (which reports fewer tables) cannot
+        silently admit a table page as a figure."""
+        default = self._extract()
+        strict_out = Path(self.tmp.name) / "strict"
+        strict = pdf_extract.extract_pdf(
+            FIXTURES_DIR / "figure.pdf", password=None, layout=False,
+            images_dir=strict_out, table_strategy="lines_strict")
+        self.assertEqual(
+            [[i["kind"] for i in p["images"]] for p in default["pages"]],
+            [[i["kind"] for i in p["images"]] for p in strict["pages"]])
+        self.assertEqual(strict["pages"][4]["images"], [])
+
+    def test_flat_fill_figure_is_missed_and_the_docs_say_so(self):
+        """Pins the honest-scope claim, in the direction that matters: a
+        flat-fill chart is extracted by nothing AND flagged by nothing, so the
+        documentation must not promise `figure_dominant` as the safety net. If
+        a future change rescues it, this test fails and the docs get updated."""
+        dump = self._extract("flatfill.pdf")
+        page = dump["pages"][0]
+        self.assertEqual(page["images"], [])
+        self.assertFalse(page["figure_dominant"])
+        self.assertEqual(dump["figure_pages"], [])
+        self.assertLess(page["vector_coverage"],
+                        pdf_extract._FIGURE_COVERAGE_THRESHOLD)
+        # …and nothing reports it, which is exactly why it is documented.
+        summary = dump["images_summary"]
+        self.assertEqual(summary["files_written"], 0)
+        self.assertEqual(summary["vector_unrendered"], 0)
+
+    def test_live_coverage_path_is_the_shared_expression(self):
+        """`vector_coverage` is a public dump field. When `_extract_page`
+        inlined its own copy of the formula, the tests for the helper guarded a
+        function the dump no longer called — mutating the live copy survived.
+        This asserts the dump's value against the helper on a real document."""
+        import pdfplumber
+        dump = pdf_extract.extract_pdf(
+            FIXTURES_DIR / "figure.pdf", password=None, layout=False)
+        with pdfplumber.open(FIXTURES_DIR / "figure.pdf") as pdf:
+            for record, page in zip(dump["pages"], pdf.pages):
+                expected = round(pdf_extract._vector_coverage(
+                    [*page.lines, *page.rects, *page.curves],
+                    float(page.width), float(page.height)), 4)
+                self.assertEqual(record["vector_coverage"], expected)
+
+    def test_default_image_dpi_value_is_pinned(self):
+        self.assertEqual(pdf_extract._DEFAULT_IMAGE_DPI, 150)
+
+    def test_px_rounds_rather_than_truncates(self):
+        self.assertEqual(pdf_extract._px(1.4, 72), 1)
+        self.assertEqual(pdf_extract._px(1.6, 72), 2)
+        self.assertEqual(pdf_extract._px(1.0, 144), 2)
+
+    def test_pixel_cap_boundary_is_exclusive(self):
+        """At exactly the cap the image is kept; one pixel over, it is not.
+
+        Driven through `_extract_rasters` rather than asserted arithmetically —
+        the previous version compared the constant with itself, which is true
+        for every possible value and therefore proved nothing."""
+        self.assertEqual(pdf_extract._IMAGE_MAX_PIXELS, 80_000_000)
+
+        class _Stream:
+            objid = 1
+
+        def page_with(width, height):
+            return mock.Mock(
+                width=612.0, height=792.0,
+                images=[{"x0": 0, "top": 0, "x1": 100, "bottom": 100,
+                         "name": "X1", "stream": _Stream(), "srcsize": None}])
+
+        cap = pdf_extract._IMAGE_MAX_PIXELS
+        for label, side, expect_kept in (("exactly at the cap", cap, True),
+                                         ("one pixel over", cap + 1, False)):
+            with self.subTest(label):
+                sink = pdf_extract._ImageSink(self.out, dpi=150)
+                self.out.mkdir(parents=True, exist_ok=True)
+                with mock.patch.object(pdf_extract, "_fetch_raster",
+                                       return_value=(b"x", ".png")):
+                    records = pdf_extract._extract_rasters(
+                        page_with(side, 1), {1: ("/k", side, 1)}, sink,
+                        page_number=1)
+                self.assertEqual(bool(records), expect_kept)
+                self.assertEqual(sink.oversized, 0 if expect_kept else 1)
+
+    def test_per_page_figure_cap_uses_its_real_value(self):
+        """`test_per_page_cap_reports_what_it_dropped` patches the constant to
+        0, so it proves the branch exists but is blind to its value. This runs
+        the real constant against more clusters than it allows."""
+        page = mock.Mock(width=612.0, height=792.0, mediabox=(0, 0, 612, 792))
+        page.find_tables.return_value = []
+        clusters = [{"bbox": (10.0 + i, 10.0, 210.0 + i, 210.0), "cells": 1,
+                     "members": [{"x0": 10.0 + i, "top": 10.0, "x1": 210.0 + i,
+                                  "bottom": 210.0, "stroke": True,
+                                  "fill": False}]}
+                    for i in range(pdf_extract._FIGURE_MAX_PER_PAGE + 5)]
+        sink = pdf_extract._ImageSink(self.out, dpi=150)
+        self.out.mkdir(parents=True, exist_ok=True)
+        with mock.patch.object(pdf_extract, "_fetch_raster", return_value=None):
+            with mock.patch.object(pdf_extract.subprocess, "run",
+                                   side_effect=subprocess.SubprocessError):
+                pdf_extract._extract_vectors(
+                    page, clusters, sink, page_number=1,
+                    pdf_path=FIXTURES_DIR / "figure.pdf",
+                    pdftocairo="/bin/true", password=None)
+        self.assertEqual(sink.dropped_capped, 5)
+        self.assertEqual(pdf_extract._FIGURE_MAX_PER_PAGE, 20)
+
+    def test_table_boxes_never_raises(self):
+        class _Exploding:
+            def find_tables(self):
+                raise RuntimeError("boom")
+        self.assertEqual(pdf_extract._table_boxes(_Exploding()), [])
+
+    # --- clustering refactor --------------------------------------------
+    def test_clusters_and_coverage_agree(self):
+        """`vector_coverage` is derived from the same clusters the crops come
+        from, so the number and the files can never disagree."""
+        import pdfplumber
+        with pdfplumber.open(FIXTURES_DIR / "figure.pdf") as pdf:
+            for page in pdf.pages:
+                objects = [*page.lines, *page.rects, *page.curves]
+                width, height = float(page.width), float(page.height)
+                clusters, cells = pdf_extract._vector_clusters(
+                    objects, width, height)
+                expected = (min(1.0, sum(c["cells"] for c in clusters) / cells)
+                            if cells else 0.0)
+                self.assertAlmostEqual(
+                    pdf_extract._vector_coverage(objects, width, height),
+                    expected, places=9)
+
+    def test_cluster_members_carry_every_object(self):
+        """Every path object lands in exactly one cluster — a member lost to
+        overpainting would shrink the crop."""
+        import pdfplumber
+        with pdfplumber.open(FIXTURES_DIR / "figure.pdf") as pdf:
+            page = pdf.pages[2]
+            objects = [*page.lines, *page.rects, *page.curves]
+            clusters, _ = pdf_extract._vector_clusters(
+                objects, float(page.width), float(page.height))
+        self.assertEqual(sum(len(c["members"]) for c in clusters),
+                         len(objects))
+
+    # --- degradation and guards ------------------------------------------
+    def test_no_vector_images_keeps_rasters_and_counts_the_rest(self):
+        dump = self._extract(vector_images=False)
+        self.assertEqual(self._images(dump, 3), [])
+        self.assertEqual(len(self._images(dump, 2)), 1)
+        self.assertEqual(dump["images_summary"]["vector_unrendered"], 2)
+
+    def test_missing_poppler_degrades_loudly_not_silently(self):
+        with mock.patch.object(pdf_extract.shutil, "which", return_value=None):
+            dump = self._extract()
+        self.assertEqual(self._images(dump, 3), [])
+        self.assertEqual(len(self._images(dump, 2)), 1)
+        self.assertEqual(dump["images_summary"]["vector_unrendered"], 2)
+
+    def test_pdftocairo_failure_is_counted_not_faked(self):
+        with mock.patch.object(pdf_extract.subprocess, "run",
+                               side_effect=subprocess.TimeoutExpired("x", 1)):
+            dump = self._extract()
+        self.assertEqual(self._images(dump, 3), [])
+        # A failed *render* is a different fact from an undecodable raster —
+        # different cause, different repair — so it has its own counter, and
+        # the raster branch is untouched by Poppler failing.
+        self.assertGreaterEqual(dump["images_summary"]["render_failed"], 2)
+        self.assertEqual(dump["images_summary"]["undecodable"], 0)
+        self.assertEqual(len(self._images(dump, 2)), 1)
+
+    def test_password_reaches_the_renderer(self):
+        """An encrypted PDF's vector figures still render — pdftocairo needs
+        the password as `-upw` or it refuses to open the file. Asserted on the
+        command line because the committed encrypted fixture holds no vector
+        figure to render."""
+        seen = []
+
+        def _capture(command, **kwargs):
+            seen.append(command)
+            raise subprocess.SubprocessError("stop here")
+
+        with mock.patch.object(pdf_extract.subprocess, "run",
+                               side_effect=_capture):
+            pdf_extract.extract_pdf(
+                FIXTURES_DIR / "figure.pdf", password="test-pw", layout=False,
+                images_dir=self.out)
+        self.assertTrue(seen, "pdftocairo was never invoked")
+        for command in seen:
+            self.assertIn("-upw", command)
+            self.assertEqual(command[command.index("-upw") + 1], "test-pw")
+
+    def test_image_suffix_is_allowlisted(self):
+        """The written filename is built only from values this module chose;
+        an unrecognised format becomes `.bin`, never a plausible `.png`."""
+        cases = [
+            ("img1.png", ".png"), ("Im2.JPG", ".jpg"), ("x.jp2", ".jp2"),
+            ("weird.exe", ".bin"), ("no-extension", ".bin"),
+            ("evil.\\..\\..\\sh", ".bin"), ("", ".bin"),
+        ]
+        for name, expected in cases:
+            with self.subTest(name):
+                self.assertEqual(pdf_extract._image_suffix(name), expected)
+
+    def test_written_filenames_stay_inside_the_destination(self):
+        dump = self._extract()
+        for page in dump["pages"]:
+            for image in page["images"]:
+                path = Path(image["file"]).resolve()
+                self.assertEqual(path.parent, self.out.resolve())
+
+    def test_per_page_cap_reports_what_it_dropped(self):
+        with mock.patch.object(pdf_extract, "_FIGURE_MAX_PER_PAGE", 0):
+            dump = self._extract()
+        self.assertEqual(self._images(dump, 3), [])
+        self.assertGreaterEqual(dump["images_summary"]["over_page_cap"], 1)
+
+    def test_rerun_into_the_same_directory_is_idempotent(self):
+        first = self._extract()
+        names = sorted(p.name for p in self.out.iterdir())
+        second = self._extract()
+        self.assertEqual(sorted(p.name for p in self.out.iterdir()), names)
+        self.assertEqual(
+            [i["file"] for p in first["pages"] for i in p["images"]],
+            [i["file"] for p in second["pages"] for i in p["images"]])
+
+    def test_filenames_are_deterministic_and_content_addressed(self):
+        record = self._images(self._extract(), 3)[0]
+        name = Path(record["file"]).name
+        self.assertTrue(name.startswith("p003-v01-"))
+        self.assertIn(record["sha1"][:8], name)
+        self.assertTrue(name.endswith(".png"))
+
+    # --- CLI -------------------------------------------------------------
+    def test_cli_writes_images_and_reports_the_directory(self):
+        result = _run_cli([str(FIXTURES_DIR / "figure.pdf"),
+                           "--extract-images", str(self.out)])
+        self.assertEqual(result.returncode, 0)
+        dump = json.loads(result.stdout)
+        self.assertEqual(dump["images_dir"], str(self.out))
+        self.assertEqual(dump["image_dpi"], pdf_extract._DEFAULT_IMAGE_DPI)
+        self.assertEqual(dump["images_summary"]["files_written"],
+                         len(list(self.out.iterdir())))
+
+    def test_cli_refuses_to_write_images_over_the_input(self):
+        target = FIXTURES_DIR / "figure.pdf"
+        result = _run_cli([str(target), "--extract-images", str(target),
+                           "--json-errors"])
+        self.assertEqual(result.returncode, pdf_extract._EXIT_SELF_OVERWRITE)
+        self.assertEqual(json.loads(result.stderr)["type"],
+                         "SelfOverwriteRefused")
+
+    def test_cli_refuses_an_empty_destination(self):
+        """`--extract-images "$OUTDIR"` with OUTDIR unset must not become the
+        working directory. `Path("")` normalises to `.`, which passes every
+        later check and scatters artwork across the caller's cwd at exit 0 —
+        the accident "DIR is mandatory" exists to prevent."""
+        workdir = Path(self.tmp.name) / "cwd"
+        workdir.mkdir()
+        result = subprocess.run(
+            [sys.executable, str(SCRIPT), str(FIXTURES_DIR / "figure.pdf"),
+             "--extract-images", "", "--json-errors"],
+            cwd=str(workdir), capture_output=True, text=True)
+        self.assertEqual(result.returncode, pdf_extract._EXIT_USAGE)
+        self.assertEqual(json.loads(result.stderr)["type"], "UsageError")
+        self.assertEqual(list(workdir.iterdir()), [],
+                         "artwork was scattered into the working directory")
+
+    def test_cli_self_overwrite_envelope_names_the_flag(self):
+        """Both refusals are exit 6 with the same `type`; a wrapper should not
+        have to parse English to learn which destination to change."""
+        target = FIXTURES_DIR / "figure.pdf"
+        by_images = _run_cli([str(target), "--extract-images", str(target),
+                              "--json-errors"])
+        by_output = _run_cli([str(target), "-o", str(target), "--json-errors"])
+        for result in (by_images, by_output):
+            self.assertEqual(result.returncode,
+                             pdf_extract._EXIT_SELF_OVERWRITE)
+        self.assertEqual(
+            json.loads(by_images.stderr)["details"]["flag"], "--extract-images")
+        self.assertEqual(
+            json.loads(by_output.stderr)["details"]["flag"], "-o")
+
+    @unittest.skipIf(os.geteuid() == 0, "root ignores directory permissions")
+    def test_cli_unwritable_destination_reports_the_directory(self):
+        """The one OSError that genuinely belongs to the image directory."""
+        parent = Path(self.tmp.name) / "locked"
+        parent.mkdir(mode=0o500)
+        self.addCleanup(parent.chmod, 0o700)
+        result = _run_cli([str(FIXTURES_DIR / "figure.pdf"),
+                           "--extract-images", str(parent / "out"),
+                           "--json-errors"])
+        self.assertEqual(result.returncode, pdf_extract._EXIT_FAIL)
+        self.assertEqual(json.loads(result.stderr)["type"],
+                         "ImageDirWriteFailed")
+
+    def test_an_unrelated_oserror_is_not_blamed_on_the_image_directory(self):
+        """An OSError from the page walk must keep its historical shape rather
+        than telling the caller to fix a directory that is fine."""
+        with mock.patch.object(pdf_extract, "_extract_page",
+                               side_effect=OSError(5, "Input/output error")):
+            with _silence_fd_stderr() as sink:
+                code = pdf_extract.main([
+                    str(FIXTURES_DIR / "figure.pdf"),
+                    "--extract-images", str(self.out), "--json-errors"])
+                sink.seek(0)
+                payload = json.loads(sink.read())
+        self.assertEqual(code, pdf_extract._EXIT_FAIL)
+        self.assertEqual(payload["type"], "InternalError")
+
+    def test_cli_refuses_a_destination_that_is_a_file(self):
+        target = Path(self.tmp.name) / "not-a-dir"
+        target.write_text("x", encoding="utf-8")
+        result = _run_cli([str(FIXTURES_DIR / "figure.pdf"),
+                           "--extract-images", str(target), "--json-errors"])
+        self.assertEqual(result.returncode, pdf_extract._EXIT_FAIL)
+        self.assertEqual(json.loads(result.stderr)["type"],
+                         "ImageDirNotADirectory")
+
+    def test_cli_rejects_a_non_positive_dpi(self):
+        result = _run_cli([str(FIXTURES_DIR / "figure.pdf"),
+                           "--extract-images", str(self.out),
+                           "--image-dpi", "0", "--json-errors"])
+        self.assertEqual(result.returncode, pdf_extract._EXIT_USAGE)
+
+    def test_cli_creates_a_missing_destination(self):
+        nested = Path(self.tmp.name) / "a" / "b" / "c"
+        result = _run_cli([str(FIXTURES_DIR / "figure.pdf"),
+                           "--extract-images", str(nested)])
+        self.assertEqual(result.returncode, 0)
+        self.assertTrue(nested.is_dir())
+
+    def test_cli_dpi_changes_only_the_vector_crop(self):
+        low = Path(self.tmp.name) / "low"
+        _run_cli([str(FIXTURES_DIR / "figure.pdf"),
+                  "--extract-images", str(low), "--image-dpi", "72"])
+        result = _run_cli([str(FIXTURES_DIR / "figure.pdf"),
+                           "--extract-images", str(self.out),
+                           "--image-dpi", "150"])
+        dump = json.loads(result.stdout)
+        vector = self._images(dump, 3)[0]
+        low_dump = json.loads(_run_cli(
+            [str(FIXTURES_DIR / "figure.pdf"), "--extract-images", str(low),
+             "--image-dpi", "72"]).stdout)
+        low_vector = low_dump["pages"][2]["images"][0]
+        self.assertGreater(vector["width"], low_vector["width"])
+        # The dump echoes the EFFECTIVE dpi, not the default.
+        self.assertEqual(low_dump["image_dpi"], 72)
+        self.assertEqual(dump["image_dpi"], 150)
+        # The raster is copied as stored, so dpi cannot touch it.
+        self.assertEqual(dump["pages"][1]["images"][0]["sha1"],
+                         low_dump["pages"][1]["images"][0]["sha1"])
+
+    def test_cli_figure_warning_points_at_the_extracted_files(self):
+        result = _run_cli([str(FIXTURES_DIR / "figure.pdf"),
+                           "--extract-images", str(self.out)])
+        self.assertIn("mostly figure", result.stderr)
+        self.assertIn(str(self.out), result.stderr)
+
+    def test_figure_warning_does_not_point_at_files_that_were_not_written(self):
+        """A flagged page whose figure was not rendered has no file. Telling
+        the caller to look in the directory for it sends them after something
+        that was never written — the failure mode this whole feature exists to
+        remove."""
+        result = _run_cli([str(FIXTURES_DIR / "figure.pdf"),
+                           "--extract-images", str(self.out),
+                           "--no-vector-images"])
+        self.assertEqual(result.returncode, 0)
+        self.assertIn("NOTHING was extracted for page(s)", result.stderr)
+        self.assertIn("3", result.stderr)
+
+    def test_figure_warning_points_at_files_when_they_all_exist(self):
+        result = _run_cli([str(FIXTURES_DIR / "figure.pdf"),
+                           "--extract-images", str(self.out)])
+        self.assertEqual(result.returncode, 0)
+        self.assertIn("see the per-page `images` entries", result.stderr)
+        self.assertNotIn("NOTHING was extracted", result.stderr)
+
+    def test_cli_scan_contract_is_untouched_by_extraction(self):
+        """Exit 10 is public: extracting images must not change it, and a
+        whole-page scan raster must not be written out as a figure."""
+        result = _run_cli([str(FIXTURES_DIR / "scanlike.pdf"),
+                           "--extract-images", str(self.out)])
+        self.assertEqual(result.returncode, pdf_extract._EXIT_SCANNED)
+        self.assertEqual(list(self.out.iterdir()), [])
+
+    def test_stderr_is_an_envelope_xor_warnings_never_both(self):
+        """`--json-errors` promises stderr parses as ONE line of JSON. Every
+        warning this feature adds must therefore stay on the exit-0 path: a
+        warning printed before an envelope silently breaks `jq` for every
+        wrapper that parses it."""
+        result = _run_cli([str(FIXTURES_DIR / "scanlike.pdf"),
+                           "--extract-images", str(self.out), "--json-errors"])
+        self.assertEqual(result.returncode, pdf_extract._EXIT_SCANNED)
+        payload = json.loads(result.stderr)   # raises if a warning preceded it
+        self.assertEqual(payload["type"], "DocumentScanned")
+        self.assertEqual(len(result.stderr.strip().splitlines()), 1)
+
+    def test_cli_encrypted_pdf_extracts_with_the_password(self):
+        result = _run_cli([str(FIXTURES_DIR / "encrypted.pdf"),
+                           "--password", fixtures.ENCRYPTED_PASSWORD,
+                           "--extract-images", str(self.out)])
+        self.assertEqual(result.returncode, 0)
+        self.assertIn("images", json.loads(result.stdout)["pages"][0])
+
+class TestStdoutChannel(unittest.TestCase):
+    """The dump on stdout is a machine-readable channel, so its bytes must not
+    depend on the caller's locale and a dead pipe must not contradict the
+    envelope. Regression lock for PDF-EXTRACT-STDOUT-LOCALE-ENCODING and
+    PDF-EXTRACT-BROKEN-PIPE-EXIT-120."""
+
+    @classmethod
+    def setUpClass(cls):
+        _ensure_fixtures()
+
+    def _run_under_locale(self, encoding: str):
+        """Run the CLI with the C locale and `encoding` as the stdio codec.
+        Bytes, not text: the point of these tests is what lands on fd 1."""
+        env = dict(os.environ, PYTHONIOENCODING=encoding, PYTHONUTF8="0",
+                   LC_ALL="C", LANG="C")
+        return subprocess.run(
+            [sys.executable, str(SCRIPT), str(FIXTURES_DIR / "digital.pdf"),
+             "--json-errors"],
+            cwd=str(SCRIPTS_DIR), capture_output=True, env=env,
+        )
+
+    def test_an_ascii_locale_does_not_truncate_the_dump(self):
+        """Was: `json.dump` into the text layer raised UnicodeEncodeError on
+        the em dash in page 2 — 1264 bytes of truncated JSON already on
+        stdout, exit 1, and a traceback where `--json-errors` promises an
+        envelope."""
+        proc = self._run_under_locale("ascii")
+        self.assertEqual(proc.returncode, 0, proc.stderr[-400:])
+        dump = json.loads(proc.stdout.decode("utf-8"))
+        self.assertEqual(dump["page_count"], 2)
+        self.assertIn("—", dump["pages"][1]["text"])
+
+    def test_a_legacy_locale_does_not_emit_non_utf8_bytes(self):
+        """Was: exit 0 with the em dash written as the cp1252 byte 0x97 — a
+        dump no UTF-8 reader can decode, and nothing on stderr said so."""
+        proc = self._run_under_locale("cp1252")
+        self.assertEqual(proc.returncode, 0, proc.stderr[-400:])
+        # .decode("utf-8") is the assertion: mojibake raises here.
+        text = proc.stdout.decode("utf-8")
+        # And the em dash must be its own three UTF-8 bytes, not cp1252's
+        # single 0x97. (Asserting 0x97 is *absent* would be wrong — it is a
+        # legal UTF-8 continuation byte inside other characters.)
+        self.assertIn("—".encode("utf-8"), proc.stdout)
+        self.assertIn("—", text)
+
+    def test_the_utf8_bytes_match_the_dump_written_under_a_utf8_locale(self):
+        """The locale must change nothing at all — not the encoding, not the
+        indentation, not a single byte. (A fix that silently switched to
+        `ensure_ascii=True` would pass the two tests above and fail here.)"""
+        native = subprocess.run(
+            [sys.executable, str(SCRIPT), str(FIXTURES_DIR / "digital.pdf")],
+            cwd=str(SCRIPTS_DIR), capture_output=True,
+        )
+        self.assertEqual(native.returncode, 0)
+        self.assertEqual(self._run_under_locale("ascii").stdout, native.stdout)
+
+    def test_a_dead_pipe_exits_with_the_code_the_envelope_declares(self):
+        """Was: envelope `"code": 1`, process exit 120 — the interpreter's
+        shutdown flush hit the same dead fd, printed `Exception ignored while
+        flushing sys.stdout` as a second, non-JSON line on stderr, and
+        replaced the exit status. A wrapper then had two contradicting
+        sources of truth for one failure."""
+        big = self._big_pdf()  # a dump larger than the 64 KiB pipe buffer
+        proc = subprocess.Popen(
+            [sys.executable, str(SCRIPT), str(big), "--json-errors"],
+            cwd=str(SCRIPTS_DIR), stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        proc.stdout.read(20)
+        proc.stdout.close()          # the `| head` moment
+        err = proc.stderr.read().decode("utf-8", "replace")
+        proc.stderr.close()
+        rc = proc.wait(timeout=120)
+
+        self.assertNotIn("Exception ignored", err)
+        lines = [ln for ln in err.splitlines() if ln.strip()]
+        self.assertEqual(len(lines), 1, err)      # nothing but the envelope
+        envelope = json.loads(lines[0])
+        self.assertEqual(envelope["type"], "OutputWriteFailed")
+        self.assertEqual(envelope["details"]["path"], "stdout")
+        self.assertEqual(rc, envelope["code"])    # 1, and never 120
+        self.assertEqual(rc, pdf_extract._EXIT_FAIL)
+
+    def _big_pdf(self) -> Path:
+        """A PDF whose dump exceeds one pipe buffer — otherwise the whole
+        dump fits in the kernel's 64 KiB and the write never sees EPIPE, so
+        the test would pass against the unfixed code."""
+        import pypdf
+
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        writer = pypdf.PdfWriter()
+        reader = pypdf.PdfReader(str(FIXTURES_DIR / "digital.pdf"))
+        for _ in range(150):         # 300 pages ≈ a 150 KiB dump, 0.9 s
+            for page in reader.pages:
+                writer.add_page(page)
+        out = Path(tmp.name) / "big.pdf"
+        with open(out, "wb") as fh:
+            writer.write(fh)
+        return out
+
+    def test_a_failing_stdout_is_named_stdout_not_none(self):
+        """Was: `Could not write output None: [Errno 28] No space left` with
+        `details.path = "None"` — the sink was reported as the string "None"
+        because `-o` was absent."""
+        with mock.patch.object(pdf_extract, "_emit",
+                               side_effect=OSError(28, "No space left")):
+            with _silence_fd_stderr() as sink:
+                rc = pdf_extract.main(
+                    [str(FIXTURES_DIR / "digital.pdf"), "--json-errors"])
+                sink.seek(0)
+                envelope = json.loads(sink.read().strip().splitlines()[-1])
+        self.assertEqual(rc, pdf_extract._EXIT_FAIL)
+        self.assertEqual(envelope["details"]["path"], "stdout")
+        self.assertIn("stdout", envelope["error"])
+
+    def test_a_lone_surrogate_is_escaped_rather_than_crashing_the_dump(self):
+        """UTF-8 cannot carry U+D800-DFFF, and a broken `/ToUnicode` CMap can
+        hand us exactly that. JSON can carry it as the `\\udXXX` escape, so
+        the dump must stay parseable instead of aborting mid-stream."""
+        class _FakeStdout:
+            """A real object, not a Mock: `getattr(..., "buffer", None)` on a
+            Mock auto-creates a child mock and the byte path would silently
+            not be exercised."""
+
+            def __init__(self):
+                self.buffer = io.BytesIO()
+
+            def flush(self):
+                pass
+
+        fake = _FakeStdout()
+        with mock.patch.object(pdf_extract.sys, "stdout", fake):
+            pdf_extract._emit({"text": "a\ud800b"}, None)
+        raw = fake.buffer.getvalue()
+        parsed = json.loads(raw.decode("utf-8"))   # raises on WTF-8 bytes
+        self.assertEqual(parsed["text"], "a\ud800b")
+
+    def test_a_stdout_without_a_buffer_still_gets_the_dump(self):
+        """`redirect_stdout(StringIO())` — every in-process test in this file,
+        and some wrappers — has no `.buffer`. The text path must stay."""
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            pdf_extract._emit({"text": "— ok"}, None)
+        self.assertEqual(json.loads(buf.getvalue())["text"], "— ok")
 
 
 if __name__ == "__main__":

@@ -651,6 +651,79 @@ assert d['pages'][6]['vector_coverage'] == d['pages'][2]['vector_coverage'], d['
     && ok "pdf_extract: figure page → exit 0 + warning, scan contract intact" \
     || nok "pdf_extract figure_pages" "exit=$rc msg=$err"
 
+# --extract-images: raster + vector figures out to a directory (pdf-13)
+set +e
+err=$("$PY" pdf_extract.py "$FX/figure.pdf" --extract-images "$TMP/img" \
+      -o "$TMP/figimg.json" 2>&1)
+rc=$?
+set -e
+[ "$rc" -eq 0 ] \
+    && "$PY" -c "
+import hashlib, json, pathlib
+d = json.load(open('$TMP/figimg.json'))
+pages = d['pages']
+kinds = [[i['kind'] for i in p['images']] for p in pages]
+# p1 prose, p5 ruled table, p6 prose behind a wash: nothing to extract.
+assert kinds[0] == [] and kinds[4] == [] and kinds[5] == [], kinds
+assert kinds[1] == ['raster'], kinds          # p2 raster diagram
+assert kinds[2] == ['vector'], kinds          # p3 vector diagram
+assert kinds[3] == ['raster'], kinds          # p4 the SAME raster as p2
+assert kinds[6] == ['vector'], kinds          # p7 figure on the wash
+# sha1 dedup: two placements of one image share one file on disk.
+assert pages[1]['images'][0]['file'] == pages[3]['images'][0]['file'], 'dedup'
+assert d['images_summary']['deduplicated'] == 1, d['images_summary']
+written = d['images_summary']['files_written']
+assert written == len(list(pathlib.Path(d['images_dir']).iterdir())), written
+assert written < d['images_summary']['placements'], d['images_summary']
+# every record names a real file whose bytes and sha1 match the record.
+for page in pages:
+    for image in page['images']:
+        blob = pathlib.Path(image['file']).read_bytes()
+        assert len(blob) == image['bytes'], image
+        assert hashlib.sha1(blob).hexdigest() == image['sha1'], image
+" 2>/dev/null \
+    && ok "pdf_extract: --extract-images → rasters + vector figures, sha1-deduped" \
+    || nok "pdf_extract --extract-images" "exit=$rc msg=$err"
+
+# a page-sized raster is a scan, not a figure: nothing written, exit 10 intact
+set +e
+"$PY" pdf_extract.py "$FX/scanlike.pdf" --extract-images "$TMP/scanimg" \
+    -o "$TMP/scanimg.json" >/dev/null 2>&1
+rc=$?
+set -e
+[ "$rc" -eq 10 ] \
+    && [ -d "$TMP/scanimg" ] \
+    && [ -z "$(ls -A "$TMP/scanimg")" ] \
+    && ok "pdf_extract: page-sized raster suppressed, exit 10 contract intact" \
+    || nok "pdf_extract scan+images" "exit=$rc dir=$(ls -A "$TMP/scanimg" 2>&1)"
+
+# the destination is mandatory and never the input PDF (cross-7 parity)
+set +e
+err=$("$PY" pdf_extract.py "$FX/figure.pdf" \
+      --extract-images "$FX/figure.pdf" --json-errors 2>&1 >/dev/null)
+rc=$?
+set -e
+[ "$rc" -eq 6 ] \
+    && echo "$err" | grep -q "SelfOverwriteRefused" \
+    && ok "pdf_extract: --extract-images onto INPUT → exit 6 SelfOverwriteRefused" \
+    || nok "pdf_extract images self-overwrite" "exit=$rc msg=$err"
+
+# without the flag the dump keeps its historical shape (no `images` key)
+set +e
+out=$("$PY" pdf_extract.py "$FX/figure.pdf" 2>/dev/null)
+rc=$?
+set -e
+[ "$rc" -eq 0 ] \
+    && echo "$out" | "$PY" -c "
+import json, sys
+d = json.load(sys.stdin)
+assert all('images' not in p for p in d['pages']), 'per-page images leaked'
+for key in ('images_dir', 'image_dpi', 'images_summary'):
+    assert key not in d, key
+" 2>/dev/null \
+    && ok "pdf_extract: no --extract-images → dump shape unchanged" \
+    || nok "pdf_extract images off-by-default" "exit=$rc"
+
 # unmapped-font PDF → exit 0 + text_layer_lossy warning that rules OCR out
 set +e
 err=$("$PY" pdf_extract.py "$FX/unmapped.pdf" -o "$TMP/unmapped.json" 2>&1)

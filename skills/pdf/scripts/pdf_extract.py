@@ -78,6 +78,55 @@ an extra row; ``--table-strategy lines_strict`` counts only stroked lines. Both
 keep pdfplumber's default so no existing dump changes shape without an explicit
 flag, and both are echoed at the top level of the dump.
 
+Image extraction (v1.3): flagging a figure page is only half the repair — the
+diagram still has to leave the PDF before it can go into Markdown, and until now
+the caller had to hand-write ``pypdf`` for that, choosing a library the skill had
+already standardised for text and tables. ``--extract-images DIR`` closes it, and
+there are **two classes of artwork, the second of which cannot be ignored**:
+
+* **raster** — an embedded image XObject. The bytes exist in the file and are
+  copied out as stored. Placements come from ``pdfplumber`` (which knows *where*
+  each image is painted) and the bytes from ``pypdf`` (which knows how to decode
+  the filter chain and fold an ``/SMask`` alpha plane into the pixels); the join
+  key is the PDF object number. Enumerating pypdf's per-page images *instead*
+  would report an image on every page whose resource dictionary mentions it —
+  painted or not — and would emit each ``/SMask`` plane as a separate greyscale
+  image. Both were measured on the dogfood corpus; the committed fixtures
+  `nested.pdf` and `shadowed.pdf` cover the nesting and shadow-key cases.
+* **vector** — a diagram or chart drawn with content-stream path operators.
+  There is no image object to extract, so the only honest route is to rasterise
+  the region: cluster the page's paths (the same ``_vector_clusters`` pass that
+  produces ``vector_coverage``), keep the clusters that are figures rather than
+  page furniture (``_is_figure_cluster``), and crop each through Poppler
+  ``pdftocairo -png -r DPI -x -y -W -H``. Poppler's SVG output would preserve
+  the vectors but ignores the crop rectangle and always emits a whole page, so a
+  cropped figure is necessarily a raster.
+
+**"Diagram" is not the same question as "vector".** Classification here is by
+object model, never by appearance: block diagrams that look plainly vector turn
+out, on measurement, to be RGBA PNGs at ~150 dpi with a transparent background
+and zero path operators on the page — i.e. anything drawn in Figma/Canva or
+pasted as a screenshot is fully served by the raster branch. A heuristic of the
+form "this page looks like it has a diagram, so render vectors" fires falsely.
+
+Each page gains an ``images`` list of ``{file, kind, bbox, name, width, height,
+bytes, sha1}``, so Markdown composition references paths that exist instead of
+guessing them, and the top level gains ``images_dir`` / ``image_dpi`` /
+``images_summary``. Without the flag *nothing* changes: no ``images`` key is
+emitted at all, which is a different statement from an empty list (``[]`` means
+"looked and found none").
+
+Three guards, each measured on a real document rather than imagined:
+``sha1`` **dedup** (one document placed a single background raster 31 times
+among 49 placements — the naive extractor writes 32 files nobody wants; here
+every placement is still reported, they simply share one file), **page-sized
+backdrop suppression** (6 of those 49 placements were sheet-sized background,
+and a scanned page is a page-sized raster too — already reported by ``scanned``
+and exit ``10``, whose repair is OCR, not a figure file), and a **mandatory
+destination** — ``DIR`` has no default, so nothing is ever scattered into the
+current directory, and a ``DIR`` that resolves to the input PDF is refused with
+exit ``6`` exactly as ``-o`` is.
+
 Honest scope (v1):
   - Final Markdown composition is the caller's job — never scripted.
   - OCR is not bundled; scans are detected, not OCR'd.
@@ -85,9 +134,34 @@ Honest scope (v1):
     ``--table-strategy lines_strict`` is the only bundled alternative and
     borderless-table tuning (``snap_tolerance`` etc.) is inline-agent work,
     see the reference.
-  - Image bytes are not extracted; only ``has_images`` / ``image_coverage``
-    are reported — a flagged figure page still needs its image pulled out
-    separately before it can go into Markdown.
+  - Without ``--extract-images``, image bytes are not extracted; only
+    ``has_images`` / ``image_coverage`` are reported.
+  - A vector figure drawn **entirely with fills** and no stroked path is NOT
+    extracted, and the omission is **silent** — no record, no counter, no
+    warning, because nothing distinguishes it from the shading the same test
+    exists to reject. ``_is_figure_cluster`` requires one stroked path because
+    that is the single measurement separating artwork from shading — code-block
+    backgrounds, heading rules, inline-code chips and the full-width cards a
+    Notion/Confluence export paints behind every block are all fill-only, and
+    admitting them turned a 9-page document into 13 spurious figures. A flat
+    filled pie chart, a treemap or an unoutlined bar chart pays for that. Do
+    **not** assume ``figure_dominant`` catches the page instead: that flag
+    needs 25 % painted coverage, and a chart of this kind on an otherwise
+    normal text page measures well under it (a 200x200 pt flat-fill pie on a
+    letter sheet measures ``vector_coverage`` 0.07), so the page is not
+    flagged either and the figure is invisible in the dump. The reliable fallback is rendering the sheet
+    with ``preview.py`` and reading it.
+  - Vector figure *detection* is a heuristic over the object model and can only
+    ever approximate a reader's judgement. It is tuned for precision: a cluster
+    it rejects is reported nowhere, so ``--no-vector-images`` and the
+    ``figure_dominant`` flag remain the honest fallbacks.
+  - Rendering a **whole page** stays ``preview.py``'s job. This extracts cropped
+    figures only.
+  - A vector crop is a raster (see above). No SVG output is produced.
+  - ``pdftocairo`` absent, timing out, or failing on a page degrades to "no
+    vector figures, said loudly on stderr and counted in ``images_summary``" —
+    never to a silent omission, and never to a failed dump: the text and tables
+    are the contract.
   - ``vector_coverage`` is a quantised approximation: path objects are painted
     onto a ~4 pt grid and each connected cluster contributes its bounding box,
     so it measures "how much of the sheet the artwork spans", not exact ink.
@@ -101,9 +175,27 @@ Honest scope (v1):
     document's fonts cannot represent any non-Latin alphabet. A genuinely
     Latin-only document trips it too, correctly and harmlessly — what was lost
     is unknowable from the file, which is exactly why the signal is needed.
-  - Decompression-bomb / adversarial-PDF hardening is not specifically done:
-    a pathological PDF can hang (no timeout) as well as crash.
-  - ``--password`` is read from argv only (visible in ``ps``).
+  - Decompression-bomb / adversarial-PDF hardening is not specifically done for
+    the text path: a pathological PDF can hang (no timeout) as well as crash.
+    The image path is the one exception, because ``--extract-images`` opens a
+    decode that is sized by the stream's *declared* ``/Width`` and ``/Height``
+    rather than by its length — a few hundred bytes can demand gigabytes — so
+    the enumeration is deliberately decode-free (``_raster_streams`` walks
+    ``page.images.keys()``, never ``page.images``, because iterating the latter
+    decodes every entry as it goes) and ``_IMAGE_MAX_PIXELS`` refuses the
+    allocation before ``_fetch_raster`` is reached. The declaration is read
+    from the XObject dictionary rather than from pdfplumber's ``srcsize``,
+    which a file can set independently via the ``/W``/``/H`` abbreviations.
+    That guards the allocation this feature adds; it does not make the tool
+    safe against a hostile PDF generally.
+  - A raster pypdf cannot inflate within its own 75 MB ceiling
+    (``ZLIB_MAX_OUTPUT_LENGTH``) is reported as ``undecodable`` rather than
+    extracted. A legitimate ~25 MP RGB image exceeds that, so a large scan can
+    be counted as undecodable even though nothing is wrong with it — loudly,
+    never silently, but the file will not be in the directory.
+  - ``--password`` is read from argv only (visible in ``ps``), and with
+    ``--extract-images`` it is passed on to ``pdftocairo`` as ``-upw``, so it
+    is visible in the child process's argv too.
   - "Encryption never silent" covers PDFs that *require* a password to open. A
     PDF encrypted with only an *owner* password but a blank *user* password is
     readable without a password — it opens normally and is treated as a digital
@@ -125,22 +217,30 @@ Usage:
     python3 pdf_extract.py INPUT.pdf [-o OUT.json] [--layout]
                            [--password PW] [--x-tolerance-ratio R]
                            [--y-tolerance PT] [--table-strategy S]
-                           [--json-errors]
+                           [--extract-images DIR] [--image-dpi N]
+                           [--no-vector-images] [--json-errors]
 
 Exit codes:
     0  — success: structured dump emitted (digital, mixed, or all-blank PDF)
     1  — failure: input missing / not a PDF / corrupt / encrypted-without-password
-    2  — usage error (argparse)
-    6  — SelfOverwriteRefused: the -o output path resolves to the input PDF
+         / --extract-images names an existing file / its directory is unwritable
+    2  — usage error (argparse, including --image-dpi < 1)
+    6  — SelfOverwriteRefused: the -o output path, or --extract-images,
+         resolves to the input PDF
     10 — DocumentScanned: whole document is image-only; run OCR or the Read tool
 """
 
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import logging
+import os
+import shutil
+import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 import pdfplumber  # type: ignore
@@ -192,6 +292,87 @@ _VECTOR_GRID_MAX_CELLS = 200
 # The ONLY site that reads this constant is `_is_backdrop`.
 _VECTOR_BACKDROP_RATIO = 0.9
 
+# --- image extraction (--extract-images) ------------------------------------
+# Rasterisation resolution for a *vector* figure crop. 150 dpi keeps a
+# letter-width figure near 1000 px wide — legible when a model reads it back and
+# small enough to sit in a Markdown tree. Rasters are never re-rendered (their
+# bytes are copied out as stored), so this knob only affects the vector branch.
+_DEFAULT_IMAGE_DPI = 150
+# A raster whose placement covers this much of the sheet is a background wash or
+# a whole-page scan, not a figure. The measured case: one document repeated a
+# single page-sized backdrop raster on 31 of its placements. A scanned page is a
+# page-sized raster too — and is already reported by `scanned` / exit 10, whose
+# repair is OCR, not a figure file. Deliberately a separate constant from
+# `_VECTOR_BACKDROP_RATIO`: that one also requires "filled and not stroked",
+# which is meaningless for an image XObject. The ONLY site that reads this
+# constant is `_is_image_backdrop`.
+_IMAGE_BACKDROP_RATIO = 0.9
+# --- vector-figure predicates ----
+# A cluster of path objects is a *figure* only if it clears all four tests
+# below. Measured across 6 documents / ~50 pages (4 real dogfood PDFs from
+# `tmp16/` plus the committed `figure.pdf` and `shaded.pdf`): the four genuine
+# vector figures score area 0.054-0.311 with 5-29 stroked paths and zero table
+# overlap, while every one of the ~30 spurious clusters is either fill-only
+# (code-block shading, heading rules, inline-code chips, card backgrounds:
+# 0 stroked paths), table ruling (overlap 0.98-1.00), or a speck (area 0.002).
+# Both of the first two tests are load-bearing and neither subsumes the other:
+# table ruling IS stroked (so only the overlap test rejects it), and a
+# full-width shaded card overlaps no table at all (so only the stroke test
+# rejects it).
+# The overlap threshold sits in an empty measured gap: every genuine figure
+# scored 0.00 and every table cluster 0.98-1.00, so anything in (0.0, 0.98)
+# separates them. It is set near the TOP of that gap deliberately, because the
+# error it guards against is asymmetric — a chart whose bars and axes partly
+# read as a lattice would be silently dropped by a low threshold, while raising
+# it costs nothing on the corpus (verified: 9/9 documents unchanged at 0.9).
+# The ONLY site that reads these three is `_is_figure_cluster`.
+_FIGURE_MIN_AREA_RATIO = 0.01
+_FIGURE_MIN_SIDE_PT = 24.0
+_FIGURE_TABLE_OVERLAP = 0.9
+# Padding added around a cluster before it is cropped. A path's bounding box is
+# its *centreline* box, so half a stroke width bleeds outside it (measured at
+# 1.3-1.6 pt on a 3 pt stroke), and the cluster bbox is quantised to
+# `_VECTOR_CELL_PT`. 4 pt covers both without pulling in neighbouring prose.
+_FIGURE_PAD_PT = 4.0
+# Per-page ceiling on rendered vector figures. A pathological page (a map, a
+# CAD drawing) can cluster into hundreds of regions; rendering each is a
+# subprocess per region. Anything dropped by this cap is reported on stderr —
+# a silent cap would read as "there were no more figures".
+_FIGURE_MAX_PER_PAGE = 20
+# Document-level ceiling on files written. The per-page caps bound one page; a
+# hostile file bounds nothing by having many pages, and unbounded output to
+# someone else's disk is its own failure mode. 2000 is far above any real
+# document's artwork (the 29-page dogfood export yields 2 files) and low enough
+# to stop a fan-out. Anything dropped is reported, never silent. Read by
+# `_ImageSink.store` (the budget itself) and by `main` (the warning text) —
+# those two sites only.
+_MAX_FILES_PER_DOCUMENT = 2000
+# Seconds any single `pdftocairo` crop may take before it is abandoned (parity
+# with preview.py's pdftoppm timeout).
+_PDFTOCAIRO_TIMEOUT = 30
+# Extensions an extracted raster may carry. pypdf decodes to these; anything
+# else is written as `.bin` rather than given a plausible image extension. The
+# ONLY site that reads this is `_image_suffix`.
+_IMAGE_SUFFIXES = frozenset({
+    ".png", ".jpg", ".jpeg", ".jp2", ".tiff", ".tif", ".bmp", ".gif", ".webp",
+})
+# Pixel ceiling for a raster the extractor will ask pypdf to decode. pypdf
+# allocates from the stream's DECLARED /Width and /Height, not from the bytes on
+# disk, so a few hundred bytes of Flate can demand gigabytes. The declaration is
+# read from the image XObject dictionary (`_declared_size`) before anything is
+# decoded — see `_raster_streams` for why enumeration must not go through
+# `page.images`, which decodes as it walks.
+#
+# This is a backstop, not the only bound: pypdf 6.x refuses any Flate stream
+# inflating past 75 MB (`ZLIB_MAX_OUTPUT_LENGTH`) and Pillow refuses ~89 MP on
+# the JPEG path, so an oversized image usually fails inside the library first —
+# loudly, as `undecodable`. 80 MP sits above every real document image (a 600
+# dpi A0 scan is ~66 MP) so it never rejects genuine content; its job is to
+# refuse the *allocation* for a filter those library limits do not cover.
+# Read by `_extract_rasters` (the guard itself) and by `main` (the warning
+# text) — those two sites only.
+_IMAGE_MAX_PIXELS = 80_000_000
+
 # --- lossy-text-layer detection ---------------------------------------------
 # Single-byte encodings whose code space is Latin: a font using one cannot
 # address a Cyrillic/Greek/CJK codepoint at all.
@@ -227,6 +408,23 @@ class _ExtractError(Exception):
         self.error_type = error_type
 
 
+def _named_dir(value: str) -> Path:
+    """An argparse type for a directory that must actually be named.
+
+    `Path("")` normalises to `PosixPath(".")`, so an empty argument silently
+    becomes the working directory and artwork is scattered across it at exit 0
+    — the accident of `--extract-images "$OUTDIR"` with `OUTDIR` unset, and
+    exactly what "DIR is mandatory" promises cannot happen. The check has to
+    live here, in the argparse type, because by the time the namespace exists
+    the empty string is already indistinguishable from an explicit ".", which
+    remains allowed."""
+    if not value.strip():
+        raise argparse.ArgumentTypeError(
+            "requires a directory name; got an empty string (an unset shell "
+            "variable?)")
+    return Path(value)
+
+
 def _build_parser() -> argparse.ArgumentParser:
     """Construct the argparse CLI. REAL from the stub phase — the smoke test
     asserts the `--help` surface."""
@@ -240,9 +438,10 @@ def _build_parser() -> argparse.ArgumentParser:
         ),
         epilog=(
             "Exit codes: 0 success; 1 failure (missing/not-a-PDF/corrupt/"
-            "encrypted-without-password); 2 usage error; 6 SelfOverwriteRefused "
-            "(-o path is the input PDF); 10 DocumentScanned (whole document is "
-            "image-only — run OCR or the Read tool)."
+            "encrypted-without-password / --extract-images names a file); "
+            "2 usage error; 6 SelfOverwriteRefused (-o path, or "
+            "--extract-images, is the input PDF); 10 DocumentScanned (whole "
+            "document is image-only — run OCR or the Read tool)."
         ),
     )
     parser.add_argument("INPUT", type=Path, help="Source PDF file.")
@@ -290,6 +489,29 @@ def _build_parser() -> argparse.ArgumentParser:
              "glued onto a real table as an extra row. 'lines_strict' counts "
              "only stroked lines — use it on a page whose 'tables' look like "
              "shading, but note it drops tables drawn purely with fills.",
+    )
+    parser.add_argument(
+        "--extract-images", type=_named_dir, default=None, metavar="DIR",
+        help="Also write the document's artwork into DIR (created if needed) "
+             "and list it per page in the dump as `images`. Two classes come "
+             "out: embedded rasters, copied byte-for-byte as stored, and "
+             "vector figures (diagrams and charts drawn with path operators, "
+             "for which no image object exists), cropped from the page at "
+             "--image-dpi. Identical images are written once and shared by "
+             "every placement; page-sized backdrops are skipped. DIR is "
+             "mandatory — nothing is ever written to the current directory by "
+             "default.",
+    )
+    parser.add_argument(
+        "--image-dpi", type=int, default=_DEFAULT_IMAGE_DPI, metavar="N",
+        help="Resolution for VECTOR figure crops (default %(default)s). "
+             "Rasters are copied as stored and are unaffected.",
+    )
+    parser.add_argument(
+        "--no-vector-images", dest="vector_images", action="store_false",
+        help="With --extract-images, extract embedded rasters only and do not "
+             "render vector figures. The escape hatch for a document where the "
+             "figure heuristic misfires, and for a host without Poppler.",
     )
     add_json_errors_argument(parser)
     return parser
@@ -509,8 +731,16 @@ def _is_backdrop(obj: dict, page_area: float) -> bool:
     return abs(x1 - x0) * abs(bottom - top) >= _VECTOR_BACKDROP_RATIO * page_area
 
 
-def _vector_coverage(objects, width: float, height: float) -> float:
-    """Fraction of the sheet spanned by clustered vector artwork.
+def _vector_clusters(objects, width: float, height: float):
+    """Cluster path objects into the regions a reader sees as one drawing.
+
+    Returns `(clusters, grid_cells)` where each cluster is a dict with `bbox`
+    (the union of its members' bounding boxes, in page coordinates), `cells`
+    (the area of its *cell* bounding box, in grid cells) and `members` (the
+    objects that fell into it); `grid_cells` is the total cell count of the
+    page grid. `vector_coverage` is derived from `cells / grid_cells` and the
+    figure crops from `bbox`, so the measurement and the extraction can never
+    disagree about what a cluster is.
 
     Summing path bounding boxes directly is useless — a ruling line's box has
     ~zero area, yet a table of them plainly occupies a region of the page. So
@@ -519,22 +749,27 @@ def _vector_coverage(objects, width: float, height: float) -> float:
     cluster contributes its bounding box. That answers the question the figure
     signal actually asks: how much of the sheet does the artwork span. It is an
     approximation quantised to the cell size, and clusters whose boxes overlap
-    double-count, hence the clamp.
+    double-count, hence the clamp applied by the caller.
 
     Page-sized background fills are dropped first (`_is_backdrop`) — one such
     rect would otherwise mark every cell and report a prose page as wholly
     artwork."""
     page_area = width * height
     if page_area <= 0 or not objects:
-        return 0.0
+        return [], 0
     objects = [obj for obj in objects if not _is_backdrop(obj, page_area)]
     if not objects:
-        return 0.0
+        return [], 0
     cell = max(_VECTOR_CELL_PT,
                width / _VECTOR_GRID_MAX_CELLS, height / _VECTOR_GRID_MAX_CELLS)
     cols = int(width / cell) + 1
     rows = int(height / cell) + 1
     grid = bytearray(cols * rows)
+    # One representative cell per object, kept so the second pass can hand the
+    # object to the cluster it landed in. Any of its cells will do: an object
+    # paints a solid rectangle of cells, which is connected by construction, so
+    # every one of them ends up in the same component.
+    anchors: list[tuple[dict, int]] = []
 
     for obj in objects:
         x0, top, x1, bottom = _obj_box(obj)
@@ -546,17 +781,26 @@ def _vector_coverage(objects, width: float, height: float) -> float:
         for row in range(r0, r1 + 1):
             base = row * cols
             grid[base + c0:base + c1 + 1] = span
+        anchors.append((obj, r0 * cols + c0))
 
-    covered_cells = 0
+    # `labels[cell]` is the index of the cluster that owns it, or -1. The flood
+    # fill is the original one; labelling is what lets members be recovered
+    # exactly. It is sized by the GRID (bounded by `_VECTOR_GRID_MAX_CELLS`),
+    # not by the object count, which is what keeps a page of thousands of paths
+    # from blowing the mapping up.
+    labels = [-1] * (cols * rows)
+    clusters: list[dict] = []
     for start in range(cols * rows):
         if grid[start] != 1:
             continue
         grid[start] = 2  # 2 == already absorbed into a cluster
+        index_of_cluster = len(clusters)
         stack = [start]
         min_r = max_r = start // cols
         min_c = max_c = start % cols
         while stack:
             index = stack.pop()
+            labels[index] = index_of_cluster
             row, col = divmod(index, cols)
             min_r, max_r = min(min_r, row), max(max_r, row)
             min_c, max_c = min(min_c, col), max(max_c, col)
@@ -573,8 +817,42 @@ def _vector_coverage(objects, width: float, height: float) -> float:
                     if grid[neighbour] == 1:
                         grid[neighbour] = 2
                         stack.append(neighbour)
-        covered_cells += (max_r - min_r + 1) * (max_c - min_c + 1)
-    return min(1.0, covered_cells / (cols * rows))
+        clusters.append({
+            "bbox": None,
+            "cells": (max_r - min_r + 1) * (max_c - min_c + 1),
+            "members": [],
+        })
+
+    for obj, anchor in anchors:
+        cluster = clusters[labels[anchor]]
+        cluster["members"].append(obj)
+        box = _obj_box(obj)
+        current = cluster["bbox"]
+        cluster["bbox"] = box if current is None else (
+            min(current[0], box[0]), min(current[1], box[1]),
+            max(current[2], box[2]), max(current[3], box[3]))
+    return clusters, cols * rows
+
+
+def _coverage_of(clusters: list, grid_cells: int) -> float:
+    """Fraction of the sheet spanned by already-clustered vector artwork — the
+    sum of the cell boxes over the page grid, clamped to 1.0 because
+    overlapping cluster boxes would otherwise sum past the page.
+
+    The ONE site that computes `vector_coverage`. It takes clusters rather than
+    objects so `_extract_page`, which needs the clusters anyway for the figure
+    crops, can share this expression instead of inlining a second copy — a
+    duplicate here silently moves the dump's `vector_coverage` out from under
+    whatever tests guard this function."""
+    if not grid_cells:
+        return 0.0
+    return min(1.0, sum(c["cells"] for c in clusters) / grid_cells)
+
+
+def _vector_coverage(objects, width: float, height: float) -> float:
+    """`_coverage_of` over freshly clustered objects — the standalone form,
+    used where the clusters are not needed for anything else."""
+    return _coverage_of(*_vector_clusters(objects, width, height))
 
 
 def _classify_figure_page(
@@ -593,6 +871,513 @@ def _classify_figure_page(
     covered = min(1.0, image_coverage + vector_coverage)
     return (covered >= _FIGURE_COVERAGE_THRESHOLD
             and char_count < _FIGURE_CHAR_THRESHOLD)
+
+
+# --- image extraction (--extract-images) ------------------------------------
+
+def _is_image_backdrop(image: dict, page_area: float) -> bool:
+    """True for a raster whose placement covers essentially the whole sheet — a
+    background wash or a whole-page scan, not a figure. The ONLY site that reads
+    `_IMAGE_BACKDROP_RATIO`."""
+    if page_area <= 0:
+        return False
+    x0, top, x1, bottom = _obj_box(image)
+    return abs(x1 - x0) * abs(bottom - top) >= _IMAGE_BACKDROP_RATIO * page_area
+
+
+def _table_boxes(page) -> list[tuple[float, float, float, float]]:
+    """Bounding boxes of the tables pdfplumber finds on `page`.
+
+    Deliberately uses pdfplumber's DEFAULT (`lines`) detection regardless of
+    `--table-strategy`. The two uses pull in opposite directions: the dump's
+    `tables` wants the strategy that reports the *real* tables, while this one
+    wants the broadest possible notion of "this region is a table", because
+    every box it returns is a *rejection* and the filter is tuned for
+    precision. Keeping it fixed also means `--table-strategy` cannot silently
+    change which figures come out.
+
+    Best-effort: table detection is a heuristic over the same path objects the
+    figure clusterer walks, and a malformed page can make it raise. A failure
+    here may only *admit* a spurious figure, never suppress a real one, so it
+    is swallowed rather than propagated."""
+    try:
+        return [tuple(float(v) for v in table.bbox)
+                for table in page.find_tables()]
+    except Exception:
+        return []
+
+
+def _overlap_ratio(box: tuple, other: tuple) -> float:
+    """Fraction of `box`'s area that lies inside `other`. 0.0 when `box` is
+    degenerate, so a zero-area cluster can never be called a table."""
+    width = max(0.0, min(box[2], other[2]) - max(box[0], other[0]))
+    height = max(0.0, min(box[3], other[3]) - max(box[1], other[1]))
+    area = max(0.0, box[2] - box[0]) * max(0.0, box[3] - box[1])
+    if area <= 0:
+        return 0.0
+    return (width * height) / area
+
+
+def _is_figure_cluster(cluster: dict, page_width: float, page_height: float,
+                       table_boxes: list) -> bool:
+    """Is this cluster of paths a *figure* — something a reader would want as a
+    picture — rather than page furniture?
+
+    Four tests, all measured (see the constants). Two do the real work and
+    neither subsumes the other:
+
+    * **at least one stroked path.** Shading is drawn with fills and no stroke:
+      code-block backgrounds, heading rules, inline-code chips, the full-width
+      cards a Notion/Confluence export paints behind every block. Every one of
+      the ~30 spurious clusters measured on the fill-only side scored 0 stroked
+      paths; every one of the four genuine figures scored 5-29. The cost is
+      stated in the module's honest-scope list: a figure drawn *entirely* with
+      fills (a flat pie chart) is not extracted.
+    * **not a table.** Table ruling IS stroked, so the test above cannot see it;
+      it clusters into one region that overlaps pdfplumber's own table bbox by
+      0.98-1.00, while no genuine figure overlapped a table at all.
+
+    The remaining two drop specks: a cluster must span `_FIGURE_MIN_AREA_RATIO`
+    of the sheet and be at least `_FIGURE_MIN_SIDE_PT` on both sides, which
+    rejects inline-code chips (0.002 of a sheet) and hairline rules. The ONLY
+    site that reads any of the three constants."""
+    box = cluster["bbox"]
+    if box is None or page_width <= 0 or page_height <= 0:
+        return False
+    width, height = box[2] - box[0], box[3] - box[1]
+    if width < _FIGURE_MIN_SIDE_PT or height < _FIGURE_MIN_SIDE_PT:
+        return False
+    if (width * height) / (page_width * page_height) < _FIGURE_MIN_AREA_RATIO:
+        return False
+    if not any(member.get("stroke") for member in cluster["members"]):
+        return False
+    return not any(_overlap_ratio(box, table) >= _FIGURE_TABLE_OVERLAP
+                   for table in table_boxes)
+
+
+def _figure_boxes(page, box: tuple):
+    """A cluster bbox → `(page_box, render_box)`, both padded and clamped.
+
+    Two frames, returned together so they cannot drift apart. `page_box` is in
+    the page coordinates every other bbox in the dump uses (`_obj_box`, the
+    raster records) and is what gets reported; `render_box` is the same
+    rectangle in the frame `pdftocairo` crops in, and never leaves this module.
+    Reporting the render frame instead would put two coordinate systems in one
+    JSON field, distinguishable only on a PDF whose MediaBox is not at (0, 0) —
+    invisible on every ordinary document.
+
+    Poppler draws the MediaBox with its origin at the top-left of the output
+    image, while pdfplumber measures objects from the *unshifted* origin, so a
+    PDF whose MediaBox does not start at (0, 0) offsets the two frames against
+    each other and every crop lands on the wrong part of the sheet. Measured on
+    a MediaBox of `(20, -30, 632, 762)`: a path pdfplumber reports at
+    `(100, 142)` renders at `(78.7, 170.4)` — i.e. subtract the MediaBox origin
+    from BOTH axes. On the usual `(0, 0)` page both corrections are the
+    identity, which is exactly why the bug is invisible without
+    `fixtures/shifted.pdf`, and why that fixture exists.
+
+    Page rotation needs no handling: pdfplumber already reports coordinates in
+    the rotated frame (a `/Rotate 90` letter page measures 792x612), and so does
+    Poppler.
+
+    The box is padded by `_FIGURE_PAD_PT` and clamped to the sheet."""
+    origin_x = float(page.mediabox[0])
+    origin_y = float(page.mediabox[1])
+    x0 = box[0] - origin_x - _FIGURE_PAD_PT
+    x1 = box[2] - origin_x + _FIGURE_PAD_PT
+    top = box[1] - origin_y - _FIGURE_PAD_PT
+    bottom = box[3] - origin_y + _FIGURE_PAD_PT
+    render = (max(0.0, x0), max(0.0, top),
+              min(float(page.width), x1), min(float(page.height), bottom))
+    page_box = (render[0] + origin_x, render[1] + origin_y,
+                render[2] + origin_x, render[3] + origin_y)
+    return page_box, render
+
+
+def _px(value: float, dpi: int) -> int:
+    """Points → whole pixels at `dpi`."""
+    return int(round(value * dpi / 72.0))
+
+
+def _sha1(data: bytes) -> str:
+    """Content identity for dedup and for the filename — NOT a security
+    primitive. `usedforsecurity=False` says so, and keeps the call working on a
+    FIPS-enforcing host, where an unflagged sha1 raises and would take the whole
+    extraction with it."""
+    return hashlib.sha1(data, usedforsecurity=False).hexdigest()
+
+
+class _ImageBudgetExceeded(Exception):
+    """The document-level file budget is spent. Caught per page so the pages
+    already extracted keep their records and the dump still emits."""
+
+
+class _ImageSink:
+    """Writes extracted artwork into the destination directory, deduplicated.
+
+    One instance per document. Holds the sha1 → filename map that implements
+    the dedup guard: a document measured for this feature placed a single
+    background raster 31 times among 49 placements, so a naive extractor writes
+    32 files nobody needs. Placements are still reported individually — each
+    keeps its own page and bbox — they simply share one file on disk.
+
+    Counters exist so `main` can report what did NOT come out: `undecodable`
+    (a raster whose bytes pypdf could not produce) is kept apart from
+    `render_failed` (a vector crop Poppler could not draw) because they have
+    different repairs, and both from `dropped_capped` / `vector_unrendered`. A
+    cap or a failure that says nothing reads as "there was nothing more to
+    extract"."""
+
+    def __init__(self, directory: Path, *, dpi: int) -> None:
+        self.directory = directory
+        self.dpi = dpi
+        self._by_digest: dict[str, str] = {}
+        self._by_objid: dict[int, tuple[str, str]] = {}
+        self._per_page: dict[int, int] = {}
+        self.written = 0
+        self.deduped = 0
+        self.undecodable = 0
+        self.render_failed = 0
+        self.oversized = 0
+        self.page_failed = 0
+        self.over_document_cap = 0
+        self.dropped_backdrop = 0
+        self.dropped_capped = 0
+        self.vector_unrendered = 0
+
+    def store(self, data: bytes, *, page_number: int, kind: str,
+              suffix: str, objid: int | None = None) -> tuple[str, str]:
+        """Write `data` (or reuse an identical earlier file) → `(path, sha1)`.
+
+        The returned path is the destination directory joined with the file
+        name *as the caller spelled the directory* — a relative
+        `--extract-images out/img` yields `out/img/p005-r01-….png`, which
+        resolves from the same working directory the CLI ran in, so a Markdown
+        document can reference it verbatim.
+
+        Dedup is keyed on the PDF object number first and the digest second.
+        The digest is what makes two *different* objects sharing one image
+        collapse, but hashing every placement means re-hashing the same buffer
+        once per placement: one document placed a single image 31 times, and a
+        crafted one can place a 75 MB image thousands of times, turning a small
+        file into terabytes of hashing. An objid that has been stored before
+        cannot have different bytes, so it short-circuits before the hash."""
+        if objid is not None:
+            remembered = self._by_objid.get(objid)
+            if remembered is not None:
+                self.deduped += 1
+                return remembered
+        digest = _sha1(data)
+        existing = self._by_digest.get(digest)
+        if existing is not None:
+            self.deduped += 1
+            if objid is not None:
+                self._by_objid[objid] = (existing, digest)
+            return existing, digest
+        if self.written >= _MAX_FILES_PER_DOCUMENT:
+            self.over_document_cap += 1
+            raise _ImageBudgetExceeded()
+        sequence = self._per_page.get(page_number, 0) + 1
+        self._per_page[page_number] = sequence
+        name = (f"p{page_number:03d}-{kind[0]}{sequence:02d}-"
+                f"{digest[:8]}{suffix}")
+        path = self.directory / name
+        self._write(path, data)
+        self.written += 1
+        self._by_digest[digest] = str(path)
+        if objid is not None:
+            self._by_objid[objid] = (str(path), digest)
+        return str(path), digest
+
+    @staticmethod
+    def _write(path: Path, data: bytes) -> None:
+        """Create `path` and write `data`, refusing to follow a symlink.
+
+        `Path.write_bytes` opens `O_WRONLY|O_CREAT|O_TRUNC` and follows
+        symlinks, while every component of the file name — page, kind,
+        sequence, digest prefix — is predictable to whoever supplied the PDF
+        (they know their own images' digests). A symlink planted in a shared
+        destination therefore redirects the write to its target, with
+        attacker-chosen bytes. `O_NOFOLLOW | O_EXCL` refuses both that and a
+        pre-existing regular file.
+
+        Re-running into the same directory is still idempotent: an existing
+        file holding exactly these bytes is accepted as already written, which
+        makes the idempotence an explicit contract rather than a side effect of
+        `O_TRUNC`. Anything else — same name, different content — is a genuine
+        collision and raises."""
+        try:
+            handle = os.open(
+                path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                0o600)
+        except FileExistsError:
+            if not path.is_symlink() and path.is_file() \
+                    and path.read_bytes() == data:
+                return
+            raise
+        with os.fdopen(handle, "wb") as sink:
+            sink.write(data)
+
+
+def _open_pypdf(pdf_path: Path, password: str | None):
+    """A `pypdf` reader for the same file, or `None`.
+
+    Imported lazily and failure-tolerantly on purpose. pdfplumber gives the
+    *placements* (which image is painted where, with its bbox); only pypdf
+    decodes an image XObject into bytes a file can hold, applying the filter
+    chain and folding an /SMask alpha plane into the pixels. Neither library
+    does both. Because this is needed only under `--extract-images`, a missing
+    or unhappy pypdf must not change what the tool does without the flag — and
+    must degrade to "no rasters, said loudly" rather than to a traceback."""
+    try:
+        import pypdf  # noqa: PLC0415 — deliberate: only the flag needs it
+        reader = pypdf.PdfReader(str(pdf_path))
+        if reader.is_encrypted and password is not None:
+            reader.decrypt(password)
+        return reader
+    except Exception:
+        return None
+
+
+def _declared_size(entry) -> tuple[int, int]:
+    """`/Width` x `/Height` as pypdf's decoder will read them, or `(0, 0)`.
+
+    Deliberately NOT pdfplumber's `srcsize`. pdfminer resolves that through
+    ``get_any(("W", "Width"))`` — first key present wins — while pypdf reads
+    ``/Width`` only. An image XObject carrying the inline-image abbreviations
+    *alongside* the real keys (``/W 1 /H 1 /Width 40000 /Height 40000``) is
+    therefore reported by pdfplumber as 1x1 while pypdf allocates 1.6 G pixels:
+    a 14-byte edit that makes the size guard and the decoder disagree. Measured
+    on a crafted file: `srcsize` (1, 1), pypdf decode 400x300. A non-numeric or
+    indirect value yields `(0, 0)` — "unknown", which the caller treats as
+    uncapped rather than as zero."""
+    try:
+        width = int(entry.get("/Width", 0))
+        height = int(entry.get("/Height", 0))
+    except (TypeError, ValueError):
+        return (0, 0)
+    return (max(0, width), max(0, height))
+
+
+def _raster_streams(reader, index: int) -> dict:
+    """`{PDF object number: (image key, declared width, declared height)}`.
+
+    Enumerates a page's images WITHOUT decoding any of them. `page.images` is
+    tempting and wrong for this: iterating it calls pypdf's `_get_image` for
+    every entry, which runs the whole filter chain and builds a Pillow image
+    eagerly — so a size check performed afterwards guards nothing, and a
+    hostile `/Width`/`/Height` has already driven the allocation. `keys()`
+    costs nothing (measured at 0.000 s) and still walks nested Form XObjects,
+    which a hand-rolled scan of `/Resources/XObject` does NOT: a page whose
+    image lives inside a form exposes only the form at the top level, so
+    rolling our own would silently lose it.
+
+    Keyed by object number because that is the join back to pdfplumber's
+    placements (`image["stream"].objid` == the XObject's `idnum`). Going
+    through the placements is what keeps two pypdf artefacts out of the output:
+    a page's resource dictionary lists images it never paints, and an /SMask
+    alpha plane is enumerated as its own greyscale entry beside the RGBA image
+    it belongs to. Decoding is deferred to `_fetch_raster`, which is called
+    only for placements that survive every guard."""
+    if reader is None:
+        return {}
+    streams: dict = {}
+    try:
+        page = reader.pages[index]
+        keys = list(page.images.keys())
+    except Exception:
+        return {}
+    for key in keys:
+        # Accumulate outside any single try: one unresolvable key must not cost
+        # the keys already resolved for this page.
+        try:
+            node = page["/Resources"]["/XObject"]
+            reference = None
+            for part in (key if isinstance(key, list) else [key]):
+                reference = node.raw_get(part)
+                entry = node[part].get_object()
+                if entry.get("/Subtype") == "/Image":
+                    idnum = getattr(reference, "idnum", None)
+                    if idnum is not None:
+                        streams[int(idnum)] = (key, *_declared_size(entry))
+                    break
+                node = entry["/Resources"]["/XObject"]
+        except Exception:
+            continue
+    return streams
+
+
+def _fetch_raster(reader, index: int, key):
+    """Decode ONE image, by key. The only place a raster is decoded.
+
+    Split out from enumeration so every guard — placement, backdrop, declared
+    size — runs first. Returns `(bytes, suffix)` or `None`; pypdf raises for a
+    filter it cannot handle, a truncated stream, and (in 6.x) for any Flate
+    stream inflating past `ZLIB_MAX_OUTPUT_LENGTH` (75 MB), which a legitimate
+    ~25 MP RGB image exceeds."""
+    try:
+        image = reader.pages[index].images[key]
+        return image.data, _image_suffix(image.name)
+    except Exception:
+        return None
+
+
+def _image_suffix(name) -> str:
+    """The file extension for an extracted raster, from an allowlist.
+
+    pypdf names the image after its resource key plus the format it decoded to.
+    That name is PDF-controlled data, and `Path(...).suffix` on POSIX happily
+    returns a backslash-bearing string for a crafted key — harmless here, but
+    the filename is written to disk, so it is built only from values this module
+    chose. An unrecognised format becomes `.bin` rather than a plausible `.png`:
+    mislabelling an undecoded blob as an image is the same silent lie the rest
+    of this tool exists to prevent."""
+    suffix = Path(str(name)).suffix.lower()
+    return suffix if suffix in _IMAGE_SUFFIXES else ".bin"
+
+
+def _extract_rasters(page, streams: dict, sink: _ImageSink, *,
+                     page_number: int, reader=None, index: int = 0
+                     ) -> list[dict]:
+    """Copy every raster *placement* on `page` out to a file.
+
+    Guard order is the whole point and is load-bearing: a placement must clear
+    the page-sized-backdrop test (`_is_image_backdrop`) AND the declared-pixel
+    cap (`_IMAGE_MAX_PIXELS`) BEFORE anything is decoded, because the decode
+    allocation is driven by the declaration rather than by the bytes on disk.
+    `_raster_streams` therefore hands over declared sizes only, and
+    `_fetch_raster` is called last, per surviving placement.
+
+    An image whose bytes cannot be produced — a filter pypdf cannot decode, a
+    truncated stream, a Flate stream over pypdf's 75 MB inflate ceiling — is
+    counted in `sink.undecodable` and skipped, never faked."""
+    records: list[dict] = []
+    page_area = float(page.width) * float(page.height)
+    for image in page.images:
+        if _is_image_backdrop(image, page_area):
+            sink.dropped_backdrop += 1
+            continue
+        stream = image.get("stream")
+        objid = getattr(stream, "objid", None)
+        source = streams.get(int(objid)) if objid is not None else None
+        if source is None:
+            sink.undecodable += 1
+            continue
+        key, width, height = source
+        # `(0, 0)` means the declaration was missing or unreadable, not zero —
+        # such an image is passed through to the decoder rather than silently
+        # dropped, since dropping it would be the content loss this tool exists
+        # to prevent.
+        if width and height and width * height > _IMAGE_MAX_PIXELS:
+            sink.oversized += 1
+            continue
+        fetched = _fetch_raster(reader, index, key)
+        if fetched is None:
+            sink.undecodable += 1
+            continue
+        data, suffix = fetched
+        path, digest = sink.store(
+            data, page_number=page_number, kind="raster", suffix=suffix,
+            objid=objid)
+        records.append({
+            "file": path,
+            "kind": "raster",
+            "bbox": [round(v, 2) for v in _obj_box(image)],
+            "name": image.get("name"),
+            # From the XObject dict, NOT pdfplumber's `srcsize`: the two
+            # disagree whenever a file carries the `/W`,`/H` abbreviations, and
+            # reporting 1x1 for a 400x300 image is a lie in the dump itself.
+            "width": width or None,
+            "height": height or None,
+            "bytes": len(data),
+            "sha1": digest,
+        })
+    return records
+
+
+def _figures_on(page, clusters: list) -> list:
+    """The clusters on `page` that are figures — the ONE definition.
+
+    Both the renderer and the "detected but not rendered" counter need this
+    answer, and computing it twice means a fifth predicate could silently make
+    the counter disagree with what would actually have been extracted.
+    `find_tables()` is hoisted here because it re-runs pdfplumber's whole edge
+    detection; evaluating it per cluster would run it hundreds of times on a
+    dense page."""
+    if not clusters:
+        return []
+    tables = _table_boxes(page)
+    width, height = float(page.width), float(page.height)
+    return [c for c in clusters
+            if _is_figure_cluster(c, width, height, tables)]
+
+
+def _extract_vectors(page, clusters: list, sink: _ImageSink, *,
+                     page_number: int, pdf_path: Path, pdftocairo: str,
+                     password: str | None) -> list[dict]:
+    """Rasterise each vector figure on `page` into its own file.
+
+    A vector figure is not an object in the file — it is a set of path
+    operators — so there are no bytes to copy and the only honest extraction is
+    to render the region it occupies. `pdftocairo` crops in *pixels* from the
+    top-left of the rendered MediaBox, hence `_figure_boxes` + `_px`.
+
+    Poppler's own SVG output would keep the artwork as vectors, but it ignores
+    the crop rectangle and always emits the whole page (verified against
+    poppler 26.06), so cropping to the figure means a raster."""
+    # Hoisted deliberately: `find_tables()` re-runs pdfplumber's whole edge
+    # detection, and evaluating it inside the comprehension would run it once
+    # per cluster — hundreds of times on a dense page.
+    figures = _figures_on(page, clusters)
+    if len(figures) > _FIGURE_MAX_PER_PAGE:
+        sink.dropped_capped += len(figures) - _FIGURE_MAX_PER_PAGE
+        figures = figures[:_FIGURE_MAX_PER_PAGE]
+    records: list[dict] = []
+    for cluster in figures:
+        page_box, box = _figure_boxes(page, cluster["bbox"])
+        width = _px(box[2] - box[0], sink.dpi)
+        height = _px(box[3] - box[1], sink.dpi)
+        if width <= 0 or height <= 0:
+            sink.render_failed += 1
+            continue
+        with tempfile.TemporaryDirectory() as tmp:
+            prefix = Path(tmp) / "figure"
+            command = [
+                pdftocairo, "-png", "-r", str(sink.dpi),
+                "-f", str(page_number), "-l", str(page_number),
+                "-singlefile",
+                "-x", str(_px(box[0], sink.dpi)),
+                "-y", str(_px(box[1], sink.dpi)),
+                "-W", str(width), "-H", str(height),
+            ]
+            if password is not None:
+                command += ["-upw", password]
+            # resolve(): a relative INPUT that begins with "-" would be
+            # parsed by poppler as an option, swallowing the next argument.
+            command += [str(pdf_path.resolve()), str(prefix)]
+            rendered = prefix.with_suffix(".png")
+            try:
+                subprocess.run(command, capture_output=True, check=True,
+                               timeout=_PDFTOCAIRO_TIMEOUT)
+                data = rendered.read_bytes()
+            except (subprocess.SubprocessError, OSError):
+                sink.render_failed += 1
+                continue
+        path, digest = sink.store(
+            data, page_number=page_number, kind="vector", suffix=".png")
+        records.append({
+            "file": path,
+            "kind": "vector",
+            # Page coordinates, the same frame as a raster record's bbox —
+            # NOT the pdftocairo crop rectangle (see `_figure_boxes`).
+            "bbox": [round(v, 2) for v in page_box],
+            "name": None,
+            "width": width,
+            "height": height,
+            "bytes": len(data),
+            "sha1": digest,
+        })
+    return records
 
 
 def _classify_page(char_count: int, has_images: bool) -> bool:
@@ -664,6 +1449,7 @@ def _extract_page(
     x_tolerance_ratio: float | None = _DEFAULT_X_TOLERANCE_RATIO,
     y_tolerance: float | None = None,
     table_strategy: str = _DEFAULT_TABLE_STRATEGY,
+    images: dict | None = None,
 ) -> dict:
     """Build one PageRecord (ARCH §4.2) from a pdfplumber page.
 
@@ -671,6 +1457,12 @@ def _extract_page(
     extracted text (whitespace-only page → 0). `tables` is the raw
     `extract_tables()` form (list of row-lists of `str | None`). `scanned` is
     delegated to `_classify_page`, `figure_dominant` to `_classify_figure_page`.
+
+    `images` carries the `--extract-images` context (sink, page number, source
+    path, the resolved `pdftocairo`) or is `None`. When it is `None` the record
+    has no `images` key at all, so a dump taken without the flag is byte-for-byte
+    what it always was; when it is set, `images` is present and an empty list
+    means "looked, found nothing" rather than "did not look".
 
     `x_tolerance_ratio` (font-relative word-split threshold) and `y_tolerance`
     (absolute line-grouping threshold) are applied to BOTH the page text and the
@@ -706,11 +1498,14 @@ def _extract_page(
     has_images = bool(page.images)
     width, height = float(page.width), float(page.height)
     image_coverage = round(_image_coverage(page.images, width, height), 4)
-    vector_coverage = round(
-        _vector_coverage(
-            [*page.lines, *page.rects, *page.curves], width, height), 4)
+    # One clustering pass feeds both the coverage number and the figure crops,
+    # so the measurement and the extraction can never disagree about what a
+    # cluster is.
+    clusters, grid_cells = _vector_clusters(
+        [*page.lines, *page.rects, *page.curves], width, height)
+    vector_coverage = round(_coverage_of(clusters, grid_cells), 4)
     scanned = _classify_page(char_count, has_images)
-    return {
+    record = {
         "n": 0,
         "text": text,
         "tables": tables,
@@ -722,6 +1517,45 @@ def _extract_page(
         "figure_dominant": _classify_figure_page(
             char_count, image_coverage, vector_coverage, scanned),
     }
+    if images is not None:
+        try:
+            record["images"] = _extract_page_images(page, clusters, images)
+        except _ImageBudgetExceeded:
+            # Distinct from a page failure: nothing is wrong with the page, the
+            # document-level file budget is simply spent. Already counted in
+            # `over_document_cap`.
+            record["images"] = []
+        except Exception:
+            # The text and tables ARE the contract; artwork is an extra. A
+            # hostile or malformed image must not cost the caller the dump, so
+            # the page's extraction is abandoned, counted and reported rather
+            # than propagated. Without this the docstring's "deliberately not
+            # allowed to fail the dump" is a promise nothing keeps.
+            images["sink"].page_failed += 1
+            record["images"] = []
+    return record
+
+
+def _extract_page_images(page, clusters: list, images: dict) -> list[dict]:
+    """Both extraction branches for one page, in page order: rasters first
+    (they are copied out as stored), then vector figures (they are rendered).
+
+    The vector branch is skipped entirely when Poppler is absent or
+    `--no-vector-images` was passed; the count of figures that were *detected
+    and not rendered* is accumulated so `main` can say so out loud."""
+    sink: _ImageSink = images["sink"]
+    page_number: int = images["page_number"]
+    records = _extract_rasters(
+        page, images["streams"], sink, page_number=page_number,
+        reader=images["reader"], index=page_number - 1)
+    pdftocairo = images["pdftocairo"]
+    if pdftocairo is None:
+        sink.vector_unrendered += len(_figures_on(page, clusters))
+        return records
+    return records + _extract_vectors(
+        page, clusters, sink, page_number=page_number,
+        pdf_path=images["pdf_path"], pdftocairo=pdftocairo,
+        password=images["password"])
 
 
 def extract_pdf(
@@ -729,6 +1563,9 @@ def extract_pdf(
     x_tolerance_ratio: float | None = _DEFAULT_X_TOLERANCE_RATIO,
     y_tolerance: float | None = None,
     table_strategy: str = _DEFAULT_TABLE_STRATEGY,
+    images_dir: Path | None = None,
+    image_dpi: int = _DEFAULT_IMAGE_DPI,
+    vector_images: bool = True,
 ) -> dict:
     """Open the PDF, extract every page, classify, return the dump dict
     (ARCH §4.1 `DumpDocument`).
@@ -747,24 +1584,63 @@ def extract_pdf(
     Font records are harvested during the same page walk — the resource
     dictionaries are only reachable through the open handle — and deduplicated
     into the document-level `fonts` list that `text_layer_lossy` is computed
-    from."""
+    from.
+
+    `images_dir` is the only switch for image extraction: `None` (the default)
+    leaves every page record and the top level exactly as they were, so no
+    existing caller sees a shape change. When it is set the directory is created
+    if needed, each page gains an `images` list, and the top level gains
+    `images_dir` / `image_dpi` / `images_summary`. The extraction is
+    deliberately *not* allowed to fail the dump: the text and tables are the
+    contract, so a missing Poppler or an undecodable image degrades to a
+    counted, reported omission (see the `_ImageSink` counters, surfaced by
+    `main`)."""
     ratio = x_tolerance_ratio if (
         x_tolerance_ratio and x_tolerance_ratio > 0) else None
     y_tol = y_tolerance if (y_tolerance and y_tolerance > 0) else None
     font_acc: dict[tuple, dict] = {}
     seen_objects: set = set()
+    sink = None
+    reader = None
+    pdftocairo = None
     with _open_pdf(pdf_path, password) as pdf:
+        # Created only after the PDF opens: a corrupt or wrongly-passworded
+        # input should not leave an empty directory behind on a failed run.
+        if images_dir is not None:
+            try:
+                images_dir.mkdir(parents=True, exist_ok=True)
+            except OSError as exc:
+                # ONLY the directory creation earns this diagnosis. An OSError
+                # from anywhere else in the walk (lazy page parsing, a network
+                # mount) must keep its historical shape rather than telling the
+                # caller to fix permissions on a directory that is fine.
+                raise _ExtractError(
+                    f"Could not create the image directory {images_dir}: "
+                    f"{exc}", error_type="ImageDirWriteFailed") from exc
+            sink = _ImageSink(images_dir, dpi=image_dpi)
+            reader = _open_pypdf(pdf_path, password)
+            pdftocairo = shutil.which("pdftocairo") if vector_images else None
         pages: list[dict] = []
         for index, page in enumerate(pdf.pages, start=1):
             _collect_page_fonts(page, font_acc, seen_objects)
+            images = None if sink is None else {
+                "sink": sink,
+                "page_number": index,
+                "streams": _raster_streams(reader, index - 1),
+                "reader": reader,
+                "pdf_path": pdf_path,
+                "pdftocairo": pdftocairo,
+                "password": password,
+            }
             record = _extract_page(
                 page, layout=layout, x_tolerance_ratio=ratio,
-                y_tolerance=y_tol, table_strategy=table_strategy)
+                y_tolerance=y_tol, table_strategy=table_strategy,
+                images=images)
             record["n"] = index
             pages.append(record)
     doc_scanned, scanned_pages = _classify_document(pages)
     fonts = [font_acc[key] for key in sorted(font_acc)]
-    return {
+    dump = {
         "page_count": len(pages),
         "doc_scanned": doc_scanned,
         "scanned_pages": scanned_pages,
@@ -777,6 +1653,27 @@ def extract_pdf(
         "fonts": fonts,
         "pages": pages,
     }
+    if sink is not None:
+        dump["images_dir"] = str(images_dir)
+        dump["image_dpi"] = image_dpi
+        # What did NOT come out is reported as data, not only as a warning: a
+        # caller diffing two dumps can see that four images were undecodable
+        # this time, which a stderr line nobody captured cannot tell them.
+        dump["images_summary"] = {
+            "files_written": sink.written,
+            "placements": sum(len(p["images"]) for p in pages),
+            "deduplicated": sink.deduped,
+            "page_sized_skipped": sink.dropped_backdrop,
+            "undecodable": sink.undecodable,
+            "render_failed": sink.render_failed,
+            "oversized": sink.oversized,
+            "over_page_cap": sink.dropped_capped,
+            "over_document_cap": sink.over_document_cap,
+            "page_failed": sink.page_failed,
+            "reader_unavailable": reader is None,
+            "vector_unrendered": sink.vector_unrendered,
+        }
+    return dump
 
 
 def _same_path(a: Path, b: Path) -> bool:
@@ -788,14 +1685,82 @@ def _same_path(a: Path, b: Path) -> bool:
         return False
 
 
+def _utf8_chunk(chunk: str) -> bytes:
+    """Encode one JSON fragment as UTF-8, escaping lone surrogates.
+
+    A lone surrogate is the one character UTF-8 cannot carry, and it does
+    reach this code: a broken `/ToUnicode` CMap can map a glyph to
+    U+D800-DFFF (pdfplumber hands the `chr()` of whatever the CMap says), and
+    POSIX decodes undecodable filename bytes the same way. JSON *can* carry
+    it — as the `\\udXXX` escape a parser turns back into that same
+    character — so escape those and encode the rest normally. Surrogates are
+    BMP, so the four-hex-digit form is always exact, and the retry cannot
+    fail a second time: nothing unencodable is left.
+    """
+    try:
+        return chunk.encode("utf-8")
+    except UnicodeEncodeError:
+        return "".join(
+            f"\\u{ord(ch):04x}" if 0xD800 <= ord(ch) <= 0xDFFF else ch
+            for ch in chunk
+        ).encode("utf-8")
+
+
+def _abandon_stdout() -> None:
+    """Point fd 1 at /dev/null after stdout died mid-dump (a broken pipe).
+
+    Without this the interpreter flushes the same dead fd again at shutdown:
+    it prints `Exception ignored while flushing sys.stdout` — a second,
+    non-JSON line on stderr, right after the envelope — and replaces the exit
+    status with 120, so the process contradicts the `code` it just reported
+    (measured on a 165 KB dump through `| head -c 20`: envelope `"code": 1`,
+    process exit 120). Best-effort by design: a stdout with no real fd (a
+    test's `StringIO`) has nothing to redirect and needs nothing.
+    """
+    try:
+        devnull = os.open(os.devnull, os.O_WRONLY)
+        os.dup2(devnull, sys.stdout.fileno())
+        os.close(devnull)
+    except (OSError, ValueError, AttributeError):
+        pass
+
+
 def _emit(dump: dict, out_path: Path | None) -> None:
-    """Serialise `dump` as indented JSON straight to the sink (`json.dump`, no
+    """Serialise `dump` as indented JSON straight to the sink (streaming, no
     intermediate full-string copy). `out_path is None` → stdout; otherwise
     overwrite `out_path` (idempotent). stdout always carries the dump — never
-    the `--json-errors` envelope, which goes to stderr."""
+    the `--json-errors` envelope, which goes to stderr.
+
+    stdout is written as UTF-8 **bytes**, deliberately bypassing the text
+    layer, because that layer encodes with the process locale and the dump is
+    a machine-readable channel: measured under `PYTHONIOENCODING=ascii` the
+    old text write aborted mid-stream with a raw `UnicodeEncodeError`
+    traceback — 1264 bytes of truncated JSON already on stdout, exit 1, no
+    envelope — and under `cp1252` it silently wrote an em dash as byte 0x97,
+    i.e. a dump that is not valid UTF-8, at exit 0. JSON is UTF-8 by
+    definition (RFC 8259 §8.1), so these bytes must not depend on the
+    caller's locale. A stdout with no `.buffer` (a test's `StringIO`, a
+    wrapper's proxy object) keeps the text path — there the caller owns the
+    encoding and we cannot second-guess it.
+
+    The `-o FILE` path was never locale-dependent (`open(..., encoding=
+    "utf-8")`) and is unchanged.
+    """
+    encoder = json.JSONEncoder(ensure_ascii=False, indent=2)
     if out_path is None:
-        json.dump(dump, sys.stdout, ensure_ascii=False, indent=2)
-        sys.stdout.write("\n")
+        buffer = getattr(sys.stdout, "buffer", None)
+        if buffer is None:
+            for chunk in encoder.iterencode(dump):
+                sys.stdout.write(chunk)
+            sys.stdout.write("\n")
+            return
+        # Any text already queued on stdout must reach fd 1 before our bytes
+        # do, or the two layers interleave out of order.
+        sys.stdout.flush()
+        for chunk in encoder.iterencode(dump):
+            buffer.write(_utf8_chunk(chunk))
+        buffer.write(b"\n")
+        buffer.flush()
     else:
         # Auto-create the parent dir (parity with pdf_split.py / preview.py).
         out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -808,10 +1773,24 @@ def main(argv: list[str] | None = None) -> int:
     """CLI entry point: parse → extract → emit → return the exit code.
 
     Exit codes: 0 success; 1 failure (`InputNotFound` / `EncryptedPDF` /
-    `CorruptPdf` / `OutputWriteFailed` / `InternalError`); 2 argparse usage
-    error; 6 `SelfOverwriteRefused` (`-o` resolves to the input PDF); 10
+    `CorruptPdf` / `OutputWriteFailed` / `ImageDirNotADirectory` /
+    `ImageDirWriteFailed` / `InternalError`); 2 usage error (argparse, plus the
+    manual `--image-dpi < 1` and empty-`--extract-images` checks, both
+    `UsageError`); 6 `SelfOverwriteRefused` — `-o` OR `--extract-images`
+    resolves to the input PDF, with `details.flag` naming which; 10
     `DocumentScanned` (whole-document scan). On a whole-doc scan the dump is
-    still emitted (to stdout or `-o`) — exit 10 + stderr is the loud signal."""
+    still emitted (to stdout or `-o`) — exit 10 + stderr is the loud signal.
+
+    Two side effects of `--extract-images` a wrapper should know about, because
+    "non-zero means nothing happened" is no longer true:
+
+    * artwork is written during extraction, before the dump is serialised, so a
+      later `OutputWriteFailed` exits 1 with files already in DIR and no dump
+      indexing them. Point `-o` outside DIR and this cannot arise.
+    * the exit-10 branch returns before every image warning, so on a
+      whole-document scan the omission counters are in `images_summary` only —
+      that is deliberate, since `--json-errors` promises a single JSON line on
+      stderr and a warning printed beside the envelope would break it."""
     parser = _build_parser()
     args = parser.parse_args(argv)
     je = args.json_errors
@@ -824,6 +1803,39 @@ def main(argv: list[str] | None = None) -> int:
             details={"path": str(input_path)}, json_mode=je,
         )
 
+    # cross-7 parity again, for the image destination: a `--extract-images`
+    # pointing at the input PDF would have `mkdir` fail with a confusing errno
+    # (or, if the path is a directory that happens to be the input's parent,
+    # quietly scatter PNGs beside it). Refuse the same way `-o` does.
+    if args.extract_images is not None and _same_path(
+            input_path, args.extract_images):
+        return report_error(
+            f"Refusing to write extracted images over the input PDF "
+            f"(--extract-images resolves to INPUT): {input_path}",
+            code=_EXIT_SELF_OVERWRITE, error_type="SelfOverwriteRefused",
+            # `flag` discriminates the two refusals: both are exit 6 with the
+            # same type, and a wrapper should not have to parse English to
+            # tell which destination it must change.
+            details={"path": str(input_path), "flag": "--extract-images"},
+            json_mode=je,
+        )
+
+    if (args.extract_images is not None and args.extract_images.exists()
+            and not args.extract_images.is_dir()):
+        return report_error(
+            f"--extract-images must name a directory, but "
+            f"{args.extract_images} is an existing file.",
+            code=_EXIT_FAIL, error_type="ImageDirNotADirectory",
+            details={"path": str(args.extract_images)}, json_mode=je,
+        )
+
+    if args.image_dpi < 1:
+        return report_error(
+            f"--image-dpi must be a positive integer, got {args.image_dpi}.",
+            code=_EXIT_USAGE, error_type="UsageError",
+            details={"image_dpi": args.image_dpi}, json_mode=je,
+        )
+
     # cross-7 parity: refuse to overwrite the input PDF with the JSON dump.
     # `resolve()` also neutralises a symlinked `-o` pointing back at the input.
     if args.output is not None and _same_path(input_path, args.output):
@@ -831,7 +1843,7 @@ def main(argv: list[str] | None = None) -> int:
             f"Refusing to overwrite the input PDF with the JSON dump "
             f"(-o resolves to INPUT): {input_path}",
             code=_EXIT_SELF_OVERWRITE, error_type="SelfOverwriteRefused",
-            details={"path": str(input_path)}, json_mode=je,
+            details={"path": str(input_path), "flag": "-o"}, json_mode=je,
         )
 
     try:
@@ -839,7 +1851,10 @@ def main(argv: list[str] | None = None) -> int:
             input_path, password=args.password, layout=args.layout,
             x_tolerance_ratio=args.x_tolerance_ratio,
             y_tolerance=args.y_tolerance,
-            table_strategy=args.table_strategy)
+            table_strategy=args.table_strategy,
+            images_dir=args.extract_images,
+            image_dpi=args.image_dpi,
+            vector_images=args.vector_images)
     except _ExtractError as exc:
         return report_error(
             exc.message, code=_EXIT_FAIL, error_type=exc.error_type,
@@ -856,11 +1871,24 @@ def main(argv: list[str] | None = None) -> int:
     # `-o` file surfaces as a clean envelope, never a raw traceback.
     try:
         _emit(dump, args.output)
-    except OSError as exc:
+    except BrokenPipeError:
+        # The reader closed the pipe (`… | head`). Silence the shutdown flush
+        # first, so the envelope below stays the only line on stderr and the
+        # exit status stays the one it declares — see `_abandon_stdout`.
+        _abandon_stdout()
         return report_error(
-            f"Could not write output {args.output}: {exc}",
+            "stdout closed before the dump was fully written (broken pipe)",
             code=_EXIT_FAIL, error_type="OutputWriteFailed",
-            details={"path": str(args.output)}, json_mode=je,
+            details={"path": "stdout"}, json_mode=je,
+        )
+    except OSError as exc:
+        # `args.output` is None when the dump goes to stdout; naming the sink
+        # "None" told the reader nothing about which sink failed.
+        target = str(args.output) if args.output is not None else "stdout"
+        return report_error(
+            f"Could not write output {target}: {exc}",
+            code=_EXIT_FAIL, error_type="OutputWriteFailed",
+            details={"path": target}, json_mode=je,
         )
 
     if dump["doc_scanned"]:
@@ -883,12 +1911,103 @@ def main(argv: list[str] | None = None) -> int:
     # "the whole document is a scan", and that contract is public.
     if dump["figure_pages"]:
         pages = ", ".join(str(n) for n in dump["figure_pages"])
+        # With --extract-images the artwork has just been written out, so the
+        # instruction changes from "go and extract it" to "the text of this
+        # dump still does not contain it — use the files".
+        if not dump.get("images_dir"):
+            remedy = ("the diagram is NOT in this dump. Extract the image "
+                      "(--extract-images DIR) or read those pages visually "
+                      "before composing Markdown.")
+        else:
+            # Naming the directory is only useful for pages that actually
+            # produced a file. A flagged page can come back empty — Poppler
+            # absent, --no-vector-images, a render failure, or a fill-only
+            # cluster the figure predicate rejects — and pointing those at
+            # "the extracted file(s)" would send the caller looking for
+            # something that was never written.
+            served = {p["n"] for p in dump["pages"] if p.get("images")}
+            unserved = [n for n in dump["figure_pages"] if n not in served]
+            if not unserved:
+                remedy = (f"the diagram itself is not text and is NOT in this "
+                          f"dump — see the per-page `images` entries for the "
+                          f"extracted file(s) in {dump['images_dir']}.")
+            else:
+                missing = ", ".join(str(n) for n in unserved)
+                remedy = (f"the diagram itself is not text and is NOT in this "
+                          f"dump, and NOTHING was extracted for page(s) "
+                          f"{missing} — read those visually (preview.py). Any "
+                          f"other page's artwork is in {dump['images_dir']}.")
         sys.stderr.write(
             f"warning: page(s) {pages} are mostly figure (see per-page "
-            f"image_coverage / vector_coverage) with little text — the "
-            f"diagram is NOT in this dump. Extract the image or read those "
-            f"pages visually before composing Markdown.\n"
+            f"image_coverage / vector_coverage) with little text — {remedy}\n"
         )
+    if args.extract_images is None and (
+            args.image_dpi != _DEFAULT_IMAGE_DPI or not args.vector_images):
+        sys.stderr.write(
+            "warning: --image-dpi / --no-vector-images do nothing without "
+            "--extract-images; no artwork was written.\n"
+        )
+    summary = dump.get("images_summary")
+    if summary is not None:
+        # Report the omissions, never just the successes: a cap or a decode
+        # failure that says nothing reads as "there was nothing more to get".
+        if summary["undecodable"]:
+            cause = (
+                "pypdf could not be used at all (import or open failed), so no "
+                "raster could be decoded"
+                if summary.get("reader_unavailable") else
+                "pypdf could not decode them (unsupported filter, truncated "
+                "stream, or a single stream over pypdf's 75 MB inflate ceiling "
+                "— a legitimate ~25 MP image exceeds it)"
+            )
+            sys.stderr.write(
+                f"warning: {summary['undecodable']} raster placement(s) were "
+                f"NOT written — {cause}. Their content is missing from "
+                f"{dump['images_dir']}; render those pages with preview.py to "
+                f"see what they held.\n"
+            )
+        if summary["render_failed"]:
+            sys.stderr.write(
+                f"warning: {summary['render_failed']} vector figure(s) failed "
+                f"to render (pdftocairo errored or timed out) and are NOT in "
+                f"{dump['images_dir']}.\n"
+            )
+        if summary["vector_unrendered"]:
+            sys.stderr.write(
+                f"warning: {summary['vector_unrendered']} vector figure(s) "
+                f"were detected but NOT rendered"
+                + (" (--no-vector-images)" if not args.vector_images else
+                   " because pdftocairo (Poppler) is not on PATH; install "
+                   "Poppler (brew install poppler / apt-get install "
+                   "poppler-utils)")
+                + ". Embedded rasters were still extracted.\n"
+            )
+        if summary["oversized"]:
+            sys.stderr.write(
+                f"warning: {summary['oversized']} raster(s) declare more than "
+                f"{_IMAGE_MAX_PIXELS // 1_000_000} megapixels and were NOT "
+                f"decoded — decoding is sized by the declaration, so a "
+                f"malformed one can exhaust memory.\n"
+            )
+        if summary["over_page_cap"]:
+            sys.stderr.write(
+                f"warning: {summary['over_page_cap']} vector figure(s) past "
+                f"the per-page cap of {_FIGURE_MAX_PER_PAGE} were NOT "
+                f"rendered.\n"
+            )
+        if summary["over_document_cap"]:
+            sys.stderr.write(
+                f"warning: the document-level budget of "
+                f"{_MAX_FILES_PER_DOCUMENT} files is spent — "
+                f"{summary['over_document_cap']} further image(s) were NOT "
+                f"written. The dump lists only what reached disk.\n"
+            )
+        if summary["page_failed"]:
+            sys.stderr.write(
+                f"warning: artwork extraction raised on "
+                f"{summary['page_failed']} page(s); their `images` lists are "
+                f"empty. The text and tables for those pages are unaffected.\n"
+            )
     if dump["text_layer_lossy"]:
         sys.stderr.write(
             "warning: no font in this PDF is embedded or carries /ToUnicode, "

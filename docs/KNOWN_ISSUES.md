@@ -51,6 +51,7 @@ Analysis Phase" which mandates this read.
 - **PDF-EXTRACT-FIGURE-PAGE-UNFLAGGED** [страница из одной схемы не помечается — колонтитул выбивает её из-под порога в 10 символов, содержимое теряется молча](issues/pdf-extract-figure-page-unflagged.md) — severity `SEV-2`, status `fixed`, opened 2026-08-29, resolved 2026-08-29
 - **PDF-EXTRACT-TOLERANCE-ARTIFACTS** [`pdf_extract.py` наследует дефолты pdfplumber: маркеры списка теряют порядок, заливки фона превращаются в строки таблиц](issues/pdf-extract-tolerance-artifacts.md) — severity `SEV-2`, status `fixed`, opened 2026-08-29, resolved 2026-08-29
 - **PDF-EXTRACT-VECTOR-COVERAGE-BACKDROP** [`vector_coverage` считает подложку страницы графикой и насыщается в 1.0 на сплошном тексте](issues/pdf-extract-vector-coverage-backdrop.md) — severity `SEV-3`, status `fixed`, opened 2026-08-30, resolved 2026-08-30
+- **PDF-EXTRACT-STDOUT-LOCALE-ENCODING** [дамп на stdout кодировался кодеком локали: под `LC_ALL=C` обрывался на полуслове, под `cp1252` молча переставал быть UTF-8](issues/pdf-extract-stdout-locale-encoding.md) — severity `SEV-2`, status `fixed`, opened 2026-08-31, resolved 2026-08-31
 - **PDF-EXTRACT-UNMAPPED-FONT-TEXT-LOSS** [документ без встроенных шрифтов теряет всю нелатиницу ещё при производстве — дамп отдаёт exit 0 и выглядит здоровым](issues/pdf-extract-unmapped-font-text-loss.md) — severity `SEV-2`, status `fixed`, opened 2026-08-29, resolved 2026-08-29
 
 ## dogfood
@@ -70,6 +71,8 @@ Analysis Phase" which mandates this read.
 
 ## robustness
 
+- **PDF-EXTRACT-BROKEN-PIPE-EXIT-120** [`… | head` давал код возврата 120 при envelope'е `"code": 1` и лишнюю не-JSON строку на stderr](issues/pdf-extract-broken-pipe-exit-120.md) — severity `SEV-3`, status `fixed`, opened 2026-08-31, resolved 2026-08-31
+- **PDF-CLI-STDOUT-JSON-LOCALE-CLASS** [тот же локале-зависимый JSON на stdout остаётся в 17 других скриптах репозитория](issues/pdf-cli-stdout-json-locale-class.md) — severity `SEV-3`, status `open`, opened 2026-08-31
 - **PDF-4** [`pdf_ocr.py` vdd-multi deferred LOWs (sidecar atomicity, `--list-langs` non-zero exit)](issues/pdf-4-pdf-ocr-vdd-multi-deferred-lows.md) — severity `LOW`, status `fixed`, opened 2026-06-03
 - **HTML2MD-1** [Cloudflare/captcha-hard sites auto-recover via the remote reader tier](issues/html2md-1-cloudflare-captcha-remote-tier-recovery.md) — severity `LOW`, status `handled`, opened 2026-06-23
 - **HTML2MD-7** [clean-source host variants (Wikipedia REST, arXiv /html)](issues/html2md-7-clean-source-host-variants.md) — severity `LOW`, status `handled`, opened 2026-06-23
