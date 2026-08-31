@@ -7,10 +7,10 @@ every list-emit boundary) so the R11 byte-identity gate stays green.
 from __future__ import annotations
 
 import argparse
-import json
 from pathlib import Path
 
 from wiki_ingest._safety import die
+from wiki_ingest._stdout import write_json
 from wiki_ingest._vault import (
     DEFAULT_SUBDIRS,
     INDEX_FILE,
@@ -51,5 +51,5 @@ def execute(args: argparse.Namespace) -> int:
         },
         "last_log_entries": tail_log(vault, 5),
     }
-    print(json.dumps(state, indent=2, ensure_ascii=False))
+    write_json(state, indent=2, ensure_ascii=False)
     return 0

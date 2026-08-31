@@ -58,6 +58,7 @@ if str(_HERE) not in sys.path:
     sys.path.insert(0, str(_HERE))
 
 import _config as cfg  # noqa: E402
+from _stdout import write_json_stdout  # noqa: E402
 from asr import DEFAULT_ASR_TIMEOUT_SEC  # noqa: E402
 from sources import _auth  # noqa: E402
 from sources._log import debug_enabled  # noqa: E402
@@ -119,7 +120,16 @@ def _emit_error(
         }
         if details:
             envelope["details"] = details
-        sys.stderr.write(json.dumps(envelope, ensure_ascii=False) + "\n")
+        # ensure_ascii=True, not a style choice: stderr is opened
+        # errors="backslashreplace", so a non-ASCII envelope never crashes — it
+        # quietly stops being JSON. Measured under PYTHONIOENCODING=ascii: a
+        # Latin-1 message came out as `caf\xe9` and an emoji as `\U0001f600`,
+        # and neither `\x` nor `\U` is a legal JSON escape, so the wrapper this
+        # envelope exists for cannot parse it; under cp1252, Cyrillic raises
+        # outright. ASCII-only output is encodable by every codec a caller can
+        # set and parses back to exactly the same string. Same reasoning, and
+        # same fix, as the office skills' _errors.py.
+        sys.stderr.write(json.dumps(envelope, ensure_ascii=True) + "\n")
     else:
         sys.stderr.write(message.rstrip() + "\n")
         # Make the remedy operator-visible even without --json-errors (F15) —
@@ -653,7 +663,20 @@ def _run_doctor(argv: list[str]) -> int:
     }
 
     if args.json:
-        print(json.dumps(envelope, ensure_ascii=False, indent=2))
+        # UTF-8 bytes, not locale-encoded text: `remediation` carries em dashes,
+        # so the old `print(json.dumps(...))` died with UnicodeEncodeError under
+        # LC_ALL=C and emitted 0x97 instead of U+2014 under cp1252. A dead reader
+        # is reported here rather than by the interpreter's shutdown flush (which
+        # substituted exit 120). See _stdout.write_json_stdout.
+        try:
+            write_json_stdout(envelope, indent=2)
+        except BrokenPipeError:
+            return _emit_error(
+                "stdout closed before the doctor report was written "
+                "(broken pipe).",
+                code=1,
+                error_type="BrokenPipeError",
+            )
     else:
         _print_doctor_report(envelope, raw_components, local_asr_present, cloud_ready)
 
@@ -964,8 +987,22 @@ def main(argv: Optional[list[str]] = None) -> int:
                 details={"url": args.url},
                 json_mode=json_errors,
             )
-        sys.stdout.write(json.dumps(stat, ensure_ascii=False) + "\n")
-        sys.stdout.flush()
+        try:
+            write_json_stdout(stat)
+        except BrokenPipeError:
+            # The fetched output IS on disk (`_fetch_one` wrote it before
+            # returning); only the stat record could not be delivered. Say so,
+            # and exit with the code we declare instead of the shutdown flush's
+            # substituted 120.
+            written = stat.get("output_path") or str(args.out)
+            return _emit_error(
+                "stdout closed before the stat record was written (broken "
+                f"pipe); the output itself was written to {written}.",
+                code=1,
+                error_type="BrokenPipeError",
+                details={"url": args.url, "output_path": written},
+                json_mode=json_errors,
+            )
         return 0
 
     # Batch mode
@@ -987,8 +1024,47 @@ def main(argv: Optional[list[str]] = None) -> int:
         )
 
     failures = 0
+    processed = 0
+    records_written = 0
+    pipe_dead = False
     seen_paths: set[Path] = set()
+
+    def _emit_record(record: dict) -> None:
+        """Stream one JSONL record to stdout; note a dead reader, never raise.
+
+        Every write in the batch loop goes through here, which is what keeps a
+        single unwritable record from taking the run down. Two ways that used
+        to happen, both measured:
+
+          * a success record under an ASCII locale raised UnicodeEncodeError,
+            a ``ValueError`` subclass, which the loop's own ``except ValueError``
+            relabelled ``UsageError`` — three transcripts on disk, ``3/3 URLs
+            failed`` on stdout, exit 4;
+          * an error record raised from inside an ``except`` block, where no
+            clause could catch it — 3 URLs in, 0 records out, exit 1, URLs 2-3
+            never fetched.
+
+        The first is gone by construction (UTF-8 bytes, surrogates escaped);
+        the second is what ``pipe_dead`` is for — the loop breaks on the next
+        iteration and ``main`` returns a code it declares, instead of the
+        interpreter's substituted 120.
+        """
+        nonlocal pipe_dead, records_written
+        if pipe_dead:
+            return
+        try:
+            write_json_stdout(record)
+        except BrokenPipeError:
+            pipe_dead = True
+            return
+        records_written += 1
+
     for url in urls:
+        if pipe_dead:
+            # stdout is gone: nobody can receive the remaining records, and
+            # each further URL costs a real download + possibly an ASR run.
+            break
+        processed += 1
         try:
             out_path = _resolve_batch_path(
                 url, args.out_dir, seen_paths, args.on_collision
@@ -1001,8 +1077,7 @@ def main(argv: Optional[list[str]] = None) -> int:
                     "type": "BatchCollision",
                     "url": url,
                 }
-                sys.stdout.write(json.dumps(err_record, ensure_ascii=False) + "\n")
-                sys.stdout.flush()
+                _emit_record(err_record)
                 continue
             stat = _fetch_one(
                 url,
@@ -1024,7 +1099,7 @@ def main(argv: Optional[list[str]] = None) -> int:
                 remove_silence=remove_silence,
                 debug=debug,
             )
-            sys.stdout.write(json.dumps(stat, ensure_ascii=False) + "\n")
+            _emit_record(stat)
         except _BatchCollisionError as e:
             failures += 1
             err_record = {
@@ -1033,7 +1108,7 @@ def main(argv: Optional[list[str]] = None) -> int:
                 "type": "BatchCollision",
                 "url": url,
             }
-            sys.stdout.write(json.dumps(err_record, ensure_ascii=False) + "\n")
+            _emit_record(err_record)
         except MissingDependencyError as e:
             # Surface the remediation hint per-URL (arch-016 §4.3 — exit 7
             # handling must exist in BOTH the single-URL and batch paths). The
@@ -1048,7 +1123,7 @@ def main(argv: Optional[list[str]] = None) -> int:
             }
             if getattr(e, "remediation", None):
                 err_record["remediation"] = e.remediation
-            sys.stdout.write(json.dumps(err_record, ensure_ascii=False) + "\n")
+            _emit_record(err_record)
         except TranscriptFetchError as e:
             # Surface the transient (media-download timeout) remediation hint
             # per-URL, same as MissingDependencyError above — the batch run
@@ -1063,7 +1138,7 @@ def main(argv: Optional[list[str]] = None) -> int:
             }
             if getattr(e, "remediation", None):
                 err_record["remediation"] = e.remediation
-            sys.stdout.write(json.dumps(err_record, ensure_ascii=False) + "\n")
+            _emit_record(err_record)
         except ValueError as e:
             # Mirror the single-URL path: a usage-class error (bad URL, or a
             # per-host convention cookies file that fails the 0600/symlink gate
@@ -1076,7 +1151,7 @@ def main(argv: Optional[list[str]] = None) -> int:
                 "type": "UsageError",
                 "url": url,
             }
-            sys.stdout.write(json.dumps(err_record, ensure_ascii=False) + "\n")
+            _emit_record(err_record)
         except Exception as e:  # noqa: BLE001
             failures += 1
             err_record = {
@@ -1085,9 +1160,27 @@ def main(argv: Optional[list[str]] = None) -> int:
                 "type": type(e).__name__,
                 "url": url,
             }
-            sys.stdout.write(json.dumps(err_record, ensure_ascii=False) + "\n")
-        sys.stdout.flush()
+            _emit_record(err_record)
+        # No trailing flush: `_emit_record` flushes each record itself, which is
+        # what keeps batch mode a live JSONL stream (measured through a pipe:
+        # records arrive as they are produced, not all at once at exit).
 
+    if pipe_dead:
+        # Reported before the failure tally: a dead reader means the tally
+        # itself never arrived, so it is not the thing to act on.
+        return _emit_error(
+            f"stdout closed after {records_written}/{len(urls)} batch records "
+            f"(broken pipe); {len(urls) - processed} URL(s) were not fetched.",
+            code=1,
+            error_type="BrokenPipeError",
+            details={
+                "records_written": records_written,
+                "processed": processed,
+                "total": len(urls),
+                "failed": failures,
+            },
+            json_mode=json_errors,
+        )
     if failures:
         return _emit_error(
             f"{failures}/{len(urls)} URLs failed.",

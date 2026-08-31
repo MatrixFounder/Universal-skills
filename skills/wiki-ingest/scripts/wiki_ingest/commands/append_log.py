@@ -8,7 +8,6 @@ heading-spoof rejection.
 from __future__ import annotations
 
 import argparse
-import json
 import re
 from datetime import datetime
 from pathlib import Path
@@ -21,6 +20,7 @@ from wiki_ingest._safety import (
     read_text,
     write_text,
 )
+from wiki_ingest._stdout import write_json
 from wiki_ingest._vault import LOG_FILE, ensure_schema, load_asset
 
 
@@ -90,14 +90,14 @@ def execute(args: argparse.Namespace) -> int:
             # peek up to 10 following lines for the summary marker
             lines = tail.split("\n", 11)[:10]
             if any(line.strip() == summary_line.strip() for line in lines):
-                print(json.dumps({
+                write_json({
                     "log": str(log.relative_to(vault)),
                     "appended": False,
                     "skipped_reason": "duplicate (same heading + summary-page "
                                       "line already present); pass --force-log "
                                       "to append anyway",
                     "date": date,
-                }, indent=2))
+                }, indent=2)
                 return 0
 
     # Collect names from comma-separated --touched/--created (back-compat) and
@@ -123,5 +123,5 @@ def execute(args: argparse.Namespace) -> int:
 
     new_content = content.rstrip() + "\n" + "\n".join(entry) + "\n"
     write_text(log, new_content, args.dry_run)
-    print(json.dumps({"log": str(log.relative_to(vault)), "appended": True, "date": date}, indent=2))
+    write_json({"log": str(log.relative_to(vault)), "appended": True, "date": date}, indent=2)
     return 0

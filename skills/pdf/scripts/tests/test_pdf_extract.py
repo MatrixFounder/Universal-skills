@@ -19,6 +19,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -2295,6 +2296,62 @@ class TestStdoutChannel(unittest.TestCase):
         self.assertEqual(envelope["details"]["path"], "stdout")
         self.assertIn("stdout", envelope["error"])
 
+    def test_a_dead_o_fifo_is_named_by_the_envelope_not_stdout(self):
+        """Two sinks raise `BrokenPipeError` — a dead reader on stdout and a
+        `-o` FIFO whose reader hung up — and the arm used to hard-code
+        "stdout" for both. Measured before the fix, `-o FIFO` with the reader
+        gone reported `"stdout closed before the dump was fully written"` and
+        `details.path: "stdout"` at exit 1, for a run whose stdout was never
+        written to at all.
+
+        The reader is opened non-blocking *before* the writer starts (a
+        blocking `open()` on a readerless FIFO never returns), held until the
+        first bytes prove the writer is attached, then closed — after which
+        every further write is EPIPE regardless of the buffer.
+        """
+        big = self._big_pdf()
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        fifo = Path(tmp.name) / "dump.fifo"
+        os.mkfifo(fifo)
+
+        read_fd = os.open(fifo, os.O_RDONLY | os.O_NONBLOCK)
+        proc = None
+        try:
+            proc = subprocess.Popen(
+                [sys.executable, str(SCRIPT), str(big), "-o", str(fifo),
+                 "--json-errors"],
+                cwd=str(SCRIPTS_DIR), stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE)
+            deadline = time.monotonic() + 120
+            while True:
+                try:
+                    if os.read(read_fd, 20):
+                        break
+                except BlockingIOError:
+                    pass
+                self.assertLess(time.monotonic(), deadline,
+                                "the writer never opened the FIFO")
+                time.sleep(0.02)
+        finally:
+            os.close(read_fd)          # the `| head` moment, on a `-o` sink
+        out, err = proc.communicate(timeout=180)
+        rc = proc.returncode
+
+        text = err.decode("utf-8", "replace")
+        self.assertNotIn("Exception ignored", text)
+        lines = [ln for ln in text.splitlines() if ln.strip()]
+        self.assertEqual(len(lines), 1, text)
+        envelope = json.loads(lines[0])
+        self.assertEqual(envelope["type"], "OutputWriteFailed")
+        self.assertEqual(envelope["details"]["path"], str(fifo))
+        self.assertIn(str(fifo), envelope["error"])
+        # The sink that did NOT break must not be blamed for it.
+        self.assertNotIn("stdout", envelope["error"])
+        self.assertEqual(b"", out)
+        self.assertEqual(rc, envelope["code"])
+        self.assertEqual(rc, pdf_extract._EXIT_FAIL)
+
     def test_a_lone_surrogate_is_escaped_rather_than_crashing_the_dump(self):
         """UTF-8 cannot carry U+D800-DFFF, and a broken `/ToUnicode` CMap can
         hand us exactly that. JSON can carry it as the `\\udXXX` escape, so
@@ -2324,6 +2381,43 @@ class TestStdoutChannel(unittest.TestCase):
         with contextlib.redirect_stdout(buf):
             pdf_extract._emit({"text": "— ok"}, None)
         self.assertEqual(json.loads(buf.getvalue())["text"], "— ok")
+
+    def test_the_stdout_writer_is_the_shared_helper_not_a_local_copy(self):
+        """The encoder, the surrogate escape and the dead-pipe redirect used
+        to live here as `_utf8_chunk` / `_abandon_stdout`. They are
+        `_errors.py`'s job — it is byte-identical across five skills, and the
+        whole point of PDF-CLI-STDOUT-JSON-LOCALE-CLASS is that this defect
+        gets ONE home rather than a private copy per script."""
+        import _errors
+
+        self.assertIs(pdf_extract.write_json_stdout, _errors.write_json_stdout)
+        for gone in ("_utf8_chunk", "_abandon_stdout"):
+            self.assertFalse(hasattr(pdf_extract, gone),
+                             f"{gone} is back — see the issue record's Do-not")
+
+    def test_an_unserialisable_dump_leaves_nothing_on_stdout(self):
+        """The local writer streamed `iterencode` chunks straight to fd 1, so
+        a payload that failed to serialise part-way through left a truncated
+        document on the wire under a traceback. The shared helper serialises
+        one-shot: the exception arrives with stdout still untouched. (This is
+        a defensive property — `extract_pdf` only builds JSON-native types —
+        which is why it is asserted rather than assumed.)"""
+        class _ByteStdout:
+            """A real object: `getattr(mock, "buffer", None)` on a Mock
+            auto-creates a child and the byte path would not be exercised."""
+
+            def __init__(self):
+                self.buffer = io.BytesIO()
+
+            def flush(self):
+                pass
+
+        fake = _ByteStdout()
+        with mock.patch.object(pdf_extract.sys, "stdout", fake):
+            with self.assertRaises(TypeError):
+                pdf_extract._emit({"pages": [{"text": "ok"}],
+                                   "bad": object()}, None)
+        self.assertEqual(fake.buffer.getvalue(), b"")
 
 
 if __name__ == "__main__":

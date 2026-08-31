@@ -12,7 +12,6 @@ the CLI orchestration + JSON emit.
 from __future__ import annotations
 
 import argparse
-import json
 import re
 from pathlib import Path
 
@@ -26,6 +25,7 @@ from wiki_ingest._classify import (
     _pick_primary,
 )
 from wiki_ingest._safety import die
+from wiki_ingest._stdout import write_json
 from wiki_ingest._vault import SCHEMA_FILE
 
 
@@ -178,5 +178,5 @@ def execute(args: argparse.Namespace) -> int:
         "subdirs": subdirs,
         "groups": output_groups,
     }
-    print(json.dumps(plan, indent=2, ensure_ascii=False))
+    write_json(plan, indent=2, ensure_ascii=False)
     return 0

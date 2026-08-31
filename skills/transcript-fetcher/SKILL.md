@@ -301,6 +301,7 @@ See `examples/`:
 - `scripts/asr/` — pluggable ASR backend package: `_base.py` (the `ASRBackend` interface), `macwhisper.py`, `whisper_cli.py`, `whisper_cpp.py`, `openai_api.py` (opt-in cloud), `__init__.py` (priority registry + fallback chain).
 - `scripts/_config.py` — skill-local `.env` loader (secrets-safe) + typed config accessors (endpoints/models/tool paths).
 - `scripts/_procgroup.py` — source-neutral process-group subprocess runner: kills a timed-out child AND its descendants (yt-dlp's ffmpeg / JS runtime, whisper's ffmpeg decode). Imported by both `sources/` and `asr/`; must import from neither.
+- `scripts/_stdout.py` — the machine channel's byte contract: JSON to stdout as UTF-8 regardless of the caller's locale, lone surrogates escaped, a dead reader raised to the caller instead of rewriting the exit status to 120. Stdlib-only; deliberately NOT the office skills' `_errors.py` (that one is proprietary, this skill is Apache-2.0 — see the module docstring).
 - `scripts/.env.example` — config/secret template (copy to `.env`, `chmod 600`).
 - `scripts/install_components.py` — detect / guide / install the optional ASR components.
 - `scripts/sources/skool.py` — Skool lesson adapter (cookies.txt + Next.js scrape + embed delegation).

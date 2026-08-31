@@ -31,7 +31,6 @@ so JSON output is byte-stable (m-5 / determinism gate).
 from __future__ import annotations
 
 import argparse
-import json
 import re
 from pathlib import Path
 
@@ -43,6 +42,7 @@ from wiki_ingest._markdown import (
     get_section_body,
 )
 from wiki_ingest._safety import _safe_for_json, die, read_text
+from wiki_ingest._stdout import write_json
 from wiki_ingest._vault import (
     SCHEMA_FILE,
     SUBDIR_TO_KIND,
@@ -223,7 +223,7 @@ def _execute_single(args: argparse.Namespace, vault: Path) -> int:
         "open_contradictions": sorted(contradictions, key=lambda x: x["page"]),
         "missing_concept_pages": sorted(missing_concept_pages, key=lambda x: -x["count"]),
     }
-    print(json.dumps(_safe_for_json(report), indent=2, ensure_ascii=False))
+    write_json(_safe_for_json(report), indent=2, ensure_ascii=False)
     return 0
 
 
@@ -423,7 +423,7 @@ def _execute_two_tier(args: argparse.Namespace, vault_root: Path) -> int:
     }
     if truncated:
         report["truncated"] = truncated
-    print(json.dumps(_safe_for_json(report), indent=2, ensure_ascii=False))
+    write_json(_safe_for_json(report), indent=2, ensure_ascii=False)
     # R6.2: invariant_violation is a HARD failure
     return 1 if invariant else 0
 

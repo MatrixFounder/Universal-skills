@@ -8,12 +8,12 @@ via crafted titles (S-M6).
 from __future__ import annotations
 
 import argparse
-import json
 import re
 from pathlib import Path
 
 from wiki_ingest._frontmatter import _strip_frontmatter_fast, split_frontmatter
 from wiki_ingest._safety import _safe_for_json, die, read_text
+from wiki_ingest._stdout import write_json
 from wiki_ingest._vault import SUBDIR_TO_KIND, _walk_pages
 
 
@@ -102,7 +102,8 @@ def execute(args: argparse.Namespace) -> int:
     # Sanitize attacker-controlled scalars (title, term, etc.) before they
     # land in the agent's planning context — prevents prompt-injection
     # chains via crafted frontmatter (S-M6).
-    print(json.dumps(_safe_for_json(
+    write_json(
+        _safe_for_json(
             {"query_terms": terms, "hits": top, "total_matches": len(hits)}),
-                     indent=2, ensure_ascii=False))
+        indent=2, ensure_ascii=False)
     return 0

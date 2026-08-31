@@ -29,7 +29,6 @@ from __future__ import annotations
 
 import argparse
 import importlib.metadata as _im
-import json
 import platform
 import shlex
 import shutil
@@ -43,6 +42,7 @@ if str(_HERE) not in sys.path:
     sys.path.insert(0, str(_HERE))
 
 import _config as cfg  # noqa: E402
+from _stdout import write_json_stdout  # noqa: E402
 
 _OS = platform.system()  # "Darwin" | "Linux" | "Windows"
 
@@ -223,10 +223,29 @@ def main(argv: list[str] | None = None) -> int:
     components = _components()
 
     if args.json:
-        print(json.dumps(
-            {c["key"]: {"present": c["present"], "required": c["required"]} for c in components},
-            ensure_ascii=False, indent=2,
-        ))
+        # This payload is ASCII by construction (component keys + booleans), so
+        # the locale half of the stdout contract changes nothing here today —
+        # measured identical bytes under utf-8, cp1252 and LC_ALL=C. It goes
+        # through the shared writer anyway so that a component key or a future
+        # field carrying a non-ASCII character cannot quietly reintroduce the
+        # defect, and for the half that DID bite: with the reader gone, the
+        # interpreter's shutdown flush printed "Exception ignored while flushing
+        # sys.stdout" and replaced the exit status with 120 (measured).
+        try:
+            write_json_stdout(
+                {
+                    c["key"]: {"present": c["present"], "required": c["required"]}
+                    for c in components
+                },
+                indent=2,
+            )
+        except BrokenPipeError:
+            sys.stderr.write(
+                "install_components.py: stdout closed before the JSON status "
+                "was written (broken pipe).\n"
+            )
+            sys.stderr.flush()
+            return 1
         return 0
 
     _print_report(components)

@@ -13,7 +13,6 @@ Imports F1+F2+F3-helper only — never another command (R12.5).
 from __future__ import annotations
 
 import argparse
-import json
 import re
 from datetime import datetime
 from pathlib import Path
@@ -36,6 +35,7 @@ from wiki_ingest._safety import (
     die,
     read_text,
 )
+from wiki_ingest._stdout import write_json
 from wiki_ingest._vault import (
     SCHEMA_FILE,
     _peek_schema_version,
@@ -175,7 +175,7 @@ def execute(args: argparse.Namespace) -> int:
         "moved_to": str(target_path.relative_to(vault)),
     }
     if args.dry_run:
-        print(json.dumps(_safe_for_json(plan), indent=2, ensure_ascii=False))
+        write_json(_safe_for_json(plan), indent=2, ensure_ascii=False)
         return 0
 
     # --- write path ---
@@ -193,7 +193,7 @@ def execute(args: argparse.Namespace) -> int:
     # Append target course log
     _append_demote_log(target, safe_name, kind, today, vault)
 
-    print(json.dumps(plan, indent=2, ensure_ascii=False))
+    write_json(plan, indent=2, ensure_ascii=False)
     return 0
 
 

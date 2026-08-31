@@ -11,7 +11,6 @@ local helper `render_stub_page` stays here — it consumes the F3-helper
 from __future__ import annotations
 
 import argparse
-import json
 import re
 from datetime import datetime
 from pathlib import Path
@@ -31,6 +30,7 @@ from wiki_ingest._safety import (
     read_text,
     write_text,
 )
+from wiki_ingest._stdout import write_json
 from wiki_ingest._vault import ensure_schema, find_vault_root, load_asset
 
 CONCEPT_KIND, ENTITY_KIND = "concept", "entity"
@@ -213,7 +213,7 @@ def execute(args: argparse.Namespace) -> int:
     }
     if contradiction_warning:
         result["warning"] = contradiction_warning
-    print(json.dumps(result, indent=2))
+    write_json(result, indent=2)
     return 0
 
 

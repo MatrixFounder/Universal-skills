@@ -26,10 +26,13 @@ import _venv_bootstrap  # noqa: E402  (replicated per CLAUDE.md §2)
 _venv_bootstrap.reexec_into_venv(requires=("lxml",), _file=__file__)
 
 import argparse
-import json
 import sys
 import zipfile
 from pathlib import Path
+
+# `scripts/` is already on sys.path from the bootstrap prelude above, which is
+# also how `_venv_bootstrap` is reached; `_errors` is the same replicated tier.
+from _errors import write_json_stdout  # noqa: E402
 
 if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -163,7 +166,18 @@ def main(argv: list[str] | None = None) -> int:
         report.merge(redline_report)
 
     if args.json:
-        print(json.dumps(report.to_dict(), ensure_ascii=False, indent=2))
+        try:
+            write_json_stdout(report.to_dict(), indent=2)
+        except BrokenPipeError:
+            # `… --json | head`. write_json_stdout has already pointed fd 1 at
+            # /dev/null, so the interpreter cannot replace our exit status at
+            # shutdown. This script's contract is that the exit code IS the
+            # verdict (0 ok / 1 errors / 2 usage), so keep it and say on stderr
+            # that the report itself did not get out.
+            sys.stderr.write(
+                "validate: stdout closed before the report was written "
+                "(broken pipe); the exit code below is still the verdict\n"
+            )
     else:
         for err in report.errors:
             print(f"ERROR: {err}")

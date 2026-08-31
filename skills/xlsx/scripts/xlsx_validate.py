@@ -13,20 +13,22 @@ Usage:
 Exit codes:
     0 — no errors found
     1 — errors found (any of #REF!, #DIV/0!, #VALUE!, #NAME?, #N/A,
-        #NUM!, #NULL!)
+        #NUM!, #NULL!); also returned when stdout dies before the
+        report is written (`--json` into a closed or abandoned pipe)
+        — the stderr envelope's `type: OutputWriteFailed` is what
+        separates the two
     2 — input missing
 """
 
 from __future__ import annotations
 
 import argparse
-import json
 import sys
 from pathlib import Path
 
 from openpyxl import load_workbook  # type: ignore
 
-from _errors import add_json_errors_argument, report_error
+from _errors import add_json_errors_argument, report_error, write_json_stdout
 from office._encryption import EncryptedFileError, assert_not_encrypted
 
 
@@ -88,8 +90,27 @@ def main(argv: list[str] | None = None) -> int:
 
     hits, non_empty = scan(args.input)
     if args.json:
-        print(json.dumps({"ok": not hits, "errors": hits, "non_empty_cells": non_empty},
-                         ensure_ascii=False, indent=2))
+        try:
+            write_json_stdout(
+                {"ok": not hits, "errors": hits, "non_empty_cells": non_empty},
+                indent=2,
+            )
+        except BrokenPipeError:
+            # write_json_stdout has already pointed fd 1 at /dev/null, so the
+            # shutdown flush cannot replace this status with 120. Measured
+            # before the fix: a reader that is already gone
+            # (`--json | bash -c 'exit 0'`) exits 120 with two non-JSON lines
+            # on stderr even on a 164-byte report, so size is not the gate;
+            # for a reader still alive at write time (`--json | head -c 20`)
+            # size only picks the mode — 108,977 bytes exits 120, 264,979
+            # bytes escapes as a raw traceback. Code 1 is this script's
+            # existing failure code; it does NOT distinguish a dead pipe from
+            # "errors found" — the envelope's `type` on stderr does.
+            return report_error(
+                "stdout closed before the report was written (broken pipe)",
+                code=1, error_type="OutputWriteFailed",
+                details={"path": "stdout"}, json_mode=je,
+            )
     else:
         if not hits:
             print(f"OK — {non_empty} non-empty cells, no formula errors.")

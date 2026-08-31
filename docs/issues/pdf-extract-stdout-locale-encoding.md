@@ -27,7 +27,7 @@ slug: pdf-extract-stdout-locale-encoding
 **Location:** [`skills/pdf/scripts/pdf_extract.py`](../../skills/pdf/scripts/pdf_extract.py)
 — `_emit`, `_utf8_chunk`.
 **Related:** [PDF-CLI-STDOUT-JSON-LOCALE-CLASS](pdf-cli-stdout-json-locale-class.md)
-(тот же дефект в 17 других скриптах репозитория — **не закрыт**),
+(обобщение: тот же дефект нашёлся ещё в ~60 местах семи скиллов; класс закрыт 2026-08-31),
 [PDF-EXTRACT-BROKEN-PIPE-EXIT-120](pdf-extract-broken-pipe-exit-120.md) (найдено тем же
 прогоном, соседний канал).
 **Found:** VDD-adversarial, контрактная линза, 2026-08-31 — прогон CLI под нестандартными

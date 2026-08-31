@@ -8,7 +8,6 @@ imported from `_safety` (centralised in 015-01; shared with `append_log`).
 from __future__ import annotations
 
 import argparse
-import json
 from pathlib import Path
 
 from wiki_ingest._markdown import (
@@ -23,6 +22,7 @@ from wiki_ingest._safety import (
     read_text,
     write_text,
 )
+from wiki_ingest._stdout import write_json
 from wiki_ingest._vault import INDEX_FILE, ensure_schema, load_asset
 
 INDEX_SECTIONS = {
@@ -112,5 +112,5 @@ def execute(args: argparse.Namespace) -> int:
                                 slug_key=f"[[{name}]]")
 
     write_text(index, content, args.dry_run)
-    print(json.dumps({"index": str(index.relative_to(vault)), "updated": True}, indent=2))
+    write_json({"index": str(index.relative_to(vault)), "updated": True}, indent=2)
     return 0

@@ -25,8 +25,8 @@ slug: pdf-extract-broken-pipe-exit-120
 — `main` (ветка `except BrokenPipeError`), `_abandon_stdout`.
 **Related:** [PDF-EXTRACT-STDOUT-LOCALE-ENCODING](pdf-extract-stdout-locale-encoding.md)
 (найдено тем же прогоном, тот же канал),
-[PDF-CLI-STDOUT-JSON-LOCALE-CLASS](pdf-cli-stdout-json-locale-class.md) (тот же дефект в
-соседних скриптах — **не закрыт**).
+[PDF-CLI-STDOUT-JSON-LOCALE-CLASS](pdf-cli-stdout-json-locale-class.md) (обобщение на весь
+репозиторий; класс закрыт 2026-08-31).
 **Found:** VDD-adversarial, контрактная линза, 2026-08-31 — `pdf_extract.py … | head -c 20`
 на документе, дамп которого больше буфера трубы (64 KiB).
 

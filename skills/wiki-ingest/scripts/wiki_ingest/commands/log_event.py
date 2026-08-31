@@ -7,11 +7,11 @@ rejects newlines + `^## [` prefixes that would spoof a fake heading.
 from __future__ import annotations
 
 import argparse
-import json
 from datetime import datetime
 from pathlib import Path
 
 from wiki_ingest._safety import _LOG_FORBIDDEN_IN_DETAIL, die, read_text, write_text
+from wiki_ingest._stdout import write_json
 from wiki_ingest._vault import LOG_FILE, ensure_schema, load_asset
 
 
@@ -67,6 +67,6 @@ def execute(args: argparse.Namespace) -> int:
 
     new_content = content.rstrip() + "\n" + "\n".join(lines) + "\n"
     write_text(log, new_content, args.dry_run)
-    print(json.dumps({"log": str(log.relative_to(vault)), "appended": True,
-                      "date": date, "event": safe_event}, indent=2))
+    write_json({"log": str(log.relative_to(vault)), "appended": True,
+                "date": date, "event": safe_event}, indent=2)
     return 0

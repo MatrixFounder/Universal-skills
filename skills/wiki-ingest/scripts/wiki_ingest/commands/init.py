@@ -9,11 +9,11 @@ added `--root`: scaffolds the vault-root layer (schema_version: 2.0,
 from __future__ import annotations
 
 import argparse
-import json
 from pathlib import Path
 
 from wiki_ingest import _safety
 from wiki_ingest._safety import die, write_text
+from wiki_ingest._stdout import write_json
 from wiki_ingest._vault import (
     DEFAULT_SUBDIRS,
     INDEX_FILE,
@@ -103,7 +103,7 @@ def _execute_course(args: argparse.Namespace) -> int:
                 d.mkdir(parents=True, exist_ok=True)
             created.append(f"{sd}/")
 
-    print(json.dumps({"created": created, "skipped": skipped}, indent=2))
+    write_json({"created": created, "skipped": skipped}, indent=2)
     return 0
 
 
@@ -155,8 +155,8 @@ def _execute_root(args: argparse.Namespace) -> int:
                 d.mkdir(parents=True, exist_ok=True)
             created.append(f"{sd}/")
 
-    print(json.dumps(
+    write_json(
         {"created": created, "skipped": skipped, "kind": "vault-root"},
         indent=2,
-    ))
+    )
     return 0

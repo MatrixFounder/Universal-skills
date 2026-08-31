@@ -667,6 +667,21 @@ def _run_with_envelope(
             json_mode=json_mode,
             stream=sys.stderr,
         )
+    except BrokenPipeError:
+        # Must precede the OSError arm: BrokenPipeError is an OSError, and the
+        # generic arm reports the envelope but never redirects the dead fd — so
+        # the interpreter's shutdown flush printed a second, non-JSON line on
+        # stderr and replaced the exit status with 120, contradicting the
+        # `code` this envelope declares (PDF-CLI-STDOUT-JSON-LOCALE-CLASS).
+        _errors.abandon_stdout()
+        return _errors.report_error(
+            "stdout closed before the output was fully written (broken pipe)",
+            code=1,
+            error_type="OutputWriteFailed",
+            details={"path": "stdout"},
+            json_mode=json_mode,
+            stream=sys.stderr,
+        )
     except (PermissionError, OSError) as exc:
         # H3 (vdd-multi): I/O errors (read-only filesystem, EACCES,
         # ENOSPC, etc.) previously escaped uncaught and surfaced as

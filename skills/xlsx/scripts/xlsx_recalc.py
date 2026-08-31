@@ -38,7 +38,6 @@ If `--output` is omitted, the input file is rewritten in place.
 from __future__ import annotations
 
 import argparse
-import json
 import shutil
 import sys
 import tempfile
@@ -48,7 +47,7 @@ from pathlib import Path
 from defusedxml.ElementTree import iterparse as defused_iterparse  # type: ignore
 from openpyxl import load_workbook  # type: ignore
 
-from _errors import add_json_errors_argument, report_error
+from _errors import add_json_errors_argument, report_error, write_json_stdout
 from _soffice import SofficeError, convert_to as soffice_convert_to
 from office._encryption import EncryptedFileError, assert_not_encrypted
 from office._macros import warn_if_macros_will_be_dropped
@@ -195,6 +194,31 @@ def scan_errors(path: Path) -> dict[str, list[str]]:
     return hits
 
 
+def _stdout_closed(json_mode: bool) -> int:
+    """Report a stdout that died mid-write and return this script's failure code.
+
+    `write_json_stdout` has already pointed fd 1 at /dev/null, so the
+    interpreter's shutdown flush finds nothing to retry and cannot replace the
+    returned status with 120. Measured before the fix with a reader that is
+    already gone (`--json | bash -c 'exit 0'`): rc 120 and two non-JSON lines
+    on stderr, on a payload of just 27 bytes. Payload size is not the gate —
+    it only picks the mode for a reader still alive at write time
+    (`--json | head -c 20`): 27 bytes fit in the pipe buffer and never fail,
+    a ~109 KB report exits 120, a ~265 KB one escapes as a raw traceback.
+
+    The recalculated workbook is already written to --output; only the summary
+    was lost. Code 1 is this script's existing failure code and is NOT specific
+    to a dead pipe — under `--scan-errors` it also means "formula errors
+    found". The stderr envelope's `type: OutputWriteFailed` is what separates
+    the two; the bare exit code cannot.
+    """
+    return report_error(
+        "stdout closed before the summary was written (broken pipe)",
+        code=1, error_type="OutputWriteFailed",
+        details={"path": "stdout"}, json_mode=json_mode,
+    )
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("input", type=Path, help="Source .xlsx")
@@ -239,14 +263,20 @@ def main(argv: list[str] | None = None) -> int:
 
     if not args.scan_errors:
         if args.json:
-            print(json.dumps({"ok": True, "errors": {}}, ensure_ascii=False))
+            try:
+                write_json_stdout({"ok": True, "errors": {}})
+            except BrokenPipeError:
+                return _stdout_closed(je)
         else:
             print("Recalculated.")
         return 0
 
     errors = scan_errors(output)
     if args.json:
-        print(json.dumps({"ok": not errors, "errors": errors}, ensure_ascii=False, indent=2))
+        try:
+            write_json_stdout({"ok": not errors, "errors": errors}, indent=2)
+        except BrokenPipeError:
+            return _stdout_closed(je)
     else:
         if not errors:
             print("Recalculated, no formula errors.")

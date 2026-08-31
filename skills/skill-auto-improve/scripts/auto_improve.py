@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import shutil
 import sys
@@ -31,6 +32,7 @@ from typing import Any, Callable
 # --- imports (work as script or module) ------------------------------------
 try:
     from scripts.common import (  # type: ignore
+        emit_json,
         ARTIFACT_DATASET, ARTIFACT_FULL_SKILL, ARTIFACT_PROMPT,
         ARTIFACT_SKILL, ARTIFACT_TEXT, ARTIFACT_WORKFLOW,
         DIFF_SECTION_REPLACE,
@@ -53,6 +55,7 @@ try:
     from scripts.backends import get_backend
 except ImportError:
     from common import (
+        emit_json,
         ARTIFACT_DATASET, ARTIFACT_FULL_SKILL, ARTIFACT_PROMPT,
         ARTIFACT_SKILL, ARTIFACT_TEXT, ARTIFACT_WORKFLOW,
         DIFF_SECTION_REPLACE,
@@ -973,7 +976,7 @@ def main(argv: list[str] | None = None) -> int:
     report = write_report(workspace, summary, artifact_path, artifact_type, vendor, branch)
     if args.verbose:
         print(json.dumps(summary, indent=2), file=sys.stderr)
-    print(json.dumps({"summary": summary, "report": str(report)}, indent=2))
+    emit_json({"summary": summary, "report": str(report)})
     return 0
 
 

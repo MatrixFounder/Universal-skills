@@ -33,7 +33,7 @@ try:
         ARTIFACT_SKILL, ARTIFACT_TEXT, ARTIFACT_WORKFLOW,
         DATASET_IMMUTABLE_FIELDS, DATASET_REF_FIELDS,
         DIFF_DATASET_OP, DIFF_FRONTMATTER_FIELD, DIFF_SECTION_REPLACE, DIFF_TEXT_REPLACE,
-        MUTABLE_FRONTMATTER_FIELDS, parse_frontmatter, resolve_dataset_items,
+        MUTABLE_FRONTMATTER_FIELDS, emit_json, parse_frontmatter, resolve_dataset_items,
     )
 except ImportError:
     from common import (
@@ -41,7 +41,7 @@ except ImportError:
         ARTIFACT_SKILL, ARTIFACT_TEXT, ARTIFACT_WORKFLOW,
         DATASET_IMMUTABLE_FIELDS, DATASET_REF_FIELDS,
         DIFF_DATASET_OP, DIFF_FRONTMATTER_FIELD, DIFF_SECTION_REPLACE, DIFF_TEXT_REPLACE,
-        MUTABLE_FRONTMATTER_FIELDS, parse_frontmatter, resolve_dataset_items,
+        MUTABLE_FRONTMATTER_FIELDS, emit_json, parse_frontmatter, resolve_dataset_items,
     )
 
 _PLACEHOLDER_RE = re.compile(r"\{\{[^}]+\}\}")
@@ -239,7 +239,7 @@ def main() -> int:
         return 0
     proposal = json.loads(Path(args.proposal).read_text(encoding="utf-8"))
     ok, reason = validate_proposal(Path(args.path), args.type, proposal)
-    print(json.dumps({"ok": ok, "reason": reason}))
+    emit_json({"ok": ok, "reason": reason}, indent=None)
     return 0 if ok else 1
 
 

@@ -37,7 +37,7 @@ from openpyxl import load_workbook  # type: ignore
 from openpyxl.chart import BarChart, LineChart, PieChart, Reference  # type: ignore
 from openpyxl.utils import column_index_from_string, get_column_letter  # type: ignore
 
-from _errors import add_json_errors_argument, report_error
+from _errors import add_json_errors_argument, report_error, write_json_stdout
 from office._encryption import EncryptedFileError, assert_not_encrypted
 from office._macros import warn_if_macros_will_be_dropped
 
@@ -219,8 +219,23 @@ def main(argv: list[str] | None = None) -> int:
             code=1, error_type=type(exc).__name__, json_mode=je,
         )
 
-    import json
-    print(json.dumps(report, indent=2, ensure_ascii=False))
+    try:
+        write_json_stdout(report, indent=2)
+    except BrokenPipeError:
+        # A reader that is already gone (`… | bash -c 'exit 0'`, a wrapper that
+        # abandons the pipeline). write_json_stdout has already pointed fd 1 at
+        # /dev/null, so the interpreter's shutdown flush cannot replace this
+        # exit status with 120 — measured before the fix on this very report
+        # (268 bytes): rc 120 plus two non-JSON lines on stderr. Payload size
+        # is not the gate; it only picks the mode for a reader that is still
+        # alive at write time (`| head -c 20` leaves 268 bytes sitting in the
+        # pipe buffer and never fails at all). The chart is already saved to
+        # --output; only the report was lost, which is what code 1 reports.
+        return report_error(
+            "stdout closed before the report was written (broken pipe)",
+            code=1, error_type="OutputWriteFailed",
+            details={"path": "stdout"}, json_mode=je,
+        )
     return 0
 
 

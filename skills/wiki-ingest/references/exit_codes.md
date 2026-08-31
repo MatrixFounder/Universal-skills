@@ -36,6 +36,15 @@ scripts) may key on these codes.
 - **20..26** — v1.1 contract band. Symbolic constants in `_safety.py`.
 - **30+** — reserved for hypothetical v1.2+ contract.
 
+**A dead reader does not change the code.** Every command writes its
+JSON through `wiki_ingest/_stdout.py::write_json`, which swallows the
+`BrokenPipeError` a closed reader raises after pointing fd 1 at
+`/dev/null`. Without that, CPython's shutdown flush prints `Exception
+ignored while flushing sys.stdout` and substitutes exit status **120**
+(or lets a raw traceback escape for exit 1 on a payload past ~135 KB) —
+measured, and locked by `tests/test__stdout.py`. `120` is therefore NOT
+a wiki-ingest code and never appears in the matrix above.
+
 **Partial-envelope discriminator**: codes **20, 21, 22, 26** MUST carry
 `{"phase": "<phase>"}` in the JSON envelope so consumers can route on
 failure phase even when codes alias future failure modes.

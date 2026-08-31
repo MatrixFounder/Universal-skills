@@ -168,7 +168,7 @@ def analyze_skill(skill_path, config, json_output=False):
     if not os.path.exists(skill_md_path):
         msg = f"CRITICAL: Missing SKILL.md in {skill_path}"
         if json_output:
-            print(json.dumps({"gaps": [msg], "status": "critical"}))
+            skill_utils.emit_json({"gaps": [msg], "status": "critical"})
             sys.exit(1)
         print(msg)
         return
@@ -385,7 +385,7 @@ def analyze_skill(skill_path, config, json_output=False):
             "gaps": gaps,
             "status": "failed" if gaps else "passed"
         }
-        print(json.dumps(result, indent=2))
+        skill_utils.emit_json(result)
         sys.exit(1 if gaps else 0)
     else:
         if gaps:

@@ -31,6 +31,11 @@ import sys
 from pathlib import Path
 from typing import Any, Iterator
 
+# _errors lives at scripts/ root (replicated per CLAUDE.md §2); the shims and
+# tests put scripts/ on sys.path before importing this package, exactly as
+# cli.py relies on.
+import _errors  # type: ignore[import-untyped]
+
 _HEADER_SEPARATOR = " › "  # ' › '
 
 # **xlsx-8a-08 (R10, D-A18)** — sentinel returned by
@@ -111,16 +116,18 @@ def emit_json(
         )
 
     if output is None:
-        # Stdout path: build the string then write. Pipe consumers
+        # Stdout path: build the document then write it. Pipe consumers
         # buffer the output downstream anyway, so the memory benefit
         # of streaming-to-pipe is downstream-dependent — keep the
         # existing newline contract here. (D-A17 asymmetric.)
-        text = json.dumps(
-            shape,
-            ensure_ascii=False, indent=2, sort_keys=False,
-            default=_json_default,
+        # `write_json_stdout` rather than a bare write: `ensure_ascii=False`
+        # on the text layer let the process locale pick the codec, which
+        # truncated the document mid-write under LC_ALL=C and silently
+        # emitted non-UTF-8 under cp1252 (PDF-CLI-STDOUT-JSON-LOCALE-CLASS).
+        # Same serialisation arguments, so the bytes are unchanged.
+        _errors.write_json_stdout(
+            shape, indent=2, default=_json_default,
         )
-        sys.stdout.write(text + "\n")
     else:
         # **xlsx-8a-07 (R9, PERF-HIGH-2 partial)**: stream-serialise
         # directly to the file descriptor. Drops the intermediate
@@ -446,11 +453,17 @@ def _stream_single_region_json(
         include_hyperlinks, drop_empty_rows,
     ))
 
-    # Determine output sink.
+    # Determine output sink. stdout goes through `_errors.utf8_stdout`, a
+    # text stream bound to stdout's BYTE layer with encoding="utf-8", because
+    # this helper exists to avoid materialising the document and so cannot use
+    # the one-shot `write_json_stdout`; the locale must not pick the codec for
+    # a machine channel either way (PDF-CLI-STDOUT-JSON-LOCALE-CLASS).
     if output_path is None:
-        fp = sys.stdout
+        stdout_ctx = _errors.utf8_stdout()
+        fp = stdout_ctx.__enter__()
         close_fp = False
     else:
+        stdout_ctx = None
         fp = output_path.open("w", encoding="utf-8")
         close_fp = True
 
@@ -484,3 +497,7 @@ def _stream_single_region_json(
     finally:
         if close_fp:
             fp.close()
+        if stdout_ctx is not None:
+            # Flushes and detaches the wrapper (never closes stdout itself);
+            # re-raises a dead-pipe error for the CLI's envelope to catch.
+            stdout_ctx.__exit__(None, None, None)

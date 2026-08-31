@@ -18,7 +18,6 @@ defeats L-H6 ghost headers.
 from __future__ import annotations
 
 import argparse
-import json
 import re
 from pathlib import Path
 
@@ -36,6 +35,7 @@ from wiki_ingest._markdown import (
     replace_section_body,
 )
 from wiki_ingest._safety import read_text, write_text
+from wiki_ingest._stdout import write_json
 from wiki_ingest._vault import (
     DEFAULT_SUBDIRS,
     INDEX_FILE,
@@ -241,7 +241,7 @@ def _execute_course(args: argparse.Namespace, vault: Path) -> int:
     }
     if merge_warnings:
         result["warnings"] = merge_warnings
-    print(json.dumps(result, indent=2, ensure_ascii=False))
+    write_json(result, indent=2, ensure_ascii=False)
     return 0
 
 
@@ -404,5 +404,5 @@ def _execute_root(args: argparse.Namespace, vault_root: Path) -> int:
         "preserved_sections": preserved,
         "cascaded": cascaded,
     }
-    print(json.dumps(result, indent=2, ensure_ascii=False))
+    write_json(result, indent=2, ensure_ascii=False)
     return 0

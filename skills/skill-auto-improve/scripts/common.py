@@ -13,7 +13,10 @@ The skill must be installable/runnable in isolation, including as a packaged
 
 from __future__ import annotations
 
+import json
+import os
 import re
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -313,3 +316,108 @@ def set_frontmatter_field(text: str, field: str, value: str) -> str:
     if not found:
         raise ValueError(f"frontmatter field not found: {field!r}")
     return f"---\n" + "\n".join(out_lines) + "\n---\n" + body
+
+
+# ---------------------------------------------------------------------------
+# stdout JSON channel
+#
+# Duplicated verbatim in the sibling tooling skills (skill-creator and
+# skill-enhancer carry it in their own `skill_utils.py`, skill-validator in
+# `validate.py`, skill-auto-improve in `common.py`). The duplication is
+# deliberate: each skill must be installable and runnable in isolation,
+# including as a packaged `.skill` archive, so no skill imports a helper from
+# another. There is no diff -q gate on these copies -- unlike the office
+# skills' `_errors.py`, they are not a declared replication unit.
+# ---------------------------------------------------------------------------
+
+def abandon_stdout():
+    """Point a dead stdout's file descriptor at os.devnull. Best effort.
+
+    Call this after a BrokenPipeError. Without it the interpreter flushes the
+    same dead fd again while shutting down: it prints "Exception ignored while
+    flushing sys.stdout" on stderr and **replaces the exit status with 120**,
+    so the process contradicts the verdict it just returned. A stream with no
+    real fd (a test's StringIO, a wrapper's proxy object) has nothing to
+    redirect and needs nothing, hence the swallowed exceptions.
+    """
+    try:
+        fd = sys.stdout.fileno()
+    except (OSError, ValueError, AttributeError):
+        return
+    try:
+        devnull = os.open(os.devnull, os.O_WRONLY)
+    except OSError:
+        return
+    try:
+        os.dup2(devnull, fd)
+    except OSError:
+        pass
+    finally:
+        os.close(devnull)
+
+
+def emit_text(text):
+    """Write `text` plus a newline to stdout and flush, surviving a dead pipe.
+
+    Returns True when the line reached stdout, False when the sink was already
+    gone. See `emit_json` for the two failure modes this exists to close; this
+    is the same contract for a stdout payload that is not JSON (e.g. a bare
+    digest).
+    """
+    if sys.stdout is None:
+        return False
+    try:
+        sys.stdout.write(text + "\n")
+        sys.stdout.flush()
+    except BrokenPipeError:
+        abandon_stdout()
+        return False
+    return True
+
+
+def emit_json(payload, indent=2):
+    """Write `payload` to stdout as one JSON document, then flush.
+
+    Replaces `print(json.dumps(payload, indent=2))`, which has two measured
+    failure modes.
+
+    **A reader that is already gone.** Payload size is not the gate: a reader
+    that disappeared before the write raises EPIPE for a 65-byte document just
+    as readily as for a 500 KB one (measured on CPython 3.14.4 / macOS: the
+    immutability gate's 83-byte `{"ok": ..., "reason": ...}` line, written into
+    a pipe whose read end was already closed, turned `return 1` into exit 120).
+    Size only decides *which way* a bare `print()` fails. Measured on this
+    machine, with the reader gone before the write: at 131_071 payload bytes
+    and below the text stays in `sys.stdout`'s buffer, `print()` returns
+    normally, and only the interpreter's shutdown flush hits the dead fd --
+    which prints "Exception ignored while flushing sys.stdout" on stderr and
+    replaces the exit status with 120; at 131_072 bytes and above the write
+    itself raises and the traceback escapes with exit 1. Both land in
+    `emit_text`'s `except` arm, where `abandon_stdout()` leaves the shutdown
+    flush nothing to fail on, so the caller's own exit code survives.
+
+    (A reader that is merely *slow* rather than gone -- `... | head -c 20` --
+    reaches those same two modes, but only once the document outgrows the
+    ~64 KB pipe buffer. That is why the tests use the already-gone reader: it
+    takes payload size out of the contract, so a shrinking fixture cannot turn
+    a real regression green.)
+
+    **fd 1 closed before the process started** (`prog >&-`): CPython sets
+    `sys.stdout` to None and makes `print()` a silent no-op, so the caller sees
+    exit 0 and no document. Detected here and reported through the return value
+    rather than raising AttributeError.
+
+    `json.dumps` runs to completion before anything is written, so a reader
+    gets a whole document or none of it, never one truncated mid-serialization.
+
+    `ensure_ascii` keeps its default, so the document is pure ASCII and the
+    text layer's codec (`PYTHONIOENCODING`, then the process locale) can
+    neither alter these bytes nor abort mid-write on them. A caller that needs
+    non-ASCII output must move to a byte-level write (as
+    `_errors.write_json_stdout` does in the office skills), not merely flip
+    `ensure_ascii`.
+
+    Returns True when the document reached stdout, False when the sink was
+    already gone. The caller's exit path runs unchanged either way.
+    """
+    return emit_text(json.dumps(payload, indent=indent))

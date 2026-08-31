@@ -7,6 +7,7 @@ using Claude with extended thinking.
 
 import argparse
 import json
+import os
 import re
 import sys
 from pathlib import Path
@@ -17,9 +18,9 @@ except ImportError:
     anthropic = None
 
 try:
-    from scripts.skill_utils import parse_skill_md
+    from scripts.skill_utils import emit_json, parse_skill_md
 except ImportError:
-    from skill_utils import parse_skill_md
+    from skill_utils import emit_json, parse_skill_md
 
 
 def improve_description(
@@ -191,7 +192,7 @@ Please respond with only the new description text in <new_description> tags, not
     if log_dir:
         log_dir.mkdir(parents=True, exist_ok=True)
         log_file = log_dir / f"improve_iter_{iteration or 'unknown'}.json"
-        log_file.write_text(json.dumps(transcript, indent=2))
+        log_file.write_text(json.dumps(transcript, indent=2), encoding="utf-8")
 
     return description
 
@@ -210,10 +211,10 @@ def main():
         print(f"Error: No SKILL.md found at {skill_path}", file=sys.stderr)
         sys.exit(1)
 
-    eval_results = json.loads(Path(args.eval_results).read_text())
+    eval_results = json.loads(Path(args.eval_results).read_text(encoding="utf-8"))
     history = []
     if args.history:
-        history = json.loads(Path(args.history).read_text())
+        history = json.loads(Path(args.history).read_text(encoding="utf-8"))
 
     name, _, content = parse_skill_md(skill_path)
     current_description = eval_results["description"]
@@ -250,7 +251,7 @@ def main():
             "results": eval_results["results"],
         }],
     }
-    print(json.dumps(output, indent=2))
+    emit_json(output)
 
 
 if __name__ == "__main__":

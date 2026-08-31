@@ -253,7 +253,7 @@ All scripts share the `_errors.py` envelope (schema `v=1`):
 | `python3 scripts/pdf_merge.py OUTPUT.pdf INPUT1.pdf ...` | `--json-errors` | 0 ok, 1 fail |
 | `python3 scripts/pdf_split.py INPUT.pdf --ranges "..."` | `--each-page OUTDIR/`, `--every N OUTDIR/`, `--json-errors` | 0 ok, 1 invalid range/pypdf error |
 | `python3 scripts/pdf_watermark.py INPUT.pdf OUTPUT.pdf` | `--text TEXT` or `--image STAMP.png`, `--opacity`, `--position center\|top-left\|top-right\|bottom-left\|bottom-right\|diagonal`, `--rotation`, `--font-size`, `--color`, `--scale`, `--pages "all"\|"1-5,8"`, `--json-errors` | 0 ok, 1 fail, 2 usage, 6 SelfOverwriteRefused |
-| `python3 scripts/pdf_fill_form.py --check INPUT.pdf` | `--extract-fields INPUT.pdf -o FIELDS.json`, fill mode `INPUT.pdf DATA.json -o OUT.pdf [--flatten]`, `--json-errors` | 0 AcroForm, 10 fill error, 11 XFA, 12 no-form |
+| `python3 scripts/pdf_fill_form.py --check INPUT.pdf` | `--extract-fields INPUT.pdf -o FIELDS.json`, fill mode `INPUT.pdf DATA.json -o OUT.pdf [--flatten]`, `--json-errors` | 0 AcroForm, 10 fill error, 11 XFA, 12 no-form, 13 OutputWriteFailed |
 | `python3 scripts/pdf_extract.py INPUT.pdf` | `-o OUT.json`, `--layout`, `--password PW`, `--x-tolerance-ratio R`, `--json-errors` | 0 ok, 1 fail, 2 usage, 6 SelfOverwrite, 10 DocumentScanned |
 | `python3 scripts/pdf_ocr.py INPUT.pdf OUTPUT.pdf` | `--lang eng+rus`, `--skip-text\|--redo-ocr\|--force-ocr`, `--sidecar PATH.txt`, `--jobs N`, `--password PW`, `--deskew`, `--rotate-pages`, `--clean`, `--json-errors` | 0 ok, 1 fail (OcrEngineUnavailable/LanguagePackMissing/EncryptedInput/etc.), 2 usage, 6 SelfOverwriteRefused |
 | `python3 scripts/preview.py INPUT OUTPUT.jpg` | `--cols 3`, `--dpi 110`, `--gap 12`, `--padding 24`, `--label-font-size 14`, `--soffice-timeout 240`, `--pdftoppm-timeout 60`, `--json-errors` | 0 ok, 1 fail |
@@ -273,6 +273,9 @@ All scripts share the `_errors.py` envelope (schema `v=1`):
 - `10` — `DocumentScanned` (exclusive to `pdf_extract.py`; ocr remediation hop)
 - `11` — XFA form detected (exclusive to `pdf_fill_form.py`)
 - `12` — no form present (exclusive to `pdf_fill_form.py`)
+- `13` — `OutputWriteFailed` (exclusive to `pdf_fill_form.py`): the stdout reader
+  went away mid-write. `pdf_extract.py` reports the same condition as `1` with
+  `type: "OutputWriteFailed"` — its `1` is already the discriminated-by-`type` code
 
 ---
 

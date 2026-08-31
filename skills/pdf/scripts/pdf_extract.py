@@ -246,7 +246,7 @@ from pathlib import Path
 import pdfplumber  # type: ignore
 from pdfminer.pdftypes import resolve1  # type: ignore
 
-from _errors import add_json_errors_argument, report_error
+from _errors import add_json_errors_argument, report_error, write_json_stdout
 
 # A CLI owns its stderr: with --json-errors a wrapper parses stderr as JSON.
 # pdfminer / pypdf log free-text warnings ("invalid pdf header", "EOF marker
@@ -1685,82 +1685,69 @@ def _same_path(a: Path, b: Path) -> bool:
         return False
 
 
-def _utf8_chunk(chunk: str) -> bytes:
-    """Encode one JSON fragment as UTF-8, escaping lone surrogates.
-
-    A lone surrogate is the one character UTF-8 cannot carry, and it does
-    reach this code: a broken `/ToUnicode` CMap can map a glyph to
-    U+D800-DFFF (pdfplumber hands the `chr()` of whatever the CMap says), and
-    POSIX decodes undecodable filename bytes the same way. JSON *can* carry
-    it — as the `\\udXXX` escape a parser turns back into that same
-    character — so escape those and encode the rest normally. Surrogates are
-    BMP, so the four-hex-digit form is always exact, and the retry cannot
-    fail a second time: nothing unencodable is left.
-    """
-    try:
-        return chunk.encode("utf-8")
-    except UnicodeEncodeError:
-        return "".join(
-            f"\\u{ord(ch):04x}" if 0xD800 <= ord(ch) <= 0xDFFF else ch
-            for ch in chunk
-        ).encode("utf-8")
-
-
-def _abandon_stdout() -> None:
-    """Point fd 1 at /dev/null after stdout died mid-dump (a broken pipe).
-
-    Without this the interpreter flushes the same dead fd again at shutdown:
-    it prints `Exception ignored while flushing sys.stdout` — a second,
-    non-JSON line on stderr, right after the envelope — and replaces the exit
-    status with 120, so the process contradicts the `code` it just reported
-    (measured on a 165 KB dump through `| head -c 20`: envelope `"code": 1`,
-    process exit 120). Best-effort by design: a stdout with no real fd (a
-    test's `StringIO`) has nothing to redirect and needs nothing.
-    """
-    try:
-        devnull = os.open(os.devnull, os.O_WRONLY)
-        os.dup2(devnull, sys.stdout.fileno())
-        os.close(devnull)
-    except (OSError, ValueError, AttributeError):
-        pass
-
-
 def _emit(dump: dict, out_path: Path | None) -> None:
-    """Serialise `dump` as indented JSON straight to the sink (streaming, no
-    intermediate full-string copy). `out_path is None` → stdout; otherwise
-    overwrite `out_path` (idempotent). stdout always carries the dump — never
-    the `--json-errors` envelope, which goes to stderr.
+    """Serialise `dump` as indented JSON to the sink. `out_path is None` →
+    stdout; otherwise overwrite `out_path` (idempotent). stdout always
+    carries the dump — never the `--json-errors` envelope, which goes to
+    stderr.
 
-    stdout is written as UTF-8 **bytes**, deliberately bypassing the text
-    layer, because that layer encodes with the process locale and the dump is
-    a machine-readable channel: measured under `PYTHONIOENCODING=ascii` the
-    old text write aborted mid-stream with a raw `UnicodeEncodeError`
-    traceback — 1264 bytes of truncated JSON already on stdout, exit 1, no
-    envelope — and under `cp1252` it silently wrote an em dash as byte 0x97,
-    i.e. a dump that is not valid UTF-8, at exit 0. JSON is UTF-8 by
-    definition (RFC 8259 §8.1), so these bytes must not depend on the
-    caller's locale. A stdout with no `.buffer` (a test's `StringIO`, a
-    wrapper's proxy object) keeps the text path — there the caller owns the
-    encoding and we cannot second-guess it.
+    stdout is written as UTF-8 **bytes** by `_errors.write_json_stdout`,
+    deliberately bypassing the text layer, because that layer encodes with
+    the process locale and the dump is a machine-readable channel: measured
+    under `PYTHONIOENCODING=ascii` the old text write aborted mid-stream with
+    a raw `UnicodeEncodeError` traceback — 1264 bytes of truncated JSON
+    already on stdout, exit 1, no envelope — and under `cp1252` it silently
+    wrote an em dash as byte 0x97, i.e. a dump that is not valid UTF-8, at
+    exit 0. JSON is UTF-8 by definition (RFC 8259 §8.1), so these bytes must
+    not depend on the caller's locale. A stdout with no `.buffer` (a test's
+    `StringIO`, a wrapper's proxy object) keeps the text path — there the
+    caller owns the encoding and we cannot second-guess it.
+
+    Serialisation on the stdout path is **one-shot**, not streamed: the whole
+    document is built as one string, escaped, and encoded before any of it is
+    written. That buys the guarantee that a payload which cannot be
+    serialised leaves *nothing* on the wire rather than a truncated document.
+    The `-o FILE` path streams into the file, as it always did.
+
+    The price is **memory, not time**. Measured on the fixture the dead-pipe
+    tests build (`tests/fixtures/digital.pdf` concatenated 150x = 300 pages,
+    a 149 247-byte dump), HEAD's streaming loop against this code, both
+    writing to /dev/null, CPython 3.14.4:
+
+      * memory — `tracemalloc` peak 7 698 B streamed against 1 042 776 B
+        one-shot: 0.05x the payload against 6.99x (on a 48-page real
+        document, a 115 941-byte dump: 0.20x against 6.91x). The multiple is
+        not one copy but three: `json.dumps(..., indent=2)` takes CPython's
+        Python-level encoder, which builds a list of per-token chunks and
+        joins it, and the encoded bytes then live alongside the joined
+        string. It also tracks the payload's *widest* character — the same
+        dump reduced to pure ASCII peaks at 3.00x, and one astral character
+        anywhere in it takes the string to UCS-4 and the peak to 12.0x.
+      * time — one-shot is *faster* on these payloads, not slower: median of
+        9 runs, 2.61 ms streamed against 0.73 ms one-shot (0.75 ms against
+        0.56 ms on the 116 KB dump). Streaming pays a `str.encode()` and a
+        `write()` per encoder chunk, and an indented 300-page dump is tens of
+        thousands of chunks. The surrogate escape is 0.34 ms of the one-shot
+        figure: `_errors.py` matches with a compiled regex, where the
+        per-character scan an earlier version used costs 3.12 ms on the same
+        string, and `str.isascii()` skips both on an ASCII payload.
+
+    Neither half shows at process level: max RSS 127.2-127.3 MB streamed
+    against 127.3-127.5 MB one-shot (two runs each — the gap is inside the
+    run-to-run spread) and 0.92-0.95 s against 0.86-0.88 s for the whole run,
+    because pdfplumber's page objects dominate both. The memory multiple is
+    real and scales with the dump; on this workload it is not the thing that
+    decides whether the process fits.
+
+    On a dead pipe `write_json_stdout` re-raises `BrokenPipeError` after
+    pointing fd 1 at /dev/null; `main()` maps it to the `OutputWriteFailed`
+    envelope. Nothing here catches it.
 
     The `-o FILE` path was never locale-dependent (`open(..., encoding=
     "utf-8")`) and is unchanged.
     """
-    encoder = json.JSONEncoder(ensure_ascii=False, indent=2)
     if out_path is None:
-        buffer = getattr(sys.stdout, "buffer", None)
-        if buffer is None:
-            for chunk in encoder.iterencode(dump):
-                sys.stdout.write(chunk)
-            sys.stdout.write("\n")
-            return
-        # Any text already queued on stdout must reach fd 1 before our bytes
-        # do, or the two layers interleave out of order.
-        sys.stdout.flush()
-        for chunk in encoder.iterencode(dump):
-            buffer.write(_utf8_chunk(chunk))
-        buffer.write(b"\n")
-        buffer.flush()
+        write_json_stdout(dump, indent=2)
     else:
         # Auto-create the parent dir (parity with pdf_split.py / preview.py).
         out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -1872,14 +1859,23 @@ def main(argv: list[str] | None = None) -> int:
     try:
         _emit(dump, args.output)
     except BrokenPipeError:
-        # The reader closed the pipe (`… | head`). Silence the shutdown flush
-        # first, so the envelope below stays the only line on stderr and the
-        # exit status stays the one it declares — see `_abandon_stdout`.
-        _abandon_stdout()
+        # Two sinks reach this arm, so name the one that actually broke: a
+        # dead reader on stdout (`… | head`) and a `-o` FIFO whose reader is
+        # gone both raise EPIPE, and an envelope that says "stdout" for the
+        # second sends the caller after the wrong thing (measured: `-o FIFO`
+        # with the reader closed reported `details.path: "stdout"`).
+        #
+        # No `dup2` here. On the stdout path `write_json_stdout` has already
+        # pointed fd 1 at /dev/null (`_errors.abandon_stdout`), so the
+        # interpreter's shutdown flush finds nothing to retry and the exit
+        # status stays the one this envelope declares instead of 120. On the
+        # `-o` path fd 1 was never written to and there is nothing to
+        # redirect — a second, blind redirect would only hide that.
+        target = str(args.output) if args.output is not None else "stdout"
         return report_error(
-            "stdout closed before the dump was fully written (broken pipe)",
+            f"{target} closed before the dump was fully written (broken pipe)",
             code=_EXIT_FAIL, error_type="OutputWriteFailed",
-            details={"path": "stdout"}, json_mode=je,
+            details={"path": target}, json_mode=je,
         )
     except OSError as exc:
         # `args.output` is None when the dump goes to stdout; naming the sink

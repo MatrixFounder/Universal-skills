@@ -24,7 +24,6 @@ VDD-multi pass):
 from __future__ import annotations
 
 import argparse
-import json
 import os
 import re
 from pathlib import Path
@@ -41,6 +40,7 @@ from wiki_ingest._safety import (
     slugify,
     write_text,
 )
+from wiki_ingest._stdout import write_json
 from wiki_ingest._vault import ensure_schema
 
 SUMMARY_KIND_HINTS = ("lesson-summary", "meeting-summary", "source", "summary")
@@ -286,5 +286,5 @@ def execute(args: argparse.Namespace) -> int:
         result["backup_path"] = str(backup_path.relative_to(vault))
     # Strip control chars + cap scalar lengths before echoing into the agent
     # context (S-M6 — prompt-injection-via-frontmatter defense).
-    print(json.dumps(_safe_for_json(result), indent=2, ensure_ascii=False))
+    write_json(_safe_for_json(result), indent=2, ensure_ascii=False)
     return 0

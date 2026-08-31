@@ -173,6 +173,10 @@ print(str(PdfReader('$TMP/intbool.pdf').get_fields()['agree_terms'].get('/V')))
     && ok "checkbox: int 1 → /Yes" \
     || nok "checkbox int coercion" "got '$agree'"
 
+# The pdf_fill_form stdout-channel unit suite runs further down, next to the
+# other `-m unittest` blocks — `_parse_unittest_failure` is defined below
+# this point and a shell function cannot be called before it exists.
+
 # --- mermaid (only if mmdc available) -------------------------------------
 if [ -x "node_modules/.bin/mmdc" ]; then
     echo "md2pdf with mermaid:"
@@ -794,6 +798,23 @@ if [ "$rc" -eq 0 ]; then
     ok "pdf_extract unit + E2E suite (${n} cases)"
 else
     nok "pdf_extract suite" "$(_parse_unittest_failure "$out")"
+fi
+
+# --- pdf_fill_form: stdout-channel unit suite ------------------------------
+# Enumerated by name for the same reason tests.test_pdf_extract is: this file
+# lists its unittest modules explicitly, so a suite nobody names never runs.
+# Covers locale-independent payload bytes and a dead reader → exit 13 + an
+# OutputWriteFailed envelope (never 120, never a traceback).
+echo "pdf_fill_form (stdout channel):"
+set +e
+out=$("$PY" -m unittest tests.test_pdf_fill_form 2>&1)
+rc=$?
+set -e
+if [ "$rc" -eq 0 ]; then
+    n=$(echo "$out" | awk '/^Ran [0-9]+ tests/ {print $2}')
+    ok "pdf_fill_form stdout-channel suite (${n} cases)"
+else
+    nok "pdf_fill_form suite" "$(_parse_unittest_failure "$out")"
 fi
 
 # --- pdf_ocr: OCR scanned PDF → searchable PDF (eng+rus) -------------------

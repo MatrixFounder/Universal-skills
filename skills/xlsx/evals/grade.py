@@ -39,6 +39,8 @@ HERE = Path(__file__).resolve().parent
 SCRIPTS = HERE.parent / "scripts"  # skills/xlsx/scripts
 sys.path.insert(0, str(SCRIPTS))
 
+from _errors import write_json_stdout  # noqa: E402  (needs SCRIPTS on sys.path)
+
 from openpyxl import load_workbook  # noqa: E402
 
 # Production gate — IMPORTED, never copied (guide §7.1).
@@ -262,14 +264,25 @@ def main(argv: list[str] | None = None) -> int:
         return verify_pin(Path(args.verify_pin[0]), Path(args.verify_pin[1]))
     if args.workspace:
         result = grade_workspace(args.workspace)
-        print(json.dumps(result, ensure_ascii=False, indent=2))
+        try:
+            write_json_stdout(result, indent=2)
+        except BrokenPipeError:
+            # The grading document IS this command's product, so a reader that
+            # hung up is an IO failure (exit 1 per the docstring's table), not a
+            # success with the output missing. write_json_stdout has already
+            # pointed fd 1 at /dev/null, so the interpreter's shutdown flush
+            # cannot replace this status with 120.
+            return 1
         return 0
     if args.case and args.run_dir:
         case = _load_cases().get(args.case)
         if case is None:
             print(f"unknown case: {args.case}", file=sys.stderr)
             return 1
-        print(json.dumps(grade_case(case, args.run_dir), ensure_ascii=False, indent=2))
+        try:
+            write_json_stdout(grade_case(case, args.run_dir), indent=2)
+        except BrokenPipeError:
+            return 1
         return 0
     parser.print_help()
     return 1

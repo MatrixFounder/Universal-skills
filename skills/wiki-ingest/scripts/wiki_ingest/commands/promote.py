@@ -12,7 +12,6 @@ F3-helper (`_vault`). Per R12.5, does NOT import any other `commands/*`.
 from __future__ import annotations
 
 import argparse
-import json
 import re
 from datetime import datetime
 from pathlib import Path
@@ -42,6 +41,7 @@ from wiki_ingest._safety import (
     die,
     read_text,
 )
+from wiki_ingest._stdout import write_json
 from wiki_ingest._vault import (
     SCHEMA_FILE,
     _peek_schema_version,
@@ -193,7 +193,7 @@ def execute(args: argparse.Namespace) -> int:
     }
 
     if not args.apply:
-        print(json.dumps(_safe_for_json(plan), indent=2, ensure_ascii=False))
+        write_json(_safe_for_json(plan), indent=2, ensure_ascii=False)
         return 0
 
     # === bead 016-06 — --apply write path ===
@@ -223,11 +223,11 @@ def _apply_promotion(*, vault: Path, safe_name: str, kind: str,
     # R4.3 — no-op when nothing to do (page already at root, no course
     # copies left to fold in)
     if not course_hits and root_hit is not None:
-        print(json.dumps(_safe_for_json({
+        write_json(_safe_for_json({
             "applied": True, "noop": True,
             "name": safe_name, "kind": kind,
             "merge_to": str(merge_to.relative_to(vault)),
-        }), indent=2, ensure_ascii=False))
+        }), indent=2, ensure_ascii=False)
         return 0
 
     today = datetime.today().strftime("%Y-%m-%d")
@@ -392,11 +392,11 @@ def _apply_promotion(*, vault: Path, safe_name: str, kind: str,
     if residual_course_copies:
         result_payload["partial"] = True
         result_payload["residual_course_copies"] = sorted(residual_course_copies)
-        print(json.dumps(_safe_for_json(result_payload),
-                         indent=2, ensure_ascii=False))
+        write_json(_safe_for_json(result_payload),
+                   indent=2, ensure_ascii=False)
         return 1
-    print(json.dumps(_safe_for_json(result_payload),
-                     indent=2, ensure_ascii=False))
+    write_json(_safe_for_json(result_payload),
+               indent=2, ensure_ascii=False)
     return 0
 
 

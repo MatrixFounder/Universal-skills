@@ -132,7 +132,10 @@ fetch → md → delete-HTML command. Env vars are `HTML_*` (hard rename, no ali
    breaks `diff -q` and forks). A smoke-test MUST assert `weasyprint` /
    `playwright` stay out of `sys.modules` after importing `web_clean`.
 3. **Shared helpers — MASTER = docx.** `_errors.py` + `_venv_bootstrap.py`
-   include `html` in their replication loop (4→5-skill).
+   include `html` in their replication loop (4→5-skill). `_errors.py` covers
+   BOTH machine channels: the `--json-errors` envelope on stderr and the JSON
+   payload on stdout (`write_json_stdout` / `utf8_stdout` / `abandon_stdout`),
+   because the caller's locale must not decide the bytes of either.
 
 ### Anti-patterns — DO NOT
 

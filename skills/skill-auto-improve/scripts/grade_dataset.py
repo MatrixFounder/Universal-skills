@@ -25,9 +25,9 @@ from itertools import combinations
 from pathlib import Path
 
 try:
-    from scripts.common import resolve_dataset_items  # type: ignore
+    from scripts.common import emit_json, resolve_dataset_items  # type: ignore
 except ImportError:
-    from common import resolve_dataset_items
+    from common import emit_json, resolve_dataset_items
 
 TARGET_N = 5
 WEIGHTS = {"schema": 0.30, "forbidden": 0.25, "uniqueness": 0.20, "diversity": 0.15, "count": 0.10}
@@ -116,7 +116,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Score an eval dataset's quality")
     parser.add_argument("path")
     args = parser.parse_args()
-    print(json.dumps(score_dataset(Path(args.path)), indent=2))
+    emit_json(score_dataset(Path(args.path)))
     return 0
 
 

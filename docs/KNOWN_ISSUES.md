@@ -72,11 +72,12 @@ Analysis Phase" which mandates this read.
 ## robustness
 
 - **PDF-EXTRACT-BROKEN-PIPE-EXIT-120** [`… | head` давал код возврата 120 при envelope'е `"code": 1` и лишнюю не-JSON строку на stderr](issues/pdf-extract-broken-pipe-exit-120.md) — severity `SEV-3`, status `fixed`, opened 2026-08-31, resolved 2026-08-31
-- **PDF-CLI-STDOUT-JSON-LOCALE-CLASS** [тот же локале-зависимый JSON на stdout остаётся в 17 других скриптах репозитория](issues/pdf-cli-stdout-json-locale-class.md) — severity `SEV-3`, status `open`, opened 2026-08-31
+- **PDF-CLI-STDOUT-JSON-LOCALE-CLASS** [JSON на stdout кодировался локалью вызывающего во всём репозитории, а мёртвый читатель подменял код возврата](issues/pdf-cli-stdout-json-locale-class.md) — severity `SEV-2`, status `fixed`, opened 2026-08-31, resolved 2026-08-31
 - **PDF-4** [`pdf_ocr.py` vdd-multi deferred LOWs (sidecar atomicity, `--list-langs` non-zero exit)](issues/pdf-4-pdf-ocr-vdd-multi-deferred-lows.md) — severity `LOW`, status `fixed`, opened 2026-06-03
 - **HTML2MD-1** [Cloudflare/captcha-hard sites auto-recover via the remote reader tier](issues/html2md-1-cloudflare-captcha-remote-tier-recovery.md) — severity `LOW`, status `handled`, opened 2026-06-23
 - **HTML2MD-7** [clean-source host variants (Wikipedia REST, arXiv /html)](issues/html2md-7-clean-source-host-variants.md) — severity `LOW`, status `handled`, opened 2026-06-23
 - **HTML2MD-8** [empty-extraction guard (no more silent empties)](issues/html2md-8-empty-extraction-guard.md) — severity `SEV-2`, status `handled`, opened 2026-06-23
+- **TF-HUMAN-REPORT-LOCALE-CRASH** [человекочитаемые отчёты падают под не-UTF-8 локалью ещё до первой строки вывода](issues/tf-human-report-locale-crash.md) — severity `SEV-3`, status `open`, opened 2026-08-31
 - **TF-X-2** [ffmpeg is required for the X ASR path on HLS sources (Broadcasts/Spaces)](issues/tf-x-2-ffmpeg-required-for-x-asr-hls.md) — severity `MEDIUM`, status `handled`, opened 2026-07-09
 - **TF-X-4** [captions: VTT + SRT + TTML/DFXP](issues/tf-x-4-captions-vtt-srt-ttml.md) — severity `LOW`, status `handled`, opened 2026-07-09
 - **TF-X-5** [X auth + long-broadcast cost + duration](issues/tf-x-5-x-auth-long-broadcast-duration.md) — severity `LOW`, status `handled`, opened 2026-07-09

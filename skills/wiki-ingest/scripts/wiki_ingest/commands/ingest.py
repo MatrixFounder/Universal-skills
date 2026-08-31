@@ -37,6 +37,7 @@ from pathlib import Path
 
 from wiki_ingest import _dispatch, _safety, _vault
 from wiki_ingest._frontmatter import split_frontmatter
+from wiki_ingest._stdout import write_json
 
 
 _MANIFEST_VERSION = "1.1"
@@ -603,8 +604,7 @@ def _emit_partial(head: dict, exc: _PartialFailure) -> int:
         "written_so_far": exc.written_so_far,
         "cleanup_advice": exc.cleanup_advice,
     }
-    json.dump(_safety._safe_for_json(envelope), sys.stdout)
-    sys.stdout.write("\n")
+    write_json(_safety._safe_for_json(envelope))
     return _safety.EXIT_PARTIAL
 
 
@@ -708,8 +708,7 @@ def _emit(args, manifest: dict, *, human_summary_lines: list[str]) -> int:
     """Dispatch to JSON vs human output; honour --quiet + TTY check."""
     quiet = _should_be_quiet(args)
     if args.output_format == "json":
-        json.dump(_safety._safe_for_json(manifest), sys.stdout)
-        sys.stdout.write("\n")
+        write_json(_safety._safe_for_json(manifest))
     elif not quiet:
         for line in human_summary_lines:
             print(line)

@@ -1,51 +1,154 @@
 ---
 id: PDF-CLI-STDOUT-JSON-LOCALE-CLASS
 type: known-issue
-status: open
+status: fixed
 opened_at: 2026-08-31
+resolved_at: 2026-08-31
+resolved_by: manual fix 2026-08-31 (общий помощник в `_errors.py` + по одному локальному в каждом Apache-2.0 скилле)
 category: robustness
-severity: SEV-3
+severity: SEV-2
 component: repo
 slug: pdf-cli-stdout-json-locale-class
 ---
 
-# PDF-CLI-STDOUT-JSON-LOCALE-CLASS — тот же локале-зависимый JSON на stdout остаётся в 16 других файлах репозитория
+# PDF-CLI-STDOUT-JSON-LOCALE-CLASS — JSON на stdout кодировался локалью вызывающего во всём репозитории, а мёртвый читатель подменял код возврата
 
-**Status:** OPEN — исправлен **только** `pdf_extract.py`
-([PDF-EXTRACT-STDOUT-LOCALE-ENCODING](pdf-extract-stdout-locale-encoding.md),
-[PDF-EXTRACT-BROKEN-PIPE-EXIT-120](pdf-extract-broken-pipe-exit-120.md)). Остальные
-носители дефекта не тронуты — запись заведена, чтобы это не читалось как «класс закрыт».
-**Location:** 22 места записи JSON в stdout в 16 файлах восьми скиллов (замер `grep -rn 'json.dump(.*sys.stdout|print(json.dumps' skills/*/scripts/*.py` после фикса `pdf_extract.py`; счёт по `.claude/skills/` не берётся — там симлинки в этот же `skills/` и в приватный `.agentic-development`), среди них
-[`skills/pdf/scripts/pdf_fill_form.py`](../../skills/pdf/scripts/pdf_fill_form.py)
-(`json.dump(info, sys.stdout, …)` — конструкция байт-в-байт та, что чинилась в
-`pdf_extract.py`), `skills/pptx/scripts/pptx_clean.py`, `skills/xlsx/scripts/xlsx_*.py`,
-плюс скиллы-инструменты (`skill-creator`, `skill-validator`, `skill-enhancer`,
-`transcript-fetcher`, `skill-auto-improve`).
-**Related:** оба фикса выше; протокол репликации —
-[`CLAUDE.md` §2](../../CLAUDE.md) (`_errors.py` байт-идентичен в docx/xlsx/pptx/pdf/html,
-мастер — docx).
+> **Resolved 2026-08-31.** Класс закрыт **во всех семи скиллах**, где он был:
+> ~67 мест записи вместо 22, заявленных при заведении записи. Общий помощник
+> живёт в `_errors.py` (мастер docx, реплика в xlsx/pptx/pdf/html), а три
+> Apache-2.0 скилла получили каждый свой stdlib-only модуль — импортировать
+> проприетарный `_errors.py` они не могут (CLAUDE.md §3). Заодно оказалось, что
+> **сломан был и сам конверт на stderr**, о чём в исходной записи не было ни
+> слова.Residual'ы перечислены ниже и не выдаются за закрытые.
 
-## Симптом (ожидаемый, по идентичности конструкции)
+**Status:** FIXED 2026-08-31.
+**Severity:** поднята SEV-3 → **SEV-2** по итогам замеров: под `cp1252` часть
+команд молча отдавала не-UTF-8 при коде 0, а в `transcript-fetcher`
+`UnicodeEncodeError` попадал в `except ValueError`, помечался как `UsageError`
+и **обрывал весь батч** — теряя минуты сети и ASR на URL, до которых очередь не
+дошла.
+**Related:** [PDF-EXTRACT-STDOUT-LOCALE-ENCODING](pdf-extract-stdout-locale-encoding.md)
+и [PDF-EXTRACT-BROKEN-PIPE-EXIT-120](pdf-extract-broken-pipe-exit-120.md) —
+первые два экземпляра класса, с которых он и был обобщён;
+[TF-HUMAN-REPORT-LOCALE-CRASH](tf-human-report-locale-crash.md) — **открытый**
+соседний дефект на человекочитаемом канале.
 
-Под `PYTHONIOENCODING=ascii` / `LC_ALL=C` любой из этих скриптов оборвёт JSON на
-полуслове с traceback'ом вместо envelope'а; под `cp1252` молча выдаст не-UTF-8 байты при
-коде 0; `… | head` даст код 120 и лишнюю не-JSON строку на stderr. **Замерено только для
-`pdf_extract.py`** — остальные не запускались, вывод основан на идентичности кода, и это
-именно вывод, а не измерение.
+## Что оказалось правдой, а что нет
 
-## Фикс path
+Исходная запись говорила «22 места в 16 файлах восьми скиллов». Ни одно из трёх
+чисел не пережило проверки:
 
-DRY-дом для помощника — `_errors.py`, который уже байт-идентично реплицируется в пять
-скиллов: добавить туда `write_json_stdout(payload)` (UTF-8-байты + суррогатный escape +
-текстовый fallback) и `abandon_stdout()`, перевести на них все места записи, после чего
-`pdf_extract.py` теряет свои локальные копии. Это change set по протоколу §2: правка в
-docx-мастере → репликация в xlsx/pptx/pdf/html → `diff -q` → прогон всех E2E + валидаторов.
-Отдельная задача — не хвост pdf-13.
+- **grep был слепым.** Он ловил только `print(json.dumps(...))` и
+  `json.dump(..., sys.stdout)`. Мимо прошли: косвенные (`payload =
+  json.dumps(...)` печатается тремя строками ниже), подпакеты
+  (`xlsx2csv2json/emit_json.py` — потоковый писатель, `sys.stdout.write`),
+  каталоги `evals/` (`docx/evals/grade.py`, `xlsx/evals/grade.py`), и **целый
+  скилл `wiki-ingest`** с 23 местами — который для вики на кириллице является
+  самым крупным носителем класса в репозитории.
+- **«Размер payload'а — гейт» неверно.** Мы считали, что ось B (обрыв трубы)
+  достижима только на payload'ах больше буфера трубы. Замер: читатель, умерший
+  **до** первой записи, даёт EPIPE и на 83 байтах. Размер решает лишь, какой из
+  двух режимов увидишь — ~90-130 КБ даёт подмену кода на 120, больше — сырой
+  traceback и код 1. Первый проход из-за этой ошибки пропустил семь мест.
+  Буфер трубы на этой машине, кстати, тоже не 64 КиБ: первый отказ на ~105 КБ.
+- **stderr-конверт `_errors.py` тоже был сломан.** Считалось, что его спасает
+  `errors="backslashreplace"`. Спасает — от падения, но не от невалидности:
+  Latin-1 выходит как `caf\xe9`, эмодзи как `\U0001f600`, и ни `\x`, ни `\U` не
+  являются JSON-escape'ами, то есть обёртка, ради которой конверт существует,
+  его не парсит. BMP-символы выживали случайно (питоновский `\uXXXX` совпадает
+  с джейсоновским). Под `cp1252` кириллица падала жёстко.
+
+## Фикс
+
+**Office-семейство (проприетарное, `_errors.py` — мастер docx, реплика в
+xlsx/pptx/pdf/html):**
+
+- `write_json_stdout(payload, *, indent, default, separators, newline, stream)`
+  — одношаговая сериализация, экранирование одиночных суррогатов, запись
+  UTF-8-**байтами** в `sys.stdout.buffer`, текстовый путь для потока без
+  `.buffer`, `BrokenPipeError` после перевода fd на `/dev/null`.
+- `utf8_stdout()` — контекст-менеджер с `TextIOWrapper(encoding="utf-8")` для
+  единственного места, которому нельзя материализовать документ
+  (`xlsx2csv2json` сериализует книгу на 3 млн ячеек построчно).
+- `abandon_stdout()` — тот самый `dup2`, без которого shutdown-flush
+  интерпретатора подменяет код возврата.
+- Конверт переведён на `ensure_ascii=True`; закрыт случай `prog >&-`
+  (`sys.stdout is None`, где `print()` — молчаливый no-op).
+- Места: `pdf_extract.py`, `pdf_fill_form.py` (3 JSON + человекочитаемая
+  строка статуса), `pptx_clean.py`, `xlsx_add_chart.py`, `xlsx_recalc.py` ×2,
+  `xlsx_validate.py`, `office/validate.py` (реплицируемый), `xlsx2csv2json`
+  (оба пути + `BrokenPipeError`-ветка в роутере ошибок `cli.py`),
+  `docx/evals/grade.py` ×2, `xlsx/evals/grade.py` ×2.
+
+**Apache-2.0 скиллы — по своему stdlib-only модулю, без импорта из office:**
+
+- `skills/transcript-fetcher/scripts/_stdout.py` — 11 мест, включая JSONL-поток
+  батча, где **пофайловый flush нагружен смыслом** (замер: записи приходят на
+  t+0.60 / 1.21 / 1.81 с; без flush — все три на t+1.81 с). Конверт
+  `_emit_error` тоже переведён на ASCII-only.
+- `skills/wiki-ingest/scripts/wiki_ingest/_stdout.py` — 23 места.
+- Четыре tooling-скилла — по копии `emit_json`/`emit_text`/`abandon_stdout`
+  (`skill_utils.py` у skill-creator и skill-enhancer, `validate.py` у
+  skill-validator, `common.py` у skill-auto-improve), 11 мест. Здесь **ось A
+  измеренно не воспроизводится**: все их `json.dumps` идут с дефолтным
+  `ensure_ascii=True`, то есть вывод чисто ASCII; чинилась только ось B.
+  Дублирование сознательное — эти скиллы не входят ни в один
+  replication-unit, и связывать Apache-2.0 скилл с проприетарным мастером
+  ради 40 строк неправильно.
+
+## Проверка
+
+- Негативные контроли против HEAD через `git worktree`: `xlsx2json.py` на
+  книге с кириллицей — HEAD `rc=1`, 4 байта документа и конверт
+  `Internal error: UnicodeEncodeError`; сейчас `rc=0`, полный документ,
+  байт-в-байт совпадающий с UTF-8-локалью. `wiki_ops.py find --terms Кривая` —
+  HEAD `rc=1`, 0 байт, traceback под `ascii` и под `cp1252`; сейчас `rc=0`,
+  82 байта, валидный UTF-8, идентично UTF-8-прогону.
+- Ось B: `wiki_ops.py scan | bash -c 'exit 0'` — на HEAD в stderr прилетает
+  `Exception ignored while flushing sys.stdout`, сейчас stderr пуст.
+- `_errors.py` покрыт 17 тестами (`skills/docx/scripts/tests/test_errors_stdout.py`),
+  включая закрытый fd, одиночные суррогаты, потоковый синк, порядок двух слоёв
+  вывода и валидность конверта под `ascii`/`cp1252` для BMP / Latin-1 /
+  астральных символов. Мутационная батарея: **9 из 9 мутаций убиты** (десятая —
+  заведомо инертный контроль, и он обязан выжить). Одна мутация пережила первый
+  прогон — «обезвредить `abandon_stdout`» — потому что тест проверял «код не 120»
+  вместо самого механизма; тест переписан так, чтобы после отказа он писал в
+  fd 1 и падал, если тот всё ещё указывает на мёртвую трубу.
+- Юнит-наборы: docx 421, xlsx 522 + xlsx2csv2json 226, pdf 225,
+  transcript-fetcher 445, wiki-ingest 328, tooling 65/2/2/61 — все зелёные.
+- Собственный аудит skill-validator снова `PASSED`: новая тест-фикстура
+  собирает опасные строки из фрагментов, чтобы не подсвечивать саму себя
+  (замер до: `DANGER`, 2 CRITICAL).
+
+## Residual'ы — НЕ закрыто
+
+- **CSV на stdout** (`xlsx2csv2json/emit_csv.py`) остаётся на кодеке локали.
+  Это **сознательное** решение самого модуля («stdout retains its process-wide
+  encoding … injecting a BOM into a pipe is almost always a bug»), у CSV нет
+  RFC, требующего UTF-8, и у скилла есть `--encoding` для файлового вывода.
+  Класс этой записи — JSON; трогать CSV в рамках него было бы расширением
+  контракта без решения.
+- **Человекочитаемые `print()`** остаются локале-зависимыми везде. Для
+  transcript-fetcher это заведено отдельной записью
+  [TF-HUMAN-REPORT-LOCALE-CRASH](tf-human-report-locale-crash.md); для
+  остальных скиллов **не измерено** — предполагать «там то же самое» без
+  замера эта запись не будет.
+- **`validate.py --json` возвращает 0 даже при `risk_level: DANGER`**, тогда
+  как человекочитаемый путь на тех же входных данных возвращает 1. Дефект
+  пред-существующий, к этому классу отношения не имеет, тестом сознательно
+  **не** зафиксирован (иначе неверное поведение стало бы контрактом).
+- **Мутационная проверка** прогнана только для office-помощника; локальные
+  копии в Apache-2.0 скиллах покрыты тестами, но не мутациями.
 
 ## Do-not
 
-- **Не** копировать `_utf8_chunk` / `_abandon_stdout` из `pdf_extract.py` в соседние
-  скрипты вручную: пять расходящихся копий одного помощника — ровно то, ради чего в
-  репозитории существует `_errors.py`.
-- **Не** закрывать эту запись, пока не измерены (а не выведены по аналогии) хотя бы
-  `pdf_fill_form.py --info` и один xlsx-скрипт.
+- **Не** «упрощать» помощник до `sys.stdout.reconfigure(encoding="utf-8")`:
+  это переписывает явный выбор вызывающего на весь процесс, включая
+  человекочитаемый stderr, который обязан уважать локаль.
+- **Не** заводить шестую копию `_errors.py` в Apache-2.0 скилле и не
+  импортировать его оттуда — лицензионные области разные (CLAUDE.md §3).
+- **Не** писать тест на обрыв трубы, полагаясь на размер payload'а, без
+  явной проверки этого размера: буфер трубы платформо-зависим, и тест
+  молча позеленеет на сломанном коде.
+- **Не** возвращать `ensure_ascii=False` в конверт на stderr: он обязан быть
+  ASCII-only, иначе перестаёт быть JSON под не-UTF-8 локалью.

@@ -111,7 +111,11 @@ Two helper files live at `skills/<skill>/scripts/` (sibling to
 **all four** office skills (`docx`, `xlsx`, `pptx`, `pdf`):
 
 - `_errors.py` — `--json-errors` envelope helper used by every Python
-  CLI for uniform machine-readable failure output.
+  CLI for uniform machine-readable failure output, plus the **stdout**
+  side of the same contract (`write_json_stdout` / `utf8_stdout` /
+  `abandon_stdout`): a script's JSON payload must survive the caller's
+  locale exactly as its envelope must — see
+  [`docs/issues/pdf-cli-stdout-json-locale-class.md`](docs/issues/pdf-cli-stdout-json-locale-class.md).
 - `preview.py` — universal `INPUT → PNG-grid` renderer; routes `.pdf`
   through Poppler directly and `.docx`/`.xlsx`/`.pptx` (incl. `.docm`/
   `.xlsm`/`.pptm`) through LibreOffice → Poppler.
