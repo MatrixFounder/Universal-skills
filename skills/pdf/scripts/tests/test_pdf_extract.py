@@ -39,7 +39,7 @@ NEEDED_FIXTURES = [
     "digital.pdf", "scanlike.pdf", "encrypted.pdf", "glued.pdf",
     "unmapped.pdf", "embedded.pdf", "bullets.pdf", "shaded.pdf", "figure.pdf",
     "shifted.pdf", "flatfill.pdf", "shadowed.pdf", "nested.pdf",
-    "hugedecl.pdf", "onecol.pdf", "orphanfar.pdf",
+    "hugedecl.pdf", "onecol.pdf", "orphanfar.pdf", "ocrlike.pdf",
 ]
 
 
@@ -131,10 +131,12 @@ class TestStubUnits(unittest.TestCase):
     # TestScanClassifier (TC-UNIT-13..20).
 
     def test_extract_pdf_sentinel(self):
-        """TC-UNIT-05 — the DumpDocument carries exactly its 11 top-level keys,
+        """TC-UNIT-05 — the DumpDocument carries exactly its 12 top-level keys,
         so a consumer can rely on the shape and a dropped signal is caught.
 
-        `layout_hints` joined the set when the advisory counters landed; the
+        `source` joined the set when dogfooding showed a detached dump cannot
+        say which PDF it came from; `layout_hints` joined it when the advisory
+        counters landed; the
         `--extract-images` keys (`images_dir` / `image_dpi` / `images_summary`)
         are deliberately NOT here — they appear only with the flag, and this
         run does not pass it."""
@@ -142,9 +144,10 @@ class TestStubUnits(unittest.TestCase):
             FIXTURES_DIR / "digital.pdf", password=None, layout=False)
         self.assertEqual(
             set(dump),
-            {"page_count", "doc_scanned", "scanned_pages", "figure_pages",
-             "text_layer_lossy", "x_tolerance_ratio", "y_tolerance",
-             "table_strategy", "layout_hints", "fonts", "pages"})
+            {"source", "page_count", "doc_scanned", "scanned_pages",
+             "figure_pages", "text_layer_lossy", "x_tolerance_ratio",
+             "y_tolerance", "table_strategy", "layout_hints", "fonts",
+             "pages"})
 
     def test_fixtures_exist_and_valid(self):
         """TC-UNIT-06 — every fixture is present and well-formed."""
@@ -2138,6 +2141,43 @@ class TestImageExtraction(unittest.TestCase):
                            "--extract-images", str(self.out)])
         self.assertIn("mostly figure", result.stderr)
         self.assertIn(str(self.out), result.stderr)
+
+    def test_the_dump_names_the_pdf_it_came_from(self):
+        """The reference tells the caller to keep the dump OUT of the folder
+        being delivered, which makes it a detached artefact — so it has to name
+        its input. Eight of eleven dogfood composers reported guessing the
+        source from the filename because this key did not exist."""
+        result = _run_cli([str(FIXTURES_DIR / "digital.pdf")])
+        dump = json.loads(result.stdout)
+        self.assertTrue(dump["source"].endswith("digital.pdf"), dump["source"])
+        # Resolved, not as-typed: a relative path stops meaning anything once
+        # the dump is moved, which is exactly what the recipe tells you to do.
+        self.assertTrue(Path(dump["source"]).is_absolute(), dump["source"])
+
+    def test_writing_no_artwork_at_all_is_said_out_loud(self):
+        """`--extract-images` on an OCR'd scan writes nothing: its only raster
+        is page-sized and the backdrop rule drops it. Before this line the
+        caller got an empty directory and a silent stderr — the shape of
+        "nothing happened" this feature exists to remove. Measured on six OCR'd
+        scans in one dogfood run.
+
+        `ocrlike.pdf`, not `scanlike.pdf`: a pure scan exits 10, and on that
+        path the image warnings are suppressed on purpose (`--json-errors`
+        promises one line). After OCR the same document exits 0 — which is
+        where the silence was actually observed."""
+        result = _run_cli([str(FIXTURES_DIR / "ocrlike.pdf"),
+                           "--extract-images", str(self.out)])
+        self.assertEqual(result.returncode, 0, result.stderr[-300:])
+        self.assertIn("no artwork was written", result.stderr)
+        self.assertIn("page-sized background", result.stderr)
+        self.assertIn("pdf_ocr.py", result.stderr)
+        self.assertEqual(list(self.out.iterdir()), [])
+
+    def test_a_document_with_artwork_is_not_told_it_has_none(self):
+        """Negative control for the line above."""
+        result = _run_cli([str(FIXTURES_DIR / "figure.pdf"),
+                           "--extract-images", str(self.out)])
+        self.assertNotIn("no artwork was written", result.stderr)
 
     def test_figure_warning_does_not_point_at_files_that_were_not_written(self):
         """A flagged page whose figure was not rendered has no file. Telling

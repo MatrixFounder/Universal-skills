@@ -22,6 +22,9 @@ Exit codes:
 
 from __future__ import annotations
 
+import _venv_bootstrap  # self-bootstrap into scripts/.venv (replicated per CLAUDE.md §2)
+_venv_bootstrap.reexec_into_venv(requires=("pypdf",), _file=__file__)
+
 import argparse
 import sys
 from pathlib import Path

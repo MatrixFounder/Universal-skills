@@ -256,6 +256,9 @@ Exit codes:
 
 from __future__ import annotations
 
+import _venv_bootstrap  # self-bootstrap into scripts/.venv (replicated per CLAUDE.md §2)
+_venv_bootstrap.reexec_into_venv(requires=("pdfplumber",), _file=__file__)
+
 import argparse
 import hashlib
 import json
@@ -1688,6 +1691,11 @@ def extract_pdf(
     doc_scanned, scanned_pages = _classify_document(pages)
     fonts = [font_acc[key] for key in sorted(font_acc)]
     dump = {
+        # The dump is a detached artefact by design — the reference tells the
+        # caller to keep it out of the folder being delivered — so it has to
+        # say which PDF it came from. Eight of eleven dogfood composers
+        # reported having to guess this from the filename.
+        "source": str(Path(pdf_path).resolve()),
         "page_count": len(pages),
         "doc_scanned": doc_scanned,
         "scanned_pages": scanned_pages,
@@ -2111,10 +2119,17 @@ def main(argv: list[str] | None = None) -> int:
                           f"extracted file(s) in {dump['images_dir']}.")
             else:
                 missing = ", ".join(str(n) for n in unserved)
+                # The tail is conditional: on a scan every page-sized raster
+                # is dropped as a backdrop, so `images_dir` is EMPTY, and
+                # sending the reader there to find "any other page's artwork"
+                # is sending them to an empty directory (measured on an
+                # 18-page OCR'd scan).
+                tail = (f" Any other page's artwork is in "
+                        f"{dump['images_dir']}."
+                        if dump["images_summary"]["files_written"] else "")
                 remedy = (f"the diagram itself is not text and is NOT in this "
                           f"dump, and NOTHING was extracted for page(s) "
-                          f"{missing} — read those visually (preview.py). Any "
-                          f"other page's artwork is in {dump['images_dir']}.")
+                          f"{missing} — read those visually (preview.py).{tail}")
         sys.stderr.write(
             f"warning: page(s) {pages} are mostly figure (see per-page "
             f"image_coverage / vector_coverage) with little text — {remedy}\n"
@@ -2127,6 +2142,27 @@ def main(argv: list[str] | None = None) -> int:
         )
     summary = dump.get("images_summary")
     if summary is not None:
+        if summary["files_written"] == 0:
+            # `--extract-images` with an empty directory and a silent stderr is
+            # the shape of "nothing happened" this tool exists to avoid. It is
+            # the NORMAL outcome for a scan — every page is one page-sized
+            # raster and the backdrop rule drops it — so the line names that
+            # reason and the repair instead of leaving the caller to diff the
+            # dump against an empty directory. Measured on six OCR'd scans.
+            if summary["page_sized_skipped"]:
+                why = (f"all {summary['page_sized_skipped']} raster(s) were "
+                       f"page-sized backgrounds, which is what a scan looks "
+                       f"like — its repair is OCR (pdf_ocr.py), not image "
+                       f"extraction")
+            elif summary["placements"]:
+                why = (f"all {summary['placements']} placement(s) were "
+                       f"filtered — see `images_summary` for which rule")
+            else:
+                why = "the document has no extractable artwork"
+            sys.stderr.write(
+                f"warning: no artwork was written to {dump['images_dir']} — "
+                f"{why}. The directory is empty by design, not by failure.\n"
+            )
         # Report the omissions, never just the successes: a cap or a decode
         # failure that says nothing reads as "there was nothing more to get".
         if summary["undecodable"]:

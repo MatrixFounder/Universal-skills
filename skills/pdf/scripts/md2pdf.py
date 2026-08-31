@@ -29,6 +29,9 @@ to the directory containing the input Markdown file.
 
 from __future__ import annotations
 
+import _venv_bootstrap  # self-bootstrap into scripts/.venv (replicated per CLAUDE.md §2)
+_venv_bootstrap.reexec_into_venv(requires=("markdown2", "weasyprint"), _file=__file__)
+
 import argparse
 import hashlib
 import json

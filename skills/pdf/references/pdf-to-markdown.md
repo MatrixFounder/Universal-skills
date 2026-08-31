@@ -67,6 +67,8 @@ python3 scripts/pdf_extract.py report.pdf -o dump.json
 
 **Where to put the two outputs.** The dump is an *intermediate* — step 2 reads
 it, step 3 does not ship it — so keep it out of the folder you are delivering.
+It carries its own provenance: top-level `source` is the resolved path of the
+PDF it came from, so a dump that has been moved still says what it describes.
 Without `-o` it goes to stdout, which is the cleanest form of all:
 
 ```bash
@@ -492,6 +494,7 @@ Output — a structured JSON **dump** (not Markdown):
 
 ```json
 {
+  "source": "/abs/path/report.pdf",
   "page_count": 12,
   "doc_scanned": false,
   "scanned_pages": [],

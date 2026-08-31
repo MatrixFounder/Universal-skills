@@ -404,7 +404,37 @@ def build_orphanfar_pdf(path: Path) -> None:
     c.save()
 
 
+OCRLIKE_LINES = [
+    "Recognised text sitting on top of the page image, the way ocrmypdf",
+    "writes it: the raster is still page-sized, so no artwork can be",
+    "extracted from this page, and the run has to say so out loud.",
+]
+
 ONECOL_TABLE = [["Показатель"], ["Доступность"], ["RTO"], ["RPO"]]
+
+
+def build_ocrlike_pdf(path: Path) -> None:
+    """A page-sized raster WITH a text layer over it — the shape of a scan that
+    has already been through `pdf_ocr.py`.
+
+    `scanlike.pdf` cannot cover this: it has no text, so it exits 10 and the
+    image warnings are deliberately suppressed on that path. After OCR the same
+    document exits 0, and then `--extract-images` writes nothing (its only
+    raster is a page-sized background) while the directory it created stays
+    empty. Six documents in one dogfood run landed exactly here, and the run
+    said nothing at all — which is what this fixture now keeps from coming
+    back."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    png = path.parent / "_ocrlike_page.png"
+    Image.new("RGB", (850, 1100), "white").save(png)
+    c = canvas.Canvas(str(path), pagesize=letter)
+    c.drawImage(str(png), 0, 0, width=letter[0], height=letter[1])
+    c.setFont("Helvetica", 11)
+    for i, line in enumerate(OCRLIKE_LINES):
+        c.drawString(72, 700 - i * 16, line)
+    c.showPage()
+    c.save()
+    png.unlink(missing_ok=True)
 
 
 def build_onecol_pdf(path: Path) -> None:
@@ -792,6 +822,7 @@ def build_all(fixtures_dir: Path) -> dict[str, Path]:
         "hugedecl": fixtures_dir / "hugedecl.pdf",
         "onecol": fixtures_dir / "onecol.pdf",
         "orphanfar": fixtures_dir / "orphanfar.pdf",
+        "ocrlike": fixtures_dir / "ocrlike.pdf",
     }
     build_digital_pdf(paths["digital"])
     build_scanlike_pdf(paths["scanlike"])
@@ -809,6 +840,7 @@ def build_all(fixtures_dir: Path) -> dict[str, Path]:
     build_hugedecl_pdf(paths["hugedecl"])
     build_onecol_pdf(paths["onecol"])
     build_orphanfar_pdf(paths["orphanfar"])
+    build_ocrlike_pdf(paths["ocrlike"])
     return paths
 
 

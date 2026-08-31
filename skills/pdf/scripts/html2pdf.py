@@ -56,6 +56,9 @@ public contract; the package layout is internal and may evolve.
 """
 from __future__ import annotations
 
+import _venv_bootstrap  # self-bootstrap into scripts/.venv (replicated per CLAUDE.md §2)
+_venv_bootstrap.reexec_into_venv(requires=("weasyprint",), _file=__file__)
+
 import argparse
 import json
 import os
