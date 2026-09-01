@@ -333,3 +333,225 @@ def report_error(
             stream.write("\n")
     stream.flush()
     return code
+
+
+# --------------------------------------------------------------------- #
+# The HUMAN channel — the opposite contract to write_json_stdout
+# --------------------------------------------------------------------- #
+#
+# Everything above this line serves MACHINE readers, and its rule is that the
+# caller's locale must not get a vote: JSON is UTF-8 by RFC 8259 §8.1, so
+# `write_json_stdout` pushes UTF-8 bytes at `sys.stdout.buffer` and the
+# `--json-errors` envelope is ASCII-only.
+#
+# Reports, status lines and `--help` are the other half, and their rule is
+# inverted: they must OBEY the caller's codec. Writing UTF-8 into a terminal
+# that declared cp1252 is mojibake, not robustness.
+#
+# Until this block existed they obeyed it by dying. The two standard streams
+# get different error handlers — stderr is always `backslashreplace`, stdout is
+# `surrogateescape` (or `strict` when PYTHONIOENCODING is set):
+#
+#     LC_ALL=C                 stdout ascii/surrogateescape  stderr ascii/backslashreplace
+#     PYTHONIOENCODING=ascii   stdout ascii/strict           stderr ascii/backslashreplace
+#
+# Only `backslashreplace` can represent an arbitrary unencodable character.
+# `surrogateescape` rescues lone surrogates and nothing else, so it raises on
+# an em dash exactly as `strict` does. One `—` in a report heading, or in an
+# argparse `help=` string, therefore takes the whole command down — measured at
+# 0 bytes of output and a non-zero exit on a clean install.
+#
+# Issue: docs/issues/human-cli-output-locale-class.md. The same fix shipped
+# first in `skills/transcript-fetcher/scripts/_human.py`, which is a separate
+# stdlib-only module rather than a sixth copy of this one: that skill is
+# Apache-2.0 and this file is proprietary (CLAUDE.md §3). The two are
+# deliberately the same shape so a reader can compare them; neither imports
+# the other, and this one answers to the office replication protocol.
+
+#: ASCII spellings for the decoration these skills actually print, plus the
+#: punctuation a future edit most plausibly reaches for. A FALLBACK table, not
+#: a transliterator: consulted only for characters the caller's codec has
+#: already rejected, and anything missing from it degrades to a
+#: `backslashreplace` escape rather than being dropped.
+_ASCII_FALLBACK = {
+    "—": "--",   # em dash            headings, help text, labels
+    "–": "-",    # en dash
+    "…": "...",  # ellipsis
+    "→": "->",   # rightwards arrow   hints, before/after lines
+    "←": "<-",
+    "✓": "+",    # check mark         pass / present
+    "✔": "+",
+    "✗": "x",    # ballot x           fail / missing
+    "✘": "x",
+    "×": "x",    # multiplication sign
+    "⚠": "!",    # warning sign
+    "•": "*",    # bullet
+    "§": "S",    # section sign       ECMA-376 references
+    "±": "+/-",
+    "≥": ">=",
+    "≤": "<=",
+    "≠": "!=",
+    "°": " deg",
+    "‘": "'",
+    "’": "'",
+    "“": '"',
+    "”": '"',
+    " ": " ",  # non-breaking space
+}
+
+
+def _usable_codec(encoding: object) -> bool:
+    """Can `str.encode` actually use this codec name?
+
+    Distinct from `_text_encodable`, which asks about a *string*. This asks
+    about the *codec*, and the difference matters: a stream may report a name
+    that is unknown, empty, not a `str` at all, or a bytes-to-bytes codec such
+    as `base64` that `str.encode` refuses outright. In every one of those cases
+    each `encode` below would raise, i.e. the crash this block exists to
+    prevent, thrown from inside the preventer.
+    """
+    try:
+        "".encode(encoding)  # type: ignore[arg-type]
+    except (LookupError, TypeError):
+        return False
+    return True
+
+
+def _text_encodable(text: str, encoding: str) -> bool:
+    """Can `encoding` represent every character of `text`?
+
+    `LookupError` and `TypeError` count as "no" for the same reason
+    `_usable_codec` exists: `.encoding` is only conventionally a valid codec
+    name, and guessing is worse than degrading.
+    """
+    try:
+        text.encode(encoding)
+    except (UnicodeError, LookupError, TypeError):
+        return False
+    return True
+
+
+def ascii_fallback(text: str, encoding: str) -> str:
+    """Return `text` reduced to something `encoding` can represent.
+
+    Pure and side-effect free, so it is testable without a stream.
+
+    The fast path is the point: a string the codec already accepts comes back
+    unchanged, by identity. That is the UTF-8 case — nearly every real run —
+    and it is why this fix moves no bytes on a correctly configured machine.
+
+    The slow path is per character, so a codec keeps everything it can carry:
+    `café — ✓` under cp1252 keeps both the é and the em dash (0x97) and
+    degrades only the check mark. The final re-check is a backstop for stateful
+    codecs (ISO-2022-JP and friends), where "each character encodes" does not
+    strictly imply "the string encodes".
+    """
+    if not _usable_codec(encoding):
+        encoding = "ascii"
+    if _text_encodable(text, encoding):
+        return text
+    out = []
+    for ch in text:
+        if _text_encodable(ch, encoding):
+            out.append(ch)
+            continue
+        replacement = _ASCII_FALLBACK.get(ch)
+        if replacement is not None and _text_encodable(replacement, encoding):
+            out.append(replacement)
+        else:
+            out.append(ch.encode(encoding, "backslashreplace").decode(encoding, "replace"))
+    joined = "".join(out)
+    if _text_encodable(joined, encoding):
+        return joined
+    return text.encode(encoding, "backslashreplace").decode(encoding, "replace")
+
+
+def say(
+    *values: Any,
+    sep: str | None = None,
+    end: str | None = None,
+    file: IO[str] | None = None,
+    flush: bool = True,
+) -> None:
+    """`print()` for the human channel: it cannot raise `UnicodeEncodeError`
+    and it does not lie about the exit status.
+
+    Stays on the TEXT layer, unlike `write_json_stdout`, which bypasses it to
+    force UTF-8 bytes. The asymmetry IS the contract: the machine channel
+    overrides the caller's codec, the human channel obeys it. Staying on the
+    text layer also preserves newline translation and lets an in-process test
+    capture output with a plain `StringIO`.
+
+    A sink with no `encoding` attribute (a `StringIO`, a wrapper's proxy) is a
+    pure-`str` sink that can hold anything, so nothing is degraded for it.
+
+    The parameter is `file`, exactly as in `print`, because every call site is
+    a converted `print` and the migration is mechanical. Naming it anything
+    else turns a converted `print(..., file=sys.stderr)` into a `TypeError` on
+    whatever branch it sits on — a bug that was actually written, and only
+    caught by a test, while this was being ported to transcript-fetcher.
+
+    `file=None` resolves to `sys.stdout` at CALL time, not import time,
+    because tests patch it.
+
+    The flush defaults to True, unlike `print`, and that is load-bearing:
+    `print` leaves stdout block-buffered into a pipe, so without it a dead
+    reader surfaces not here but in the interpreter's shutdown flush — the very
+    path that replaces the exit status with 120.
+    """
+    sep = " " if sep is None else sep
+    end = "\n" if end is None else end
+    target = sys.stdout if file is None else file
+    if target is None:
+        # `prog >&-`: fd 1 was closed before the process started, so CPython
+        # sets sys.stdout to None and print() is a silent no-op. Match that.
+        # `write_json_stdout` raises here instead — a dropped JSON record is a
+        # broken promise, a dropped progress line is not.
+        return
+    text = sep.join(str(v) for v in values) + end
+    encoding = getattr(target, "encoding", None)
+    if encoding:
+        text = ascii_fallback(text, encoding)
+    try:
+        target.write(text)
+        if flush:
+            target.flush()
+    except BrokenPipeError:
+        abandon_stdout(target)
+        raise
+
+
+class HumanArgumentParser(argparse.ArgumentParser):
+    """`ArgumentParser` whose `--help` survives the caller's locale.
+
+    `help=` and `description=` strings are prose, so they collect the same
+    `—`/`→`/`…`/`§` as any other prose, and argparse writes them with a bare
+    `file.write`. Its own guard catches `AttributeError` and `OSError` but not
+    `UnicodeEncodeError`, so a single em dash anywhere in a listing takes the
+    whole listing down. `--help` is the most-run human command there is, and no
+    audit of `print()` call sites finds it, because the skill's own code never
+    does the writing.
+
+    `_print_message` is the single funnel for `print_help`, `print_usage`,
+    `error` and `exit`; overriding it covers all four, where patching the
+    public methods would still miss `exit`. It is private by name but has been
+    stable since argparse entered the stdlib, and the docx test-suite asserts
+    the funnel still exists so a future CPython breaks a test rather than
+    production.
+
+    Composes with `add_json_errors_argument`, which patches `parser.error` on
+    the instance: with `--json-errors` a usage error leaves as an ASCII-only
+    envelope, without it the fall-through lands here.
+
+    The `except` reproduces argparse's own contract — printing help must not
+    raise — with the one difference that `say` has already pointed a dead fd at
+    /dev/null, so the shutdown flush can no longer rewrite the exit status.
+    """
+
+    def _print_message(self, message: str, file: IO[str] | None = None) -> None:
+        if not message:
+            return
+        try:
+            say(message, end="", file=file if file is not None else sys.stderr)
+        except (AttributeError, OSError):
+            pass

@@ -31,7 +31,7 @@ from pathlib import Path
 
 from openpyxl import load_workbook  # type: ignore
 
-from _errors import add_json_errors_argument, report_error, write_json_stdout
+from _errors import HumanArgumentParser, add_json_errors_argument, report_error, say, write_json_stdout
 from office._encryption import EncryptedFileError, assert_not_encrypted
 
 
@@ -64,7 +64,7 @@ def scan(input_path: Path) -> tuple[dict[str, list[str]], int]:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser = HumanArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("input", type=Path, help="Source .xlsx")
     parser.add_argument("--json", action="store_true", help="Emit JSON report")
     parser.add_argument(
@@ -116,12 +116,12 @@ def main(argv: list[str] | None = None) -> int:
             )
     else:
         if not hits:
-            print(f"OK — {non_empty} non-empty cells, no formula errors.")
+            say(f"OK — {non_empty} non-empty cells, no formula errors.")
         else:
             total = sum(len(v) for v in hits.values())
-            print(f"{total} formula-error cells across {len(hits)} error types:")
+            say(f"{total} formula-error cells across {len(hits)} error types:")
             for code, cells in hits.items():
-                print(f"  {code}: {len(cells)} — {', '.join(cells[:10])}"
+                say(f"  {code}: {len(cells)} — {', '.join(cells[:10])}"
                       + ("..." if len(cells) > 10 else ""))
 
     if hits:

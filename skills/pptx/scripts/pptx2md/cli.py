@@ -34,7 +34,7 @@ _DEFAULT_OCR_LANG = "eng+rus"
 # --------------------------------------------------------------------------- #
 def build_parser() -> argparse.ArgumentParser:
     """Construct the full CLI surface. Defaults are the 020-01 frozen baseline."""
-    p = argparse.ArgumentParser(
+    p = _errors.HumanArgumentParser(
         prog="pptx2md.py",
         description="TASK 020: Convert a .pptx/.pptm deck into structured Markdown.",
         epilog=(

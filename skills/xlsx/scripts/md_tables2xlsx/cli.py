@@ -10,7 +10,7 @@ import argparse
 import sys
 from pathlib import Path
 
-from _errors import add_json_errors_argument, report_error
+from _errors import HumanArgumentParser, add_json_errors_argument, report_error
 
 from .cli_helpers import (
     assert_distinct_paths,
@@ -40,7 +40,7 @@ from .writer import ParsedTable, WriterOptions, write_workbook
 
 def build_parser() -> argparse.ArgumentParser:
     """Construct the argparse surface. Locked at 8 flags per TASK §9."""
-    parser = argparse.ArgumentParser(
+    parser = HumanArgumentParser(
         description=(
             "Convert markdown tables to a multi-sheet .xlsx workbook. "
             "Two table flavors auto-detected: GFM pipe tables (with "

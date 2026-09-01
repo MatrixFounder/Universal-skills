@@ -45,7 +45,7 @@ from pathlib import Path
 import markdown2  # type: ignore
 from weasyprint import CSS, HTML  # type: ignore
 
-from _errors import add_json_errors_argument, report_error
+from _errors import HumanArgumentParser, add_json_errors_argument, report_error, say
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 LOCAL_BIN = SCRIPT_DIR / "node_modules" / ".bin"
@@ -173,7 +173,7 @@ def preprocess_mermaid(
     out = MERMAID_BLOCK_RE.sub(replace, md_text)
     if rendered:
         note = f" ({failures} failed)" if failures else ""
-        print(f"[md2pdf] Rendered {rendered} mermaid diagram(s) to {assets_dir}{note}.")
+        say(f"[md2pdf] Rendered {rendered} mermaid diagram(s) to {assets_dir}{note}.")
     return out
 
 
@@ -477,7 +477,7 @@ def convert(
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser = HumanArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("input", type=Path, help="Source .md file")
     parser.add_argument("output", type=Path, help="Destination .pdf file")
     parser.add_argument("--page-size", choices=list(PAGE_SIZES.keys()), default="letter")

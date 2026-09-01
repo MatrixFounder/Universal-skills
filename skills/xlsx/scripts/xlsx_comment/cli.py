@@ -26,7 +26,7 @@ from lxml import etree  # type: ignore
 
 # Cross-skill helpers (live at skills/xlsx/scripts/ — sys.path-resolved
 # from the shim entry point).
-from _errors import add_json_errors_argument, report_error
+from _errors import HumanArgumentParser, add_json_errors_argument, report_error
 from office._encryption import EncryptedFileError, assert_not_encrypted
 from office._macros import warn_if_macros_will_be_dropped
 from office.pack import pack
@@ -117,7 +117,7 @@ def build_parser() -> argparse.ArgumentParser:
     # After the F1 migration to cli.py, `__doc__` here refers to the
     # internal cli.py docstring — pinning the literal preserves the
     # baseline `--help` byte-for-byte (TASK 002 R2 / TC-E2E-02).
-    parser = argparse.ArgumentParser(
+    parser = HumanArgumentParser(
         description="Insert a Microsoft Excel comment into a target cell of a .xlsx workbook.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )

@@ -97,7 +97,7 @@ from pathlib import Path
 from docx.oxml.ns import qn  # type: ignore
 from lxml import etree  # type: ignore
 
-from _errors import add_json_errors_argument, report_error
+from _errors import HumanArgumentParser, add_json_errors_argument, report_error
 
 # Hardened XML parser — mirrors office/validators/base.py; defangs XXE /
 # external-entity expansion + DTD-based attacks (CWE-611). Used for every
@@ -852,7 +852,7 @@ def add_comment(
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser = HumanArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("input", type=Path, nargs="?",
                         help="Source .docx file (omit when using --unpacked-dir).")
     parser.add_argument("output", type=Path, nargs="?",

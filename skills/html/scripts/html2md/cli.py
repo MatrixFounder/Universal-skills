@@ -84,7 +84,7 @@ _VERB_HELP = (
 # --------------------------------------------------------------------------- #
 def build_parser() -> argparse.ArgumentParser:
     """Construct the full CLI surface. Defaults are the 022-01 frozen baseline."""
-    p = argparse.ArgumentParser(
+    p = _errors.HumanArgumentParser(
         prog="html",
         description="TASK 022: Convert a web URL or saved HTML/MHTML/webarchive into Markdown.",
         epilog=(
@@ -475,7 +475,7 @@ def _login_main(argv: list[str]) -> int:
     """``html login URL [--save-state PATH]`` — mint a Playwright ``storage_state`` via a
     HEADFUL browser (TASK 024 R3): the one interactive step; runtime is always headless. The
     surface is frozen here (024-01); the actual render lands in 024-04."""
-    p = argparse.ArgumentParser(
+    p = _errors.HumanArgumentParser(
         prog="html login",
         description="Open URL in a headful browser, log in by hand (2FA ok), then save the "
                     "session as a storage_state JSON (chmod 0600) for --chrome-storage-state.")
@@ -711,7 +711,7 @@ def _get_main(argv: list[str]) -> int:
     holds a PREFIX; reporting 0 there would be the undetectable truncation the file path
     exists to exclude).
     """
-    parser = argparse.ArgumentParser(
+    parser = _errors.HumanArgumentParser(
         prog="html get",
         description="Download URL to OUTPUT_PATH as raw bytes, through the SSRF-guarded "
                     "fetch ladder. No conversion, no content sniffing.")

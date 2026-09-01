@@ -47,7 +47,7 @@ import textwrap
 import zipfile
 from pathlib import Path
 
-from _errors import add_json_errors_argument, report_error
+from _errors import HumanArgumentParser, add_json_errors_argument, report_error
 from _soffice import SofficeError, run as soffice_run
 from office._encryption import EncryptedFileError, assert_not_encrypted
 from office._macros import warn_if_macros_will_be_dropped
@@ -185,7 +185,7 @@ def accept_changes(input_path: Path, output_path: Path, *, timeout: int) -> None
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser = HumanArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("input", type=Path, help="Source .docx file")
     parser.add_argument("output", type=Path, help="Destination .docx with changes accepted")
     parser.add_argument("--timeout", type=int, default=120, help="soffice timeout in seconds (default 120)")

@@ -53,7 +53,7 @@ HERE = Path(__file__).resolve().parent
 SCRIPTS = HERE.parent / "scripts"  # skills/docx/scripts
 sys.path.insert(0, str(SCRIPTS))
 
-from _errors import write_json_stdout  # noqa: E402  (needs SCRIPTS on sys.path)
+from _errors import HumanArgumentParser, write_json_stdout  # noqa: E402  (needs SCRIPTS on sys.path)
 
 # Production gate — IMPORTED, never copied (guide §7.1).
 from docx_accept_changes import (  # noqa: E402
@@ -402,7 +402,7 @@ def selftest() -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser = HumanArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--case")
     parser.add_argument("--run-dir", type=Path)
     parser.add_argument("--workspace", type=Path)

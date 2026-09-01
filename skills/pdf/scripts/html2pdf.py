@@ -69,7 +69,7 @@ from pathlib import Path
 
 from md2pdf import PAGE_SIZES
 
-from _errors import add_json_errors_argument, report_error
+from _errors import HumanArgumentParser, add_json_errors_argument, report_error
 from html2pdf_lib import (
     ChromeEngineUnavailable,
     RenderTimeout,
@@ -102,7 +102,7 @@ def _print_frames(frames, dest=sys.stdout) -> None:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser = HumanArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument(
         "input", type=Path,
         help="Source file: .html/.htm, .mhtml/.mht, or .webarchive",

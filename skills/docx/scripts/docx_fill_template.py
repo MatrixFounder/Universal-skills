@@ -37,7 +37,7 @@ from docx import Document  # type: ignore
 from docx.oxml.ns import qn  # type: ignore
 from lxml import etree  # type: ignore
 
-from _errors import add_json_errors_argument, report_error
+from _errors import HumanArgumentParser, add_json_errors_argument, report_error
 from office._encryption import EncryptedFileError, assert_not_encrypted
 from office._macros import warn_if_macros_will_be_dropped
 
@@ -169,7 +169,7 @@ def fill_template(template: Path, data: dict[str, Any], output: Path) -> set[str
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser = HumanArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("template", type=Path, help="Source .docx template with {{placeholders}}")
     parser.add_argument("data", type=Path, help="JSON file with key/value substitutions")
     parser.add_argument("output", type=Path, help="Destination .docx file")

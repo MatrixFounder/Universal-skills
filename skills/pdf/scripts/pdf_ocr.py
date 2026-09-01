@@ -63,7 +63,7 @@ import sys
 import tempfile
 from pathlib import Path
 
-from _errors import add_json_errors_argument, report_error
+from _errors import HumanArgumentParser, add_json_errors_argument, report_error, say
 
 # A CLI owns its stderr: with --json-errors a wrapper parses stderr as JSON.
 # The OCR engine libraries emit free-text progress/warnings — silence them so
@@ -101,7 +101,7 @@ class _OcrError(Exception):
 def _build_parser() -> argparse.ArgumentParser:
     """Construct the argparse CLI. REAL from the stub phase — the smoke test
     asserts the `--help` surface; the mode group enforces the mutex."""
-    parser = argparse.ArgumentParser(
+    parser = HumanArgumentParser(
         prog="pdf_ocr.py",
         description=(
             "OCR a scanned (image-only) PDF into a searchable PDF (default "
@@ -596,7 +596,7 @@ def main(argv: list[str] | None = None) -> int:
         + (f", sidecar={sidecar}" if sidecar is not None else "")
         + ")"
     )
-    print(summary)
+    say(summary)
     return code
 
 

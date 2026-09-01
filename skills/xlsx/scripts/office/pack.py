@@ -31,6 +31,7 @@ import argparse
 import sys
 import zipfile
 from pathlib import Path
+from _errors import HumanArgumentParser  # noqa: E402
 
 from lxml import etree  # type: ignore
 
@@ -144,7 +145,7 @@ def pack(
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser = HumanArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("input_dir", type=Path, help="Unpacked directory tree")
     parser.add_argument("output", type=Path, help="Destination .docx/.xlsx/.pptx file")
     parser.add_argument("--no-unescape-quotes", action="store_true", help="Keep smart-quote entities as-is")

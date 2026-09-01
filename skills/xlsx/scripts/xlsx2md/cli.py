@@ -96,7 +96,7 @@ def build_parser() -> argparse.ArgumentParser:
         locked per ARCH §5.1 — future tasks must not change defaults here
         (they are the 012-08 no-flag shape pin regression baseline).
     """
-    p = argparse.ArgumentParser(
+    p = _errors.HumanArgumentParser(
         prog="xlsx2md.py",
         description="xlsx-9: Convert an .xlsx workbook into Markdown.",
         epilog=(

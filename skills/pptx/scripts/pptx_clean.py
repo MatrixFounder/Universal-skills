@@ -48,7 +48,7 @@ from pathlib import Path
 
 from lxml import etree  # type: ignore
 
-from _errors import add_json_errors_argument, report_error, write_json_stdout
+from _errors import HumanArgumentParser, add_json_errors_argument, report_error, write_json_stdout
 from office._encryption import EncryptedFileError, assert_not_encrypted
 from office._macros import warn_if_macros_will_be_dropped
 
@@ -250,7 +250,7 @@ def clean(input_path: Path, output_path: Path | None, *, dry_run: bool) -> dict:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser = HumanArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("input", type=Path, help="Source .pptx")
     parser.add_argument("--output", type=Path, default=None,
                         help="Destination .pptx (default: overwrite INPUT).")

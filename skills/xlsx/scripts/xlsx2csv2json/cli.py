@@ -187,7 +187,7 @@ def build_parser(*, format_lock: str | None) -> argparse.ArgumentParser:
     elif format_lock == "json":
         prog = "xlsx2json.py"
 
-    parser = argparse.ArgumentParser(
+    parser = _errors.HumanArgumentParser(
         prog=prog,
         description=(
             "Convert an .xlsx workbook into CSV or JSON. "

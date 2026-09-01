@@ -45,7 +45,7 @@ import argparse
 import sys
 from pathlib import Path
 
-from _errors import add_json_errors_argument, report_error
+from _errors import HumanArgumentParser, add_json_errors_argument, report_error
 from office._encryption import is_cfb_container
 
 
@@ -429,7 +429,7 @@ def cmd_decrypt(
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(
+    parser = HumanArgumentParser(
         prog="office_passwd",
         description=(
             "Set or remove password protection on .docx/.xlsx/.pptx files "

@@ -29,7 +29,7 @@ import tempfile
 from pathlib import Path
 from typing import Iterator
 
-from _errors import add_json_errors_argument, report_error
+from _errors import HumanArgumentParser, add_json_errors_argument, report_error
 from _app_errors import (
     _AppError,
     AnchorNotFound,
@@ -443,7 +443,7 @@ def build_parser() -> argparse.ArgumentParser:
     (R10.b + R10.e CLOSED in docx-008: --insert-after relocates images,
     charts, OLE, SmartArt, and numbered/bulleted lists into the base.)
     """
-    parser = argparse.ArgumentParser(
+    parser = HumanArgumentParser(
         prog="docx_replace.py",
         description=(
             "Replace, insert after, or delete paragraphs in .docx files.\n\n"

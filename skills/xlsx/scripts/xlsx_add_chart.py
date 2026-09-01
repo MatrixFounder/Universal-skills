@@ -40,7 +40,7 @@ from openpyxl import load_workbook  # type: ignore
 from openpyxl.chart import BarChart, LineChart, PieChart, Reference  # type: ignore
 from openpyxl.utils import column_index_from_string, get_column_letter  # type: ignore
 
-from _errors import add_json_errors_argument, report_error, write_json_stdout
+from _errors import HumanArgumentParser, add_json_errors_argument, report_error, write_json_stdout
 from office._encryption import EncryptedFileError, assert_not_encrypted
 from office._macros import warn_if_macros_will_be_dropped
 
@@ -168,7 +168,7 @@ def add_chart(
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser = HumanArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("input", type=Path, help="Source .xlsx")
     parser.add_argument("--type", required=True, choices=list(CHART_TYPES),
                         help="Chart kind: bar, line, or pie.")
