@@ -323,5 +323,86 @@ class TestEnvelopeEncoding(unittest.TestCase):
         self.assertEqual(legacy, native)
 
 
+
+class TestWriteTextStdout(unittest.TestCase):
+    """Non-JSON MACHINE output — a TSV row, a listing a tool greps. Same byte
+    contract as the JSON writer, minus the serialisation."""
+
+    def test_bytes_do_not_depend_on_the_stream_codec(self):
+        row = "0\tmain\tyes\thttps://ex.com/\u0441\u0442\u0440-caf\u00e9"
+        seen = set()
+        for enc in ("utf-8", "ascii", "cp1251", "cp1252"):
+            with self.subTest(encoding=enc):
+                sink = io.TextIOWrapper(io.BytesIO(), encoding=enc, errors="strict")
+                _errors.write_text_stdout(row, stream=sink)
+                raw = sink.buffer.getvalue()
+                seen.add(raw)
+                self.assertEqual(raw.decode("utf-8"), row + "\n")
+        self.assertEqual(len(seen), 1, "the same row produced different bytes")
+
+    def test_a_strict_ascii_stream_would_have_raised_with_print(self):
+        """The defect, restated: this is why the TSV writer exists."""
+        sink = io.TextIOWrapper(io.BytesIO(), encoding="ascii", errors="strict")
+        with self.assertRaises(UnicodeEncodeError):
+            print("url\thttps://ex.com/\u0441\u0442\u0440", file=sink)
+            sink.flush()
+
+    def test_newline_can_be_suppressed(self):
+        sink = io.TextIOWrapper(io.BytesIO(), encoding="ascii", errors="strict")
+        _errors.write_text_stdout("row", newline=False, stream=sink)
+        self.assertEqual(sink.buffer.getvalue(), b"row")
+
+
+class TestWritePathStdout(unittest.TestCase):
+    """A path list is a MACHINE channel (`skills/pdf/SKILL.md`: "All stdout goes
+    to the output path list"), and it needs `os.fsencode`, not UTF-8.
+
+    The distinction is not pedantry. POSIX filenames are bytes; Python carries
+    an undecodable one as a lone surrogate. `os.fsencode` turns it back into
+    the ORIGINAL bytes, so the path the caller captures actually opens.
+    `.encode("utf-8")` raises on it, and `say()` would degrade it to a
+    plausible-looking string that opens nothing.
+    """
+
+    def test_bytes_do_not_depend_on_the_stream_codec(self):
+        path = "/tmp/\u0442\u0435\u0441\u0442-caf\u00e9/out.pdf"
+        seen = set()
+        for enc in ("utf-8", "ascii", "cp1251"):
+            with self.subTest(encoding=enc):
+                sink = io.TextIOWrapper(io.BytesIO(), encoding=enc, errors="strict")
+                _errors.write_path_stdout(path, stream=sink)
+                seen.add(sink.buffer.getvalue())
+        self.assertEqual(len(seen), 1)
+        self.assertEqual(seen.pop(), os.fsencode(path) + b"\n")
+
+    def test_the_emitted_path_actually_opens(self):
+        """The property that matters. A transliterated path would pass a
+        "did it print something" test and still be useless."""
+        with tempfile.TemporaryDirectory() as d:
+            target = Path(d) / "\u0442\u0435\u0441\u0442-caf\u00e9.pdf"
+            target.write_bytes(b"%PDF-1.4\n")
+            sink = io.TextIOWrapper(io.BytesIO(), encoding="ascii", errors="strict")
+            _errors.write_path_stdout(target, stream=sink)
+            emitted = os.fsdecode(sink.buffer.getvalue().rstrip(b"\n"))
+            self.assertTrue(Path(emitted).is_file(), f"emitted path does not open: {emitted!r}")
+
+    def test_an_undecodable_filename_round_trips(self):
+        """`.encode("utf-8")` cannot do this — the whole reason for fsencode."""
+        path = "/tmp/out\udcff.pdf"
+        with self.assertRaises(UnicodeEncodeError):
+            path.encode("utf-8")
+        sink = io.TextIOWrapper(io.BytesIO(), encoding="ascii", errors="strict")
+        _errors.write_path_stdout(path, stream=sink)
+        self.assertEqual(sink.buffer.getvalue(), os.fsencode(path) + b"\n")
+
+    def test_a_dead_pipe_is_reported_not_swallowed(self):
+        read_fd, write_fd = os.pipe()
+        os.close(read_fd)
+        sink = io.TextIOWrapper(open(write_fd, "wb", buffering=0), encoding="ascii")
+        self.addCleanup(sink.close)
+        with self.assertRaises(BrokenPipeError):
+            _errors.write_path_stdout("/tmp/x.pdf", stream=sink)
+
+
 if __name__ == "__main__":
     unittest.main()

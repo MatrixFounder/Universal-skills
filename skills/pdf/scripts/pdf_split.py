@@ -31,7 +31,7 @@ from pathlib import Path
 
 from pypdf import PdfReader, PdfWriter  # type: ignore
 
-from _errors import HumanArgumentParser, add_json_errors_argument, report_error
+from _errors import HumanArgumentParser, add_json_errors_argument, report_error, write_path_stdout
 
 
 def _parse_ranges(spec: str) -> list[tuple[int, int, Path]]:
@@ -155,7 +155,10 @@ def main(argv: list[str] | None = None) -> int:
         )
 
     for p in written:
-        print(str(p))
+        # MACHINE channel: SKILL.md declares stdout to be the output-path list,
+        # so this must be byte-exact regardless of locale. `print` used to raise
+        # here AFTER every chunk was already written to disk.
+        write_path_stdout(p)
     return 0
 
 

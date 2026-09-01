@@ -69,7 +69,7 @@ from pathlib import Path
 
 from md2pdf import PAGE_SIZES
 
-from _errors import HumanArgumentParser, add_json_errors_argument, report_error
+from _errors import HumanArgumentParser, add_json_errors_argument, report_error, write_text_stdout
 from html2pdf_lib import (
     ChromeEngineUnavailable,
     RenderTimeout,
@@ -92,12 +92,15 @@ def _print_frames(frames, dest=sys.stdout) -> None:
     parsing — a downstream tool that wants e.g. "the first substantial
     subframe" can `awk -F'\\t' '$3=="yes" && $2=="subframe"'`.
     """
-    print(f"index\tkind\tsubstantial\tbytes\tscripts\ttext\turl", file=dest)
+    # MACHINE channel: the docstring above promises grep/awk can parse this,
+    # so the URL column must survive the caller's locale byte-for-byte. `say`
+    # would transliterate the very field awk matches on.
+    write_text_stdout("index\tkind\tsubstantial\tbytes\tscripts\ttext\turl", stream=dest)
     for f in frames:
-        print(
+        write_text_stdout(
             f"{f.index}\t{f.kind}\t{'yes' if f.substantial else 'no'}\t"
             f"{f.bytes}\t{f.scripts}\t{f.text_len}\t{f.url}",
-            file=dest,
+            stream=dest,
         )
 
 

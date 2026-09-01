@@ -24,6 +24,12 @@ import sys
 import tempfile
 from pathlib import Path
 
+# `_errors` lives at scripts/_errors.py, one level up from tests/. Progress
+# output interpolates fixture FILENAMES, so it goes through the
+# locale-tolerant writer rather than bare say().
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from _errors import HumanArgumentParser, say  # noqa: E402
+
 HERE = Path(__file__).resolve().parent          # scripts/tests/
 SCRIPTS = HERE.parent                            # scripts/
 SKILL = SCRIPTS.parent                           # skills/html/
@@ -96,11 +102,11 @@ def build() -> dict:
     sig: dict = {}
     for name, spec in FIXTURES.items():
         if not spec["path"].exists():
-            print(f"  skip (absent): {name}", file=sys.stderr)
+            say(f"  skip (absent): {name}", file=sys.stderr)
             continue
         whole, reader = convert(spec["path"])
         if whole is None:
-            print(f"  FAIL convert: {name}", file=sys.stderr)
+            say(f"  FAIL convert: {name}", file=sys.stderr)
             continue
         sig[name] = {
             "platform": spec["platform"],
@@ -108,20 +114,20 @@ def build() -> dict:
             "reader": metrics(reader) if reader else None,
         }
         m = sig[name]["whole"]
-        print(f"  captured {name}: lines={m['lines']} headings={m['headings']} "
+        say(f"  captured {name}: lines={m['lines']} headings={m['headings']} "
               f"table_rows={m['table_rows']} empty_headings={m['empty_headings']} "
               f"stray_chrome={m['stray_chrome']}")
     return sig
 
 
 def main() -> None:
-    ap = argparse.ArgumentParser(description=__doc__)
+    ap = HumanArgumentParser(description=__doc__)
     ap.add_argument("--refresh", action="store_true", help="write battery_signatures.json")
     args = ap.parse_args()
     sig = build()
     if args.refresh:
         SIG_PATH.write_text(json.dumps(sig, indent=1, ensure_ascii=False) + "\n", encoding="utf-8")
-        print(f"wrote {SIG_PATH} ({len(sig)} fixtures)")
+        say(f"wrote {SIG_PATH} ({len(sig)} fixtures)")
 
 
 if __name__ == "__main__":

@@ -112,6 +112,83 @@ def abandon_stdout(stream: IO[str] | None = None) -> None:
         pass
 
 
+def _utf8(text: str) -> bytes:
+    return text.encode("utf-8")
+
+
+def _write_encoded_stdout(
+    text: str,
+    encode: Callable[[str], bytes],
+    stream: IO[str] | None = None,
+) -> None:
+    """Shared tail of every MACHINE-channel write: bytes to the fd, chosen by
+    `encode`, never by the process locale.
+
+    Factored out of `write_json_stdout` when the path-list writers below
+    needed exactly the same four guarantees and differed only in how text
+    becomes bytes.
+    """
+    target = sys.stdout if stream is None else stream
+    if target is None:
+        # fd 1 was closed before the process even started (`prog >&-`): CPython
+        # sets `sys.stdout` to None and makes `print()` a silent no-op — the one
+        # outcome this module exists to prevent. Report it as the sink being
+        # gone, which is exactly what every caller's BrokenPipeError arm already
+        # says, rather than dying on an AttributeError three frames down.
+        raise BrokenPipeError(errno.EBADF, "stdout is closed")
+    buffer = getattr(target, "buffer", None)
+    try:
+        if buffer is None:
+            target.write(text)
+            target.flush()
+            return
+        # Anything already queued on the text layer must reach the fd before
+        # our bytes do, or the two layers interleave out of order.
+        target.flush()
+        buffer.write(encode(text))
+        buffer.flush()
+    except BrokenPipeError:
+        abandon_stdout(target)
+        raise
+
+
+def write_text_stdout(
+    text: str,
+    *,
+    newline: bool = True,
+    stream: IO[str] | None = None,
+) -> None:
+    """Write non-JSON MACHINE output — a TSV row, a listing a tool greps — as
+    UTF-8 bytes, independent of the caller's locale.
+
+    Same contract as `write_json_stdout`, minus the serialisation. Use it
+    wherever a program, not a person, consumes the line: transliterating it
+    through `say` would corrupt the very field the consumer matches on.
+    """
+    _write_encoded_stdout(text + ("\n" if newline else ""), _utf8, stream)
+
+
+def write_path_stdout(path: object, *, stream: IO[str] | None = None) -> None:
+    """Write one filesystem path to stdout, byte-exactly.
+
+    `os.fsencode`, not UTF-8, and the difference is not pedantry: POSIX
+    filenames are bytes, and Python carries an undecodable one as a lone
+    surrogate via `surrogateescape`. `os.fsencode` turns that back into the
+    ORIGINAL bytes, so the caller's `$(...)` receives a path that actually
+    opens; `.encode("utf-8")` would raise on it.
+
+    This exists because a path list is a MACHINE channel — `skills/pdf/SKILL.md`
+    says "All stdout goes to the output path list" — and the human channel's
+    answer is wrong for it twice over. `print()` raised under a non-UTF-8
+    locale AFTER the files were already on disk (measured: `pdf_split` wrote
+    three chunks, then exited 1 with 0 bytes, so a caller that cleans up on
+    failure deletes real output); and `say()` would have degraded the path to
+    `\u0447...`, which is worse — a plausible-looking string that opens
+    nothing. See docs/issues/human-cli-output-locale-class.md.
+    """
+    _write_encoded_stdout(str(path) + "\n", os.fsencode, stream)
+
+
 def write_json_stdout(
     payload: Any,
     *,
@@ -158,28 +235,7 @@ def write_json_stdout(
     ))
     if newline:
         text += "\n"
-    target = sys.stdout if stream is None else stream
-    if target is None:
-        # fd 1 was closed before the process even started (`prog >&-`): CPython
-        # sets `sys.stdout` to None and makes `print()` a silent no-op — the one
-        # outcome this module exists to prevent. Report it as the sink being
-        # gone, which is exactly what every caller's BrokenPipeError arm already
-        # says, rather than dying on an AttributeError three frames down.
-        raise BrokenPipeError(errno.EBADF, "stdout is closed")
-    buffer = getattr(target, "buffer", None)
-    try:
-        if buffer is None:
-            target.write(text)
-            target.flush()
-            return
-        # Anything already queued on the text layer must reach the fd before
-        # our bytes do, or the two layers interleave out of order.
-        target.flush()
-        buffer.write(text.encode("utf-8"))
-        buffer.flush()
-    except BrokenPipeError:
-        abandon_stdout(target)
-        raise
+    _write_encoded_stdout(text, _utf8, stream)
 
 
 @contextlib.contextmanager

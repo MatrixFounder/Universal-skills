@@ -40,7 +40,7 @@ from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageFont  # type: ignore
 
-from _errors import HumanArgumentParser, add_json_errors_argument, report_error
+from _errors import HumanArgumentParser, add_json_errors_argument, report_error, write_path_stdout
 
 
 SUPPORTED_OOXML = frozenset({".docx", ".xlsx", ".pptx",
@@ -384,7 +384,9 @@ def main(argv: list[str] | None = None) -> int:
             f"I/O error during preview: {exc}",
             code=1, error_type=type(exc).__name__, json_mode=je,
         )
-    print(str(args.output))
+    # MACHINE channel: callers capture this path. Byte-exact, not
+    # locale-encoded and not transliterated. See write_path_stdout.
+    write_path_stdout(args.output)
     return 0
 
 
