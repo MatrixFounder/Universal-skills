@@ -6,6 +6,9 @@ lives in `xlsx2md/`. See `--help` for the full flag list.
 """
 from __future__ import annotations
 
+import _venv_bootstrap  # self-bootstrap into scripts/.venv (TASK 019; replicated per CLAUDE.md §2)
+_venv_bootstrap.reexec_into_venv(requires=("openpyxl",), _file=__file__)
+
 import sys
 from pathlib import Path
 

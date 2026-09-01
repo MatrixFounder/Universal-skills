@@ -50,6 +50,9 @@ envelope `type`; no new codes; `10` stays exclusive to pdf_extract.py):
 
 from __future__ import annotations
 
+import _venv_bootstrap  # self-bootstrap into scripts/.venv (replicated per CLAUDE.md §2)
+_venv_bootstrap.reexec_into_venv(requires=("ocrmypdf",), _file=__file__)
+
 import argparse
 import contextlib
 import logging

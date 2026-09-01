@@ -840,5 +840,58 @@ class TestImagePrepKnobs(unittest.TestCase):
         self.assertTrue(out.exists())
 
 
+class TestDocumentedCommandRuns(unittest.TestCase):
+    """`python3 scripts/pdf_ocr.py …` is the command SKILL.md prints, and the
+    engine it needs lives in `scripts/.venv` (residual 7 of the cycle-2 dogfood
+    report).
+
+    Without the venv self-bootstrap the lazy `import ocrmypdf` fails under any
+    interpreter that is not that venv — and this CLI's failure mode is worse
+    than the `ModuleNotFoundError` its siblings gave: it reports "ocrmypdf is
+    not installed" on a host where it IS installed, sending the reader to
+    re-run an install that already succeeded. Measured before the fix on a host
+    with `ocrmypdf 17.5.0` in the venv."""
+
+    def _foreign_interpreter(self) -> str | None:
+        """An interpreter that is NOT this skill's venv, or None."""
+        venv = SCRIPTS_DIR / ".venv" / "bin" / "python"
+        for candidate in ("/usr/bin/python3", shutil.which("python3")):
+            if not candidate:
+                continue
+            resolved = Path(candidate).resolve()
+            if resolved != venv.resolve() and resolved != Path(
+                    sys.executable).resolve():
+                return candidate
+        return None
+
+    def test_a_non_venv_interpreter_still_finds_the_engine(self) -> None:
+        venv = SCRIPTS_DIR / ".venv" / "bin" / "python"
+        if not venv.is_file():
+            self.skipTest("no scripts/.venv on this host")
+        probe = subprocess.run(
+            [str(venv), "-c", "import ocrmypdf"], capture_output=True)
+        if probe.returncode != 0:
+            self.skipTest("the venv itself has no ocrmypdf (install --with-ocr)")
+        foreign = self._foreign_interpreter()
+        if foreign is None:
+            self.skipTest("no interpreter outside the venv to test with")
+
+        fx = fixtures.build_all(Path(tempfile.mkdtemp()))
+        with tempfile.TemporaryDirectory() as tmp:
+            # `--lang zzz` stops right after the engine probe, so this asserts
+            # the bootstrap without paying for a real OCR run: the broken build
+            # answers `OcrEngineUnavailable`, the fixed one gets far enough to
+            # complain about the language pack.
+            r = subprocess.run(
+                [foreign, str(SCRIPTS_DIR / "pdf_ocr.py"), str(fx["scan"]),
+                 str(Path(tmp) / "out.pdf"), "--lang", "zzz", "--json-errors"],
+                cwd=tmp, capture_output=True, text=True)
+        envelope = json.loads(r.stderr.strip().splitlines()[-1])
+        self.assertNotEqual(
+            envelope["type"], "OcrEngineUnavailable",
+            "the documented command cannot see the engine in its own venv")
+        self.assertEqual(envelope["type"], "LanguagePackMissing")
+
+
 if __name__ == "__main__":
     unittest.main()

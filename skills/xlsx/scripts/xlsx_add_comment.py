@@ -17,6 +17,9 @@ Usage and honest-scope details: see `xlsx_comment/cli.py` docstring,
 """
 from __future__ import annotations
 
+import _venv_bootstrap  # self-bootstrap into scripts/.venv (TASK 019; replicated per CLAUDE.md §2)
+_venv_bootstrap.reexec_into_venv(requires=("lxml",), _file=__file__)
+
 import subprocess as _subprocess  # noqa: F401  # mock.patch target in tests/test_xlsx_add_comment.py::TestPostValidateGuard
 import sys
 

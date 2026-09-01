@@ -28,6 +28,9 @@ trendlines. For elaborate dashboards drop down to openpyxl directly.
 """
 from __future__ import annotations
 
+import _venv_bootstrap  # self-bootstrap into scripts/.venv (TASK 019; replicated per CLAUDE.md §2)
+_venv_bootstrap.reexec_into_venv(requires=("openpyxl",), _file=__file__)
+
 import argparse
 import re
 import sys
