@@ -23,6 +23,7 @@ import argparse
 import sys
 
 from wiki_ingest import __version__ as _WIKI_INGEST_VERSION
+from wiki_ingest._stdout import HumanArgumentParser  # noqa: E402
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -60,7 +61,7 @@ def build_parser() -> argparse.ArgumentParser:
         ingest,
     )
 
-    p = argparse.ArgumentParser(prog="wiki_ops", description=__doc__,
+    p = HumanArgumentParser(prog="wiki_ops", description=__doc__,
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--version", action="version",
                    version=f"wiki-ingest {_WIKI_INGEST_VERSION}")
