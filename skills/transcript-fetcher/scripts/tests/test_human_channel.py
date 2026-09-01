@@ -446,14 +446,34 @@ class TestTheRarelyReachedBranchesStillRun(unittest.TestCase):
     def test_the_pip_failure_line(self):
         import install_components as ic
 
-        err, out = io.StringIO(), io.StringIO()
+        out, err = _strict("ascii"), _strict("ascii")
         with mock.patch.object(ic.subprocess, "run",
                                return_value=mock.Mock(returncode=1)), \
                 mock.patch.object(sys, "stderr", err), \
                 mock.patch.object(sys, "stdout", out):
             rc = ic._install_whisper()
         self.assertEqual(rc, 1)
-        self.assertIn("pip install failed", err.getvalue())
+        err.flush()
+        self.assertIn(b"x pip install failed", err.buffer.getvalue())
+
+    def test_the_pip_success_line(self):
+        """The other half of `_install_whisper`, and the reason the sink here
+        is a STRICT ascii stream rather than a `StringIO`: a `StringIO` holds
+        ``str``, so `print` and `say` are indistinguishable against it and a
+        mutation reverting this call site to `print` survives. Against a
+        strict stream `print` raises and `say` degrades — which is the whole
+        property under test."""
+        import install_components as ic
+
+        out, err = _strict("ascii"), _strict("ascii")
+        with mock.patch.object(ic.subprocess, "run",
+                               return_value=mock.Mock(returncode=0)), \
+                mock.patch.object(sys, "stderr", err), \
+                mock.patch.object(sys, "stdout", out):
+            rc = ic._install_whisper()
+        self.assertEqual(rc, 0)
+        out.flush()
+        self.assertIn(b"+ openai-whisper installed", out.buffer.getvalue())
 
     def test_the_dry_run_system_install_report(self):
         import install_components as ic
@@ -663,6 +683,16 @@ class TestTheComponentsPresentBranch(unittest.TestCase):
                 # Written as a normal literal this would BE the ✓ character, which
                 # ASCII-decoded text can never contain — a vacuously passing test.
                 self.assertNotIn(r"\u2713", text)
+
+    def test_the_ready_verdict_line_is_reached(self):
+        """`fetch.py doctor` ends in `✓ Ready.` only when nothing is missing —
+        unreachable while every other subprocess test pins PATH=/nonexistent.
+        A mutation reverting that one `say` to `print` survived the whole suite
+        until this test existed."""
+        proc = _run([sys.executable, str(_FETCH), "doctor"],
+                    _ascii_env(PATH=self._stub_path()))
+        self.assertNotIn(b"UnicodeEncodeError", proc.stderr)
+        self.assertIn("+ Ready.", proc.stdout.decode("ascii"))
 
     def test_the_same_run_under_utf8_still_shows_a_real_check_mark(self):
         proc = _run([sys.executable, str(_INSTALL)], _utf8_env(PATH=self._stub_path()))

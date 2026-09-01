@@ -7,11 +7,17 @@ module is the other half, and its contract is the OPPOSITE one.
 ``fetch.py doctor`` (without ``--json``) and ``install_components.py`` (without
 flags) print prose for a person, decorated with ``—``, ``✓``, ``✗``, ``→``,
 ``⚠`` and ``…``. Python encodes a text stream with the codec taken from the
-process locale, and — unlike stderr, which CPython opens
-``errors="backslashreplace"`` — **stdout is opened ``errors="strict"``**
-(measured: ``stdout enc=ascii errors=strict`` / ``stderr enc=ascii
-errors=backslashreplace`` under ``LC_ALL=C``). So an em dash in a heading is
-fatal:
+process locale, and the two standard streams get **different error handlers**:
+stderr is always ``backslashreplace``, stdout is ``surrogateescape`` (or
+``strict`` when ``PYTHONIOENCODING`` is set explicitly). Measured::
+
+    LC_ALL=C                 stdout ascii/surrogateescape  stderr ascii/backslashreplace
+    PYTHONIOENCODING=ascii   stdout ascii/strict           stderr ascii/backslashreplace
+
+Only ``backslashreplace`` has a representation for an arbitrary unencodable
+character. ``surrogateescape`` rescues lone surrogates and nothing else, so it
+raises on an em dash exactly as ``strict`` does — which is why the asymmetry
+bites even without ``PYTHONIOENCODING``. An em dash in a heading is fatal:
 
     PYTHONIOENCODING=ascii PYTHONUTF8=0 LC_ALL=C python3 install_components.py
     # rc=1, 0 bytes on stdout, UnicodeEncodeError on
