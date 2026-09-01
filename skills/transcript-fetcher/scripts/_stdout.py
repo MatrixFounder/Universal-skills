@@ -73,13 +73,15 @@ WHAT THIS DOES NOT COVER (honest scope)
   * **stdout only.** The ``--json-errors`` envelope on stderr is a different
     channel with different defaults (stderr is opened ``errors="backslashreplace"``,
     so it mangles rather than raises) and is untouched here.
-  * **The human-facing reports are still locale-fragile.** ``install_components.py``
-    with no flags and ``fetch.py doctor`` without ``--json`` print ``✓``/``✗``/``→``
-    through plain ``print()`` and still raise ``UnicodeEncodeError`` under
-    ``LC_ALL=C``. That is a presentation surface, not a machine channel: its
-    fix has to respect the caller's locale rather than override it, so it is
-    recorded separately as ``docs/issues/tf-human-report-locale-crash.md``
-    (open, unfixed).
+  * **The human-facing reports are a different channel, fixed separately.**
+    ``install_components.py`` with no flags, ``fetch.py doctor`` without
+    ``--json`` and ``--help`` print ``✓``/``✗``/``→`` as prose. They used to
+    raise ``UnicodeEncodeError`` under ``LC_ALL=C``; that is a presentation
+    surface, not a machine channel, so its fix had to respect the caller's
+    locale rather than override it — the opposite of this module. It lives in
+    ``_human.py`` (``say`` / ``HumanArgumentParser``) and closed
+    ``docs/issues/tf-human-report-locale-crash.md``. Nothing here changed:
+    this module still owns stdout's MACHINE channel only.
   * **No process-wide reconfiguration.** Nothing here calls
     ``sys.stdout.reconfigure()``: the caller's codec choice still governs every
     other write the process makes, including its human-readable stderr.

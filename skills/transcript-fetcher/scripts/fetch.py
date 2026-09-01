@@ -58,6 +58,7 @@ if str(_HERE) not in sys.path:
     sys.path.insert(0, str(_HERE))
 
 import _config as cfg  # noqa: E402
+from _human import HumanArgumentParser, say  # noqa: E402
 from _stdout import write_json_stdout  # noqa: E402
 from asr import DEFAULT_ASR_TIMEOUT_SEC  # noqa: E402
 from sources import _auth  # noqa: E402
@@ -368,7 +369,7 @@ def _fetch_one(
 
 
 def _build_parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(
+    p = HumanArgumentParser(
         prog="fetch.py",
         description=(
             "Fetch a clean plain-text transcript from a video URL "
@@ -600,7 +601,7 @@ def _run_doctor(argv: list[str]) -> int:
     (R5d, UNCHANGED) — a non-empty ``remediation`` with ``ready: true`` means
     "usable, but a real flow-blocking gap remains", not failure.
     """
-    p = argparse.ArgumentParser(
+    p = HumanArgumentParser(
         prog="fetch.py doctor",
         description="Report transcript-fetcher readiness (import-free; no network).",
     )
@@ -678,7 +679,20 @@ def _run_doctor(argv: list[str]) -> int:
                 error_type="BrokenPipeError",
             )
     else:
-        _print_doctor_report(envelope, raw_components, local_asr_present, cloud_ready)
+        # Same dead-reader contract as the --json branch above: without this the
+        # interpreter's shutdown flush hits the dead fd and replaces the exit
+        # status with 120 — measured here against a real answer of 7.
+        try:
+            _print_doctor_report(
+                envelope, raw_components, local_asr_present, cloud_ready
+            )
+        except BrokenPipeError:
+            return _emit_error(
+                "stdout closed before the doctor report was written "
+                "(broken pipe).",
+                code=1,
+                error_type="BrokenPipeError",
+            )
 
     return 0 if ready else 7
 
@@ -712,43 +726,43 @@ def _print_doctor_report(
         ``Remediation:`` block above (which always includes the yt-dlp hint
         in this case) IS the failure output.
     """
-    print("transcript-fetcher — doctor\n")
-    print(f"  interpreter : {envelope['interpreter']}")
-    print(f"  in venv     : {'yes' if envelope['in_venv'] else 'no'}")
-    print()
+    say("transcript-fetcher — doctor\n")
+    say(f"  interpreter : {envelope['interpreter']}")
+    say(f"  in venv     : {'yes' if envelope['in_venv'] else 'no'}")
+    say()
     for c in raw_components:
         entry = envelope["components"][c["key"]]
         mark = "✓" if entry["present"] else "✗"
         req = " (required)" if c["required"] else ""
         version = f" [{entry['version']}]" if entry.get("version") else ""
-        print(f"  [{mark}] {c['label']}{req}{version}")
+        say(f"  [{mark}] {c['label']}{req}{version}")
         if not entry["present"]:
-            print(f"        → {c['install_hint']}")
+            say(f"        → {c['install_hint']}")
     cloud = envelope["components"]["cloud"]
     cloud_mark = "✓" if cloud["key_present"] else "✗"
-    print(
+    say(
         f"  [{cloud_mark}] cloud ASR key present "
         f"(allow_cloud={cloud['allow_cloud']})"
     )
-    print()
+    say()
     remediation = envelope["remediation"]
     if remediation:
-        print("  Remediation:")
+        say("  Remediation:")
         for hint in remediation:
-            print(f"    → {hint}")
+            say(f"    → {hint}")
     if not local_asr_present and cloud_ready:
         if remediation:
-            print()
-        print(
+            say()
+        say(
             "  Note: no local ASR backend, but cloud ASR is configured "
             "(--asr-allow-cloud + key) — caption-less media will use the "
             "cloud backend."
         )
     if not remediation:
-        print("  ✓ Ready.")
+        say("  ✓ Ready.")
     elif envelope["ready"]:
-        print()
-        print(
+        say()
+        say(
             "  ✓ Core ready (yt-dlp present) — gaps above may block "
             "specific flows."
         )

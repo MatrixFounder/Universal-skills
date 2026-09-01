@@ -42,6 +42,7 @@ if str(_HERE) not in sys.path:
     sys.path.insert(0, str(_HERE))
 
 import _config as cfg  # noqa: E402
+from _human import HumanArgumentParser, say  # noqa: E402
 from _stdout import write_json_stdout  # noqa: E402
 
 _OS = platform.system()  # "Darwin" | "Linux" | "Windows"
@@ -143,25 +144,25 @@ def _components() -> list[dict]:
 
 
 def _print_report(components: list[dict]) -> None:
-    print("transcript-fetcher — component status\n")
+    say("transcript-fetcher — component status\n")
     any_asr = False
     for c in _components_with_asr_flag(components):
         mark = "✓" if c["present"] else "✗"
         req = " (required)" if c["required"] else ""
-        print(f"  [{mark}] {c['label']}{req}")
+        say(f"  [{mark}] {c['label']}{req}")
         if not c["present"]:
-            print(f"        → {c['install_hint']}")
+            say(f"        → {c['install_hint']}")
         if c["present"] and c["key"] in _ASR_KEYS:
             any_asr = True
-    print()
+    say()
     if not any_asr:
-        print(
+        say(
             "  ⚠ No local ASR backend detected. Caption-less media (X Broadcasts/Spaces,\n"
             "    most native X video) will exit 7 (MissingDependency) unless you install one\n"
             "    of the above, or enable the cloud backend (--asr-allow-cloud + OPENAI_API_KEY)."
         )
     else:
-        print("  ✓ At least one ASR backend is available — caption-less media can be transcribed.")
+        say("  ✓ At least one ASR backend is available — caption-less media can be transcribed.")
 
 
 _ASR_KEYS = {"macwhisper", "whisper-cli", "whisper-cpp"}
@@ -172,42 +173,42 @@ def _components_with_asr_flag(components: list[dict]) -> list[dict]:
 
 
 def _install_whisper() -> int:
-    print("Installing openai-whisper into the venv "
-          f"({sys.executable}) …")
+    say("Installing openai-whisper into the venv "
+        f"({sys.executable}) …")
     rc = subprocess.run(
         [sys.executable, "-m", "pip", "install", "-U", "openai-whisper"],
         check=False,
     ).returncode
     if rc == 0:
-        print("✓ openai-whisper installed. Note: it also needs ffmpeg at runtime.")
+        say("✓ openai-whisper installed. Note: it also needs ffmpeg at runtime.")
     else:
-        print("✗ pip install failed (see output above).", file=sys.stderr)
+        say("✗ pip install failed (see output above).", file=sys.stderr)
     return rc
 
 
 def _system_install(components: list[dict], run: bool) -> int:
     missing = [c for c in components if not c["present"] and c.get("kind") == "system"]
     if not missing:
-        print("No missing system components.")
+        say("No missing system components.")
         return 0
     rc_total = 0
     for c in missing:
         cmd = c.get("sys_cmd", "")
-        print(f"\n# {c['label']}\n{cmd}")
+        say(f"\n# {c['label']}\n{cmd}")
         if run and cmd and not cmd.startswith("("):
-            print(f"  → running: {cmd}")
+            say(f"  → running: {cmd}")
             # argv form (no shell) — the commands are fixed literals, but
             # avoiding shell=True kills the injection class outright.
             rc = subprocess.run(shlex.split(cmd), shell=False, check=False).returncode
             rc_total |= rc
-            print("    ✓ done" if rc == 0 else f"    ✗ exit {rc}")
+            say("    ✓ done" if rc == 0 else f"    ✗ exit {rc}")
     if not run:
-        print("\n(Dry run — re-run with `--system --run` to execute the commands above.)")
+        say("\n(Dry run — re-run with `--system --run` to execute the commands above.)")
     return rc_total
 
 
 def main(argv: list[str] | None = None) -> int:
-    p = argparse.ArgumentParser(
+    p = HumanArgumentParser(
         prog="install_components.py",
         description="Detect / install transcript-fetcher's optional ASR components.",
     )
@@ -248,14 +249,26 @@ def main(argv: list[str] | None = None) -> int:
             return 1
         return 0
 
-    _print_report(components)
+    # Mirrors the --json branch above: a reader that is already gone must be
+    # reported here, not by the interpreter's shutdown flush, which prints a
+    # second non-report line on stderr and rewrites the exit status to 120
+    # (measured against a real answer of 0).
+    try:
+        _print_report(components)
 
-    rc = 0
-    if args.install_whisper:
-        print()
-        rc |= _install_whisper()
-    if args.system:
-        rc |= _system_install(components, run=args.run)
+        rc = 0
+        if args.install_whisper:
+            say()
+            rc |= _install_whisper()
+        if args.system:
+            rc |= _system_install(components, run=args.run)
+    except BrokenPipeError:
+        sys.stderr.write(
+            "install_components.py: stdout closed before the component "
+            "report was written (broken pipe).\n"
+        )
+        sys.stderr.flush()
+        return 1
     return rc
 
 
