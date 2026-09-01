@@ -56,6 +56,20 @@ this builder IS the provenance, per TASK 013 R11.3):
                    pdf-13's stroked-path test. Neither extracted nor flagged
                    `figure_dominant`; the fixture pins that honest-scope claim
                    so it cannot quietly become false.
+  split.pdf      — a table row cut in half by a page break, plus the two shapes
+                   that look identical and must NOT be counted (a crosstab's
+                   blank corner cell, and a table whose first column is blank
+                   by design).
+  columns.pdf    — a two-column page whose columns share baselines (so
+                   extraction interleaves them) and a one-column control.
+  glyphs.pdf     — an emoji-sized raster inline on a text line, with two
+                   same-sized controls that are pictures rather than glyphs.
+  blankraster.pdf— a page whose only raster decodes to a single flat colour
+                   (the "blank page that says: run OCR" case), plus a control.
+  ruling.pdf     — table ruling that clusters into a page-wide "figure"
+                   enclosing the whole body text.
+  links.pdf      — `/URI` link annotations over text and over an image, plus a
+                   page with none.
 
 The fixtures live under ``tests/fixtures/`` (gitignored — the skill ignores
 ``*.pdf``); re-run this module (``python3 _pdf_extract_fixtures.py``) to
@@ -457,6 +471,382 @@ def build_onecol_pdf(path: Path) -> None:
     c.save()
 
 
+SPLIT_HEADER_ROW = ["Step", "Task Description"]
+# The label the page break strands: the producer draws the row's first cell at
+# the bottom of page 1 and its text on page 2, so `2.11` reaches the dump as a
+# line of flat `text` and the continuation row arrives with an empty first cell.
+SPLIT_DANGLING_LABEL = "2.11"
+SPLIT_CONTINUATION = "Communicate RFC Approval to the requester"
+# Page 4's crosstab corner: the shape the counter must NOT read as a split,
+# because page 3 ends no table for it to continue.
+SPLIT_CROSSTAB = [["", "Q1", "Q2"], ["North", "100", "120"]]
+# Pages 5-6: a table whose first column is blank in nearly every row (a merged
+# category column). Blank-first is this table's own shape, not a page break.
+SPLIT_CATEGORY_ROWS = [["Group", "Metric", "Value"],
+                       ["", "Latency", "120 ms"],
+                       ["", "Throughput", "900 rps"]]
+SPLIT_CATEGORY_TAIL = [["", "Availability", "99.9 %"],
+                       ["", "Error rate", "0.1 %"]]
+
+
+def build_split_pdf(path: Path) -> None:
+    """A table row cut in half by a page break — and the two shapes that look
+    like one but are not (PDF-EXTRACT-DOGFOOD-CYCLE2-RESIDUALS residual 1).
+
+    Measured on four dogfood documents in two forms: the row's label stays
+    behind in the previous page's flat ``text`` while its content opens the
+    next page's table with an EMPTY first cell (``change-management`` pages
+    26-27, three times), or the whole row disappears from ``tables`` and only
+    the orphaned tail arrives (``test-1`` pages 14-15, where question ОВ-9 is
+    in no structured table at all). Nothing in the dump said so, and an agent
+    composing Markdown from ``tables`` silently dropped the row.
+
+    Six pages, three behaviours:
+
+    * 1-2 — the split itself: page 1's table ends with rows carrying labels,
+      the stranded label is the last line of its text, and page 2 repeats the
+      header and opens with ``["", …]``. This must be counted and named.
+    * 3-4 — a crosstab whose header row starts with a blank corner cell
+      (``["", "Q1", "Q2"]``), following a page with NO table. The same row
+      shape, no page break behind it: it must stay uncounted, which is what
+      makes the "previous page ends a table" conjunct load-bearing.
+    * 5-6 — a table whose first column is blank in most rows (a merged
+      category column) continuing across the break. Blank-first is this
+      table's own shape, so the continuation must stay uncounted too."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    c = canvas.Canvas(str(path), pagesize=letter)
+
+    # 1 — the table whose last row the break cuts in half.
+    c.setFont("Helvetica", 10)
+    c.drawString(72, 750, "Change process steps, continued overleaf.")
+    _draw_ruled_table(c, 72, 600, 200, 24, [
+        SPLIT_HEADER_ROW,
+        ["2.9", "Return RFC to the requester"],
+        ["2.10", "Was the RFC retrospective?"],
+    ])
+    # The stranded label: drawn in the label column's x position, BELOW the
+    # table's bottom rule, so it reaches the dump as flat text and not as a
+    # table cell — exactly what the measured producer emits.
+    c.drawString(76, 575, SPLIT_DANGLING_LABEL)
+    c.drawString(270, 60, "1 / 6")
+    c.showPage()
+
+    # 2 — the continuation: repeated header, then the label-less row.
+    c.setFont("Helvetica", 10)
+    _draw_ruled_table(c, 72, 620, 200, 24, [
+        SPLIT_HEADER_ROW,
+        ["", SPLIT_CONTINUATION],
+        ["2.12", "Close the request"],
+    ])
+    c.drawString(270, 60, "2 / 6")
+    c.showPage()
+
+    # 3 — prose, no table: nothing for page 4's corner cell to continue.
+    c.setFont("Helvetica", 11)
+    y = 720
+    for i in range(20):
+        c.drawString(72, y, f"Line {i} of ordinary prose with no table on it.")
+        y -= 20
+    c.showPage()
+
+    # 4 — a crosstab with a blank corner header cell (the false positive).
+    c.setFont("Helvetica", 10)
+    c.drawString(72, 750, "Quarterly figures by region.")
+    _draw_ruled_table(c, 72, 620, 120, 24, SPLIT_CROSSTAB)
+    c.showPage()
+
+    # 5 — a table whose first column is blank in most rows.
+    c.setFont("Helvetica", 10)
+    c.drawString(72, 750, "Service levels, part one.")
+    _draw_ruled_table(c, 72, 620, 140, 24, SPLIT_CATEGORY_ROWS)
+    c.showPage()
+
+    # 6 — its continuation: blank-first again, but that is the table's shape.
+    c.setFont("Helvetica", 10)
+    _draw_ruled_table(c, 72, 640, 140, 24, SPLIT_CATEGORY_TAIL)
+    c.showPage()
+    c.save()
+
+
+# --- columns.pdf ------------------------------------------------------------
+# Two columns of body text with a gutter wide enough to see and narrow enough
+# to be realistic. Measured on a real OCR'd bilingual contract: the gutter was
+# 6-7 pt, and every recognised text line spanned BOTH columns, so pdfplumber
+# read the two columns as one interleaved line each.
+COLUMNS_GUTTER_X = 306.0
+COLUMNS_LEFT = "Left column line {i} of the Russian half of the page."
+COLUMNS_RIGHT = "Right column line {i} of the English half here."
+COLUMNS_ROWS = 30
+# Page 3's ruled table: enough rows that its column gap is a full-height band.
+COLUMNS_TABLE_ROWS = 20
+
+
+def build_columns_pdf(path: Path) -> None:
+    """A two-column page whose columns share baselines, and a one-column
+    control (residual 6).
+
+    pdfplumber groups characters into lines by their Y position, so two columns
+    printed at the same baselines come back interleaved — left-column words and
+    right-column words alternating inside one line — and nothing in the dump
+    says so. ``--layout``, which §3.1 of the reference names as the remedy,
+    preserves the visual arrangement but does NOT separate the columns; the
+    measured repair is cropping the page at the gutter, which is why the hint
+    reports the gutter's x coordinate rather than a flag."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    c = canvas.Canvas(str(path), pagesize=letter)
+    c.setFont("Helvetica", 9)
+    y = 740
+    for i in range(COLUMNS_ROWS):
+        c.drawString(72, y, COLUMNS_LEFT.format(i=i))
+        c.drawString(COLUMNS_GUTTER_X + 8, y, COLUMNS_RIGHT.format(i=i))
+        y -= 20
+    c.showPage()
+
+    # The control: the same amount of text, one column, no gutter.
+    c.setFont("Helvetica", 9)
+    y = 740
+    for i in range(COLUMNS_ROWS):
+        c.drawString(72, y, f"Single-column body line {i} running the full "
+                            f"width of the text block without any gutter.")
+        y -= 20
+    c.showPage()
+
+    # Page 3 — a two-column ruled TABLE. Its inter-column gap is a full-height
+    # gutter by exactly the definition `_page_gutters` uses, which is why a
+    # page carrying a table is not examined at all: telling the caller to crop
+    # a table into columns would be worse than saying nothing. Without this
+    # page the "pages with tables are skipped" guard could be deleted and every
+    # test would still pass — measured: that mutant survived until this page
+    # existed.
+    c.setFont("Helvetica", 9)
+    _draw_ruled_table(
+        c, 72, 740 - COLUMNS_TABLE_ROWS * 24, 200, 24,
+        [[f"left cell {i}", f"right cell {i}"]
+         for i in range(COLUMNS_TABLE_ROWS)])
+    c.showPage()
+    c.save()
+
+
+# --- glyphs.pdf -------------------------------------------------------------
+# An emoji drawn by a colour font is a raster XObject, so a naive extractor
+# writes one PNG per ⚠ / ✅ in the text. Measured: 10 of 15 files on `test-1`,
+# every one of them 10x10 or 11x11 pt, square, sitting on a text line whose
+# median font size equals the image's height.
+GLYPH_BODY_SIZE = 11
+GLYPH_LINE = "Status ready for review"
+GLYPH_STANDALONE_SIDE = 11    # points — the SAME size as the inline glyph
+
+
+def _icon_png(path: Path, colour: str = "red") -> None:
+    """A small square raster — the emoji-glyph shape (and, placed away from
+    text, the meaningful-icon control)."""
+    img = Image.new("RGB", (160, 160), "white")
+    draw = ImageDraw.Draw(img)
+    draw.ellipse([20, 20, 140, 140], fill=colour, outline="black", width=8)
+    img.save(path)
+
+
+def build_glyphs_pdf(path: Path) -> None:
+    """An inline emoji-sized raster on a text line, and two same-sized controls
+    that are NOT glyphs (residual 3).
+
+    The rule under test is "a glyph", not "a small image": the filter may only
+    reject a raster that is square, as tall as the text it sits in, and
+    adjacent to characters on that line. Page 2 places an image of exactly the
+    same size where no text shares its band, and page 1 also carries a
+    larger version of the same artwork inline — both must survive."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory() as tmp:
+        # Three DIFFERENT images on purpose: identical bytes would collapse
+        # into one file under the sha1 dedup and the test could no longer see
+        # which of the three the filter kept.
+        glyph = Path(tmp) / "glyph.png"
+        big = Path(tmp) / "big.png"
+        alone = Path(tmp) / "alone.png"
+        _icon_png(glyph, colour="red")
+        _icon_png(big, colour="green")
+        _icon_png(alone, colour="blue")
+        c = canvas.Canvas(str(path), pagesize=letter)
+
+        # 1 — the glyph: 11x11 pt, inline, on an 11 pt text line.
+        c.setFont("Helvetica", GLYPH_BODY_SIZE)
+        c.drawString(72, 700, GLYPH_LINE)
+        text_w = stringWidth(GLYPH_LINE, "Helvetica", GLYPH_BODY_SIZE)
+        c.drawImage(str(glyph), 72 + text_w + 3, 698,
+                    width=GLYPH_BODY_SIZE, height=GLYPH_BODY_SIZE)
+        # …and the control that keeps the test honest: the same artwork four
+        # times the line height, still beside text. Big enough to be a
+        # picture, so the height test must keep it.
+        c.drawImage(str(big), 72, 560, width=48, height=48)
+        c.setFont("Helvetica", GLYPH_BODY_SIZE)
+        c.drawString(130, 580, "Prose beside the larger picture.")
+        c.showPage()
+
+        # 2 — an 11x11 pt image with no text on its line at all.
+        c.setFont("Helvetica", GLYPH_BODY_SIZE)
+        c.drawString(72, 740, "The icon below shares its line with nothing.")
+        c.drawImage(str(alone), 300, 500,
+                    width=GLYPH_STANDALONE_SIDE, height=GLYPH_STANDALONE_SIDE)
+        c.showPage()
+        c.save()
+
+
+# --- blankraster.pdf --------------------------------------------------------
+# Measured on `change-management` page 9: `scanned: true`, image_coverage 0.63,
+# and the extracted 816x1056 PNG held nothing but white. The page is blank; the
+# scan signal sent the reader to OCR something that is not there.
+BLANK_RASTER_SIZE = (816, 1056)
+
+
+def build_blankraster_pdf(path: Path) -> None:
+    """A page whose only artwork is a uniform white raster, and a control page
+    whose raster carries content (residual 5).
+
+    The blank raster is deliberately NOT page-sized (0.63 of the sheet, as
+    measured), so the backdrop rule does not catch it and the naive extractor
+    writes a file with nothing in it while `scanned` tells the caller to run
+    OCR."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory() as tmp:
+        blank = Path(tmp) / "blank.png"
+        real = Path(tmp) / "real.png"
+        Image.new("RGB", BLANK_RASTER_SIZE, "white").save(blank)
+        _diagram_png(real)
+        c = canvas.Canvas(str(path), pagesize=letter)
+
+        # 1 — the blank raster, no text: a page with nothing on it.
+        c.drawImage(str(blank), 72, 150, width=468, height=500)
+        c.showPage()
+
+        # 2 — the control: a raster with content, same extraction path.
+        c.setFont("Helvetica", 11)
+        c.drawString(72, 740, "This page's image is not blank.")
+        c.drawImage(str(real), 72, 250, width=468, height=364)
+        c.showPage()
+
+        # 3 — a blank raster on a page of live prose. The raster carries
+        # nothing and is dropped, but the PAGE is perfectly readable: this is
+        # what keeps "the artwork is blank" from being reported as "the page
+        # is blank".
+        c.setFont("Helvetica", 11)
+        y = 740
+        for i in range(20):
+            c.drawString(72, y, f"Line {i} of prose beside a white "
+                                f"placeholder image.")
+            y -= 20
+        c.drawImage(str(blank), 72, 120, width=300, height=200)
+        c.showPage()
+        c.save()
+
+
+# --- ruling.pdf -------------------------------------------------------------
+RULING_ROWS = 20
+RULING_COLS = 4
+# How far the unresolvable ruling runs past the grid. The containment test
+# rejects a cluster that is >= 90 % inside a detected table, so the tail has to
+# be more than a ninth of the cluster's height for the defect to reproduce —
+# 600 pt of grid needs > 67 pt of tail; the measured page's gap was 78.
+RULING_TAIL_PT = 90
+
+
+def build_ruling_pdf(path: Path) -> None:
+    """Table ruling that clusters into a page-wide "figure" (residual 4).
+
+    Measured on `test-1` pages 10 and 14 and `elma365-3cx-target` pages 8 and
+    12: a 345-385 KB PNG that turns out to be a crop of the whole text area,
+    whose only vector graphics is the table's ruling. `_is_figure_cluster`
+    rejects a cluster that lies inside a detected table, but here the header
+    and footer rules merge with the grid into one box BIGGER than the table, so
+    the containment test misses it and the page's entire body text is written
+    out as a picture.
+
+    The distinguishing measurement is what the cluster encloses: 1656-1974
+    characters against 0-36 for every genuine vector figure in the corpus.
+
+    Reproducing it needs the cluster to be *bigger* than the table: on the
+    measured page `find_tables()` stopped at y=702 while the ruling ran on to
+    y=780, which put the containment ratio at 0.89 — a hair under the 0.9 the
+    rejection needs. Here the same gap comes from an unfinished last row: two
+    verticals continue below the grid with no closing rule, so pdfplumber
+    cannot make a row of them and the table box ends above them."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    c = canvas.Canvas(str(path), pagesize=letter)
+    c.setStrokeColor(colors.black)
+    c.setLineWidth(0.7)
+    x0, y0, cell_w, row_h = 60, 150, 123, 30
+    grid_w = cell_w * RULING_COLS
+    c.setFont("Helvetica", 8)
+    for r in range(RULING_ROWS + 1):
+        c.line(x0, y0 + r * row_h, x0 + grid_w, y0 + r * row_h)
+    for col in range(RULING_COLS + 1):
+        c.line(x0 + col * cell_w, y0, x0 + col * cell_w, y0 + RULING_ROWS * row_h)
+    for r in range(RULING_ROWS):
+        for col in range(RULING_COLS):
+            c.drawString(x0 + col * cell_w + 3, y0 + r * row_h + 11,
+                         f"row {r} column {col} body text")
+    # The unfinished row: ruling that continues past what `find_tables` can
+    # resolve into a table, so the cluster outgrows the table box.
+    c.line(x0, y0, x0, y0 - RULING_TAIL_PT)
+    c.line(x0 + grid_w, y0, x0 + grid_w, y0 - RULING_TAIL_PT)
+    c.showPage()
+    c.save()
+
+
+# --- links.pdf --------------------------------------------------------------
+LINK_TARGETS = [
+    ("https://example.com/first", "the first anchor"),
+    ("https://example.com/second", "second anchor here"),
+]
+# A link laid over the image rather than over text: its anchor text is None,
+# which is information (match it to the image placement), not a failure.
+LINK_IMAGE_URI = "https://example.com/picture"
+# The internal `/GoTo` link: a real annotation that must stay OUT of `links`.
+LINK_INTERNAL_DEST = "inner-destination"
+LINK_INTERNAL_ANCHOR = "jump inside this document"
+
+
+def build_links_pdf(path: Path) -> None:
+    """Link annotations with anchor text, and one over an image (residual 2).
+
+    The dump had no `links` key at all: 578 `/URI` annotations across the
+    20-document dogfood corpus reached the caller as nothing, and for a
+    web-page-printed-to-PDF — which this repository's own `html2pdf.py`
+    produces — losing every URL is losing content, not formatting."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp:
+        png_path = tmp.name
+    try:
+        _icon_png(Path(png_path), colour="blue")
+        c = canvas.Canvas(str(path), pagesize=letter)
+        c.setFont("Helvetica", 11)
+        y = 720
+        for uri, anchor in LINK_TARGETS:
+            c.drawString(72, y, anchor)
+            width = stringWidth(anchor, "Helvetica", 11)
+            c.linkURL(uri, (72, y - 2, 72 + width, y + 11), relative=0)
+            y -= 40
+        c.drawString(72, y, "The picture below is itself a link.")
+        c.drawImage(png_path, 72, y - 120, width=100, height=100)
+        c.linkURL(LINK_IMAGE_URI, (72, y - 120, 172, y - 20), relative=0)
+        # An INTERNAL link, so the documented omission can be pinned: the dump
+        # reports `/URI` annotations and not `/GoTo` destinations, and this is
+        # the annotation that must NOT appear in `links`.
+        c.bookmarkPage(LINK_INTERNAL_DEST)
+        c.drawString(72, y - 150, LINK_INTERNAL_ANCHOR)
+        c.linkAbsolute(LINK_INTERNAL_ANCHOR, LINK_INTERNAL_DEST,
+                       (72, y - 152, 260, y - 139))
+        c.showPage()
+
+        # A second page with no annotations at all: `links` must be an empty
+        # list there, which is a different statement from "did not look".
+        c.setFont("Helvetica", 11)
+        c.drawString(72, 740, "No links on this page.")
+        c.showPage()
+        c.save()
+    finally:
+        os.unlink(png_path)
+
+
 def _draw_page_backdrop(c) -> None:
     """Paint the page-sized `stroke=0, fill=1` rectangle that several
     producers (Google Docs Renderer among them) put behind every page. It is a
@@ -714,7 +1104,13 @@ def build_shadowed_pdf(path: Path) -> None:
     with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp:
         png_path = tmp.name
     try:
-        Image.new("RGB", (400, 300), (120, 40, 160)).save(png_path)
+        # Drawn content, not a flat fill: a single-colour raster is rejected
+        # as blank (residual 5), and this fixture is about the size
+        # declaration, not about what the pixels hold.
+        shadowed = Image.new("RGB", (400, 300), (120, 40, 160))
+        ImageDraw.Draw(shadowed).ellipse([60, 60, 340, 240],
+                                         outline="white", width=12)
+        shadowed.save(png_path)
         with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp:
             raw_path = tmp.name
         try:
@@ -746,12 +1142,20 @@ def build_nested_pdf(path: Path) -> None:
     The enumeration must walk into forms. A hand-rolled scan of
     ``/Resources/XObject`` sees only the form (``/Subtype /Form``) and loses the
     image entirely — verified — which is why enumeration goes through pypdf's
-    own recursive key list."""
+    own recursive key list.
+
+    The raster carries a drawn shape rather than a flat fill. That is not
+    decoration: a single-colour raster is rejected as blank (residual 5), and a
+    fixture whose nesting test depends on a colour swatch would be measuring
+    the blank rule instead of the nesting it exists for."""
     path.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp:
         png_path = tmp.name
     try:
-        Image.new("RGB", (300, 200), (30, 160, 90)).save(png_path)
+        nested = Image.new("RGB", (300, 200), (30, 160, 90))
+        ImageDraw.Draw(nested).rectangle([40, 40, 260, 160],
+                                         outline="white", width=10)
+        nested.save(png_path)
         c = canvas.Canvas(str(path), pagesize=letter)
         c.beginForm("innerform")
         c.drawImage(png_path, 0, 0, width=200, height=133)
@@ -823,6 +1227,12 @@ def build_all(fixtures_dir: Path) -> dict[str, Path]:
         "onecol": fixtures_dir / "onecol.pdf",
         "orphanfar": fixtures_dir / "orphanfar.pdf",
         "ocrlike": fixtures_dir / "ocrlike.pdf",
+        "split": fixtures_dir / "split.pdf",
+        "columns": fixtures_dir / "columns.pdf",
+        "glyphs": fixtures_dir / "glyphs.pdf",
+        "blankraster": fixtures_dir / "blankraster.pdf",
+        "ruling": fixtures_dir / "ruling.pdf",
+        "links": fixtures_dir / "links.pdf",
     }
     build_digital_pdf(paths["digital"])
     build_scanlike_pdf(paths["scanlike"])
@@ -841,6 +1251,12 @@ def build_all(fixtures_dir: Path) -> dict[str, Path]:
     build_onecol_pdf(paths["onecol"])
     build_orphanfar_pdf(paths["orphanfar"])
     build_ocrlike_pdf(paths["ocrlike"])
+    build_split_pdf(paths["split"])
+    build_columns_pdf(paths["columns"])
+    build_glyphs_pdf(paths["glyphs"])
+    build_blankraster_pdf(paths["blankraster"])
+    build_ruling_pdf(paths["ruling"])
+    build_links_pdf(paths["links"])
     return paths
 
 

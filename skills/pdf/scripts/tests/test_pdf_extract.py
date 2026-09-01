@@ -131,23 +131,24 @@ class TestStubUnits(unittest.TestCase):
     # TestScanClassifier (TC-UNIT-13..20).
 
     def test_extract_pdf_sentinel(self):
-        """TC-UNIT-05 — the DumpDocument carries exactly its 12 top-level keys,
+        """TC-UNIT-05 — the DumpDocument carries exactly its 13 top-level keys,
         so a consumer can rely on the shape and a dropped signal is caught.
 
         `source` joined the set when dogfooding showed a detached dump cannot
         say which PDF it came from; `layout_hints` joined it when the advisory
-        counters landed; the
-        `--extract-images` keys (`images_dir` / `image_dpi` / `images_summary`)
-        are deliberately NOT here — they appear only with the flag, and this
-        run does not pass it."""
+        counters landed; `link_count` when dogfooding found 578 `/URI`
+        annotations across 20 documents reaching the caller as nothing. The
+        `--extract-images` keys (`images_dir` / `image_dpi` / `images_summary`
+        / `blank_pages`) are deliberately NOT here — they appear only with the
+        flag, and this run does not pass it."""
         dump = pdf_extract.extract_pdf(
             FIXTURES_DIR / "digital.pdf", password=None, layout=False)
         self.assertEqual(
             set(dump),
             {"source", "page_count", "doc_scanned", "scanned_pages",
-             "figure_pages", "text_layer_lossy", "x_tolerance_ratio",
-             "y_tolerance", "table_strategy", "layout_hints", "fonts",
-             "pages"})
+             "figure_pages", "link_count", "text_layer_lossy",
+             "x_tolerance_ratio", "y_tolerance", "table_strategy",
+             "layout_hints", "fonts", "pages"})
 
     def test_fixtures_exist_and_valid(self):
         """TC-UNIT-06 — every fixture is present and well-formed."""
@@ -197,13 +198,13 @@ class TestExtractionCore(unittest.TestCase):
             self.assertIn(token, flat)
 
     def test_extract_page_fields(self):
-        """TC-UNIT-07 — a PageRecord has all 9 keys; digital pages imageless."""
+        """TC-UNIT-07 — a PageRecord has all 10 keys; digital pages imageless."""
         dump = pdf_extract.extract_pdf(
             self.digital, password=None, layout=False)
         for page in dump["pages"]:
             self.assertEqual(
                 set(page),
-                {"n", "text", "tables", "char_count", "has_images",
+                {"n", "text", "tables", "links", "char_count", "has_images",
                  "image_coverage", "vector_coverage", "scanned",
                  "figure_dominant"})
             self.assertIsInstance(page["n"], int)
@@ -262,6 +263,8 @@ class TestExtractionCore(unittest.TestCase):
             lines: list = []
             rects: list = []
             curves: list = []
+            chars: list = []
+            hyperlinks: list = []
             width = 612
             height = 792
 
@@ -1852,7 +1855,7 @@ class TestImageExtraction(unittest.TestCase):
 
         def page_with(width, height):
             return mock.Mock(
-                width=612.0, height=792.0,
+                width=612.0, height=792.0, chars=[],
                 images=[{"x0": 0, "top": 0, "x1": 100, "bottom": 100,
                          "name": "X1", "stream": _Stream(), "srcsize": None}])
 
@@ -1874,7 +1877,8 @@ class TestImageExtraction(unittest.TestCase):
         """`test_per_page_cap_reports_what_it_dropped` patches the constant to
         0, so it proves the branch exists but is blind to its value. This runs
         the real constant against more clusters than it allows."""
-        page = mock.Mock(width=612.0, height=792.0, mediabox=(0, 0, 612, 792))
+        page = mock.Mock(width=612.0, height=792.0, chars=[],
+                         mediabox=(0, 0, 612, 792))
         page.find_tables.return_value = []
         clusters = [{"bbox": (10.0 + i, 10.0, 210.0 + i, 210.0), "cells": 1,
                      "members": [{"x0": 10.0 + i, "top": 10.0, "x1": 210.0 + i,
@@ -2488,7 +2492,8 @@ class TestLayoutHints(unittest.TestCase):
         dump, _ = self._run("digital.pdf")
         self.assertEqual(
             sorted(dump["layout_hints"]),
-            ["orphan_list_markers", "single_column_tables", "tables"])
+            ["multi_column_pages", "orphan_list_markers", "single_column_tables",
+             "split_table_pages", "split_table_rows", "tables"])
 
     def test_the_marker_hint_measures_its_own_advice_before_giving_it(self):
         """`bullets.pdf` is the case where the advice works: the probe re-reads
@@ -2658,6 +2663,644 @@ class TestLayoutHints(unittest.TestCase):
         self.assertFalse(fire({"orphan_list_markers": 32}, 5))
 
 
+class TestLinks(unittest.TestCase):
+    """`/URI` link annotations reach the dump (residual 2 of the cycle-2
+    dogfood report).
+
+    Measured before the fix: 578 link annotations across the 20-document
+    corpus, none of them anywhere in the dump, and no key saying they had not
+    been looked for. For a web page printed to PDF — which this repository's
+    own `html2pdf.py` produces — that is losing content, not formatting."""
+
+    @classmethod
+    def setUpClass(cls):
+        _ensure_fixtures()
+
+    def setUp(self):
+        self.dump = pdf_extract.extract_pdf(
+            FIXTURES_DIR / "links.pdf", password=None, layout=False)
+
+    def test_every_uri_annotation_is_reported_with_its_anchor_text(self):
+        links = self.dump["pages"][0]["links"]
+        self.assertEqual(
+            [(link["uri"], link["text"]) for link in links[:2]],
+            [(uri, anchor) for uri, anchor in fixtures.LINK_TARGETS])
+
+    def test_a_link_over_an_image_keeps_its_uri_and_says_it_has_no_text(self):
+        """`None`, not `""`: the annotation is real and its target matters —
+        the caller matches it to the `images` placement at the same bbox."""
+        image_link = [link for link in self.dump["pages"][0]["links"]
+                      if link["uri"] == fixtures.LINK_IMAGE_URI]
+        self.assertEqual(len(image_link), 1)
+        self.assertIsNone(image_link[0]["text"])
+        self.assertEqual(len(image_link[0]["bbox"]), 4)
+
+    def test_an_internal_goto_link_is_deliberately_not_reported(self):
+        """The honest-scope claim, pinned: the fixture's fourth annotation is a
+        `/GoTo` to a destination inside the file. pdfplumber sees it; `links`
+        reports `/URI` annotations only, and the docstring says so."""
+        import pdfplumber  # type: ignore
+
+        with pdfplumber.open(FIXTURES_DIR / "links.pdf") as pdf:
+            annotations = pdf.pages[0].annots
+        self.assertEqual(len(annotations), 4, "fixture lost its /GoTo link")
+        self.assertEqual(len(self.dump["pages"][0]["links"]), 3)
+        self.assertNotIn(
+            fixtures.LINK_INTERNAL_ANCHOR,
+            [link["text"] for link in self.dump["pages"][0]["links"]])
+
+    def test_a_page_with_no_annotations_carries_an_empty_list(self):
+        """`[]` is "looked, found none" — a different statement from a missing
+        key, which is what the dump used to say about every page."""
+        self.assertEqual(self.dump["pages"][1]["links"], [])
+        self.assertIn("links", self.dump["pages"][1])
+
+    def test_link_count_is_the_document_total(self):
+        self.assertEqual(self.dump["link_count"], 3)
+
+    def test_anchor_text_takes_the_characters_whose_centre_is_inside(self):
+        """Half-covered characters are excluded on purpose: a producer's link
+        box clips the glyphs at both ends, and taking every character that
+        merely intersects it appends the neighbouring punctuation (measured on
+        an arXiv export: `[32,` where the anchor is `32`)."""
+        def char(text, x0, x1, top=100.0, bottom=110.0):
+            return {"text": text, "x0": x0, "x1": x1,
+                    "top": top, "bottom": bottom}
+        index = pdf_extract._char_index([
+            char("[", 10.0, 14.0), char("3", 15.0, 20.0),
+            char("2", 20.0, 25.0), char(",", 25.0, 29.0),
+            char("z", 10.0, 20.0, top=200.0, bottom=210.0),
+        ])
+        self.assertEqual(
+            pdf_extract._anchor_text(index, (14.5, 99.0, 25.5, 111.0)), "32")
+        self.assertIsNone(
+            pdf_extract._anchor_text(index, (300.0, 99.0, 400.0, 111.0)))
+
+    def test_anchor_text_is_read_in_reading_order_not_stream_order(self):
+        """`page.chars` is in content-stream order, which a producer is free to
+        scramble; the anchor is sorted by line and then by x."""
+        def char(text, x0, top):
+            return {"text": text, "x0": x0, "x1": x0 + 5,
+                    "top": top, "bottom": top + 10}
+        index = pdf_extract._char_index(
+            [char("B", 20.0, 100.0), char("A", 10.0, 100.0),
+             char("C", 10.0, 130.0)])
+        self.assertEqual(
+            pdf_extract._anchor_text(index, (0.0, 90.0, 100.0, 145.0)), "ABC")
+
+    def test_a_malformed_annotation_costs_the_links_never_the_dump(self):
+        """This runs inside `_extract_page`, whose text and tables are the
+        contract. A page whose annotation array raises must lose its links and
+        nothing else."""
+        class _Hostile:
+            @property
+            def hyperlinks(self):
+                raise RuntimeError("malformed /Annots")
+
+        self.assertEqual(pdf_extract._page_links(_Hostile()), [])
+
+    def test_a_link_dictionary_missing_its_rectangle_is_skipped(self):
+        page = mock.Mock(chars=[], hyperlinks=[
+            {"uri": "https://example.com/ok",
+             "x0": 1.0, "top": 1.0, "x1": 2.0, "bottom": 2.0},
+            {"uri": "https://example.com/broken"},               # no Rect
+            {"x0": 1.0, "top": 1.0, "x1": 2.0, "bottom": 2.0},   # no URI
+        ])
+        links = pdf_extract._page_links(page)
+        self.assertEqual([link["uri"] for link in links],
+                         ["https://example.com/ok"])
+
+
+class TestSplitTableRows(unittest.TestCase):
+    """A table row cut in half by a page break is named (residual 1).
+
+    Measured on four dogfood documents in two forms: the label stays behind in
+    the previous page's flat `text` while the content opens the next page's
+    table with an empty first cell, or the row vanishes from `tables`
+    altogether and only its tail arrives. Nothing said so, and an agent
+    composing Markdown from `tables` dropped the row."""
+
+    @classmethod
+    def setUpClass(cls):
+        _ensure_fixtures()
+
+    def _run(self, fixture, *flags):
+        proc = _run_cli([str(FIXTURES_DIR / fixture), *flags])
+        self.assertEqual(proc.returncode, 0, proc.stderr[-400:])
+        return json.loads(proc.stdout), proc.stderr
+
+    def test_a_severed_row_is_counted_and_its_label_named(self):
+        dump, _ = self._run("split.pdf")
+        hints = dump["layout_hints"]
+        self.assertEqual(hints["split_table_rows"], 1)
+        self.assertEqual(hints["split_table_pages"],
+                         [{"page": 2, "label": fixtures.SPLIT_DANGLING_LABEL}])
+
+    def test_a_crosstab_corner_cell_is_not_a_split(self):
+        """Page 4 opens with `["", "Q1", "Q2"]` — the same row shape with no
+        page break behind it (page 3 has no table). Without this conjunct the
+        counter fires on every crosstab in the corpus."""
+        dump, _ = self._run("split.pdf")
+        self.assertNotIn(4, [hit["page"] for hit
+                             in dump["layout_hints"]["split_table_pages"]])
+        self.assertEqual(dump["pages"][3]["tables"][0][0],
+                         fixtures.SPLIT_CROSSTAB[0])
+
+    def test_a_first_column_blank_by_design_is_not_a_split(self):
+        """Pages 5-6 are one table with a merged category column: blank-first
+        is its own shape, so its continuation is not a severed row."""
+        dump, _ = self._run("split.pdf")
+        self.assertNotIn(6, [hit["page"] for hit
+                             in dump["layout_hints"]["split_table_pages"]])
+        self.assertEqual(dump["pages"][5]["tables"][0][0][0], "")
+
+    def test_a_single_column_layout_box_cannot_be_continued(self):
+        """The measured false positives came after a one-cell "table" — the
+        layout box a Chrome print produces — whose next page opened a real
+        table with an unlabelled first column."""
+        pages = [
+            {"n": 1, "text": "", "tables": [[["a full-width layout box"]]]},
+            {"n": 2, "text": "", "tables": [[["", "Name", "Value"]]]},
+        ]
+        self.assertEqual(pdf_extract._split_table_rows(pages), [])
+
+    def test_the_row_is_looked_for_under_a_repeated_header(self):
+        """The measured shape: page 2 repeats the header row, and the severed
+        row is the one under it. A rule that only inspected row 0 would find
+        none of the four documents."""
+        dump, _ = self._run("split.pdf")
+        table = dump["pages"][1]["tables"][0]
+        self.assertEqual(table[0], fixtures.SPLIT_HEADER_ROW)
+        self.assertEqual(table[1][0], "")
+
+    def test_the_counters_are_in_every_dump(self):
+        dump, _ = self._run("digital.pdf")
+        self.assertEqual(dump["layout_hints"]["split_table_rows"], 0)
+        self.assertEqual(dump["layout_hints"]["split_table_pages"], [])
+
+    def test_the_hint_names_the_pages_and_refuses_to_stitch(self):
+        _, stderr = self._run("split.pdf")
+        self.assertIn("page(s) 2 (label `2.11`)", stderr)
+        self.assertIn("this dump does not do it", stderr)
+
+    def test_a_document_with_no_split_gets_no_hint(self):
+        _, stderr = self._run("digital.pdf")
+        self.assertNotIn("first cell is EMPTY", stderr)
+
+    def test_dangling_label_drops_the_page_footer_first(self):
+        """Every page of the measured document ends with `26 / 48`; without
+        dropping it the label reported is always the footer."""
+        label = pdf_extract._dangling_label
+        self.assertEqual(label("...step 2.11]_\n2.11\n26 / 48"), "2.11")
+        self.assertEqual(label("intro\nOB-9\n- 7 -"), "OB-9")
+        self.assertIsNone(label("a full sentence of prose ending the page\n9"))
+        self.assertIsNone(label(""))
+        self.assertIsNone(label("12 / 48"))
+
+    def test_blank_first_ratio_truth_table(self):
+        ratio = pdf_extract._blank_first_ratio
+        self.assertEqual(ratio([["a", "b"], ["c", "d"]]), 0.0)
+        self.assertEqual(ratio([["", "b"], ["c", "d"]]), 0.5)
+        self.assertEqual(ratio([[None, "b"], ["  ", "d"]]), 1.0)
+        self.assertEqual(ratio([]), 1.0, "an empty table must stay quiet")
+
+    def test_a_hint_never_moves_the_exit_code(self):
+        proc = _run_cli([str(FIXTURES_DIR / "split.pdf")])
+        self.assertEqual(proc.returncode, 0)
+
+
+class TestColumnGutters(unittest.TestCase):
+    """Multi-column pages are counted, and the crop is measured before it is
+    advised (residual 6).
+
+    §3.1 of the reference calls multi-column layout pitfall number one, and
+    nothing in the dump measured it: pdfplumber groups characters into lines by
+    Y, so two columns sharing baselines come back interleaved and the text
+    reads as nonsense. On the measured OCR'd contract `--layout` — the remedy
+    that section offers — does not separate them either."""
+
+    @classmethod
+    def setUpClass(cls):
+        _ensure_fixtures()
+
+    def _run(self, fixture, *flags):
+        proc = _run_cli([str(FIXTURES_DIR / fixture), *flags])
+        self.assertEqual(proc.returncode, 0, proc.stderr[-400:])
+        return json.loads(proc.stdout), proc.stderr
+
+    def test_a_two_column_page_is_detected_and_its_gutter_reported(self):
+        dump, _ = self._run("columns.pdf")
+        hints = dump["layout_hints"]
+        self.assertEqual(hints["multi_column_pages"], 1)
+        self.assertEqual(hints["column_probe"]["pages"], [1])
+        gutter = hints["column_probe"]["gutters"][0][0]
+        self.assertAlmostEqual(gutter, fixtures.COLUMNS_GUTTER_X, delta=15)
+
+    def test_the_single_column_control_page_is_not_counted(self):
+        """Page 2 carries the same amount of text in one column. If it were
+        counted too, the signal would be measuring text, not layout."""
+        dump, _ = self._run("columns.pdf")
+        self.assertEqual(dump["layout_hints"]["column_probe"]["pages"], [1])
+
+    def test_the_columns_really_are_interleaved_without_the_crop(self):
+        """The defect itself, not just the signal: one extracted line holds
+        both columns' text."""
+        dump, _ = self._run("columns.pdf")
+        first = dump["pages"][0]["text"].split("\n")[0]
+        self.assertIn(fixtures.COLUMNS_LEFT.format(i=0), first)
+        self.assertIn(fixtures.COLUMNS_RIGHT.format(i=0), first)
+
+    def test_the_probe_measures_the_crop_before_advising_it(self):
+        """Same contract as the y-tolerance probe: cropping at the gutter has
+        to be shown to help on THIS document before it is recommended."""
+        dump, stderr = self._run("columns.pdf")
+        probe = dump["layout_hints"]["column_probe"]
+        self.assertEqual(probe["lines_before"], fixtures.COLUMNS_ROWS)
+        self.assertEqual(probe["lines_after"], 2 * fixtures.COLUMNS_ROWS)
+        self.assertIn("Cropping at the gutter took 30 line(s) to 60", stderr)
+        self.assertIn("--layout does NOT separate them", stderr)
+
+    def test_a_document_with_one_column_gets_no_hint(self):
+        dump, stderr = self._run("digital.pdf")
+        self.assertEqual(dump["layout_hints"]["multi_column_pages"], 0)
+        self.assertNotIn("column gutter", stderr)
+        self.assertNotIn("column_probe", dump["layout_hints"])
+
+    def test_a_page_with_tables_is_not_examined(self):
+        """A table's own column gaps are gutters by this definition, and
+        telling the caller to crop a table into columns would be worse than
+        silence.
+
+        `columns.pdf` page 3 is the case with teeth: a two-column ruled table
+        whose gap IS a full-height gutter by the same measurement (verified
+        below by calling the detector on that page directly), sitting on a page
+        the hint must stay silent about. Asserting this on a document whose
+        table page has no gutter proves nothing — measured: the guard could be
+        deleted and every test still passed until this page existed."""
+        import pdfplumber  # type: ignore
+
+        dump, _ = self._run("columns.pdf")
+        self.assertTrue(dump["pages"][2]["tables"], "fixture lost its table")
+        with pdfplumber.open(FIXTURES_DIR / "columns.pdf") as pdf:
+            self.assertTrue(
+                pdf_extract._page_gutters(pdf.pages[2]),
+                "the table page no longer has a gutter to be skipped")
+        self.assertEqual(dump["layout_hints"]["multi_column_pages"], 1)
+        self.assertEqual(dump["layout_hints"]["column_probe"]["pages"], [1])
+
+    def _synthetic_page(self, rows, *, right_from=0, bridge_lines=0):
+        """A page of `rows` two-column text lines, built as characters."""
+        chars = []
+        for row in range(rows):
+            top = 100.0 + row * 20.0
+            for i in range(20):
+                chars.append({"x0": 72.0 + i * 10, "x1": 80.0 + i * 10,
+                              "top": top, "bottom": top + 10,
+                              "size": 10.0, "text": "x"})
+            if row >= right_from:
+                for i in range(20):
+                    chars.append({"x0": 320.0 + i * 10, "x1": 328.0 + i * 10,
+                                  "top": top, "bottom": top + 10,
+                                  "size": 10.0, "text": "x"})
+            if row < bridge_lines:
+                chars.append({"x0": 275.0, "x1": 318.0, "top": top,
+                              "bottom": top + 10, "size": 10.0, "text": "-"})
+        return mock.Mock(chars=chars, width=612.0, height=792.0)
+
+    def test_a_few_lines_crossing_the_gutter_are_tolerated(self):
+        """Measured: on the two-column contract a stray OCR box lay across the
+        gutter on 2 pages of 3. A strict "empty on every line" rule found the
+        document on 1 page of 3 instead of 3 of 3."""
+        self.assertTrue(pdf_extract._page_gutters(self._synthetic_page(40)))
+        self.assertTrue(pdf_extract._page_gutters(
+            self._synthetic_page(40, bridge_lines=1)))
+
+    def test_a_gutter_most_lines_cross_is_not_a_gutter(self):
+        self.assertEqual(
+            pdf_extract._page_gutters(
+                self._synthetic_page(40, bridge_lines=20)), [])
+
+    def test_a_column_that_only_half_the_page_reaches_is_not_a_gutter(self):
+        """The photo-beside-prose false positive, measured at 0.54/0.50 of the
+        lines against 0.62-0.82 for real columns."""
+        self.assertEqual(
+            pdf_extract._page_gutters(
+                self._synthetic_page(40, right_from=25)), [])
+
+    def test_a_short_page_is_not_examined(self):
+        """Under `_COLUMN_MIN_LINES` lines a coincidental band is likely; the
+        signal is about a page of body text."""
+        self.assertEqual(
+            pdf_extract._page_gutters(self._synthetic_page(6)), [])
+
+
+class TestInlineGlyphs(unittest.TestCase):
+    """An emoji is an image object, and one PNG per ⚠/✅ buries the document's
+    real artwork (residual 3). Measured: 10 of 15 files on one document, 24
+    placements on another. The test is "a glyph", never "a small image"."""
+
+    @classmethod
+    def setUpClass(cls):
+        _ensure_fixtures()
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.out = Path(self.tmp.name) / "images"
+        self.addCleanup(self.tmp.cleanup)
+        self.dump = pdf_extract.extract_pdf(
+            FIXTURES_DIR / "glyphs.pdf", password=None, layout=False,
+            images_dir=self.out)
+
+    def test_the_inline_glyph_is_not_written(self):
+        summary = self.dump["images_summary"]
+        self.assertEqual(summary["inline_glyphs"], 1)
+        self.assertEqual(summary["files_written"], 2)
+
+    def test_a_larger_picture_on_the_same_text_line_is_kept(self):
+        """The height conjunct, exercised: same artwork, same page, beside
+        prose, four times the line height."""
+        kept = self.dump["pages"][0]["images"]
+        self.assertEqual(len(kept), 1)
+        self.assertEqual(kept[0]["bbox"][2] - kept[0]["bbox"][0], 48.0)
+        self.assertTrue(Path(kept[0]["file"]).is_file())
+
+    def test_an_icon_of_exactly_the_glyph_size_off_a_text_line_is_kept(self):
+        """The conjunct that makes this "a glyph" and not "a small image":
+        page 2's image is the same 11x11 pt with no text sharing its line."""
+        kept = self.dump["pages"][1]["images"]
+        self.assertEqual(len(kept), 1)
+        side = kept[0]["bbox"][2] - kept[0]["bbox"][0]
+        self.assertEqual(side, float(fixtures.GLYPH_STANDALONE_SIDE))
+
+    def test_the_note_says_what_was_dropped(self):
+        proc = _run_cli([str(FIXTURES_DIR / "glyphs.pdf"),
+                         "--extract-images", str(self.out) + "-cli"])
+        self.assertEqual(proc.returncode, 0)
+        self.assertIn("inline glyphs", proc.stderr)
+
+    def _placement(self, x0, top, side):
+        return {"x0": x0, "top": top, "x1": x0 + side, "bottom": top + side}
+
+    def _line(self, x0, top, size, count=5):
+        return [{"x0": x0 + i * size, "x1": x0 + (i + 1) * size,
+                 "top": top, "bottom": top + size, "size": size, "text": "a"}
+                for i in range(count)]
+
+    def test_is_inline_glyph_truth_table(self):
+        line = self._line(72.0, 100.0, 11.0)
+        glyph = self._placement(72.0 + 5 * 11.0 + 2, 100.0, 11.0)
+        self.assertTrue(pdf_extract._is_inline_glyph(glyph, line))
+        # not square
+        wide = {**glyph, "x1": glyph["x0"] + 40}
+        self.assertFalse(pdf_extract._is_inline_glyph(wide, line))
+        # no text on the line at all
+        self.assertFalse(pdf_extract._is_inline_glyph(glyph, []))
+        # much taller than the text it sits beside
+        big = self._placement(72.0 + 5 * 11.0 + 2, 100.0, 40.0)
+        self.assertFalse(pdf_extract._is_inline_glyph(big, line))
+        # right size, but nowhere near the text
+        far = self._placement(500.0, 100.0, 11.0)
+        self.assertFalse(pdf_extract._is_inline_glyph(far, line))
+        # degenerate box
+        self.assertFalse(pdf_extract._is_inline_glyph(
+            {"x0": 1.0, "top": 1.0, "x1": 1.0, "bottom": 1.0}, line))
+
+    def test_the_glyph_test_runs_before_anything_is_decoded(self):
+        """Guard order is load-bearing for cost as well as correctness: a
+        rejected glyph must never reach the decoder."""
+        sink = pdf_extract._ImageSink(self.out, dpi=150)
+        self.out.mkdir(parents=True, exist_ok=True)
+        page = mock.Mock(
+            width=612.0, height=792.0,
+            chars=self._line(72.0, 100.0, 11.0),
+            images=[{**self._placement(72.0 + 5 * 11.0 + 2, 100.0, 11.0),
+                     "name": "X1", "stream": None}])
+
+        def _boom(*args, **kwargs):
+            raise AssertionError("decoded an inline glyph")
+
+        with mock.patch.object(pdf_extract, "_fetch_raster", _boom):
+            records = pdf_extract._extract_rasters(
+                page, {}, sink, page_number=1)
+        self.assertEqual(records, [])
+        self.assertEqual(sink.inline_glyphs, 1)
+
+
+class TestBlankRasters(unittest.TestCase):
+    """A raster of one flat colour carries nothing, and the page it was the
+    only artwork on is blank (residual 5).
+
+    Measured on a 48-page document's page 9: `scanned: true`, coverage 0.63,
+    and the extracted 816x1056 PNG held nothing but white — the signal was
+    telling the caller to OCR an empty sheet."""
+
+    @classmethod
+    def setUpClass(cls):
+        _ensure_fixtures()
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.out = Path(self.tmp.name) / "images"
+        self.addCleanup(self.tmp.cleanup)
+
+    def _extract(self, **kwargs):
+        kwargs.setdefault("images_dir", self.out)
+        return pdf_extract.extract_pdf(
+            FIXTURES_DIR / "blankraster.pdf", password=None, layout=False,
+            **kwargs)
+
+    def test_a_flat_raster_is_counted_and_not_written(self):
+        dump = self._extract()
+        self.assertEqual(dump["images_summary"]["blank"], 2)
+        self.assertEqual(dump["pages"][0]["images"], [])
+
+    def test_the_page_it_emptied_is_named_blank(self):
+        dump = self._extract()
+        self.assertEqual(dump["blank_pages"], [1])
+        self.assertIn(1, dump["scanned_pages"],
+                      "a blank page is a scanned page by every other test")
+
+    def test_a_raster_with_content_is_kept(self):
+        """The control: same extraction path, pixels that differ."""
+        dump = self._extract()
+        kept = dump["pages"][1]["images"]
+        self.assertEqual(len(kept), 1)
+        self.assertTrue(Path(kept[0]["file"]).is_file())
+        self.assertEqual(dump["blank_pages"], [1])
+
+    def test_the_scan_warning_says_there_is_nothing_to_ocr(self):
+        proc = _run_cli([str(FIXTURES_DIR / "blankraster.pdf"),
+                         "--extract-images", str(self.out)])
+        self.assertEqual(proc.returncode, 0)
+        self.assertIn("carry no ink at all", proc.stderr)
+        self.assertIn("nothing for OCR to find", proc.stderr)
+
+    def test_without_the_flag_no_blankness_is_claimed(self):
+        """Deciding needs pixels, and without `--extract-images` nothing is
+        decoded. An absent key says "did not look"."""
+        dump = pdf_extract.extract_pdf(
+            FIXTURES_DIR / "blankraster.pdf", password=None, layout=False)
+        self.assertNotIn("blank_pages", dump)
+
+    def test_the_cheap_gate_only_decides_who_pays_for_a_decode(self):
+        """`_BLANK_RAW_BPP` bounds the cost; the verdict always comes from the
+        pixels. An image whose stream is too dense to be flat must not even be
+        opened — patched here to raise if it is."""
+        sink = pdf_extract._ImageSink(self.out, dpi=150)
+        self.out.mkdir(parents=True, exist_ok=True)
+
+        class _Stream:
+            objid = 1
+            rawdata = b"x" * 5000          # 5000 / 10000 px = 0.5 bpp
+
+        page = mock.Mock(
+            width=612.0, height=792.0, chars=[],
+            images=[{"x0": 0, "top": 0, "x1": 100, "bottom": 100,
+                     "name": "X1", "stream": _Stream()}])
+
+        def _boom(*args, **kwargs):
+            raise AssertionError("decoded a stream too dense to be flat")
+
+        with mock.patch.object(pdf_extract, "_fetch_raster",
+                               return_value=(b"x", ".png")), \
+                mock.patch.object(pdf_extract, "_is_flat_raster", _boom):
+            records = pdf_extract._extract_rasters(
+                page, {1: ("/k", 100, 100)}, sink, page_number=1)
+        self.assertEqual(len(records), 1)
+        self.assertEqual(sink.blank, 0)
+
+    def test_a_blank_raster_beside_live_text_does_not_blank_the_page(self):
+        """`blank_pages` is about the page, not the raster. Page 3 carries the
+        SAME white placeholder image beside 20 lines of prose: its only
+        artwork is blank, and the page is perfectly readable. Without the
+        char-count join `extract_pdf` applies, that page would be reported
+        blank and the caller would skip its text."""
+        dump = self._extract()
+        self.assertEqual(dump["images_summary"]["blank"], 2)
+        self.assertEqual(dump["pages"][2]["images"], [])
+        self.assertGreater(dump["pages"][2]["char_count"],
+                           pdf_extract._SCANNED_CHAR_THRESHOLD)
+        self.assertEqual(dump["blank_pages"], [1])
+
+    def test_is_flat_raster_answers_from_the_pixels(self):
+        import io as _io
+
+        from PIL import Image as _Image  # type: ignore
+
+        def png(colour, *, dot=False):
+            image = _Image.new("RGB", (40, 40), colour)
+            if dot:
+                image.putpixel((20, 20), (0, 0, 0))
+            buffer = _io.BytesIO()
+            image.save(buffer, format="PNG")
+            return buffer.getvalue()
+
+        self.assertTrue(pdf_extract._is_flat_raster(png("white")))
+        self.assertTrue(pdf_extract._is_flat_raster(png((17, 92, 240))))
+        self.assertFalse(pdf_extract._is_flat_raster(png("white", dot=True)))
+        self.assertFalse(pdf_extract._is_flat_raster(b"not an image"),
+                         "unreadable bytes must claim nothing")
+
+
+class TestTextEnclosingClusters(unittest.TestCase):
+    """A vector cluster that encloses the page's body text is table ruling, not
+    a figure (residual 4).
+
+    Measured on four pages of two documents: 345-385 KB PNGs that turn out to
+    be crops of the whole text area. The existing containment test cannot see
+    them — the ruling runs past what `find_tables()` resolves, so the cluster
+    comes out BIGGER than the table (0.89 against the 0.9 it needs)."""
+
+    @classmethod
+    def setUpClass(cls):
+        _ensure_fixtures()
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.out = Path(self.tmp.name) / "images"
+        self.addCleanup(self.tmp.cleanup)
+
+    def _extract(self, name, **kwargs):
+        kwargs.setdefault("images_dir", self.out)
+        return pdf_extract.extract_pdf(
+            FIXTURES_DIR / name, password=None, layout=False, **kwargs)
+
+    def test_the_page_wide_ruling_crop_is_refused_and_counted(self):
+        dump = self._extract("ruling.pdf")
+        summary = dump["images_summary"]
+        self.assertEqual(summary["text_enclosing"], 1)
+        self.assertEqual(summary["text_enclosing_pages"], [1])
+        self.assertEqual(dump["pages"][0]["images"], [])
+
+    def test_the_fixture_still_reproduces_the_containment_miss(self):
+        """Without this the fixture could stop exercising the defect: if the
+        cluster were fully inside the detected table, the OLD test would reject
+        it and the new one would never be reached."""
+        import pdfplumber  # type: ignore
+
+        with pdfplumber.open(FIXTURES_DIR / "ruling.pdf") as pdf:
+            page = pdf.pages[0]
+            clusters, _ = pdf_extract._vector_clusters(
+                [*page.lines, *page.rects, *page.curves],
+                float(page.width), float(page.height))
+            tables = pdf_extract._table_boxes(page)
+            biggest = max(clusters,
+                          key=lambda c: (c["bbox"][2] - c["bbox"][0])
+                          * (c["bbox"][3] - c["bbox"][1]))
+            self.assertTrue(tables, "fixture lost its detectable table")
+            self.assertTrue(
+                pdf_extract._is_figure_cluster(
+                    biggest, float(page.width), float(page.height), tables),
+                "the containment test now rejects it — the fixture no longer "
+                "reproduces the defect this rule exists for")
+
+    def test_a_real_vector_figure_is_still_extracted(self):
+        """The control that bounds the cost: `figure.pdf` page 3 is a genuine
+        vector diagram with a caption (90 characters inside the cluster
+        against the 200 the rule rejects at)."""
+        dump = self._extract("figure.pdf")
+        self.assertTrue(dump["pages"][2]["images"])
+        self.assertEqual(dump["pages"][2]["images"][0]["kind"], "vector")
+        self.assertEqual(dump["images_summary"]["text_enclosing"], 0)
+
+    def test_the_warning_names_the_pages_and_offers_the_fallback(self):
+        proc = _run_cli([str(FIXTURES_DIR / "ruling.pdf"),
+                         "--extract-images", str(self.out)])
+        self.assertEqual(proc.returncode, 0)
+        self.assertIn("enclose that page's body text", proc.stderr)
+        self.assertIn("page(s) 1", proc.stderr)
+        self.assertIn("preview.py", proc.stderr)
+
+    def test_the_empty_directory_is_explained_by_the_rule_that_fired(self):
+        """"No artwork was written" must not read as "this document has none"
+        when every candidate was rejected."""
+        proc = _run_cli([str(FIXTURES_DIR / "ruling.pdf"),
+                         "--extract-images", str(self.out)])
+        self.assertIn("every candidate was rejected", proc.stderr)
+        self.assertNotIn("has no extractable artwork", proc.stderr)
+
+    def test_the_reject_is_counted_without_poppler_too(self):
+        """It is rejected by what it holds, not by whether Poppler is
+        installed; counting it only when the renderer happens to be present
+        would make the number depend on the environment."""
+        with mock.patch.object(pdf_extract.shutil, "which", return_value=None):
+            dump = self._extract("ruling.pdf")
+        summary = dump["images_summary"]
+        self.assertEqual(summary["text_enclosing"], 1)
+        self.assertEqual(summary["vector_unrendered"], 0,
+                         "a rejected cluster is not an unrendered figure")
+
+    def test_encloses_text_counts_only_fully_contained_characters(self):
+        """A label the cluster merely overlaps belongs to the prose around it,
+        not to the figure."""
+        inside = [{"x0": 20.0, "x1": 25.0, "top": 20.0, "bottom": 25.0}] * 300
+        outside = [{"x0": 5.0, "x1": 25.0, "top": 20.0, "bottom": 25.0}] * 300
+        box = (10.0, 10.0, 100.0, 100.0)
+        self.assertTrue(pdf_extract._encloses_text(box, inside))
+        self.assertFalse(pdf_extract._encloses_text(box, outside))
+        self.assertFalse(pdf_extract._encloses_text(box, inside[:199]))
+        self.assertTrue(pdf_extract._encloses_text(box, inside[:200]))
+        self.assertFalse(pdf_extract._encloses_text(None, inside))
 
 if __name__ == "__main__":
     unittest.main()

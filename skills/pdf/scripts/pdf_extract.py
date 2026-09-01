@@ -69,6 +69,42 @@ and the multi-column phantoms among them are indistinguishable from data here �
 and it fires on a genuinely ruled one-column table too, which the ``onecol.pdf``
 fixture pins deliberately.
 
+What the second dogfood cycle changed (v1.5): twenty unfamiliar documents were
+taken all the way to Markdown-with-images, and six of the things that cost the
+composers work are closed here. Every threshold below was measured on that
+corpus, and each has a stated cost:
+
+* **Links reach the dump.** 578 ``/URI`` annotations across the twenty
+  documents were dropped entirely — for a web page printed to PDF (which this
+  repository's own ``html2pdf.py`` produces) losing every URL is losing
+  content, not formatting. Each page carries ``links`` (``uri`` / ``text`` /
+  ``bbox``) and the top level ``link_count``. The anchor text is the characters
+  whose *centre* lies inside the annotation rectangle — a producer's box clips
+  glyphs at both ends, and taking everything it touches appends the
+  neighbouring punctuation. Internal ``/GoTo`` links are deliberately not
+  reported: the destination is in the file the caller already has.
+* **A table row severed by a page break is named** (``split_table_rows``).
+  Its continuation opens the next page's table with an empty first cell while
+  the label stays behind — sometimes only in the previous page's flat ``text``,
+  and sometimes the whole row is in no ``tables`` entry at all. Stitching stays
+  composition (§4 of the reference); knowing is the dump's job.
+* **Multi-column pages are measured** (``multi_column_pages``), the first
+  pitfall the reference lists and the only one nothing checked. ``--layout``,
+  which that section offers as the remedy, does not separate columns — it
+  preserves the interleaving with spaces in it — so the hint reports the
+  gutter's x coordinate, which is the argument for the crop that does work.
+* **An inline glyph is not written as artwork.** An emoji from a colour font is
+  a raster XObject, so a naive extraction writes one PNG per ⚠/✅ (10 of 15
+  files on one document). The test is "a glyph", never "a small image".
+* **A raster of one flat colour is not written**, and the page whose only
+  artwork it was is reported in ``blank_pages`` — the measured page was
+  ``scanned`` with 0.63 coverage and pure white pixels, i.e. the signal was
+  sending the reader to OCR an empty sheet.
+* **A vector cluster that encloses the page's body text is refused** — table
+  ruling whose crop is a picture of the page (345-385 KB of it on four measured
+  pages), which the table-containment test misses because the ruling outgrows
+  the table pdfplumber detects.
+
 Lossy-text-layer detection (v1.2): a producer that embeds no fonts and writes
 in an alphabet its single-byte Latin encoding cannot express drops those
 characters *when the file is written* — the content stream holds spaces where
@@ -154,6 +190,25 @@ exit ``6`` exactly as ``-o`` is.
 Honest scope (v1):
   - Final Markdown composition is the caller's job — never scripted.
   - OCR is not bundled; scans are detected, not OCR'd.
+  - ``links`` reports ``/URI`` annotations only. An internal ``/GoTo`` link (a
+    table of contents pointing at page 7) is not reported at all, and neither
+    is a URL that exists in the text but carries no annotation.
+  - ``multi_column_pages`` skips any page with an extracted table, because a
+    table's own column gaps are gutters by the same measurement. A two-column
+    page that also carries a table is therefore missed — a real recall hole,
+    not an oversight.
+  - ``split_table_rows`` counts a severed row; it never repairs one. It also
+    cannot see a break that leaves both halves looking complete, and its two
+    precision conjuncts (the previous page must end a multi-column table that
+    is not blank-first by design) each cost recall in that direction.
+  - The inline-glyph rejection can drop a meaningful icon: a 16x16 status glyph
+    in a table cell is square, text-sized and beside text, which is the whole
+    test. It is counted in ``images_summary.inline_glyphs`` and said on stderr,
+    never silent, but the file is not written.
+  - A deliberate single-colour raster (a swatch) is rejected as blank. The
+    colour was the only thing it carried, and the dump does not report it.
+  - ``blank_pages`` needs pixels, so it exists only under ``--extract-images``.
+    Its absence means "did not look", not "none".
   - Table detection defaults to pdfplumber's ``lines`` strategy;
     ``--table-strategy lines_strict`` is the only bundled alternative and
     borderless-table tuning (``snap_tolerance`` etc.) is inline-agent work,
@@ -260,10 +315,13 @@ import _venv_bootstrap  # self-bootstrap into scripts/.venv (replicated per CLAU
 _venv_bootstrap.reexec_into_venv(requires=("pdfplumber",), _file=__file__)
 
 import argparse
+import bisect
 import hashlib
+import io
 import json
 import logging
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -356,6 +414,26 @@ _IMAGE_BACKDROP_RATIO = 0.9
 _FIGURE_MIN_AREA_RATIO = 0.01
 _FIGURE_MIN_SIDE_PT = 24.0
 _FIGURE_TABLE_OVERLAP = 0.9
+# A fifth test, added after dogfooding (residual 4): a cluster that ENCLOSES
+# this many characters is the page's body text with ruling around it, not a
+# picture. The containment test above cannot see that case — it rejects a
+# cluster that lies inside a detected table, and the measured pages are the
+# other way round: the ruling ran on past what `find_tables()` could resolve,
+# so the cluster came out BIGGER than the table (containment 0.89, a hair under
+# the 0.9 needed) and 345-385 KB crops of whole text pages were written as
+# "figures". What separates the two cleanly is what the box holds: 434-1974
+# characters for the six measured false positives, 0-36 for every genuine
+# vector figure in the same corpus. The value is `_FIGURE_CHAR_THRESHOLD`'s for
+# the same reason — that much text is not a picture — but it is a separate
+# constant because it measures a *region*, not a page. The ONLY site that reads
+# it is `_encloses_text`.
+#
+# The cost, stated where it can be checked: a full-page diagram carrying more
+# than 200 characters of labels is rejected too, and `figure_dominant` will not
+# flag that page either (it needs under 200 characters). The rejection is
+# therefore counted and named on stderr with its pages, and `preview.py`
+# renders the sheet — a page-wide crop is what that tool does anyway.
+_FIGURE_ENCLOSED_CHAR_LIMIT = 200
 # Padding added around a cluster before it is cropped. A path's bounding box is
 # its *centreline* box, so half a stroke width bleeds outside it (measured at
 # 1.3-1.6 pt on a 3 pt stroke), and the cluster bbox is quantised to
@@ -383,6 +461,32 @@ _PDFTOCAIRO_TIMEOUT = 30
 _IMAGE_SUFFIXES = frozenset({
     ".png", ".jpg", ".jpeg", ".jp2", ".tiff", ".tif", ".bmp", ".gif", ".webp",
 })
+# --- inline-glyph rejection (residual 3) ----
+# An emoji drawn from a colour font (Apple Color Emoji and friends) is a raster
+# XObject, so classification by object model — correctly — calls it an image,
+# and a document sprinkled with ⚠/✅ fills the destination with one PNG per
+# glyph: 10 of 15 files on one measured document, most of the directory on
+# another. The test is "a glyph", never "a small image", because documents also
+# carry meaningful icons of exactly that size: the placement must be square,
+# as tall as the text on its own line, and adjacent to characters on that line.
+# Measured on two documents: every emoji scored aspect 1.00 and height/font-size
+# 1.00 with 1-4 characters within an em, while the genuine small icons on a
+# third scored 0 characters sharing their line at all. Read by
+# `_is_inline_glyph` only.
+_GLYPH_MAX_ASPECT = 1.25
+_GLYPH_SIZE_TOLERANCE = 0.35
+_GLYPH_ADJACENCY_EM = 1.5
+# --- blank-raster rejection (residual 5) ----
+# Measured on a 48-page document's page 9: `scanned: true`, coverage 0.63, and
+# the extracted 816x1056 PNG held nothing but white — the page is empty, while
+# the scan signal was telling the caller to OCR it. Deciding needs pixels, so
+# the cheap half comes first: the raw (still encoded) stream length per declared
+# pixel. The blank page measured 0.0056 bytes/pixel; the lowest non-blank raster
+# in the same corpus measured 0.0446, and a scan's page raster 0.053-0.126. The
+# gate only decides who pays for a decode — the verdict always comes from the
+# pixels, so a blank image stored uncompressed is simply not reported (a missed
+# call), never a wrong one. Read by `_extract_rasters` only.
+_BLANK_RAW_BPP = 0.02
 # Pixel ceiling for a raster the extractor will ask pypdf to decode. pypdf
 # allocates from the stream's DECLARED /Width and /Height, not from the bytes on
 # disk, so a few hundred bytes of Flate can demand gigabytes. The declaration is
@@ -428,6 +532,41 @@ _HINT_PROBE_PAGES = 3        # how many affected pages a hint re-reads to check
 _HINT_Y_TOLERANCE = 5.0      # the value the marker hint advises, and probes with
 _PHANTOM_TABLE_HINT = 2      # …or half the tables, whichever comes first
 _PHANTOM_TABLE_RATIO = 0.5
+
+# --- split-table detection (residual 1) -------------------------------------
+# A row cut in half by a page break arrives with an empty FIRST cell: its label
+# stayed on the previous page. Two conjuncts keep the two look-alikes out — a
+# crosstab's blank corner cell (nothing to continue: the previous page ends no
+# table) and a table whose first column is blank by design (blank-first is that
+# table's own shape). Measured on the 20-document dogfood corpus: 11 hits, all
+# of them real page-break splits, 0 in the other 14 documents.
+_SPLIT_PROBE_ROWS = 2        # a continuation row sits at the top, under at
+                             # most one repeated header row
+_SPLIT_BLANK_NORM_RATIO = 0.5
+_SPLIT_LABEL_MAX_CHARS = 16  # a stranded label is a token, not a sentence
+_PAGE_FOOTER_RE = re.compile(
+    r"^[-—–]?\s*\d+\s*(?:/\s*\d+|of\s+\d+)?\s*[-—–]?$")
+
+# --- multi-column detection (residual 6) ------------------------------------
+# A column gutter is a vertical band nearly every text line respects. Measured
+# on a two-column bilingual contract: 6-9 pt wide (columns nearly touch — an
+# 18 pt threshold misses it), crossed by 0-2 of ~70 lines where OCR put a
+# stray box across it. `_COLUMN_BRIDGE_RATIO` is what tolerates those; without
+# it the same document is detected on 1 page of 3 instead of 3 of 3.
+_COLUMN_MIN_GUTTER_PT = 6.0
+_COLUMN_LINE_TOL_PT = 3.0    # pdfplumber's own absolute line grouping
+_COLUMN_BRIDGE_RATIO = 0.05
+_COLUMN_SIDE_RATIO = 0.6     # lines with text on BOTH sides of the gutter
+_COLUMN_MIN_LINES = 12
+_COLUMN_MIN_CHARS = 200
+_COLUMN_EDGE_MARGIN = 0.25   # the gutter's centre lies in the middle half
+_HINT_COLUMN_PAGES = 3       # pages the column probe re-reads
+
+# Anchor text is looked up per link over the page's characters; a page with
+# thousands of annotations would otherwise pay for each one. Measured: 188
+# links on one page cost 0.5 s with a linear scan, 0.03 s with the sorted
+# index this cap sits on top of.
+_MAX_LINKS_PER_PAGE = 2000
 
 
 _EXIT_OK = 0
@@ -994,6 +1133,29 @@ def _is_figure_cluster(cluster: dict, page_width: float, page_height: float,
                    for table in table_boxes)
 
 
+def _encloses_text(box: tuple | None, chars) -> bool:
+    """Does this cluster box hold the page's body text rather than a picture?
+
+    The measurement that separates a cropped diagram from a cropped page: the
+    six false positives measured on real documents enclose 434-1974 characters,
+    every genuine vector figure in the same corpus 0-36. Counting stops at the
+    limit, so a dense page costs the same as a sparse one.
+
+    A character counts when it is entirely inside the box — a label the cluster
+    merely overlaps belongs to the surrounding prose, not to the figure."""
+    if box is None:
+        return False
+    x0, top, x1, bottom = box
+    enclosed = 0
+    for char in chars:
+        if (char["x0"] >= x0 and char["x1"] <= x1
+                and char["top"] >= top and char["bottom"] <= bottom):
+            enclosed += 1
+            if enclosed >= _FIGURE_ENCLOSED_CHAR_LIMIT:
+                return True
+    return False
+
+
 def _figure_boxes(page, box: tuple):
     """A cluster bbox → `(page_box, render_box)`, both padded and clamped.
 
@@ -1083,6 +1245,25 @@ class _ImageSink:
         self.dropped_backdrop = 0
         self.dropped_capped = 0
         self.vector_unrendered = 0
+        self.inline_glyphs = 0
+        self.blank = 0
+        self.text_enclosing = 0
+        # Pages, not just counts: both of these send the reader somewhere —
+        # `blank_pages` says a `scanned` page has nothing to OCR, and
+        # `text_enclosing_pages` says which sheet to render if the rejected
+        # cluster really was a diagram.
+        self.blank_pages: list[int] = []
+        self.text_enclosing_pages: list[int] = []
+
+    def note_text_enclosing(self, page_number: int, count: int) -> None:
+        """Record vector clusters rejected for enclosing the page's body text.
+
+        One method rather than two `+=` sites so the count and the page list
+        cannot drift apart — they are reported together, and a page named with
+        a zero count (or a count with no page) would be a lie in the warning."""
+        if count:
+            self.text_enclosing += count
+            self.text_enclosing_pages.append(page_number)
 
     def store(self, data: bytes, *, page_number: int, kind: str,
               suffix: str, objid: int | None = None) -> tuple[str, str]:
@@ -1275,26 +1456,105 @@ def _image_suffix(name) -> str:
     return suffix if suffix in _IMAGE_SUFFIXES else ".bin"
 
 
+def _is_inline_glyph(image: dict, chars) -> bool:
+    """Is this raster placement a text glyph rather than a picture?
+
+    An emoji from a colour font reaches the PDF as a raster XObject, so the
+    object model — correctly — calls it an image, and a document sprinkled with
+    ⚠/✅ fills the destination directory with one PNG per glyph (10 of 15 files
+    on one measured document). The test has to be "a glyph", not "a small
+    image": documents carry meaningful icons at exactly that size, and the
+    residual this closes says so explicitly.
+
+    Three conjuncts, all measured on the two documents that produced the
+    complaint: the placement is square (aspect 1.00 there), its height matches
+    the font size of the text sharing its line (ratio 1.00), and a character
+    sits within `_GLYPH_ADJACENCY_EM` of it on that line (1-4 there). The small
+    icons of a third document — genuine artwork — share their line with NO text
+    at all and are kept by the second conjunct alone."""
+    x0, top, x1, bottom = _obj_box(image)
+    width, height = x1 - x0, bottom - top
+    if width <= 0 or height <= 0:
+        return False
+    if not (1 / _GLYPH_MAX_ASPECT <= width / height <= _GLYPH_MAX_ASPECT):
+        return False
+    band = [c for c in chars if c["top"] < bottom and c["bottom"] > top]
+    if not band:
+        return False
+    sizes = sorted(float(c.get("size") or 0.0) for c in band)
+    size = sizes[len(sizes) // 2]
+    if size <= 0 or abs(height - size) / size > _GLYPH_SIZE_TOLERANCE:
+        return False
+    reach = _GLYPH_ADJACENCY_EM * size
+    return any(0 <= x0 - c["x1"] <= reach or 0 <= c["x0"] - x1 <= reach
+               for c in band)
+
+
+def _is_flat_raster(data: bytes) -> bool:
+    """True when every pixel of the decoded image is the same colour.
+
+    The measured case (residual 5): a page whose only raster is 816x1056 of
+    pure white, extracted as a file with nothing in it while `scanned` told the
+    caller to run OCR on the page. Only the pixels can answer this, so the
+    caller gates the call on the raw stream's bytes-per-pixel; here the answer
+    is exact rather than statistical — a single band whose min equals its max.
+
+    Pillow absent or unable to open the bytes yields False: "not known to be
+    blank", never a claim in either direction."""
+    try:
+        from PIL import Image  # noqa: PLC0415 — only the blank check needs it
+
+        with Image.open(io.BytesIO(data)) as image:
+            bands = image.convert("L") if image.mode not in ("L", "1") \
+                else image
+            low, high = bands.getextrema()
+            return low == high
+    except Exception:
+        return False
+
+
+def _raw_bytes_per_pixel(image: dict, width: int, height: int) -> float | None:
+    """Encoded stream length per declared pixel, or `None` when unknown.
+
+    Cheap: the raw (still compressed) stream is already in memory and its
+    length costs nothing. It decides only WHO pays for a decode — never
+    whether an image is blank."""
+    stream = image.get("stream")
+    raw = getattr(stream, "rawdata", None)
+    if raw is None or not width or not height:
+        return None
+    return len(raw) / float(width * height)
+
+
 def _extract_rasters(page, streams: dict, sink: _ImageSink, *,
                      page_number: int, reader=None, index: int = 0
                      ) -> list[dict]:
     """Copy every raster *placement* on `page` out to a file.
 
     Guard order is the whole point and is load-bearing: a placement must clear
-    the page-sized-backdrop test (`_is_image_backdrop`) AND the declared-pixel
-    cap (`_IMAGE_MAX_PIXELS`) BEFORE anything is decoded, because the decode
-    allocation is driven by the declaration rather than by the bytes on disk.
-    `_raster_streams` therefore hands over declared sizes only, and
-    `_fetch_raster` is called last, per surviving placement.
+    the page-sized-backdrop test (`_is_image_backdrop`), the inline-glyph test
+    AND the declared-pixel cap (`_IMAGE_MAX_PIXELS`) BEFORE anything is
+    decoded, because the decode allocation is driven by the declaration rather
+    than by the bytes on disk. `_raster_streams` therefore hands over declared
+    sizes only, and `_fetch_raster` is called last, per surviving placement.
 
     An image whose bytes cannot be produced — a filter pypdf cannot decode, a
     truncated stream, a Flate stream over pypdf's 75 MB inflate ceiling — is
-    counted in `sink.undecodable` and skipped, never faked."""
+    counted in `sink.undecodable` and skipped, never faked. So is one that
+    decodes to a single flat colour: it is counted in `sink.blank`, and the
+    page it was the only artwork on is remembered so the scan warning can say
+    the page is empty rather than send the caller to OCR it."""
     records: list[dict] = []
     page_area = float(page.width) * float(page.height)
+    chars = page.chars
+    placed = blank_here = 0
     for image in page.images:
         if _is_image_backdrop(image, page_area):
             sink.dropped_backdrop += 1
+            continue
+        placed += 1
+        if _is_inline_glyph(image, chars):
+            sink.inline_glyphs += 1
             continue
         stream = image.get("stream")
         objid = getattr(stream, "objid", None)
@@ -1315,6 +1575,11 @@ def _extract_rasters(page, streams: dict, sink: _ImageSink, *,
             sink.undecodable += 1
             continue
         data, suffix = fetched
+        bpp = _raw_bytes_per_pixel(image, width, height)
+        if bpp is not None and bpp < _BLANK_RAW_BPP and _is_flat_raster(data):
+            sink.blank += 1
+            blank_here += 1
+            continue
         path, digest = sink.store(
             data, page_number=page_number, kind="raster", suffix=suffix,
             objid=objid)
@@ -1331,24 +1596,42 @@ def _extract_rasters(page, streams: dict, sink: _ImageSink, *,
             "bytes": len(data),
             "sha1": digest,
         })
+    # A page whose every surviving placement was blank has no artwork on it.
+    # Recorded here because only this loop knows how many placements survived
+    # the backdrop rule; whether the PAGE is blank also depends on its text,
+    # which `extract_pdf` applies (the measured page's only text is its
+    # `9 / 48` footer).
+    if placed and blank_here == placed:
+        sink.blank_pages.append(page_number)
     return records
 
 
-def _figures_on(page, clusters: list) -> list:
-    """The clusters on `page` that are figures — the ONE definition.
+def _figures_on(page, clusters: list) -> tuple[list, list]:
+    """The clusters on `page` that are figures — the ONE definition — and the
+    ones rejected for enclosing the page's body text.
 
     Both the renderer and the "detected but not rendered" counter need this
-    answer, and computing it twice means a fifth predicate could silently make
+    answer, and computing it twice means a sixth predicate could silently make
     the counter disagree with what would actually have been extracted.
     `find_tables()` is hoisted here because it re-runs pdfplumber's whole edge
     detection; evaluating it per cluster would run it hundreds of times on a
-    dense page."""
+    dense page. The text-enclosure rejects come back separately rather than
+    being dropped on the floor: that rejection is the one a reader can
+    disagree with, so `main` names the pages it happened on."""
     if not clusters:
-        return []
+        return [], []
     tables = _table_boxes(page)
     width, height = float(page.width), float(page.height)
-    return [c for c in clusters
-            if _is_figure_cluster(c, width, height, tables)]
+    chars = page.chars
+    figures, texty = [], []
+    for cluster in clusters:
+        if not _is_figure_cluster(cluster, width, height, tables):
+            continue
+        if _encloses_text(cluster["bbox"], chars):
+            texty.append(cluster)
+        else:
+            figures.append(cluster)
+    return figures, texty
 
 
 def _extract_vectors(page, clusters: list, sink: _ImageSink, *,
@@ -1367,7 +1650,8 @@ def _extract_vectors(page, clusters: list, sink: _ImageSink, *,
     # Hoisted deliberately: `find_tables()` re-runs pdfplumber's whole edge
     # detection, and evaluating it inside the comprehension would run it once
     # per cluster — hundreds of times on a dense page.
-    figures = _figures_on(page, clusters)
+    figures, texty = _figures_on(page, clusters)
+    sink.note_text_enclosing(page_number, len(texty))
     if len(figures) > _FIGURE_MAX_PER_PAGE:
         sink.dropped_capped += len(figures) - _FIGURE_MAX_PER_PAGE
         figures = figures[:_FIGURE_MAX_PER_PAGE]
@@ -1417,6 +1701,89 @@ def _extract_vectors(page, clusters: list, sink: _ImageSink, *,
             "sha1": digest,
         })
     return records
+
+
+def _char_index(chars) -> tuple[list, list]:
+    """`page.chars` sorted by vertical centre, plus the key list `bisect` needs.
+
+    Built once per page and shared by every link on it. A linear scan per link
+    is the obvious alternative and was measured at 0.5 s on a 188-link page —
+    ~60 % of that document's whole extraction — because each link re-walks
+    every character on the sheet. Sorting once and slicing the band a link
+    covers takes the same work to 0.03 s."""
+    items = sorted(
+        (((c["top"] + c["bottom"]) / 2.0, (c["x0"] + c["x1"]) / 2.0,
+          c["top"], c["x0"], c["text"]) for c in chars),
+        key=lambda item: item[0],
+    )
+    return items, [item[0] for item in items]
+
+
+def _anchor_text(index: tuple[list, list], box: tuple) -> str | None:
+    """The text a link annotation covers, or `None`.
+
+    A character belongs to the link when its CENTRE is inside the annotation
+    rectangle: a producer's link box clips glyphs at both ends, and taking
+    every character that merely intersects it appends the neighbouring
+    punctuation (`[32,` where the anchor is `32`). Characters are re-sorted
+    into reading order because `page.chars` is in content-stream order, which a
+    producer is free to scramble.
+
+    `None` — not `""` — for a link over an image or a whitespace-only box: the
+    annotation is real and its target matters (match it to the `images`
+    placement at the same bbox), there is simply no text under it."""
+    items, keys = index
+    x0, top, x1, bottom = box
+    lo = bisect.bisect_left(keys, top)
+    hi = bisect.bisect_right(keys, bottom)
+    hits = [item for item in items[lo:hi] if x0 <= item[1] <= x1]
+    hits.sort(key=lambda item: (round(item[2], 1), item[3]))
+    text = "".join(item[4] for item in hits).strip()
+    return text or None
+
+
+def _page_links(page) -> list[dict]:
+    """Every `/URI` link annotation on the page, with the text it covers.
+
+    Dogfooding found the dump silently dropping these: 578 of them across the
+    20-document corpus, 17 on a single printed email. For the "web page printed
+    to PDF" class — which this repository's own `html2pdf.py` produces — losing
+    every URL is losing content, not formatting.
+
+    Only `/URI` annotations are reported. An internal `/GoTo` link (a table of
+    contents pointing at page 7) is deliberately NOT here: resolving its
+    destination means walking the name tree for a target the reader already
+    has, and 45 of them on one measured document would bury the external links
+    that cannot be recovered any other way.
+
+    Best-effort throughout, and the `try` deliberately covers the character
+    read as well as the annotations: this runs inside `_extract_page`, whose
+    text and tables are the contract, and a page whose annotation array or
+    character list is malformed must cost its links, never the dump."""
+    try:
+        annotations = page.hyperlinks
+        if not annotations:
+            return []
+        chars = page.chars
+    except Exception:
+        return []
+    index = _char_index(chars) if chars else ([], [])
+    links: list[dict] = []
+    for annotation in annotations[:_MAX_LINKS_PER_PAGE]:
+        try:
+            uri = annotation.get("uri")
+            if not uri:
+                continue
+            box = (float(annotation["x0"]), float(annotation["top"]),
+                   float(annotation["x1"]), float(annotation["bottom"]))
+        except (AttributeError, KeyError, TypeError, ValueError):
+            continue
+        links.append({
+            "uri": str(uri),
+            "text": _anchor_text(index, box),
+            "bbox": [round(v, 2) for v in box],
+        })
+    return links
 
 
 def _classify_page(char_count: int, has_images: bool) -> bool:
@@ -1483,6 +1850,23 @@ def _open_pdf(pdf_path: Path, password: str | None):
         ) from exc
 
 
+def _text_kwargs(layout: bool, x_tolerance_ratio: float | None,
+                 y_tolerance: float | None) -> dict:
+    """The `extract_text` keyword arguments for the run's settings.
+
+    One definition, two callers: the page walk and the column probe's crops.
+    A probe that extracted its columns under different tolerances than the dump
+    would be measuring a different document than the one the caller holds.
+    Every knob is passed only when it is set, so the default configuration
+    reaches pdfplumber as an untouched call."""
+    kwargs: dict = {"layout": layout}
+    if x_tolerance_ratio is not None:
+        kwargs["x_tolerance_ratio"] = x_tolerance_ratio
+    if y_tolerance is not None:
+        kwargs["y_tolerance"] = y_tolerance
+    return kwargs
+
+
 def _extract_page(
     page, *, layout: bool,
     x_tolerance_ratio: float | None = _DEFAULT_X_TOLERANCE_RATIO,
@@ -1513,12 +1897,8 @@ def _extract_page(
     Every knob is passed only when it is set, so the default configuration
     reaches pdfplumber as an untouched call and cannot drift from the legacy
     output."""
-    text_kwargs: dict = {"layout": layout}
-    if x_tolerance_ratio is not None:
-        text_kwargs["x_tolerance_ratio"] = x_tolerance_ratio
-    if y_tolerance is not None:
-        text_kwargs["y_tolerance"] = y_tolerance
-    text = page.extract_text(**text_kwargs) or ""
+    text = page.extract_text(
+        **_text_kwargs(layout, x_tolerance_ratio, y_tolerance)) or ""
 
     table_settings: dict = {}
     if x_tolerance_ratio is not None:
@@ -1548,6 +1928,7 @@ def _extract_page(
         "n": 0,
         "text": text,
         "tables": tables,
+        "links": _page_links(page),
         "char_count": char_count,
         "has_images": has_images,
         "image_coverage": image_coverage,
@@ -1589,7 +1970,13 @@ def _extract_page_images(page, clusters: list, images: dict) -> list[dict]:
         reader=images["reader"], index=page_number - 1)
     pdftocairo = images["pdftocairo"]
     if pdftocairo is None:
-        sink.vector_unrendered += len(_figures_on(page, clusters))
+        # The text-enclosure rejects are counted on this path too: they were
+        # rejected by what they hold, not by whether Poppler is installed, and
+        # reporting them only when it happens to be present would make the
+        # count depend on the environment.
+        detected, texty = _figures_on(page, clusters)
+        sink.vector_unrendered += len(detected)
+        sink.note_text_enclosing(page_number, len(texty))
         return records
     return records + _extract_vectors(
         page, clusters, sink, page_number=page_number,
@@ -1660,6 +2047,10 @@ def extract_pdf(
             reader = _open_pypdf(pdf_path, password)
             pdftocairo = shutil.which("pdftocairo") if vector_images else None
         pages: list[dict] = []
+        # (page number, gutter x positions) for pages that look multi-column.
+        # Collected inside the walk because the measurement needs the page's
+        # characters, which the page records deliberately do not carry.
+        gutter_pages: list[tuple[int, list[float]]] = []
         for index, page in enumerate(pdf.pages, start=1):
             _collect_page_fonts(page, font_acc, seen_objects)
             images = None if sink is None else {
@@ -1677,17 +2068,31 @@ def extract_pdf(
                 images=images)
             record["n"] = index
             pages.append(record)
+            # A page with an extracted table is not examined for columns: a
+            # table's own column gaps are gutters by the same definition, and
+            # advising a crop through one would be worse than saying nothing.
+            if not record["tables"]:
+                gutters = _page_gutters(page)
+                if gutters:
+                    gutter_pages.append((index, gutters))
         # Computed while the document is still open: the remedy probe re-reads
         # a few pages, and re-opening the PDF for that would cost more than the
         # probe itself.
+        splits = _split_table_rows(pages)
         hints = {
             "orphan_list_markers": _orphan_list_markers(pages),
             "single_column_tables": _single_column_tables(pages),
             "tables": sum(len(p["tables"]) for p in pages),
+            "split_table_rows": len(splits),
+            "split_table_pages": splits,
+            "multi_column_pages": len(gutter_pages),
         }
         hints.update(_probe_remedy(
             pdf, pages, hints, layout=layout, x_tolerance_ratio=ratio,
             y_tolerance=y_tol, table_strategy=table_strategy))
+        hints.update(_probe_columns(
+            pdf, pages, gutter_pages, layout=layout,
+            x_tolerance_ratio=ratio, y_tolerance=y_tol))
     doc_scanned, scanned_pages = _classify_document(pages)
     fonts = [font_acc[key] for key in sorted(font_acc)]
     dump = {
@@ -1700,6 +2105,11 @@ def extract_pdf(
         "doc_scanned": doc_scanned,
         "scanned_pages": scanned_pages,
         "figure_pages": [p["n"] for p in pages if p["figure_dominant"]],
+        # Present even when zero, and at the top level rather than only per
+        # page, because "this document has 131 links you have not seen" is
+        # exactly what a reader skimming the head of the dump needs to know —
+        # the per-page lists are where they live.
+        "link_count": sum(len(p["links"]) for p in pages),
         "text_layer_lossy": _classify_text_layer(
             fonts, any(p["char_count"] > 0 for p in pages)),
         "x_tolerance_ratio": ratio,
@@ -1733,7 +2143,25 @@ def extract_pdf(
             "page_failed": sink.page_failed,
             "reader_unavailable": reader is None,
             "vector_unrendered": sink.vector_unrendered,
+            "inline_glyphs": sink.inline_glyphs,
+            "blank": sink.blank,
+            "text_enclosing": sink.text_enclosing,
+            "text_enclosing_pages": sorted(set(sink.text_enclosing_pages)),
         }
+        # Only alongside `images_summary`: deciding a page is blank needs its
+        # pixels, and without `--extract-images` nothing is decoded. An absent
+        # key says "did not look", which is a different statement from `[]`.
+        #
+        # A page is blank when its artwork carries nothing AND its text is
+        # page furniture at most — the measured page's only characters are its
+        # `9 / 48` footer. `_SCANNED_CHAR_THRESHOLD` is the same tolerance the
+        # scan classifier already applies for exactly that reason, which also
+        # makes `blank_pages` a subset of `scanned_pages` by construction.
+        blank_by_page = set(sink.blank_pages)
+        dump["blank_pages"] = sorted(
+            p["n"] for p in pages
+            if p["n"] in blank_by_page
+            and p["char_count"] <= _SCANNED_CHAR_THRESHOLD)
     return dump
 
 
@@ -1744,6 +2172,200 @@ def _same_path(a: Path, b: Path) -> bool:
         return a.resolve() == b.resolve()
     except OSError:
         return False
+
+
+def _page_gutters(page) -> list[float]:
+    """The x centre of every full-height column gutter on the page.
+
+    A gutter is a vertical band that nearly every text line respects. That is
+    the whole definition, and it is what separates a two-column layout from the
+    ragged white space inside one column: an inter-word gap is per line and
+    lands somewhere different on the next one, while a gutter lands in the same
+    place on all of them.
+
+    Reported in the hint because §3.1 of the reference names multi-column
+    layout as pitfall number one and NOTHING in the dump measured it. pdfplumber
+    groups characters into lines by Y, so two columns that share baselines come
+    back interleaved — left, right, left, right inside one line — and the text
+    reads as nonsense that no signal flagged. `--layout`, which the same
+    section offers as the remedy, preserves the visual arrangement but does not
+    separate the columns; the repair is cropping at the gutter, so the number
+    this returns IS the repair's argument.
+
+    Three deliberate limits, all measured:
+
+    * `_COLUMN_BRIDGE_RATIO` — the band may be crossed by up to 5 % of lines.
+      A strict "empty on every line" rule found the measured two-column
+      contract on 1 page of 3: on the other two a single stray OCR box lay
+      across the gutter.
+    * `_COLUMN_SIDE_RATIO` — at least 60 % of lines must reach past the gutter
+      on each side. This is what rejects a photo-beside-prose page (measured:
+      0.54 and 0.50) while keeping real columns (0.62-0.82).
+    * a page with any extracted table is not examined at all (the caller's
+      job): a table's column gaps are gutters by this definition, and telling
+      the caller to crop a table into columns would be worse than silence.
+    """
+    chars = page.chars
+    if len(chars) < _COLUMN_MIN_CHARS:
+        return []
+    left_edge = min(c["x0"] for c in chars)
+    right_edge = max(c["x1"] for c in chars)
+    span = right_edge - left_edge
+    if span <= 0:
+        return []
+    bins = int(span) + 2
+    lines: dict[int, list[tuple[float, float]]] = {}
+    for char in chars:
+        lines.setdefault(int(char["top"] / _COLUMN_LINE_TOL_PT), []).append(
+            (char["x0"], char["x1"]))
+    if len(lines) < _COLUMN_MIN_LINES:
+        return []
+    # Difference array: each line contributes its MERGED intervals, so a bin
+    # covered by three characters of one line still counts that line once.
+    crossings = [0] * (bins + 1)
+    bounds: list[tuple[float, float]] = []
+    for spans in lines.values():
+        spans.sort()
+        start, end = spans[0]
+        merged = []
+        for x0, x1 in spans[1:]:
+            if x0 > end:
+                merged.append((start, end))
+                start, end = x0, x1
+            else:
+                end = max(end, x1)
+        merged.append((start, end))
+        for x0, x1 in merged:
+            lo = max(0, int(x0 - left_edge))
+            hi = min(bins, int(x1 - left_edge) + 1)
+            if hi > lo:
+                crossings[lo] += 1
+                crossings[hi] -= 1
+        bounds.append((merged[0][0], merged[-1][1]))
+    limit = _COLUMN_BRIDGE_RATIO * len(lines)
+    needed = _COLUMN_SIDE_RATIO * len(lines)
+    gutters: list[float] = []
+    running = 0
+    cover = []
+    for value in crossings[:bins]:
+        running += value
+        cover.append(running)
+    index = 0
+    while index < bins:
+        if cover[index] > limit:
+            index += 1
+            continue
+        end = index
+        while end < bins and cover[end] <= limit:
+            end += 1
+        x0, x1 = left_edge + index, left_edge + end
+        centre = (x0 + x1) / 2.0
+        offset = (centre - left_edge) / span
+        if (x1 - x0 >= _COLUMN_MIN_GUTTER_PT
+                and _COLUMN_EDGE_MARGIN <= offset <= 1 - _COLUMN_EDGE_MARGIN):
+            # Counted per side, NOT per line: on the measured two-column
+            # contract only 43 % of lines carry text on both sides at once
+            # (headings, short paragraph ends and the last line of a
+            # paragraph fill one column only), while 75 % and 68 % of them
+            # reach the left and the right. Requiring both on the same line
+            # rejects the real thing.
+            on_left = sum(1 for lo, _ in bounds if lo < x0)
+            on_right = sum(1 for _, hi in bounds if hi > x1)
+            if on_left >= needed and on_right >= needed:
+                gutters.append(round(centre, 1))
+        index = end
+    return gutters
+
+
+def _blank_cell(cell) -> bool:
+    """True for a table cell that carries nothing (`None` or whitespace)."""
+    return cell is None or not str(cell).strip()
+
+
+def _table_columns(table: list) -> int:
+    """The widest row's cell count — a one-column "table" is a layout box, and
+    a row cannot continue one."""
+    return max((len(row) for row in table), default=0)
+
+
+def _blank_first_ratio(table: list) -> float:
+    """Fraction of the table's rows whose FIRST cell is blank.
+
+    A table with a merged category column is blank-first by design, and its
+    continuation across a page break looks exactly like a severed row. This
+    number is what tells them apart: the measured splits continue tables at
+    0.0-0.2, while a category-column table sits at 0.5 and up. An empty table
+    returns 1.0, i.e. "blank-first is normal here", which keeps it quiet."""
+    rows = [row for row in table if row]
+    if not rows:
+        return 1.0
+    return sum(1 for row in rows if _blank_cell(row[0])) / len(rows)
+
+
+def _dangling_label(text: str) -> str | None:
+    """The short token a page ends with, if it looks like a stranded row label.
+
+    Measured on `change-management`: the severed row's number (`2.11`) is the
+    last line of page 26's flat text, right above the `26 / 48` footer, while
+    its content opens page 27's table. Naming it in the hint is what lets a
+    reader find the row they are missing; the footer line is dropped first
+    because every page of that document ends with one."""
+    lines = [line.strip() for line in (text or "").split("\n") if line.strip()]
+    if lines and _PAGE_FOOTER_RE.match(lines[-1]):
+        lines.pop()
+    if not lines:
+        return None
+    last = lines[-1]
+    if len(last) <= _SPLIT_LABEL_MAX_CHARS and any(c.isalnum() for c in last):
+        return last
+    return None
+
+
+def _split_table_rows(pages: list[dict]) -> list[dict]:
+    """Pages that open with a table row whose label the page break stranded.
+
+    The shape, measured on four dogfood documents: the row's first cell arrives
+    EMPTY because its label stayed on the previous page — either in that page's
+    flat `text` (`change-management`, three times) or nowhere at all
+    (`test-1`, where question ОВ-9 is in no structured table). The data is not
+    lost, but the structure lies, and an agent composing Markdown from `tables`
+    drops the row without noticing.
+
+    Two conjuncts keep the look-alikes out, both needed:
+
+    * the previous page must END a table of two or more columns — a crosstab
+      whose header row starts with a blank corner cell (`["", "Q1", "Q2"]`)
+      has nothing to continue, and neither has a page following a
+      single-column layout box;
+    * that table must not be blank-first by design (`_blank_first_ratio`).
+
+    Stitching is deliberately NOT done here: composition is the caller's job
+    (§4 of the reference). Knowing the row was cut is the dump's job, and that
+    is what this returns — `{"page", "label"}` per hit, the label being the
+    stranded token when the previous page's text still holds it."""
+    hits: list[dict] = []
+    for position, page in enumerate(pages):
+        if position == 0:
+            continue
+        tables = page.get("tables") or []
+        previous = pages[position - 1]
+        previous_tables = previous.get("tables") or []
+        if not tables or not previous_tables:
+            continue
+        previous_table = previous_tables[-1]
+        if _table_columns(previous_table) < 2 or _table_columns(tables[0]) < 2:
+            continue
+        if _blank_first_ratio(previous_table) >= _SPLIT_BLANK_NORM_RATIO:
+            continue
+        for row in tables[0][:_SPLIT_PROBE_ROWS]:
+            if (len(row) >= 2 and _blank_cell(row[0])
+                    and any(not _blank_cell(cell) for cell in row[1:])):
+                hits.append({
+                    "page": page["n"],
+                    "label": _dangling_label(previous.get("text") or ""),
+                })
+                break
+    return hits
 
 
 def _orphan_list_markers(pages: list[dict]) -> int:
@@ -1845,6 +2467,69 @@ def _probe_remedy(pdf, pages: list[dict], hints: dict, *, layout: bool,
             "before": before, "after": after,
         }
     return result
+
+
+def _probe_columns(pdf, pages: list[dict],
+                   gutter_pages: list[tuple[int, list[float]]], *,
+                   layout: bool, x_tolerance_ratio: float | None,
+                   y_tolerance: float | None) -> dict:
+    """Crop the affected pages at their gutters and report what that changed.
+
+    Same contract as `_probe_remedy`: the advice is measured on THIS document
+    before it is given. Here the measurement is the line count — a page whose
+    columns interleave yields one line per baseline, and cropping at the gutter
+    yields one per baseline PER COLUMN, so the number roughly doubles. If it
+    does not move, the columns were already coming out separately (a producer
+    that offsets the baselines) and the hint says so rather than sending the
+    caller to re-extract for nothing.
+
+    `before` comes from the record the caller already has, not from a re-read:
+    that is the extraction they are actually holding."""
+    if not gutter_pages:
+        return {}
+    probed = gutter_pages[:_HINT_COLUMN_PAGES]
+    before = after = 0
+    for number, gutters in probed:
+        record = pages[number - 1]
+        before += sum(1 for line in (record["text"] or "").split("\n")
+                      if line.strip())
+        page = pdf.pages[number - 1]
+        left, top, right, bottom = (float(v) for v in page.bbox)
+        edges = [left, *sorted(gutters), right]
+        for start, end in zip(edges, edges[1:]):
+            if end - start <= 0:
+                continue
+            try:
+                column = page.crop((start, top, end, bottom), strict=False)
+                text = column.extract_text(
+                    **_text_kwargs(layout, x_tolerance_ratio, y_tolerance))
+            except Exception:
+                # A crop that pdfplumber refuses costs the probe's precision,
+                # never the dump. `after` simply stays where it was, which can
+                # only make the hint more cautious.
+                continue
+            after += sum(1 for line in (text or "").split("\n") if line.strip())
+    return {"column_probe": {
+        "pages": [number for number, _ in probed],
+        "gutters": [gutters for _, gutters in probed],
+        "lines_before": before, "lines_after": after,
+    }}
+
+
+def _hint_multi_column(hints: dict) -> bool:
+    """Should the multi-column hint be printed?
+
+    One page is enough — unlike a stray list marker, a full-height gutter is
+    not noise, and the measured OCR'd contract was detected on 3 pages of 3
+    while its columns were interleaved on all of them. There is no knob to
+    silence this one against, because the remedy is a crop the caller performs,
+    not a flag this tool takes."""
+    return hints["multi_column_pages"] > 0
+
+
+def _hint_split_rows(hints: dict) -> bool:
+    """Should the severed-row hint be printed? One severed row is a lost row."""
+    return hints["split_table_rows"] > 0
 
 
 def _hint_orphan_markers(hints: dict, y_tolerance: float | None) -> bool:
@@ -2087,11 +2772,23 @@ def main(argv: list[str] | None = None) -> int:
             details={"page_count": dump["page_count"]}, json_mode=je,
         )
     if dump["scanned_pages"]:
+        blank = set(dump.get("blank_pages") or [])
         pages = ", ".join(str(n) for n in dump["scanned_pages"])
+        # A blank page is a scanned page by every structural test — no text,
+        # carries an image — and sending the caller to OCR a sheet of white is
+        # the measured shape of this defect. Naming those pages separately is
+        # the whole repair; the classification itself is unchanged.
+        empty = [n for n in dump["scanned_pages"] if n in blank]
+        tail = ""
+        if empty:
+            named = ", ".join(str(n) for n in empty)
+            tail = (f" Page(s) {named} carry no ink at all — their only "
+                    f"raster decodes to a single flat colour, so there is "
+                    f"nothing for OCR to find.")
         sys.stderr.write(
             f"warning: page(s) {pages} appear scanned / image-only "
             f"(no extractable text); the rest of the document extracted "
-            f"normally.\n"
+            f"normally.{tail}\n"
         )
     # Both warnings below leave the exit code at 0 on purpose: exit 10 means
     # "the whole document is a scan", and that contract is public.
@@ -2157,6 +2854,20 @@ def main(argv: list[str] | None = None) -> int:
             elif summary["placements"]:
                 why = (f"all {summary['placements']} placement(s) were "
                        f"filtered — see `images_summary` for which rule")
+            elif summary["text_enclosing"] or summary["inline_glyphs"] \
+                    or summary["blank"]:
+                # Naming the rule that fired, not "no artwork": a directory
+                # left empty because every candidate was rejected is a
+                # different fact from a document that has none, and the
+                # difference is the caller's to judge. The lines below repeat
+                # the reasoning; this one only has to stop the flat denial.
+                dropped = ", ".join(
+                    f"{summary[key]} {label}"
+                    for key, label in (("text_enclosing", "page-wide ruling"),
+                                       ("inline_glyphs", "inline glyph(s)"),
+                                       ("blank", "blank raster(s)"))
+                    if summary[key])
+                why = f"every candidate was rejected ({dropped})"
             else:
                 why = "the document has no extractable artwork"
             sys.stderr.write(
@@ -2221,6 +2932,34 @@ def main(argv: list[str] | None = None) -> int:
                 f"warning: artwork extraction raised on "
                 f"{summary['page_failed']} page(s); their `images` lists are "
                 f"empty. The text and tables for those pages are unaffected.\n"
+            )
+        if summary["inline_glyphs"]:
+            sys.stderr.write(
+                f"note: {summary['inline_glyphs']} raster placement(s) are "
+                f"inline glyphs — an emoji drawn from a colour font is an "
+                f"image object, and writing one file per ⚠/✅ buries the "
+                f"document's real artwork. They are square, as tall as the "
+                f"text on their line and adjacent to it; icons that are not "
+                f"were kept.\n"
+            )
+        if summary["blank"]:
+            sys.stderr.write(
+                f"note: {summary['blank']} raster(s) decode to a single flat "
+                f"colour and were NOT written — they carry nothing. "
+                + (f"Page(s) "
+                   f"{', '.join(str(n) for n in dump['blank_pages'])} are "
+                   f"blank as a result.\n"
+                   if dump.get("blank_pages") else "\n")
+            )
+        if summary["text_enclosing"]:
+            pages = ", ".join(str(n) for n in summary["text_enclosing_pages"])
+            sys.stderr.write(
+                f"warning: {summary['text_enclosing']} vector cluster(s) on "
+                f"page(s) {pages} enclose that page's body text and were NOT "
+                f"written — that is table ruling around prose, and cropping it "
+                f"produces a picture of the page (measured: 345-385 KB crops "
+                f"of whole text pages). If one of those pages really does hold "
+                f"a diagram, render the sheet with preview.py.\n"
             )
     if dump["text_layer_lossy"]:
         sys.stderr.write(
@@ -2288,6 +3027,48 @@ def main(argv: list[str] | None = None) -> int:
                 f"arXiv export: a column of a 3-column table arriving as "
                 f"[['Bitcoin'], ['Accomp'], ['lishment']]). Read those pages "
                 f"before treating them as data.\n"
+            )
+    if _hint_split_rows(hints):
+        named = []
+        for hit in hints["split_table_pages"]:
+            named.append(f"{hit['page']}"
+                         + (f" (label `{hit['label']}`)" if hit["label"]
+                            else ""))
+        sys.stderr.write(
+            f"hint: {hints['split_table_rows']} table(s) open a page with a "
+            f"row whose first cell is EMPTY — the row was cut by the page "
+            f"break and its label stayed behind: page(s) {', '.join(named)}. "
+            f"Read each of those pages together with the one before it. The "
+            f"label is sometimes only in the previous page's flat `text`, and "
+            f"the severed row is sometimes in no `tables` entry at all "
+            f"(measured: question ОВ-9 of a 22-page questionnaire). Stitching "
+            f"is composition, not extraction — this dump does not do it.\n"
+        )
+    if _hint_multi_column(hints):
+        probe = hints["column_probe"]
+        pages = ", ".join(str(n) for n in probe["pages"])
+        gutters = ", ".join(
+            "/".join(f"{x:g}" for x in page_gutters)
+            for page_gutters in probe["gutters"])
+        if probe["lines_after"] > probe["lines_before"]:
+            sys.stderr.write(
+                f"hint: {hints['multi_column_pages']} page(s) have a "
+                f"full-height column gutter, so pdfplumber — which groups "
+                f"characters into lines by their Y position — returns the "
+                f"columns interleaved, one line of each in turn. Cropping at "
+                f"the gutter took {probe['lines_before']} line(s) to "
+                f"{probe['lines_after']} on page(s) {pages}; crop at x = "
+                f"{gutters} and extract each column separately. --layout does "
+                f"NOT separate them: it preserves the visual arrangement, "
+                f"which is the same interleaving with spaces in it.\n"
+            )
+        else:
+            sys.stderr.write(
+                f"hint: {hints['multi_column_pages']} page(s) have a "
+                f"full-height column gutter (x = {gutters}), but cropping at "
+                f"it does not change the line count on page(s) {pages} — "
+                f"measured, not assumed. The columns are already coming out "
+                f"separately, so the gutter is layout, not damage.\n"
             )
     return _EXIT_OK
 

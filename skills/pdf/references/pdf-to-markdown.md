@@ -96,6 +96,42 @@ can *see* the columns and reorder them yourself. The tool does **not** reflow
 columns into logical order — that is your step 3. (Word-gluing on these layouts
 — `ASurveyonBlockchain` — is a *separate* problem, handled by default; see §3.8.)
 
+**The dump now measures this, and `--layout` is not the remedy it looks like.**
+Dogfooding put a two-column bilingual contract (Russian left, English right)
+through the pipeline and the interleaved text read as plausible prose — nothing
+in the dump said the page had columns, and `--layout` did not separate them:
+it preserves the visual arrangement, which is *the same interleaving with
+spaces in it*. Every dump therefore carries `layout_hints.multi_column_pages`,
+and where it fires, `layout_hints.column_probe` reports the pages, the gutter's
+x coordinate, and what cropping there actually did:
+
+```
+hint: 2 page(s) have a full-height column gutter … Cropping at the gutter took
+124 line(s) to 214 on page(s) 1, 2; crop at x = 307.7, 309.5 and extract each
+column separately. --layout does NOT separate them.
+```
+
+The repair is a crop per column, and the hint hands you its argument:
+
+```python
+left  = page.crop((0, 0, 307.7, page.height)).extract_text(x_tolerance_ratio=0.15)
+right = page.crop((307.7, 0, page.width, page.height)).extract_text(x_tolerance_ratio=0.15)
+```
+
+A gutter is defined as a vertical band that nearly every text line respects,
+which is what separates it from the ragged white space inside one column. Three
+measured limits, and each costs something you should know about: up to 5 % of
+lines may cross the band (a stray OCR box lay across it on 2 of 3 pages of the
+measured contract — a strict rule found the document on 1 page instead of 3);
+at least 60 % of lines must reach past it on each side (this rejects a
+photo-beside-prose page, measured at 0.54/0.50 against 0.62–0.82 for real
+columns); and **a page with any extracted table is not examined at all**,
+because a table's own column gaps are gutters by this definition. That last one
+is a real recall hole: a two-column page that also carries a table is missed,
+and on such a document you are back to reading the page. Measured over the
+20-document corpus: 3 pages across the 2 genuinely multi-column documents, 0
+false positives on the other 18.
+
 **The orphaned list marker.** A second reading-order artefact, independent of
 columns: pdfplumber groups characters into lines with an *absolute*
 `y_tolerance` of 3 pt. A list marker set in a smaller point size than its body
@@ -221,6 +257,34 @@ separate tables (one per page), often with the header repeated (or absent) on
 the continuation. You must recognise this (same column count, continuation on
 the very next page) and **stitch the fragments into one Markdown table**, dropping
 a repeated header. No script can know the table is "the same one".
+
+**Worse than a split table: a split ROW.** When the break falls inside a row,
+the row itself is torn in two and the dump says nothing about it. Measured on
+four dogfood documents, in two forms:
+
+* the row's label stays on the previous page as a line of flat `text` while its
+  content opens the next page's table with an **empty first cell** —
+  `["", "Communicate RFC Approval …"]`, with `2.11` sitting alone in the
+  previous page's text (three times in one 48-page document: 2.11, 4.10, 5.10);
+* the row disappears from `tables` **entirely** and only an unlabelled tail
+  arrives. On a 22-page questionnaire, question ОВ-9 is in no structured table
+  at all — its text exists only in page 14's flat `text`, and an agent building
+  Markdown from `tables` drops the question without noticing.
+
+Every dump now carries `layout_hints.split_table_rows` and
+`layout_hints.split_table_pages` (`{"page": 27, "label": "2.11"}` per hit), and
+the hint names the pages and the stranded labels. **It does not stitch** — that
+is composition, §4 — so the instruction is to read each named page together
+with the one before it, and to look in the previous page's flat `text` for a
+row that never reached `tables`.
+
+Two conjuncts keep the look-alikes out, and both cost recall in the other
+direction: the previous page must END a table of two or more columns (so a
+crosstab's blank corner cell — `["", "Q1", "Q2"]` — is not counted, and neither
+is a continuation after a single-cell layout box), and that table must not be
+blank-first by design (a merged category column). Measured over the
+20-document corpus: 11 hits, every one a real page-break split; 0 on the other
+14 documents.
 
 ### 3.4 Image-only pages inside a digital PDF
 A mostly-digital PDF can still have a scanned page (a signed page, an inserted
@@ -419,12 +483,46 @@ What the script guarantees, and what it does not:
   Group by `sha1` if you want the unique set.
 - **Page-sized rasters are skipped** — a background wash, or a scanned page
   (which is one full-page image; its repair is OCR, §1, not a figure file).
-- **Small rasters are extracted, not judged.** Logos, avatars and 48x48 icons
-  are real content and dropping them silently is the failure this skill exists
-  to prevent — so they come out, and you filter them: `width`/`height` (source
-  pixels) and `bbox` (placement, in points) are in every record. A practical
-  rule when composing Markdown: ignore anything under ~100 pt on its long side
-  unless the surrounding text refers to it.
+- **Small rasters are extracted, not judged — with one exception, and it is
+  narrow.** Logos, avatars and 48x48 icons are real content and dropping them
+  silently is the failure this skill exists to prevent, so they come out and
+  you filter them: `width`/`height` (source pixels) and `bbox` (placement, in
+  points) are in every record. A practical rule when composing Markdown: ignore
+  anything under ~100 pt on its long side unless the surrounding text refers to
+  it. The exception is an **inline glyph**: an emoji drawn from a colour font
+  (Apple Color Emoji and friends) is a raster XObject, so one file per ⚠/✅ in
+  the prose is what a naive extraction writes — measured at 10 of 15 files on
+  one dogfood document and 24 placements on another, burying the document's
+  real artwork. Such a placement is counted in `images_summary.inline_glyphs`,
+  named on stderr, and not written. The test is "a glyph", never "a small
+  image": the placement must be square, as tall as the text on its own line,
+  AND adjacent to characters on that line. A 16x16 status icon in a table cell
+  can meet all three and be dropped — if a document's icons carry meaning that
+  the text does not, read the pages instead of the directory.
+- **A raster of one flat colour is not written.** Measured on a 48-page
+  document's page 9: `scanned: true`, coverage 0.63, and the extracted
+  816x1056 PNG held nothing but white — an empty file, while the scan signal
+  told the reader to run OCR on a blank sheet. Such rasters are counted in
+  `images_summary.blank`, and where a page's only artwork was blank and its
+  text is page furniture at most (the same 10-character tolerance the scan
+  classifier uses), the page is listed in top-level `blank_pages` and the
+  scanned-page warning says there is nothing for OCR to find. `blank_pages`
+  exists only under `--extract-images`, because deciding it needs pixels — its
+  absence means "did not look", not "none". A deliberate single-colour swatch
+  is dropped too; the colour is the only thing it carried.
+- **A vector cluster that encloses the page's body text is refused.** The
+  containment test that rejects table ruling compares the cluster against
+  pdfplumber's own table box, and on four measured pages the ruling ran on past
+  what `find_tables()` could resolve — so the cluster came out *bigger* than the
+  table (0.89 containment against the 0.9 it needs) and 345–385 KB crops of
+  whole text pages were written as "figures". What separates them cleanly is
+  what the box holds: 434–1974 characters for the six measured false positives,
+  0–36 for every genuine vector figure in the same corpus. A cluster enclosing
+  200 characters or more is counted in `images_summary.text_enclosing`, its
+  pages named on stderr, and not rendered. The cost is stated where you can
+  check it: a full-page diagram carrying more than 200 characters of labels is
+  refused too, and `figure_dominant` will not flag that page either — render
+  the sheet with `preview.py`, which is what a page-wide crop was anyway.
 - **`DIR` is mandatory** and nothing is written to the current directory by
   default; a `DIR` that resolves to the input PDF is refused (exit `6`).
 - **A fill-only vector figure is not extracted, and the omission is silent.**
@@ -487,7 +585,8 @@ Consistency + honest tooling beats a converter that lies.
 python3 scripts/pdf_extract.py INPUT.pdf [-o OUT.json] [--layout]
                                [--password PW] [--x-tolerance-ratio R]
                                [--y-tolerance PT] [--table-strategy S]
-                               [--json-errors]
+                               [--extract-images DIR] [--image-dpi N]
+                               [--no-vector-images] [--json-errors]
 ```
 
 Output — a structured JSON **dump** (not Markdown):
@@ -499,17 +598,23 @@ Output — a structured JSON **dump** (not Markdown):
   "doc_scanned": false,
   "scanned_pages": [],
   "figure_pages": [4],
+  "link_count": 17,
   "text_layer_lossy": false,
   "x_tolerance_ratio": 0.15,
   "y_tolerance": null,
   "table_strategy": "lines",
   "layout_hints": {"orphan_list_markers": 0,
-                   "single_column_tables": 0, "tables": 3},
+                   "single_column_tables": 0, "tables": 3,
+                   "split_table_rows": 1,
+                   "split_table_pages": [{"page": 7, "label": "2.11"}],
+                   "multi_column_pages": 0},
   "fonts": [{"name": "ABCDEF+NotoSans", "subtype": "Type0",
              "embedded": true, "encoding": "Identity-H",
              "has_tounicode": true}],
   "pages": [
     {"n": 1, "text": "...", "tables": [[["a","b"],["c",null]]],
+     "links": [{"uri": "https://example.com/docs", "text": "the docs",
+                "bbox": [72.0, 118.0, 141.3, 131.0]}],
      "char_count": 412, "has_images": false,
      "image_coverage": 0.0, "vector_coverage": 0.0,
      "scanned": false, "figure_dominant": false}
@@ -530,6 +635,18 @@ content is missing from the dump you are about to turn into Markdown:
 | `scanned_pages` | those pages are image-only | OCR them, or read them as images (§3.4) |
 | `figure_pages` | those pages are mostly artwork with too little text to be text pages | extract the image or read the page; describe it in the Markdown (§3.4) |
 | `text_layer_lossy` | the file's fonts cannot represent a non-Latin alphabet, so any it had was destroyed at export | re-export the source with embedded fonts — **OCR will not help** (§3.9) |
+
+Four advisory counters sit beside them in `layout_hints`, each with the same
+contract — the exit code never moves, and where a remedy exists the script
+measures it on *this* document before recommending it:
+`orphan_list_markers` (§3.1), `single_column_tables` (§3.2),
+`split_table_rows` (§3.3) and `multi_column_pages` (§3.1). `link_count` and the
+per-page `links` are not a warning at all — they are content the dump used to
+drop: 578 `/URI` annotations across the 20-document dogfood corpus reached the
+caller as nothing. Each link carries the text it covers (`null` when it sits
+over an image — match it to the `images` placement at the same `bbox`).
+Internal `/GoTo` links are deliberately **not** reported: the destination is
+inside the same file you already have.
 
 Exit codes — the loud scan signal lives here:
 
