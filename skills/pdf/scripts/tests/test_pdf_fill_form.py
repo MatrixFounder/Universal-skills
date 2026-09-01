@@ -107,9 +107,8 @@ def _build_form(out: Path, *, value: str, fields: int = 1) -> Path:
     return out
 
 
-def _run(args: list[str], *, encoding: str | None = None):
-    """Run the CLI in a subprocess, optionally under a legacy stdio codec.
-    Bytes, not text: the point of these tests is what lands on fd 1."""
+def _child_env(encoding: str | None) -> dict[str, str]:
+    """The environment a CLI subprocess runs under, for a given stdio codec."""
     env = dict(os.environ)
     if encoding is None:
         env.update(PYTHONUTF8="1")
@@ -117,8 +116,34 @@ def _run(args: list[str], *, encoding: str | None = None):
     else:
         env.update(PYTHONIOENCODING=encoding, PYTHONUTF8="0",
                    LC_ALL="C", LANG="C")
+    return env
+
+
+def _child_fs_encoding(encoding: str | None) -> str:
+    """The codec the child decodes `argv` with — asked of the child, not assumed.
+
+    A non-ASCII path reaches the CLI as bytes on `argv`; which characters the
+    status line can then name depends on the codec the *child* used to decode
+    them, and that is not the same everywhere under `LC_ALL=C`: macOS hardcodes
+    utf-8 as the filesystem encoding, while glibc gives ascii + surrogateescape
+    (`LC_ALL` set suppresses PEP-538 coercion, `PYTHONUTF8=0` UTF-8 mode). The
+    contract is that unrenderable characters are escaped rather than dropped or
+    fatal — not which of the two escape spellings a platform produces.
+    """
+    proc = subprocess.run(
+        [sys.executable, "-c",
+         "import sys; sys.stdout.write(sys.getfilesystemencoding())"],
+        cwd=str(SCRIPTS_DIR), capture_output=True,
+        env=_child_env(encoding), check=True)
+    return proc.stdout.decode("ascii").strip()
+
+
+def _run(args: list[str], *, encoding: str | None = None):
+    """Run the CLI in a subprocess, optionally under a legacy stdio codec.
+    Bytes, not text: the point of these tests is what lands on fd 1."""
     return subprocess.run([sys.executable, str(SCRIPT), *args],
-                          cwd=str(SCRIPTS_DIR), capture_output=True, env=env)
+                          cwd=str(SCRIPTS_DIR), capture_output=True,
+                          env=_child_env(encoding))
 
 
 def _run_with_dead_reader(args: list[str]) -> tuple[int, bytes]:
@@ -359,8 +384,13 @@ class TestExtractFieldsStatusLine(_FormFixtures):
                         proc.stdout)
         self.assertTrue(proc.stdout.isascii(), proc.stdout)
         # Every character ascii cannot render arrives as a `backslashreplace`
-        # escape (`п…—fields.json`), not dropped and not fatal.
-        self.assertIn(target.name.encode("ascii", "backslashreplace"),
+        # escape (`\\u043f…fields.json`, or `\\udcd0…` where the child had to
+        # decode argv with a non-UTF-8 filesystem codec), not dropped and not
+        # fatal. The escape spelling follows the child's codec, so read it off
+        # the child rather than assuming this platform's.
+        as_child_read_it = target.name.encode("utf-8").decode(
+            _child_fs_encoding("ascii"), "surrogateescape")
+        self.assertIn(as_child_read_it.encode("ascii", "backslashreplace"),
                       proc.stdout)
 
     def test_a_dead_reader_on_the_status_line_names_the_file_it_wrote(self):

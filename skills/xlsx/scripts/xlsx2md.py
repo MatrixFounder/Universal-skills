@@ -9,8 +9,8 @@ from __future__ import annotations
 import _venv_bootstrap  # self-bootstrap into scripts/.venv (TASK 019; replicated per CLAUDE.md §2)
 _venv_bootstrap.reexec_into_venv(requires=("openpyxl",), _file=__file__)
 
-import sys
-from pathlib import Path
+import sys  # noqa: E402  -- after _venv_bootstrap re-exec (see above)
+from pathlib import Path  # noqa: E402  -- after _venv_bootstrap re-exec (see above)
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
