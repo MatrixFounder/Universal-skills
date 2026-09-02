@@ -132,17 +132,25 @@ jobs:
         run: bash skills/${{ matrix.skill }}/scripts/tests/test_e2e.sh
 
   harness:
-    # Guards the symlinked-invocation class of defect. The matrix job above
-    # always runs the suites from the repo root, where logical and physical
-    # pwd coincide — so it cannot catch a harness that breaks when the skill
-    # is reached through the ~/.claude/skills/<skill> symlink it is actually
-    # installed as. Pure bash: no venv, no system deps.
+    # Guards two repo-wide classes of defect that the matrix job structurally
+    # cannot see. Pure stdlib: no venv, no system deps.
+    #
+    # 1. Symlinked invocation. The matrix always runs the suites from the repo
+    #    root, where logical and physical pwd coincide — so it cannot catch a
+    #    harness that breaks when the skill is reached through the
+    #    ~/.claude/skills/<skill> symlink it is actually installed as.
+    # 2. Locale-decoded subprocess output. The matrix runs under a UTF-8
+    #    locale, so a `subprocess.run(..., text=True)` that never named a
+    #    codec passes there and dies on a user's cp1251 or SJIS host. The
+    #    guard is a static AST walk, so it holds regardless of CI's locale.
     name: test harness
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v5
       - name: symlinked-invocation guard
         run: bash tests/test_symlink_invocation.sh
+      - name: subprocess-decode guard
+        run: python3 tests/test_subprocess_decode.py
 
   property:
     name: property fuzz

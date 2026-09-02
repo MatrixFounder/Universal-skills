@@ -27,6 +27,7 @@ def _installed_languages(exe: str) -> set[str]:
     try:
         proc = subprocess.run(  # noqa: S603 — fixed argv, no shell, trusted exe
             [exe, "--list-langs"], capture_output=True, text=True, check=False,
+            encoding="utf-8", errors="replace",
         )
     except OSError as exc:
         raise OcrEngineUnavailable(
@@ -171,6 +172,7 @@ def ocr_asset(
             proc = subprocess.run(  # noqa: S603 — fixed argv, no shell (S-2)
                 argv,
                 capture_output=True, text=True, timeout=timeout, check=False,
+                encoding="utf-8", errors="replace",
             )
         except subprocess.TimeoutExpired:
             sys.stderr.write(f"warning: OCR timed out after {timeout}s on one image\n")

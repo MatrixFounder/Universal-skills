@@ -148,13 +148,16 @@ def run_in_process_group(
     """``subprocess.run(capture_output=True, text=True, timeout=…)`` that also
     reaps GRANDchildren when the timeout fires (TF-X-7).
 
-    Two differences from ``subprocess.run``:
+    Three differences from ``subprocess.run``:
 
     * the child is launched with ``start_new_session=True``, so it heads its
       own process group and every descendant it spawns lands in that group;
     * ``TimeoutExpired`` — and any other ``BaseException``, notably
       ``KeyboardInterrupt`` — tears the whole group down via
-      :func:`_kill_process_group` before it propagates.
+      :func:`_kill_process_group` before it propagates;
+    * the pipes are decoded as UTF-8, not with the caller's locale codec —
+      `yt-dlp` and `ffmpeg` write UTF-8 filenames and metadata whatever the
+      locale says (docs/issues/subprocess-text-decode-locale-class.md).
 
     The ``BaseException`` arm is not decorative: ``start_new_session=True``
     also detaches the child from the terminal's foreground process group, so a
@@ -164,7 +167,10 @@ def run_in_process_group(
     Raises the same ``FileNotFoundError`` / ``subprocess.TimeoutExpired`` the
     callers already handle; returns a ``CompletedProcess`` otherwise.
     """
-    popen_kwargs = dict(stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    popen_kwargs = dict(
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+        encoding="utf-8", errors="replace",
+    )
     if os.name == "posix":
         popen_kwargs["start_new_session"] = True
     with subprocess.Popen(args, **popen_kwargs) as proc:

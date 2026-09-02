@@ -257,6 +257,7 @@ def _installed_languages() -> set[str]:
     try:
         proc = subprocess.run(  # noqa: S603 — fixed argv, no shell, trusted exe
             [exe, "--list-langs"], capture_output=True, text=True, check=False,
+            encoding="utf-8", errors="replace",
         )
     except OSError as exc:
         raise _OcrError(

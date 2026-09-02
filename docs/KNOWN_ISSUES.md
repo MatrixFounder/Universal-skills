@@ -80,7 +80,7 @@ Analysis Phase" which mandates this read.
 - **HTML2MD-8** [empty-extraction guard (no more silent empties)](issues/html2md-8-empty-extraction-guard.md) — severity `SEV-2`, status `handled`, opened 2026-06-23
 - **TF-HUMAN-REPORT-LOCALE-CRASH** [человекочитаемые отчёты падали под не-UTF-8 локалью ещё до первой строки вывода](issues/tf-human-report-locale-crash.md) — severity `SEV-3`, status `fixed`, opened 2026-08-31, resolved 2026-09-01
 - **HUMAN-CLI-OUTPUT-LOCALE-CLASS** [человекочитаемый вывод падает под не-UTF-8 локалью во всём репозитории, включая `--help`](issues/human-cli-output-locale-class.md) — severity `SEV-3`, status `fixed`, opened 2026-09-01, resolved 2026-09-02
-- **SUBPROCESS-TEXT-DECODE-LOCALE-CLASS** [`subprocess.run(..., text=True)` декодирует вывод ребёнка кодеком локали родителя](issues/subprocess-text-decode-locale-class.md) — severity `SEV-2`, status `open`, opened 2026-09-02
+- **SUBPROCESS-TEXT-DECODE-LOCALE-CLASS** [`subprocess.run(..., text=True)` декодирует вывод ребёнка кодеком локали родителя](issues/subprocess-text-decode-locale-class.md) — severity `SEV-2`, status `fixed`, opened 2026-09-02, resolved 2026-09-02
 - **TF-X-2** [ffmpeg is required for the X ASR path on HLS sources (Broadcasts/Spaces)](issues/tf-x-2-ffmpeg-required-for-x-asr-hls.md) — severity `MEDIUM`, status `handled`, opened 2026-07-09
 - **TF-X-4** [captions: VTT + SRT + TTML/DFXP](issues/tf-x-4-captions-vtt-srt-ttml.md) — severity `LOW`, status `handled`, opened 2026-07-09
 - **TF-X-5** [X auth + long-broadcast cost + duration](issues/tf-x-5-x-auth-long-broadcast-duration.md) — severity `LOW`, status `handled`, opened 2026-07-09

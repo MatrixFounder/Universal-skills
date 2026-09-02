@@ -257,6 +257,7 @@ def preprocess_math(md_text: str, *, strict: bool = False) -> str:
         proc = subprocess.run(
             [str(node), str(KATEX_RENDER_JS)],
             input=json.dumps(formulas), capture_output=True, text=True,
+            encoding="utf-8", errors="replace",
             timeout=KATEX_TIMEOUT, cwd=str(SCRIPT_DIR),
         )
         if proc.returncode != 0:

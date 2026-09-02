@@ -17,6 +17,13 @@ Design goals:
   can still start. Shim is no-op on AF_UNIX-capable machines (desktop
   macOS / Linux / most CI runners).
 - Raise a clear exception on timeout or non-zero exit.
+- Decode every child (`soffice`, `codesign`, `bash`) as UTF-8 rather
+  than with the caller's locale codec. `text=True` alone takes the
+  codec from the locale, so under `LC_ALL=C` a Cyrillic filename
+  echoed back by soffice — or the *Russian date* macOS puts in
+  `codesign`'s Timestamp line, on a fully ASCII path — raises
+  `UnicodeDecodeError` from inside `subprocess.communicate`. See
+  docs/issues/subprocess-text-decode-locale-class.md.
 """
 
 from __future__ import annotations
@@ -131,6 +138,8 @@ def _shim_library_path() -> Path | None:
                         check=True,
                         capture_output=True,
                         text=True,
+                        encoding="utf-8",
+                        errors="replace",
                     )
                 except (subprocess.CalledProcessError, FileNotFoundError):
                     return None
@@ -155,7 +164,9 @@ def _soffice_hardened_on_macos(soffice_path: str) -> bool:
     try:
         result = subprocess.run(
             ["codesign", "--display", "--verbose=2", soffice_path],
-            capture_output=True, text=True, timeout=5,
+            capture_output=True, text=True,
+            encoding="utf-8", errors="replace",
+            timeout=5,
         )
     except (FileNotFoundError, subprocess.TimeoutExpired):
         return False
@@ -262,6 +273,8 @@ def run(
                 cwd=cwd,
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
                 timeout=timeout,
                 check=True,
             )

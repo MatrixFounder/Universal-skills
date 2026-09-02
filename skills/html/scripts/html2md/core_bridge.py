@@ -31,6 +31,8 @@ def html_to_markdown(html: str) -> str:
             input=html,
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=_TIMEOUT_S,
         )
     except FileNotFoundError as exc:

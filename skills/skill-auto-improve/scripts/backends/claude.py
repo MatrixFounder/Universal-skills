@@ -87,7 +87,8 @@ class ClaudeBackend:
         outer_timeout = max(60, timeout * max(len(eval_set), 1) * max(runs_per_query, 1) + 60)
         try:
             res = subprocess.run(
-                cmd, capture_output=True, text=True, check=False, timeout=outer_timeout
+                cmd, capture_output=True, text=True, check=False,
+                encoding="utf-8", errors="replace", timeout=outer_timeout
             )
         except subprocess.TimeoutExpired as exc:
             raise RuntimeError(f"run_eval.py timed out after {outer_timeout}s") from exc

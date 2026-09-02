@@ -171,6 +171,7 @@ def _post_pack_validate(output_path: Path) -> None:
     try:
         result = _subprocess.run(
             cmd, capture_output=True, text=True, timeout=60,
+            encoding="utf-8", errors="replace",
         )
     except _subprocess.TimeoutExpired as exc:
         # Task 002 vdd-adversarial finding #2: a 60s hang in office/

@@ -216,6 +216,7 @@ def _materialise_md_source(
         result = subprocess.run(
             ["node", str(md2docx), str(md_path), str(out_docx)],
             shell=False, timeout=60, capture_output=True, text=True,
+            encoding="utf-8", errors="replace",
             check=False,
         )
     except FileNotFoundError as exc:

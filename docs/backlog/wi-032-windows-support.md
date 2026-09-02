@@ -116,7 +116,7 @@ string `python3` and has no bootstrap to save it.
 | B3 | The AF_UNIX shim is structurally non-portable: `LD_PRELOAD` / `DYLD_INSERT_LIBRARIES`, a C source compiled by `build.sh`, and an `fcntl.flock` build lock. `_shim_library_path()` already returns `None` for non-Linux/Darwin — the code path is correct, the surrounding module is not (see A3). | [_soffice.py:104-112](../../skills/docx/scripts/_soffice.py#L104-L112), `office/shim/` |
 | B4 | weasyprint (the default `pdf` render engine) needs a GTK3 / Pango / Cairo runtime that Windows does not ship. `install.sh` prints remediation for macOS, Debian and Fedora only. | [pdf/scripts/install.sh:94-106](../../skills/pdf/scripts/install.sh#L94-L106) |
 | B5 | Poppler (`pdftoppm`, `pdftotext`) has no Windows package manager path; it backs `preview.py` for all four office skills and the high-fidelity shape route in `docx2md`. Same for `tesseract` / `ghostscript` (OCR in `pdf` and `pptx`) — remediation strings name only `brew` and `apt`. | [preview.py:110-116](../../skills/docx/scripts/preview.py#L110-L116), [pdf/scripts/install.sh:179-180](../../skills/pdf/scripts/install.sh#L179-L180) |
-| B6 | `subprocess.run(..., text=True)` without `encoding=` (30 call sites in production code) decodes child output with the Windows ANSI codepage (cp1251 on a Russian host). Non-ASCII `soffice` / `pdftotext` diagnostics raise `UnicodeDecodeError` or mojibake instead of the intended error message. | e.g. [_soffice.py:255-261](../../skills/docx/scripts/_soffice.py#L255-L261) |
+| ~~B6~~ | ~~`subprocess.run(..., text=True)` without `encoding=` decodes child output with the Windows ANSI codepage (cp1251 on a Russian host).~~ **Fixed 2026-09-02** — all 34 production sites now pin `encoding="utf-8", errors="replace"`, held by a repo-wide AST gate in CI. This was never Windows-only: the same defect fires on a POSIX host under `LC_ALL=C` or `ja_JP.SJIS`. See [SUBPROCESS-TEXT-DECODE-LOCALE-CLASS](../issues/subprocess-text-decode-locale-class.md). | [tests/test_subprocess_decode.py](../../tests/test_subprocess_decode.py) |
 
 ### Tier C — no way to prove Windows works
 
@@ -239,8 +239,10 @@ counted above.
 4. Interpreter resolution: one Platform line per `SKILL.md` (see "What this changes about
    A4"), and `md2pptx.js:661` resolves the interpreter instead of hardcoding `python3`.
 5. `md2pptx.js resolveMmdc()`: `mmdc.cmd` on win32, `where` instead of `command -v`.
-6. `subprocess` decoding: `encoding="utf-8", errors="replace"` on the 30 `text=True`
-   sites, so a cp1251 host cannot turn a diagnostic into a traceback.
+6. ~~`subprocess` decoding~~ — **done 2026-09-02, ahead of this backlog item**: all 34
+   production `text=True` sites pin `encoding="utf-8", errors="replace"`, so a cp1251
+   host cannot turn a diagnostic into a traceback. `tests/test_subprocess_decode.py`
+   gates regressions repo-wide.
 7. **Out of scope for Stage 1, stated explicitly in the docs:** the AF_UNIX shim (B3) —
    Windows does not have the sandbox class it exists for.
 

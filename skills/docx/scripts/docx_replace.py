@@ -175,6 +175,7 @@ def _run_post_validate(output: Path, scripts_dir: Path) -> None:
         result = subprocess.run(
             [sys.executable, "-m", "office.validate", str(output)],
             shell=False, timeout=60, capture_output=True, text=True,
+            encoding="utf-8", errors="replace",
             cwd=str(output.parent),
             env=env,
         )

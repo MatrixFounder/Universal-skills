@@ -43,7 +43,8 @@ def main():
     ]
     
     try:
-        result = subprocess.run(cmd, capture_output=True, text=True, check=False)
+        result = subprocess.run(cmd, capture_output=True, text=True, check=False,
+                                encoding="utf-8", errors="replace")
         output = json.loads(result.stdout)
     except Exception as e:
         print(f"❌ Critical Error running validator: {e}")

@@ -17,6 +17,12 @@ across the four office skills (`docx`, `xlsx`, `pptx`, `pdf`). A
 single skill installation is enough — preview works for any of the
 four file types regardless of which skill owns the script.
 
+Both children are read as UTF-8, not as whatever the caller's locale
+codec happens to be: `soffice` echoes the input path back on stdout, so
+under `LC_ALL=C` a non-ASCII filename used to abort the render with a
+`UnicodeDecodeError` out of stdlib. See
+docs/issues/subprocess-text-decode-locale-class.md.
+
 Requires:
     - LibreOffice (`soffice`) on PATH for OOXML inputs.
     - Poppler (`pdftoppm`) on PATH for both OOXML and PDF inputs.
@@ -93,6 +99,7 @@ def _convert_via_soffice(src: Path, out_dir: Path, *, timeout: int) -> Path:
         ]
         try:
             subprocess.run(cmd, env=env, capture_output=True, text=True,
+                           encoding="utf-8", errors="replace",
                            timeout=timeout, check=True)
         except subprocess.TimeoutExpired as exc:
             raise RuntimeError(f"soffice timed out after {timeout}s") from exc
@@ -125,6 +132,7 @@ def _render_pdf_to_jpegs(pdf: Path, out_dir: Path, dpi: int,
     try:
         result = subprocess.run(
             cmd, capture_output=True, text=True,
+            encoding="utf-8", errors="replace",
             timeout=timeout, check=True,
         )
         del result

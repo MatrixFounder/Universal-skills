@@ -61,7 +61,8 @@ def restore_snapshot(artifact_path: Path, ref: str) -> None:
 # ------------------------------- git helpers --------------------------------
 def _git(args: list[str], cwd: Path) -> subprocess.CompletedProcess:
     return subprocess.run(
-        ["git", *args], cwd=str(cwd), capture_output=True, text=True, check=False
+        ["git", *args], cwd=str(cwd), capture_output=True, text=True, check=False,
+        encoding="utf-8", errors="replace",
     )
 
 

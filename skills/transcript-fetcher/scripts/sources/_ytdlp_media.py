@@ -536,6 +536,7 @@ def probe_media_duration(media: Path, *, timeout_sec: int = 60) -> Optional[int]
                 str(media),
             ],
             check=False, capture_output=True, text=True, timeout=timeout_sec,
+            encoding="utf-8", errors="replace",
         )
     except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
         return None
@@ -600,7 +601,8 @@ def remove_silence(
     ]
     try:
         proc = subprocess.run(
-            argv, check=False, capture_output=True, text=True, timeout=timeout_sec
+            argv, check=False, capture_output=True, text=True, timeout=timeout_sec,
+            encoding="utf-8", errors="replace",
         )
     except (FileNotFoundError, subprocess.TimeoutExpired, OSError) as e:
         return None, f"silence-removal skipped: ffmpeg failed ({type(e).__name__})"

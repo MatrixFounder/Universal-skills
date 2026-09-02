@@ -56,7 +56,9 @@ def run_post_validate(output: Path) -> tuple[bool, str]:
     `PostValidateFailed` (code 7). On success: return `(True, stdout)`.
 
     Mirrors xlsx-2 + xlsx-6 precedent: subprocess.run with
-    `shell=False`, `timeout=60`, `capture_output=True`, `text=True`.
+    `shell=False`, `timeout=60`, `capture_output=True`, `text=True`,
+    and an explicit `encoding="utf-8"` so the child is decoded with the
+    codec it actually writes rather than the caller's locale codec.
     """
     import subprocess
     office_validate = (
@@ -81,6 +83,7 @@ def run_post_validate(output: Path) -> tuple[bool, str]:
         result = subprocess.run(
             [sys.executable, str(office_validate), "--", str(output)],
             shell=False, timeout=60, capture_output=True, text=True,
+            encoding="utf-8", errors="replace",
         )
     except subprocess.TimeoutExpired:
         try:

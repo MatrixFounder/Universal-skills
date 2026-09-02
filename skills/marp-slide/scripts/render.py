@@ -88,6 +88,7 @@ def _mmdc_cache_key(mmdc: Path, mermaid_config: Path | None, env: dict[str, str]
         result = subprocess.run(
             [str(mmdc), '--version'],
             capture_output=True, text=True, check=False,
+            encoding='utf-8', errors='replace',
             timeout=30, env=env,
         )
         version = (result.stdout or '').strip()
