@@ -22,8 +22,8 @@ office-семейство** (docx / xlsx / pptx / pdf / html), `wiki-ingest`,
 (кодек берётся из локали) ломает `subprocess.run(..., text=True)`, который
 декодирует вывод дочернего процесса локальным кодеком —
 [SUBPROCESS-TEXT-DECODE-LOCALE-CLASS](subprocess-text-decode-locale-class.md).
-Найден при починке `design-md` и там же закрыт; остальные ~13 продакшн-сайтов
-не измерены.
+Найден при починке `design-md` и там же закрыт. Измерено 2026-09-02:
+падают **9 групп сайтов из 12**, 30 сайтов в 18 файлах не починены.
 **Related:** [PDF-CLI-STDOUT-JSON-LOCALE-CLASS](pdf-cli-stdout-json-locale-class.md)
 — тот же корень (кодек берётся из локали), но **противоположный** контракт:
 там stdout обязан игнорировать локаль (JSON — всегда UTF-8, RFC 8259 §8.1),

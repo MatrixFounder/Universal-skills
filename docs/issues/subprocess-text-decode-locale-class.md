@@ -4,15 +4,17 @@ type: known-issue
 status: open
 opened_at: 2026-09-02
 category: robustness
-severity: SEV-3
+severity: SEV-2
 component: repo
 slug: subprocess-text-decode-locale-class
 ---
 
 # SUBPROCESS-TEXT-DECODE-LOCALE-CLASS — `subprocess.run(..., text=True)` декодирует ребёнка кодеком локали
 
-**Status:** OPEN — закрыт только в `design-md` (2 сайта), где и был найден.
-**~23 продакшн-сайта в 10 скиллах не измерены.**
+**Status:** OPEN — починен только `design-md` (2 сайта), где и был найден.
+**Измерено 2026-09-02: 9 групп сайтов из 12 падают, воспроизведено и
+подтверждено независимой проверкой; 0 опровергнуто.** Не починены **30 сайтов
+в 18 файлах** (ещё 4 сайта в 4 файлах признаны недостижимыми, см. ниже).
 
 **Related:**
 [HUMAN-CLI-OUTPUT-LOCALE-CLASS](human-cli-output-locale-class.md) и
@@ -23,91 +25,131 @@ slug: subprocess-text-decode-locale-class
 ## Корень
 
 `subprocess.run(cmd, text=True)` (равно `universal_newlines=True`) не задаёт
-кодек. CPython берёт его из `locale.getencoding()`, поэтому под `LC_ALL=C` с
-отключённым PEP 540 дочерний вывод декодируется как **ascii** — со
-`strict`-обработчиком, потому что у декодирующей стороны никакого
+кодек. CPython берёт его из локали, поэтому дочерний вывод декодируется
+кодеком родителя со `strict`-обработчиком: у декодирующей стороны никакого
 `backslashreplace` по умолчанию нет.
 
-Дочерний процесс при этом никакой локали не спрашивал: Node-CLI, `pdftoppm`,
-`soffice`, `git` отдают UTF-8 (или свой фиксированный кодек) независимо от
-того, что объявил родитель. То есть кодек берётся **не у той стороны**.
+Дочерний процесс при этом никакой локали не спрашивал: Node, `soffice`,
+`tesseract`, `git`, `pdftoppm`, `yt-dlp` отдают UTF-8 независимо от того, что
+объявил родитель. Кодек берётся **не у той стороны**.
 
-Итог — `UnicodeDecodeError` внутри `subprocess.communicate`, то есть падение
-не в месте печати, а посреди чтения, с трейсбеком из stdlib.
+Итог — `UnicodeDecodeError` внутри `subprocess.communicate`, то есть падение не
+в месте печати, а посреди чтения, с трейсбеком из stdlib.
 
-## Замер (что найдено и как)
+## Замер 2026-09-02
 
-Найдено при починке `design-md` в рамках человеческого класса. `lint` под
-`PYTHONIOENCODING=ascii PYTHONUTF8=0 LC_ALL=C`:
+12 групп сайтов, по агенту на группу; каждое заявленное падение проверял
+отдельный агент, воспроизводивший его заново. Находкой считался только случай,
+где UTF-8-прогон отрабатывает, а прогон под ограниченным кодеком падает с
+`UnicodeDecodeError` из `subprocess`. **9 групп подтверждены, 3 не достижимы,
+0 опровергнуто.**
+
+| Группа | Ребёнок | Чем вызывается | Реплицирован в |
+|---|---|---|---|
+| `_soffice.py:129,156,259` | `soffice`, `codesign`, `bash` | имя файла **или ничего** (см. ниже) | xlsx, pptx |
+| `preview.py:95,127` | `soffice`, `pdftoppm` | имя файла | xlsx, pptx, pdf |
+| `pptx2md/ocr.py:29,173`, `pdf_ocr.py` | `tesseract` | **одна только локаль** (см. ниже) | — |
+| `_actions.py:218`, `docx_replace.py:177` | `node md2docx.js` | содержимое MD | — |
+| `md2pdf.py:259` | `node katex_render.js` | формула TeX | — |
+| `html2md/core_bridge.py:33` | `node html_convert.js` | содержимое HTML | — |
+| `render.py:90` | `mmdc --version` | путь установки | — |
+| `snapshot.py:64` | `git` | имя ветки, текст коммита | — |
+| `_procgroup.py:167`, `_ytdlp_media.py` | `mw`, `yt-dlp`, `ffmpeg` | имя файла, метаданные | — |
+
+Замер выполнен на macOS, CPython 3.14.4, LibreOffice 26.2.4, tesseract 5.5.2,
+node 24.15.0, mermaid-cli 11.12.0. На машине без этих инструментов те же сайты
+не исполняются и потому не измеримы — это ограничение прогона, а не свойство
+кода.
+
+### Две поправки, которые меняют severity
+
+**1. Достаточно обычной локали — подставлять переменные Python не нужно.**
+Обе предыдущие записи этого семейства утверждали, что на Unix репро требует
+явно снятых предохранителей PEP 538/540. Для этого класса это неверно.
+`pptx2md --ocr` падает под `LC_ALL=ja_JP.SJIS` **без единой переменной
+Python**, и так же под `ja_JP.eucJP`, `ko_KR.eucKR`, `zh_CN.eucCN`, `Big5`.
+Причина: `PYTHONIOENCODING` до каналов `subprocess` вообще не доходит —
+значение имеет кодек локали, из которого CPython строит текстовый режим канала.
+Контроль: чисто ASCII-ный слайд под `ja_JP.eucJP` отрабатывает, кириллический
+под однобайтовыми `KOI8-R` / `ISO8859-1` тоже (там выходит мусор, а не
+падение), — то есть отказ привязан к кодеку, а не к шуму окружения.
+
+Цена отказа там же: команда теряет **всю** конвертацию, а не только OCR-блок.
+Выходного файла нет, даже частичного; под `--json-errors` наружу выходит
+`{"v": 1, "error": "Internal error: UnicodeDecodeError", "code": 1,
+"type": "InternalError"}` — конверт без диагностики.
+
+**2. `_soffice.py:156` падает на полностью ASCII-ных путях.** macOS форматирует
+отметку времени подписи через *региональные* настройки, которые `LC_ALL=C` не
+переопределяет: `codesign --display --verbose=2` для нормально установленного
+LibreOffice выдаёт `Timestamp=2 Jun 2026 г.` — U+202F и кириллическое `г.`.
+Никакого экзотического имени файла не требуется. При этом `except` на строке
+160 ловит только `FileNotFoundError` и `TimeoutExpired`, поэтому
+`UnicodeDecodeError` уходит мимо пробы, которая писалась как best-effort.
+
+### Пример репро (самый частый путь)
 
 ```
-File ".../subprocess.py", line 1099, in _translate_newlines
-    data = data.decode(encoding, errors)
-UnicodeDecodeError: 'ascii' codec can't decode byte 0xe2 in position 308
+cp skills/xlsx/examples/check-rules-timesheet.xlsx /tmp/таблица-счёт.xlsx
+env PYTHONIOENCODING=ascii PYTHONUTF8=0 LC_ALL=C \
+  skills/xlsx/scripts/.venv/bin/python skills/xlsx/scripts/xlsx_recalc.py \
+  /tmp/таблица-счёт.xlsx --output /tmp/out.xlsx
 ```
 
-Позиция 308 — длинное тире в JSON-отчёте `@google/design.md`. Под UTF-8 та же
-команда отрабатывает.
+Под UTF-8: `Recalculated.`, rc 0. Под ascii: rc 1, stdout пуст,
+`UnicodeDecodeError: 'ascii' codec can't decode byte 0xd1` из
+`_soffice.py:259` → `subprocess/_translate_newlines`. Ребёнок печатает
+`convert /tmp/таблица-счёт.xlsx as a Calc document -> ...`, то есть имя файла
+возвращается в stdout, и декодирование обрывается на нём.
 
-**Эта находка объясняет одну строку в предыдущей записи.** В
-[HUMAN-CLI-OUTPUT-LOCALE-CLASS](human-cli-output-locale-class.md)
-`design-md/scripts/lint` — единственная из 91 находок, которую верификатор не
-подтвердил: он сообщил, что «под UTF-8 команда падает тоже», и её вынесли за
-скобки по правилу отбора. Верификатор ошибся, но и правило отбора не помогло
-бы: находки засчитывались по `UnicodeEncodeError` в stderr, а здесь
-`UnicodeDecodeError`. **Грепом по имени исключения этот класс не находится.**
+## Не достижимы (проверено, не предположено)
 
-## Починено
+- **`office/pack.py:76` — сайта не существует.** Там `remove_blank_text=True`,
+  аргумент `etree.XMLParser`, а не вызов `subprocess`. Первичный список
+  собирался грепом по подстроке `text=True`, и она сюда попала ложно. Это же
+  исправляет инвентарь: **22 файла и 34 сайта**, а не 25 и 39, как стояло в
+  первой версии записи.
+- **`full_audit.py:46`, `generate_review.py:293`** — ребёнок это
+  `sys.executable`, то есть собственный Python-скрипт репозитория. Под
+  ограниченной локалью он сам печатает ASCII (машинный канал держит
+  `ensure_ascii`), поэтому декодировать нечего. Проверялось с валидированным
+  негативным контролем.
+- **`md_tables2xlsx/cli_helpers.py`, `xlsx_comment/cli_helpers.py`** — тот же
+  случай: ребёнок это `office/validate.py`, запускаемый через `sys.executable`.
 
-`skills/design-md/scripts/lint` и `skills/design-md/scripts/check-contrast` —
-обоим вызовам `subprocess.run` явно задан `encoding="utf-8",
-errors="replace"`. Ребёнок (`npx @google/design.md`) — Node-CLI и всегда
-пишет UTF-8; `replace` не даёт кривому байту превратить отчёт линтера в
-трейсбек.
+## Что осталось неизмеренным
 
-Мутация «снять `encoding=`» убивается тестом
-`skills/design-md/scripts/tests/test_human_channel.py`.
-
-## Не измерено
-
-`text=True` без `encoding=` в продакшн-коде (тесты исключены) — **25 файлов**:
-
-| скилл | файлы |
-|---|---|
-| docx | `_actions.py`, `_soffice.py`, `docx_replace.py`, `office/pack.py`, `preview.py` |
-| xlsx | `_soffice.py`, `office/pack.py`, `preview.py`, `md_tables2xlsx/cli_helpers.py`, `xlsx_comment/cli_helpers.py` |
-| pptx | `_soffice.py`, `office/pack.py`, `preview.py`, `pptx2md/ocr.py` |
-| pdf | `md2pdf.py`, `pdf_ocr.py`, `preview.py` |
-| html | `html2md/core_bridge.py` |
-| marp-slide | `render.py` |
-| transcript-fetcher | `_procgroup.py`, `sources/_ytdlp_media.py` |
-| skill-validator | `full_audit.py` |
-| skill-auto-improve | `snapshot.py`, `backends/claude.py` |
-| skill-creator | `eval-viewer/generate_review.py` |
-
-Список получен грепом, а **не** прогоном: сколько из них реально падает,
-зависит от того, бывает ли не-ASCII в выводе конкретного ребёнка. У
-`_soffice.py`, `office/pack.py` и `preview.py` цена ошибки выше прочих — это
-единицы репликации, то есть одна правка закрывает четыре скилла, и одна
-пропущенная оставляет четыре.
-
-Ни один из них здесь **не** объявляется дефектным. Это список кандидатов на
-замер, а не находки.
+Все 34 сайта отнесены к какой-либо группе, но **воспроизведение делалось по
+одному характерному сайту на группу**: 12 прогонов на 34 сайта. Остальные
+сайты внутри группы признаны падающими по коду — тот же вызов, тот же
+ребёнок, — а не по прогону. Отдельно: `backends/claude.py:90` требует
+установленного `claude` CLI и не запускался.
 
 ## Путь починки
 
 Задать кодек явно у той стороны, которая его знает — у ребёнка:
-`subprocess.run(..., text=True, encoding="utf-8", errors="replace")`.
 
-Контракт тот же, что у машинного канала на выходе: **байты дочернего процесса
-не зависят от локали родителя, значит и декодировать их локалью нельзя.**
+```python
+subprocess.run(..., text=True, encoding="utf-8", errors="replace")
+```
+
+`errors="replace"`, а не `strict`: задача CLI-обёртки — доложить результат, а
+не умереть на одном кривом байте в чужом выводе.
+
+Порядок для реплицируемых файлов — CLAUDE.md §2: править только docx-копию
+`_soffice.py` и `preview.py`, затем реплицировать и проверить `diff -q`. Одна
+правка `_soffice.py` закрывает три скилла, `preview.py` — четыре; один
+пропуск оставляет столько же сломанными.
 
 ## Do-not
 
-- **Не** чинить это `sys.stdout.reconfigure(...)`: это выходная сторона, здесь
-  она ни при чём.
-- **Не** искать этот класс грепом по `UnicodeEncodeError` — исключение
-  противоположное (`UnicodeDecodeError`), и в предыдущем замере класс
-  из-за этого списали как «другой дефект».
-- **Не** ставить `errors="strict"` по умолчанию: у CLI-обёртки задача —
-  доложить результат, а не умереть на одном кривом байте в чужом выводе.
+- **Не** искать этот класс грепом по `UnicodeEncodeError`: исключение
+  противоположное. В замере предыдущей записи `design-md/lint` из-за этого
+  списали как «другой дефект» — единственная из 91 находки, которую
+  верификатор не подтвердил.
+- **Не** считать `text=True` признаком сайта: `remove_blank_text=True`
+  содержит ту же подстроку и дал ложную позицию в первой версии этого списка.
+  Проверять, что подстрока лежит внутри вызова `subprocess`.
+- **Не** чинить это через `sys.stdout.reconfigure(...)`: это выходная сторона,
+  здесь она ни при чём.
+- **Не** ставить `errors="strict"` по умолчанию.
