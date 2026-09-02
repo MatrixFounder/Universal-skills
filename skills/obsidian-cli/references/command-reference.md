@@ -14,7 +14,7 @@
 
 ## Tier & gating legend
 
-**Tier** (normative source: `SKILL.md` safety tiers — this reference must agree):
+**Tier** (normative source: `SKILL.md` → *Safety Boundaries (tiers)* — this reference must agree):
 - **T1** — read-only, free use.
 - **T1-UX** — opens a pane / GUI state, no on-disk note change; free use.
 - **T2** — mutating; in-task-scope, explicit `path=`, confirm if the operator hasn't scoped it.
@@ -317,7 +317,7 @@ to do.
   rules below; add a **gating** tag (`[core]` unless it belongs to a toggleable plugin
   namespace → `[plugin:X]`); copy its params/flags + `format=` default verbatim from the new
   help. If the new command changes a tier *class* (e.g. a new mutating verb, a new dev/eval
-  surface), also add it to the matching list in `SKILL.md` → *Safety tiers*.
+  surface), also add it to the matching list in `SKILL.md` → *Safety Boundaries (tiers)*.
 - **REMOVED command** → delete its catalog row; if it still appears in obsidian.md/help/cli,
   move it to the **Doc-only** table instead; note it in the Anomaly section.
 - **CHANGED command** → edit only that row (new flag, new `format=` option, changed default

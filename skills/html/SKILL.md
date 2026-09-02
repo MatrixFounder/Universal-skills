@@ -20,6 +20,15 @@ for two consumers: (1) an **Obsidian web-clipper** (self-contained note), and
 - "I'll fetch the page with curl and strip tags with regex" → **WRONG**. Use the
   script — it has SSRF protection, dual-output, sha1-deduped attachments.
 
+### Rationalization Table
+| Agent Excuse | Reality / Counter-Argument |
+| :--- | :--- |
+| "The page is simple, plain turndown is enough" | Plain turndown keeps the nav, cookie banner and share rail. The reader-mode pass is what makes the Markdown readable, and it is one flag. |
+| "Reader mode dropped something, so I'll skip it" | Reader mode is lossy by design. Re-run with `--whole` for that one page instead of abandoning the cleaner for every page. |
+| "I'll patch `web_clean/` here, it's a small fix" | `web_clean/` is a byte-identical replica; **pdf** is its master. Edit `skills/pdf/scripts/html2pdf_lib/`, then replicate — a local patch is silently reverted by the next `diff -q` gate. |
+| "The file is already HTML, no need to fetch" | A saved `.mhtml`/`.webarchive` is a container, not HTML. Point the script at it and let `archives.py` unpack it. |
+| "It rendered, so the output is right" | A non-empty `.md` proves the pipeline ran, not that the article survived. Read the first and last heading before handing it back. |
+
 ## 2. Capabilities
 - **URL → Markdown via a resilient fallback ladder** (`--engine lite|chrome|auto|jina|remote`):
   `httpx`+`trafilatura` lite fetch (also yields title/date/author) with **retry + backoff +

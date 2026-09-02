@@ -132,7 +132,7 @@ jobs:
         run: bash skills/${{ matrix.skill }}/scripts/tests/test_e2e.sh
 
   harness:
-    # Guards three repo-wide classes of defect that the matrix job structurally
+    # Guards four repo-wide classes of defect that the matrix job structurally
     # cannot see. Pure stdlib: no venv, no system deps.
     #
     # 1. Symlinked invocation. The matrix always runs the suites from the repo
@@ -147,6 +147,11 @@ jobs:
     #    `Path.read_text()` that never named a codec reads SKILL.md with the
     #    locale's. Measured: one em dash added to a skill's prose turned
     #    `package_skill.py` into a traceback under LC_ALL=C.
+    # 4. The two skill gates drifting apart. validate_skill.py and
+    #    analyze_gaps.py duplicate several functions verbatim (neither may
+    #    import from the other -- a skill must run in isolation) and must not
+    #    return contradictory verdicts on one SKILL.md. WI-033 was filed
+    #    because they did.
     name: test harness
     runs-on: ubuntu-22.04
     steps:
@@ -157,6 +162,8 @@ jobs:
         run: python3 tests/test_subprocess_decode.py
       - name: file-codec guard
         run: python3 tests/test_file_codec.py
+      - name: skill-gate agreement guard
+        run: python3 tests/test_shared_gate_logic.py
 
   property:
     name: property fuzz

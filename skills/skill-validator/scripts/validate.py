@@ -26,7 +26,7 @@ else:
     _import_error = None
 
 # Version must match SKILL.md frontmatter
-VERSION = "1.3"
+VERSION = "1.4"
 
 # Binary file extensions to skip during scanning
 BINARY_EXTENSIONS = frozenset((

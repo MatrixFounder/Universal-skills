@@ -2,7 +2,7 @@
 name: mcp-builder
 description: Guidelines for creating high-quality MCP (Model Context Protocol) servers. Use when building MCP servers to integrate external APIs or services, whether in Python (FastMCP) or Node/TypeScript (MCP SDK).
 tier: 2
-version: 1.0
+version: 1.1
 ---
 
 # MCP Server Development Guide
@@ -20,9 +20,34 @@ Create MCP (Model Context Protocol) servers that enable LLMs to interact with ex
 
 ---
 
+## 2. Execution Policy
+
+### 2.1 Execution Mode
+- **Mode**: `hybrid`
+- **Why this mode**: The skill requires both prompting for MCP design and logic generation, as well as iterative execution for testing the built servers.
+
+### 2.2 Script Contract
+- **Command(s)**:
+  - Depending on the target stack, testing relies on standard runtime commands:
+    - Node: `npx @modelcontextprotocol/inspector`
+    - Python: `python -m mcp run`
+- **Inputs**: Source code files for the MCP server.
+- **Outputs**: Running stdio process or compiled build artifacts.
+- **Failure semantics**: Compilation or runtime crashes emit standard error traces.
+- **Idempotency**: Ensure builds and tests are re-runnable without side effects.
+
+### 2.3 Safety Boundaries
+- **Allowed scope**: Only the localized MCP project directory.
+- **Default exclusions**: Modifying global system configurations or installing aggressive global dependencies without prompt.
+- **Destructive actions**: Deleting source files or aggressively overwriting non-generated boilerplate must be explicit.
+
+### 2.4 Validation Evidence
+- **Local verification**: LLM must run the build verification and successfully launch the MCP Inspector.
+- **Expected evidence**: Screenshots or terminal logs demonstrating the tools successfully enumerating and returning structured text.
+
 # Process
 
-## 🚀 High-Level Workflow
+## 3. 🚀 High-Level Workflow
 
 Creating a high-quality MCP server involves four main phases:
 
@@ -130,33 +155,6 @@ For each tool:
 - `idempotentHint`: true/false
 - `openWorldHint`: true/false
 
----
-
-## 3. Execution Policy
-
-### 3.1 Execution Mode
-- **Mode**: `hybrid`
-- **Why this mode**: The skill requires both prompting for MCP design and logic generation, as well as iterative execution for testing the built servers.
-
-### 3.2 Script Contract
-- **Command(s)**:
-  - Depending on the target stack, testing relies on standard runtime commands:
-    - Node: `npx @modelcontextprotocol/inspector`
-    - Python: `python -m mcp run`
-- **Inputs**: Source code files for the MCP server.
-- **Outputs**: Running stdio process or compiled build artifacts.
-- **Failure semantics**: Compilation or runtime crashes emit standard error traces.
-- **Idempotency**: Ensure builds and tests are re-runnable without side effects.
-
-### 3.3 Safety Boundaries
-- **Allowed scope**: Only the localized MCP project directory.
-- **Default exclusions**: Modifying global system configurations or installing aggressive global dependencies without prompt.
-- **Destructive actions**: Deleting source files or aggressively overwriting non-generated boilerplate must be explicit.
-
-### 3.4 Validation Evidence
-- **Local verification**: LLM must run the build verification and successfully launch the MCP Inspector.
-- **Expected evidence**: Screenshots or terminal logs demonstrating the tools successfully enumerating and returning structured text.
-
 ### Phase 3: Review and Test
 
 #### 3.1 Code Quality
@@ -228,7 +226,7 @@ Create an XML file with this structure.
 
 # Reference Files
 
-## 📚 Documentation Library
+## 4. 📚 Documentation Library
 
 Load these resources as needed during development:
 
