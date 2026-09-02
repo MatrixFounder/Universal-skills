@@ -96,7 +96,7 @@ def build_parser() -> argparse.ArgumentParser:
         locked per ARCH §5.1 — future tasks must not change defaults here
         (they are the 012-08 no-flag shape pin regression baseline).
     """
-    p = _errors.HumanArgumentParser(
+    p = argparse.ArgumentParser(
         prog="xlsx2md.py",
         description="xlsx-9: Convert an .xlsx workbook into Markdown.",
         epilog=(
@@ -485,6 +485,7 @@ def main(argv: list[str] | None = None) -> int:
         0 on success; 2-7 on documented failure modes per the envelope
         catalogue in ``docs/ARCHITECTURE.md §2.1 F8``.
     """
+    _errors.install_human_channel()
     parser = build_parser()
     args = parser.parse_args(argv)
     json_mode = bool(args.json_errors)

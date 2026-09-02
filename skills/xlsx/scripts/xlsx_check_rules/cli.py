@@ -12,6 +12,8 @@ import time
 from pathlib import Path
 from typing import Any
 
+import _errors
+
 from .constants import (
     DEFAULT_MAX_FINDINGS,
     DEFAULT_SUMMARIZE_AFTER,
@@ -236,6 +238,7 @@ def _validate_mutex_dep(args: argparse.Namespace, parser: argparse.ArgumentParse
 
 def main(argv: list[str] | None = None) -> int:
     """End-to-end entrypoint. M-2 line-buffer guarantees partial-flush atomicity."""
+    _errors.install_human_channel()
     try:
         sys.stdout.reconfigure(line_buffering=True)  # type: ignore[attr-defined]
     except (AttributeError, ValueError):

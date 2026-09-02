@@ -48,7 +48,7 @@ from pypdf import PdfReader, PdfWriter  # type: ignore
 from reportlab.lib.colors import HexColor  # type: ignore
 from reportlab.pdfgen import canvas  # type: ignore
 
-from _errors import HumanArgumentParser, add_json_errors_argument, report_error, say
+from _errors import add_json_errors_argument, install_human_channel, report_error
 
 
 POSITIONS = ("center", "top-left", "top-right",
@@ -279,7 +279,8 @@ def _hex_colour(s: str) -> str:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = HumanArgumentParser(description=__doc__.splitlines()[0])
+    install_human_channel()
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("input", type=Path, help="Source .pdf")
     parser.add_argument("output", type=Path, help="Destination .pdf")
     mode = parser.add_mutually_exclusive_group(required=True)
@@ -364,7 +365,7 @@ def main(argv: list[str] | None = None) -> int:
             code=1, error_type=type(exc).__name__, json_mode=je,
         )
 
-    say(f"Stamped {report['pages_stamped']}/{report['pages_total']} "
+    print(f"Stamped {report['pages_stamped']}/{report['pages_total']} "
           f"page(s) of {args.input} → {args.output} ({report['mode']} mode).")
     return 0
 

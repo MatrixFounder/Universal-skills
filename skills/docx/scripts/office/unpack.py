@@ -30,7 +30,7 @@ import argparse
 import sys
 import zipfile
 from pathlib import Path
-from _errors import HumanArgumentParser  # noqa: E402
+from _errors import install_human_channel  # noqa: E402
 
 from defusedxml import minidom  # type: ignore
 from lxml import etree  # type: ignore
@@ -135,7 +135,8 @@ def unpack(
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = HumanArgumentParser(description=__doc__.splitlines()[0])
+    install_human_channel()
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("input", type=Path, help="Source .docx/.xlsx/.pptx file")
     parser.add_argument("output_dir", type=Path, help="Directory to unpack into (created if missing)")
     parser.add_argument("--no-pretty", action="store_true", help="Skip XML pretty-printing")

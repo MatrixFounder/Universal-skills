@@ -6,7 +6,7 @@ neither can represent an em dash — surrogateescape rescues lone surrogates and
 nothing else. One `—` or `✓` in a report, or in an argparse `help=` string,
 took the whole command down.
 
-Measured before the fix: `full_audit.py <skill>` returned rc 1 and 0 bytes where UTF-8 returned 7263.
+Measured before the fix: `analyze_gaps.py <skill>` returned 54 bytes where UTF-8 returned 1373.
 
 The contract is OBEY the caller's codec, not ignore it. Writing UTF-8 into a
 terminal that declared cp1252 is mojibake, not robustness — so the fix degrades
@@ -28,8 +28,10 @@ import importlib.util
 import io
 import json
 import os
+import shutil
 import subprocess
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -51,8 +53,7 @@ def _load(filename, name):
     return module
 
 
-sys.path.insert(0, str(SCRIPTS))
-import validate as H  # noqa: E402
+H = _load("skill_utils.py", "skill_enhancer_skill_utils")
 
 GLYPHS = {"—": "--", "…": "...", "→": "->", "✓": "+", "✗": "x", "⚠": "!", "§": "S"}
 
@@ -221,50 +222,6 @@ class TestArgparseNeedsNoSubclass(unittest.TestCase):
         self.assertIn(b"sub -- prose", stream.buffer.getvalue())
 
 
-class TestTheMachineChannelIgnoresTheLocale(unittest.TestCase):
-    """The opposite contract, in the same file, on purpose.
-
-    Everything above obeys the caller's codec. `emit_json` must NOT: JSON is
-    UTF-8 by RFC 8259 §8.1, and a consumer parsing this stream did not agree to
-    read cp1251. `ensure_ascii` keeps its default so the document is pure ASCII
-    and the text layer's codec can neither alter these bytes nor abort
-    mid-write on them — which also means the human-channel handler installed on
-    the same stream never fires for them.
-
-    Here because the two contracts are one edit apart: flipping `ensure_ascii`
-    to False makes the JSON follow the locale like prose, and no test of the
-    human half would notice.
-    """
-
-    def _emit(self, payload, encoding):
-        stream = io.TextIOWrapper(io.BytesIO(), encoding=encoding, errors="strict")
-        H.install_human_channel(stream)
-        saved = sys.stdout
-        sys.stdout = stream
-        try:
-            H.emit_json(payload)
-        finally:
-            sys.stdout = saved
-        stream.flush()
-        return stream.buffer.getvalue()
-
-    def test_the_bytes_are_the_same_under_every_locale(self):
-        payload = {"note": "доклад — готово ✓", "path": "/tmp/café.md"}
-        first = self._emit(payload, "utf-8")
-        for encoding in ("ascii", "cp1251", "cp1252", "latin-1"):
-            with self.subTest(encoding=encoding):
-                self.assertEqual(self._emit(payload, encoding), first)
-
-    def test_it_is_not_transliterated_like_prose(self):
-        """`—` must stay `\u2014` in the document, not become `--`. The
-        difference is the whole reason the two channels are separate: a parser
-        round-trips the escape, and cannot round-trip `--`."""
-        got = self._emit({"note": "доклад — ✓"}, "ascii").decode("ascii")
-        self.assertIn(r"\u2014", got)
-        self.assertNotIn("--", got)
-        self.assertEqual(json.loads(got)["note"], "доклад — ✓")
-
-
 class TestEveryEntryPointInstallsIt(unittest.TestCase):
     """The regression test that matters.
 
@@ -342,8 +299,8 @@ class TestTheRealCommands(unittest.TestCase):
 
     CWD = Path(__file__).resolve().parents[4]
     COMMANDS = {
-        "full_audit.py": ["skills/skill-validator/scripts/full_audit.py",
-                          "skills/text-humanizer"],
+        "analyze_gaps.py": ["skills/skill-enhancer/scripts/analyze_gaps.py",
+                            "skills/text-humanizer"],
     }
 
     def _require(self, argv):
@@ -407,6 +364,105 @@ class TestTheRealCommands(unittest.TestCase):
                                  _degrade(utf8.stdout.decode("utf-8")),
                                  "%s: the ascii run is not the utf-8 run degraded"
                                  % label)
+
+
+class TestTheMachineChannelIgnoresTheLocale(unittest.TestCase):
+    """The opposite contract, in the same file, on purpose.
+
+    Everything above obeys the caller's codec. `emit_json` must NOT: JSON is
+    UTF-8 by RFC 8259 §8.1, and a consumer parsing this stream did not agree to
+    read cp1251. `ensure_ascii` keeps its default so the document is pure ASCII
+    and the text layer's codec can neither alter these bytes nor abort
+    mid-write on them — which also means the human-channel handler installed on
+    the same stream never fires for them.
+
+    Here because the two contracts are one edit apart: flipping `ensure_ascii`
+    to False makes the JSON follow the locale like prose, and no test of the
+    human half would notice.
+    """
+
+    def _emit(self, payload, encoding):
+        stream = io.TextIOWrapper(io.BytesIO(), encoding=encoding, errors="strict")
+        H.install_human_channel(stream)
+        saved = sys.stdout
+        sys.stdout = stream
+        try:
+            H.emit_json(payload)
+        finally:
+            sys.stdout = saved
+        stream.flush()
+        return stream.buffer.getvalue()
+
+    def test_the_bytes_are_the_same_under_every_locale(self):
+        payload = {"note": "доклад — готово ✓", "path": "/tmp/café.md"}
+        first = self._emit(payload, "utf-8")
+        for encoding in ("ascii", "cp1251", "cp1252", "latin-1"):
+            with self.subTest(encoding=encoding):
+                self.assertEqual(self._emit(payload, encoding), first)
+
+    def test_it_is_not_transliterated_like_prose(self):
+        """`—` must stay `\u2014` in the document, not become `--`. The
+        difference is the whole reason the two channels are separate: a parser
+        round-trips the escape, and cannot round-trip `--`."""
+        got = self._emit({"note": "доклад — ✓"}, "ascii").decode("ascii")
+        self.assertIn(r"\u2014", got)
+        self.assertNotIn("--", got)
+        self.assertEqual(json.loads(got)["note"], "доклад — ✓")
+
+
+class TestNonAsciiUserData(unittest.TestCase):
+    """The half of this class that ASCII-only source code does not fix.
+
+    44 of the 102 measured findings came from user DATA, not from literals: a
+    path with Cyrillic in it, or a filename with `café`, kills a report whose
+    own source is pure ASCII. Every other test here would pass on a build where
+    the literals were scrubbed and nothing else changed, so this is the one
+    that distinguishes the two.
+    """
+
+    REPO = Path(__file__).resolve().parents[4]
+    TARGET = "skills/skill-enhancer/scripts/analyze_gaps.py"
+
+    def _fixture(self):
+        """A skill copied under a directory whose NAME is non-ASCII.
+
+        The skill's own name stays ASCII on purpose: the validator requires it
+        to match the directory, so the non-ASCII has to come from an ancestor
+        — which is exactly how it arrives in real life, from the checkout path
+        rather than from the skill.
+        """
+        tmp = tempfile.mkdtemp(prefix="human-channel-")
+        self.addCleanup(shutil.rmtree, tmp, True)
+        dst = Path(tmp) / "проект — café" / "skill-enhancer"
+        shutil.copytree(self.REPO / "skills" / "skill-enhancer", dst,
+                        ignore=shutil.ignore_patterns(".venv", "__pycache__",
+                                                      "node_modules"))
+        return dst
+
+    def _run(self, target, ascii_locale):
+        env = dict(os.environ)
+        if ascii_locale:
+            env.update(PYTHONIOENCODING="ascii", PYTHONUTF8="0", LC_ALL="C")
+        else:
+            env.update(PYTHONIOENCODING="utf-8", PYTHONUTF8="1")
+        return subprocess.run([sys.executable, self.TARGET, str(target)],
+                              cwd=str(self.REPO), env=env, timeout=180,
+                              stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+
+    def test_a_non_ascii_path_does_not_take_the_report_down(self):
+        target = self._fixture()
+        utf8 = self._run(target, ascii_locale=False)
+        got = self._run(target, ascii_locale=True)
+        self.assertNotIn(b"UnicodeEncodeError", got.stderr)
+        self.assertEqual(got.returncode, utf8.returncode)
+        self.assertEqual(got.stdout.decode("ascii"),
+                         _degrade(utf8.stdout.decode("utf-8")))
+
+    def test_the_fixture_really_does_carry_non_ascii_into_the_output(self):
+        """Guards the test above: if the command stopped echoing the path, the
+        test would keep passing while covering nothing."""
+        utf8 = self._run(self._fixture(), ascii_locale=False)
+        self.assertIn("café", utf8.stdout.decode("utf-8"))
 
 
 if __name__ == "__main__":

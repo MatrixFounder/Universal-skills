@@ -32,15 +32,26 @@ from typing import Any, Callable
 # --- imports (work as script or module) ------------------------------------
 try:
     from scripts.common import (  # type: ignore
-        HumanArgumentParser,
-        emit_json,
-        say,
-        ARTIFACT_DATASET, ARTIFACT_FULL_SKILL, ARTIFACT_PROMPT,
-        ARTIFACT_SKILL, ARTIFACT_TEXT, ARTIFACT_WORKFLOW,
+        ARTIFACT_DATASET,
+        ARTIFACT_FULL_SKILL,
+        ARTIFACT_PROMPT,
+        ARTIFACT_SKILL,
+        ARTIFACT_TEXT,
+        ARTIFACT_WORKFLOW,
         DIFF_SECTION_REPLACE,
-        STATUS_BASELINE, STATUS_ERROR, STATUS_IMMUTABILITY, STATUS_KEEP,
-        STATUS_NO_CHANGE, STATUS_NO_SIGNAL, STATUS_REVERT,
-        TIER_LARGE, find_sections, parse_skill_md, split_frontmatter,
+        STATUS_BASELINE,
+        STATUS_ERROR,
+        STATUS_IMMUTABILITY,
+        STATUS_KEEP,
+        STATUS_NO_CHANGE,
+        STATUS_NO_SIGNAL,
+        STATUS_REVERT,
+        TIER_LARGE,
+        emit_json,
+        find_sections,
+        install_human_channel,
+        parse_skill_md,
+        split_frontmatter,
     )
     from scripts.pairwise import build_pairwise_decider  # type: ignore
     from scripts.check_immutability import immutable_preserved, immutable_signatures, validate_proposal
@@ -57,15 +68,26 @@ try:
     from scripts.backends import get_backend
 except ImportError:
     from common import (
-        HumanArgumentParser,
-        emit_json,
-        say,
-        ARTIFACT_DATASET, ARTIFACT_FULL_SKILL, ARTIFACT_PROMPT,
-        ARTIFACT_SKILL, ARTIFACT_TEXT, ARTIFACT_WORKFLOW,
+        ARTIFACT_DATASET,
+        ARTIFACT_FULL_SKILL,
+        ARTIFACT_PROMPT,
+        ARTIFACT_SKILL,
+        ARTIFACT_TEXT,
+        ARTIFACT_WORKFLOW,
         DIFF_SECTION_REPLACE,
-        STATUS_BASELINE, STATUS_ERROR, STATUS_IMMUTABILITY, STATUS_KEEP,
-        STATUS_NO_CHANGE, STATUS_NO_SIGNAL, STATUS_REVERT,
-        TIER_LARGE, find_sections, parse_skill_md, split_frontmatter,
+        STATUS_BASELINE,
+        STATUS_ERROR,
+        STATUS_IMMUTABILITY,
+        STATUS_KEEP,
+        STATUS_NO_CHANGE,
+        STATUS_NO_SIGNAL,
+        STATUS_REVERT,
+        TIER_LARGE,
+        emit_json,
+        find_sections,
+        install_human_channel,
+        parse_skill_md,
+        split_frontmatter,
     )
     from pairwise import build_pairwise_decider
     from check_immutability import immutable_preserved, immutable_signatures, validate_proposal
@@ -368,7 +390,7 @@ def _finalize(state, artifact_path, artifact_type, config, on_large_tier) -> dic
         try:
             on_large_tier(artifact_path)
         except Exception as exc:  # adversarial review is advisory, never fatal
-            say(f"WARNING: large-tier review failed: {exc}", file=sys.stderr)
+            print(f"WARNING: large-tier review failed: {exc}", file=sys.stderr)
     return {
         "best_score": state.best_score,
         "best_secondary": state.best_secondary,
@@ -851,7 +873,8 @@ def _parse_duration(text: str | None) -> float | None:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = HumanArgumentParser(description="Iteratively improve an artifact")
+    install_human_channel()
+    parser = argparse.ArgumentParser(description="Iteratively improve an artifact")
     parser.add_argument("--artifact-path", required=True)
     parser.add_argument("--artifact-type", default="auto")
     parser.add_argument("--target", default="auto",
@@ -901,10 +924,10 @@ def main(argv: list[str] | None = None) -> int:
     if args.eval_set:
         raw = json.loads(Path(args.eval_set).read_text())
         if not isinstance(raw, list) or not all(isinstance(x, dict) for x in raw):
-            say("ABORT: --eval-set must be a JSON list of objects.", file=sys.stderr)
+            print("ABORT: --eval-set must be a JSON list of objects.", file=sys.stderr)
             return 2
         if len(raw) > 1000:
-            say(f"ABORT: --eval-set too large ({len(raw)} cases; cap 1000).", file=sys.stderr)
+            print(f"ABORT: --eval-set too large ({len(raw)} cases; cap 1000).", file=sys.stderr)
             return 2
         eval_set = raw
 
@@ -914,14 +937,14 @@ def main(argv: list[str] | None = None) -> int:
     repo_dir = artifact_path if artifact_path.is_dir() else artifact_path.parent
     if args.git_isolation and is_git_repo(repo_dir):
         if not is_clean(repo_dir):
-            say("ABORT: uncommitted changes. Stash or commit before --git-isolation.",
+            print("ABORT: uncommitted changes. Stash or commit before --git-isolation.",
                   file=sys.stderr)
             return 2
         branch = f"auto-improve/{artifact_path.name}/run"
         if create_branch(repo_dir, branch):
             git_repo = repo_dir
         else:
-            say(f"WARNING: could not create branch {branch}; continuing without git isolation.",
+            print(f"WARNING: could not create branch {branch}; continuing without git isolation.",
                   file=sys.stderr)
 
     # Target dispatch. Three modes:
@@ -932,11 +955,11 @@ def main(argv: list[str] | None = None) -> int:
     score_threshold = args.threshold if args.threshold is not None else 1.0
     if artifact_type == ARTIFACT_TEXT:
         if not args.criteria:
-            say("ABORT: --artifact-type text requires --criteria <rubric.md>.", file=sys.stderr)
+            print("ABORT: --artifact-type text requires --criteria <rubric.md>.", file=sys.stderr)
             return 2
         criteria_path = Path(args.criteria)
         if criteria_path.stat().st_size > 256 * 1024:
-            say("ABORT: --criteria rubric too large (>256KB).", file=sys.stderr)
+            print("ABORT: --criteria rubric too large (>256KB).", file=sys.stderr)
             return 2
         criteria_text = criteria_path.read_text(encoding="utf-8")
         holder = {"breakdown": ""}
@@ -979,7 +1002,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     report = write_report(workspace, summary, artifact_path, artifact_type, vendor, branch)
     if args.verbose:
-        say(json.dumps(summary, indent=2), file=sys.stderr)
+        print(json.dumps(summary, indent=2), file=sys.stderr)
     emit_json({"summary": summary, "report": str(report)})
     return 0
 

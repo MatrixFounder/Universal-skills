@@ -84,7 +84,7 @@ _VERB_HELP = (
 # --------------------------------------------------------------------------- #
 def build_parser() -> argparse.ArgumentParser:
     """Construct the full CLI surface. Defaults are the 022-01 frozen baseline."""
-    p = _errors.HumanArgumentParser(
+    p = argparse.ArgumentParser(
         prog="html",
         description="TASK 022: Convert a web URL or saved HTML/MHTML/webarchive into Markdown.",
         epilog=(
@@ -475,7 +475,7 @@ def _login_main(argv: list[str]) -> int:
     """``html login URL [--save-state PATH]`` — mint a Playwright ``storage_state`` via a
     HEADFUL browser (TASK 024 R3): the one interactive step; runtime is always headless. The
     surface is frozen here (024-01); the actual render lands in 024-04."""
-    p = _errors.HumanArgumentParser(
+    p = argparse.ArgumentParser(
         prog="html login",
         description="Open URL in a headful browser, log in by hand (2FA ok), then save the "
                     "session as a storage_state JSON (chmod 0600) for --chrome-storage-state.")
@@ -711,7 +711,7 @@ def _get_main(argv: list[str]) -> int:
     holds a PREFIX; reporting 0 there would be the undetectable truncation the file path
     exists to exclude).
     """
-    parser = _errors.HumanArgumentParser(
+    parser = argparse.ArgumentParser(
         prog="html get",
         description="Download URL to OUTPUT_PATH as raw bytes, through the SSRF-guarded "
                     "fetch ladder. No conversion, no content sniffing.")
@@ -862,6 +862,7 @@ def combined_main(argv: list[str] | None = None) -> int:
     split is the single source of truth: the caller is left with just ``<slug>.md`` (+
     ``.reader.md``) + ``_attachments/`` — no leftover HTML. ``--stdout`` and the trust-markdown
     reader path have nothing to persist, so they convert in one pass."""
+    _errors.install_human_channel()
     if argv is None:
         argv = sys.argv[1:]
     parser = build_parser()
@@ -911,6 +912,7 @@ def main(argv: list[str] | None = None) -> int:
     ``fetch URL`` would otherwise mis-parse as INPUT="fetch"). A bare ``INPUT [OUTPUT_DIR] …``
     (no verb) is the end-to-end pipeline (fetch+convert in one process); the combined
     ``html2md`` command builds on it."""
+    _errors.install_human_channel()
     if argv is None:
         argv = sys.argv[1:]
     if argv and argv[0] == "login":

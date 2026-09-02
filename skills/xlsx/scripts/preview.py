@@ -40,7 +40,7 @@ from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageFont  # type: ignore
 
-from _errors import HumanArgumentParser, add_json_errors_argument, report_error, write_path_stdout
+from _errors import add_json_errors_argument, install_human_channel, report_error, write_path_stdout
 
 
 SUPPORTED_OOXML = frozenset({".docx", ".xlsx", ".pptx",
@@ -247,7 +247,8 @@ def build(
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = HumanArgumentParser(description=__doc__.splitlines()[0])
+    install_human_channel()
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("input", type=Path)
     parser.add_argument("output", type=Path)
     parser.add_argument("--cols", type=int, default=3)

@@ -331,7 +331,7 @@ from pathlib import Path
 import pdfplumber  # type: ignore
 from pdfminer.pdftypes import resolve1  # type: ignore
 
-from _errors import HumanArgumentParser, add_json_errors_argument, report_error, write_json_stdout
+from _errors import add_json_errors_argument, install_human_channel, report_error, write_json_stdout
 
 # A CLI owns its stderr: with --json-errors a wrapper parses stderr as JSON.
 # pdfminer / pypdf log free-text warnings ("invalid pdf header", "EOF marker
@@ -606,7 +606,7 @@ def _named_dir(value: str) -> Path:
 def _build_parser() -> argparse.ArgumentParser:
     """Construct the argparse CLI. REAL from the stub phase — the smoke test
     asserts the `--help` surface."""
-    parser = HumanArgumentParser(
+    parser = argparse.ArgumentParser(
         prog="pdf_extract.py",
         description=(
             "Dump a PDF's per-page text and tables to structured JSON. "
@@ -2632,6 +2632,7 @@ def _emit(dump: dict, out_path: Path | None) -> None:
 
 
 def main(argv: list[str] | None = None) -> int:
+    install_human_channel()
     """CLI entry point: parse → extract → emit → return the exit code.
 
     Exit codes: 0 success; 1 failure (`InputNotFound` / `EncryptedPDF` /

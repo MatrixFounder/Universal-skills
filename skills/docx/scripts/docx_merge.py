@@ -53,7 +53,7 @@ from pathlib import Path
 from docx.oxml.ns import qn  # type: ignore
 from lxml import etree  # type: ignore
 
-from _errors import HumanArgumentParser, add_json_errors_argument, report_error
+from _errors import add_json_errors_argument, install_human_channel, report_error
 from office._encryption import EncryptedFileError, assert_not_encrypted
 from office._macros import warn_if_macros_will_be_dropped
 from office.pack import pack
@@ -715,7 +715,8 @@ def merge_into_base(
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = HumanArgumentParser(description=__doc__.splitlines()[0])
+    install_human_channel()
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("output", type=Path)
     parser.add_argument("inputs", nargs="+", type=Path,
                         help="Two or more .docx files to merge, in order. "

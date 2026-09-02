@@ -10,8 +10,11 @@ script_dir = os.path.dirname(os.path.abspath(__file__))
 sys.path.append(script_dir)
 try:
     import skill_utils
+    from skill_utils import install_human_channel
 except ImportError:
-    # Fail gracefully if utils missing (should be there due to copy)
+    # Fail gracefully if utils missing (should be there due to copy). `print`,
+    # not `say`: this is the branch where skill_utils -- and therefore `say`
+    # itself -- did not import. The message is ASCII, so no codec can reject it.
     print("Error: skill_utils.py not found. Please ensure it is in the scripts directory.")
     sys.exit(1)
 
@@ -399,6 +402,7 @@ def analyze_skill(skill_path, config, json_output=False):
             sys.exit(0)
 
 def main():
+    install_human_channel()
     parser = argparse.ArgumentParser(description="Analyze a skill for Standard compliance gaps.")
     parser.add_argument("path", help="Path to the skill directory.")
     parser.add_argument("--json", action="store_true", help="Output results in JSON format")

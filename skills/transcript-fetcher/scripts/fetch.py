@@ -58,7 +58,7 @@ if str(_HERE) not in sys.path:
     sys.path.insert(0, str(_HERE))
 
 import _config as cfg  # noqa: E402
-from _human import HumanArgumentParser, say  # noqa: E402
+from _human import install_human_channel  # noqa: E402
 from _stdout import write_json_stdout  # noqa: E402
 from asr import DEFAULT_ASR_TIMEOUT_SEC  # noqa: E402
 from sources import _auth  # noqa: E402
@@ -369,7 +369,7 @@ def _fetch_one(
 
 
 def _build_parser() -> argparse.ArgumentParser:
-    p = HumanArgumentParser(
+    p = argparse.ArgumentParser(
         prog="fetch.py",
         description=(
             "Fetch a clean plain-text transcript from a video URL "
@@ -601,7 +601,7 @@ def _run_doctor(argv: list[str]) -> int:
     (R5d, UNCHANGED) — a non-empty ``remediation`` with ``ready: true`` means
     "usable, but a real flow-blocking gap remains", not failure.
     """
-    p = HumanArgumentParser(
+    p = argparse.ArgumentParser(
         prog="fetch.py doctor",
         description="Report transcript-fetcher readiness (import-free; no network).",
     )
@@ -726,43 +726,43 @@ def _print_doctor_report(
         ``Remediation:`` block above (which always includes the yt-dlp hint
         in this case) IS the failure output.
     """
-    say("transcript-fetcher — doctor\n")
-    say(f"  interpreter : {envelope['interpreter']}")
-    say(f"  in venv     : {'yes' if envelope['in_venv'] else 'no'}")
-    say()
+    print("transcript-fetcher — doctor\n")
+    print(f"  interpreter : {envelope['interpreter']}")
+    print(f"  in venv     : {'yes' if envelope['in_venv'] else 'no'}")
+    print()
     for c in raw_components:
         entry = envelope["components"][c["key"]]
         mark = "✓" if entry["present"] else "✗"
         req = " (required)" if c["required"] else ""
         version = f" [{entry['version']}]" if entry.get("version") else ""
-        say(f"  [{mark}] {c['label']}{req}{version}")
+        print(f"  [{mark}] {c['label']}{req}{version}")
         if not entry["present"]:
-            say(f"        → {c['install_hint']}")
+            print(f"        → {c['install_hint']}")
     cloud = envelope["components"]["cloud"]
     cloud_mark = "✓" if cloud["key_present"] else "✗"
-    say(
+    print(
         f"  [{cloud_mark}] cloud ASR key present "
         f"(allow_cloud={cloud['allow_cloud']})"
     )
-    say()
+    print()
     remediation = envelope["remediation"]
     if remediation:
-        say("  Remediation:")
+        print("  Remediation:")
         for hint in remediation:
-            say(f"    → {hint}")
+            print(f"    → {hint}")
     if not local_asr_present and cloud_ready:
         if remediation:
-            say()
-        say(
+            print()
+        print(
             "  Note: no local ASR backend, but cloud ASR is configured "
             "(--asr-allow-cloud + key) — caption-less media will use the "
             "cloud backend."
         )
     if not remediation:
-        say("  ✓ Ready.")
+        print("  ✓ Ready.")
     elif envelope["ready"]:
-        say()
-        say(
+        print()
+        print(
             "  ✓ Core ready (yt-dlp present) — gaps above may block "
             "specific flows."
         )
@@ -779,6 +779,7 @@ def _read_batch(path: Path) -> list[str]:
 
 
 def main(argv: Optional[list[str]] = None) -> int:
+    install_human_channel()
     # Skill-local `.env` (secrets-safe) BEFORE any config read. Encapsulation:
     # the skill's settings/secrets travel with it; opt out via
     # TRANSCRIPT_FETCHER_NO_DOTENV=1. Process env always wins.

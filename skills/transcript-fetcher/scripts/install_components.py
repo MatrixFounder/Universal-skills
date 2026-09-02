@@ -42,7 +42,7 @@ if str(_HERE) not in sys.path:
     sys.path.insert(0, str(_HERE))
 
 import _config as cfg  # noqa: E402
-from _human import HumanArgumentParser, say  # noqa: E402
+from _human import install_human_channel  # noqa: E402
 from _stdout import write_json_stdout  # noqa: E402
 
 _OS = platform.system()  # "Darwin" | "Linux" | "Windows"
@@ -144,25 +144,25 @@ def _components() -> list[dict]:
 
 
 def _print_report(components: list[dict]) -> None:
-    say("transcript-fetcher — component status\n")
+    print("transcript-fetcher — component status\n")
     any_asr = False
     for c in _components_with_asr_flag(components):
         mark = "✓" if c["present"] else "✗"
         req = " (required)" if c["required"] else ""
-        say(f"  [{mark}] {c['label']}{req}")
+        print(f"  [{mark}] {c['label']}{req}")
         if not c["present"]:
-            say(f"        → {c['install_hint']}")
+            print(f"        → {c['install_hint']}")
         if c["present"] and c["key"] in _ASR_KEYS:
             any_asr = True
-    say()
+    print()
     if not any_asr:
-        say(
+        print(
             "  ⚠ No local ASR backend detected. Caption-less media (X Broadcasts/Spaces,\n"
             "    most native X video) will exit 7 (MissingDependency) unless you install one\n"
             "    of the above, or enable the cloud backend (--asr-allow-cloud + OPENAI_API_KEY)."
         )
     else:
-        say("  ✓ At least one ASR backend is available — caption-less media can be transcribed.")
+        print("  ✓ At least one ASR backend is available — caption-less media can be transcribed.")
 
 
 _ASR_KEYS = {"macwhisper", "whisper-cli", "whisper-cpp"}
@@ -173,42 +173,43 @@ def _components_with_asr_flag(components: list[dict]) -> list[dict]:
 
 
 def _install_whisper() -> int:
-    say("Installing openai-whisper into the venv "
+    print("Installing openai-whisper into the venv "
         f"({sys.executable}) …")
     rc = subprocess.run(
         [sys.executable, "-m", "pip", "install", "-U", "openai-whisper"],
         check=False,
     ).returncode
     if rc == 0:
-        say("✓ openai-whisper installed. Note: it also needs ffmpeg at runtime.")
+        print("✓ openai-whisper installed. Note: it also needs ffmpeg at runtime.")
     else:
-        say("✗ pip install failed (see output above).", file=sys.stderr)
+        print("✗ pip install failed (see output above).", file=sys.stderr)
     return rc
 
 
 def _system_install(components: list[dict], run: bool) -> int:
     missing = [c for c in components if not c["present"] and c.get("kind") == "system"]
     if not missing:
-        say("No missing system components.")
+        print("No missing system components.")
         return 0
     rc_total = 0
     for c in missing:
         cmd = c.get("sys_cmd", "")
-        say(f"\n# {c['label']}\n{cmd}")
+        print(f"\n# {c['label']}\n{cmd}")
         if run and cmd and not cmd.startswith("("):
-            say(f"  → running: {cmd}")
+            print(f"  → running: {cmd}")
             # argv form (no shell) — the commands are fixed literals, but
             # avoiding shell=True kills the injection class outright.
             rc = subprocess.run(shlex.split(cmd), shell=False, check=False).returncode
             rc_total |= rc
-            say("    ✓ done" if rc == 0 else f"    ✗ exit {rc}")
+            print("    ✓ done" if rc == 0 else f"    ✗ exit {rc}")
     if not run:
-        say("\n(Dry run — re-run with `--system --run` to execute the commands above.)")
+        print("\n(Dry run — re-run with `--system --run` to execute the commands above.)")
     return rc_total
 
 
 def main(argv: list[str] | None = None) -> int:
-    p = HumanArgumentParser(
+    install_human_channel()
+    p = argparse.ArgumentParser(
         prog="install_components.py",
         description="Detect / install transcript-fetcher's optional ASR components.",
     )
@@ -258,7 +259,7 @@ def main(argv: list[str] | None = None) -> int:
 
         rc = 0
         if args.install_whisper:
-            say()
+            print()
             rc |= _install_whisper()
         if args.system:
             rc |= _system_install(components, run=args.run)

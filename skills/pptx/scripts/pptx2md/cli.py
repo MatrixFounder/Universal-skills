@@ -34,7 +34,7 @@ _DEFAULT_OCR_LANG = "eng+rus"
 # --------------------------------------------------------------------------- #
 def build_parser() -> argparse.ArgumentParser:
     """Construct the full CLI surface. Defaults are the 020-01 frozen baseline."""
-    p = _errors.HumanArgumentParser(
+    p = argparse.ArgumentParser(
         prog="pptx2md.py",
         description="TASK 020: Convert a .pptx/.pptm deck into structured Markdown.",
         epilog=(
@@ -313,6 +313,7 @@ def main(argv: list[str] | None = None) -> int:
     Exit map (§5.1): 0 ok · 1 OCR-engine/generic/internal · 2 usage · 3
     EncryptedFileError · 6 SelfOverwriteRefused.
     """
+    _errors.install_human_channel()
     parser = build_parser()
     args = parser.parse_args(argv)
     json_mode = bool(args.json_errors)

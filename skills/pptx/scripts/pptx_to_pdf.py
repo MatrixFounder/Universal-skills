@@ -17,13 +17,14 @@ import shutil
 import sys
 from pathlib import Path
 
-from _errors import HumanArgumentParser, add_json_errors_argument, report_error
+from _errors import add_json_errors_argument, install_human_channel, report_error
 from _soffice import SofficeError, convert_to
 from office._encryption import EncryptedFileError, assert_not_encrypted
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = HumanArgumentParser(description=__doc__.splitlines()[0])
+    install_human_channel()
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("input", type=Path, help="Source .pptx file")
     parser.add_argument("output", nargs="?", type=Path, default=None, help="Destination .pdf (optional)")
     parser.add_argument("--timeout", type=int, default=180, help="soffice timeout in seconds (default 180)")

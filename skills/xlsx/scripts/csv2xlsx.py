@@ -36,7 +36,7 @@ from openpyxl import Workbook  # type: ignore
 from openpyxl.styles import Alignment, Font, PatternFill  # type: ignore
 from openpyxl.utils import get_column_letter  # type: ignore
 
-from _errors import HumanArgumentParser, add_json_errors_argument, report_error
+from _errors import add_json_errors_argument, install_human_channel, report_error
 
 
 HEADER_FILL = PatternFill("solid", fgColor="F2F2F2")
@@ -163,7 +163,8 @@ def convert(
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = HumanArgumentParser(description=__doc__.splitlines()[0])
+    install_human_channel()
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("input", type=Path, help="Source .csv / .tsv file")
     parser.add_argument("output", type=Path, help="Destination .xlsx file")
     parser.add_argument("--delimiter", default="auto", help="auto (default), ',', ';', or '\\t'")

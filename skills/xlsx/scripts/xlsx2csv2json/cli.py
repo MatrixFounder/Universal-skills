@@ -187,7 +187,7 @@ def build_parser(*, format_lock: str | None) -> argparse.ArgumentParser:
     elif format_lock == "json":
         prog = "xlsx2json.py"
 
-    parser = _errors.HumanArgumentParser(
+    parser = argparse.ArgumentParser(
         prog=prog,
         description=(
             "Convert an .xlsx workbook into CSV or JSON. "
@@ -921,6 +921,7 @@ def main(argv: list[str] | None = None, *, format_lock: str | None = None) -> in
 
     Returns the process exit code.
     """
+    _errors.install_human_channel()
     parser = build_parser(format_lock=format_lock)
 
     # FormatLockedByShim is raised by the --format type validator

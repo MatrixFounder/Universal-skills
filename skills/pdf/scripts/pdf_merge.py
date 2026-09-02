@@ -24,7 +24,7 @@ from pathlib import Path
 
 from pypdf import PdfReader, PdfWriter  # type: ignore
 
-from _errors import HumanArgumentParser, add_json_errors_argument, report_error, say
+from _errors import add_json_errors_argument, install_human_channel, report_error
 
 
 def merge(output: Path, inputs: list[Path]) -> None:
@@ -41,7 +41,8 @@ def merge(output: Path, inputs: list[Path]) -> None:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = HumanArgumentParser(description=__doc__.splitlines()[0])
+    install_human_channel()
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("output", type=Path, help="Destination merged PDF")
     parser.add_argument("inputs", nargs="+", type=Path, help="Source PDFs in merge order")
     add_json_errors_argument(parser)
@@ -64,7 +65,7 @@ def main(argv: list[str] | None = None) -> int:
             code=1, error_type=type(exc).__name__, json_mode=je,
         )
 
-    say(f"Merged {len(args.inputs)} PDFs into {args.output}")
+    print(f"Merged {len(args.inputs)} PDFs into {args.output}")
     return 0
 
 

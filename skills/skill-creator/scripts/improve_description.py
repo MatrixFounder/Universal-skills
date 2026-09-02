@@ -18,9 +18,9 @@ except ImportError:
     anthropic = None
 
 try:
-    from scripts.skill_utils import emit_json, parse_skill_md
+    from scripts.skill_utils import emit_json, install_human_channel, parse_skill_md
 except ImportError:
-    from skill_utils import emit_json, parse_skill_md
+    from skill_utils import emit_json, install_human_channel, parse_skill_md
 
 
 def improve_description(
@@ -198,6 +198,7 @@ Please respond with only the new description text in <new_description> tags, not
 
 
 def main():
+    install_human_channel()
     parser = argparse.ArgumentParser(description="Improve a skill description based on eval results")
     parser.add_argument("--eval-results", required=True, help="Path to eval results JSON (from run_eval.py)")
     parser.add_argument("--skill-path", required=True, help="Path to skill directory")

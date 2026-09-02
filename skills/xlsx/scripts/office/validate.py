@@ -32,7 +32,7 @@ from pathlib import Path
 
 # `scripts/` is already on sys.path from the bootstrap prelude above, which is
 # also how `_venv_bootstrap` is reached; `_errors` is the same replicated tier.
-from _errors import HumanArgumentParser, say, write_json_stdout  # noqa: E402
+from _errors import install_human_channel, write_json_stdout  # noqa: E402
 
 if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -99,7 +99,8 @@ def _resolve_schemas_dir(cli_value: Path | None) -> Path | None:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = HumanArgumentParser(description=__doc__.splitlines()[0])
+    install_human_channel()
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("input", type=Path, help="OOXML file to validate")
     parser.add_argument("--strict", action="store_true", help="Treat warnings as errors and do full XSD validation")
     parser.add_argument("--json", action="store_true", help="Emit JSON report instead of plain text")
@@ -185,11 +186,11 @@ def main(argv: list[str] | None = None) -> int:
         # whole report under LC_ALL=C — measured rc 1 and 0 bytes where UTF-8
         # gives rc 0 and a 119-byte WARN. See docs/issues/human-cli-output-locale-class.md.
         for err in report.errors:
-            say(f"ERROR: {err}")
+            print(f"ERROR: {err}")
         for warn in report.warnings:
-            say(f"WARN:  {warn}")
+            print(f"WARN:  {warn}")
         if report.ok and not report.warnings:
-            say("OK")
+            print("OK")
 
     if report.errors:
         return 1

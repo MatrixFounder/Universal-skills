@@ -20,7 +20,7 @@ import argparse
 import sys
 from pathlib import Path
 
-from _errors import HumanArgumentParser, add_json_errors_argument, report_error  # type: ignore[import-not-found]
+from _errors import add_json_errors_argument, install_human_channel, report_error  # type: ignore[import-not-found]
 
 from .cli_helpers import (
     assert_distinct_paths,
@@ -44,7 +44,7 @@ _DESCRIPTION = (
 
 def build_parser() -> argparse.ArgumentParser:
     """All 8 R9 flags. `--input-format` is intentionally absent (D6)."""
-    p = HumanArgumentParser(
+    p = argparse.ArgumentParser(
         prog="json2xlsx.py",
         description=_DESCRIPTION,
     )
@@ -107,6 +107,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
+    install_human_channel()
     parser = build_parser()
     args = parser.parse_args(argv)
     return _run(args)

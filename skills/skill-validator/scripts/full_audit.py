@@ -17,19 +17,20 @@ import argparse
 # this file; it carries the locale-tolerant writers (Apache-2.0 copy — the
 # office skills' `_errors.py` is proprietary and cannot be imported here).
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from validate import HumanArgumentParser, say  # noqa: E402
+from validate import install_human_channel  # noqa: E402
 
 def main():
-    parser = HumanArgumentParser(description="Full Audit Wrapper for Agents")
+    install_human_channel()
+    parser = argparse.ArgumentParser(description="Full Audit Wrapper for Agents")
     parser.add_argument("skill_path", help="Path to the skill directory")
     args = parser.parse_args()
 
     skill_path = os.path.abspath(args.skill_path)
     if not os.path.isdir(skill_path):
-        say(f"Error: Directory not found: {skill_path}")
+        print(f"Error: Directory not found: {skill_path}")
         sys.exit(1)
 
-    say(f"🔹 Starting Full Audit for: {os.path.basename(skill_path)}...")
+    print(f"🔹 Starting Full Audit for: {os.path.basename(skill_path)}...")
     
     # 1. Run validate.py with all checks enabled
     cmd = [
@@ -45,8 +46,8 @@ def main():
         result = subprocess.run(cmd, capture_output=True, text=True, check=False)
         output = json.loads(result.stdout)
     except Exception as e:
-        say(f"❌ Critical Error running validator: {e}")
-        say(result.stderr if 'result' in locals() else "")
+        print(f"❌ Critical Error running validator: {e}")
+        print(result.stderr if 'result' in locals() else "")
         sys.exit(1)
 
     # 2. Print Summary
@@ -54,29 +55,29 @@ def main():
     summary = output.get("summary", {})
     issues = output.get("issues", [])
 
-    say(f"\n📊 Audit Report")
-    say(f"Risk Level: {risk}")
-    say(f"Critical: {summary.get('critical', 0)} | Error: {summary.get('error', 0)} | Warning: {summary.get('warning', 0)} | Info: {summary.get('info', 0)}")
+    print(f"\n📊 Audit Report")
+    print(f"Risk Level: {risk}")
+    print(f"Critical: {summary.get('critical', 0)} | Error: {summary.get('error', 0)} | Warning: {summary.get('warning', 0)} | Info: {summary.get('info', 0)}")
     
     if not issues:
-        say("\n✅ No issues found. Skill appears clean.")
+        print("\n✅ No issues found. Skill appears clean.")
         sys.exit(0)
 
     # 3. Print Issues
-    say("\n🔎 Findings:")
+    print("\n🔎 Findings:")
     for issue in issues:
         type_upper = issue.get('type', 'info').upper()
-        say(f"[{type_upper}] {issue.get('message')}")
+        print(f"[{type_upper}] {issue.get('message')}")
         if 'line' in issue:
-            say(f"    Line: {issue['line']}")
+            print(f"    Line: {issue['line']}")
 
     # 4. Phase 3: Agent-Assisted Verification Prompts
     # If we have warnings/info, we instruct the Agent to verify them.
     if summary.get("warning", 0) > 0 or summary.get("info", 0) > 0:
-        say("\n" + "="*60)
-        say("🤖 AGENT INSTRUCTION: PHASE 3 VERIFICATION REQUIRED")
-        say("="*60)
-        say("Some issues require manual verification. Please use the following prompts to analyze the flagged content:\n")
+        print("\n" + "="*60)
+        print("🤖 AGENT INSTRUCTION: PHASE 3 VERIFICATION REQUIRED")
+        print("="*60)
+        print("Some issues require manual verification. Please use the following prompts to analyze the flagged content:\n")
 
         # Load prompts
         base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -88,19 +89,19 @@ def main():
             with open(os.path.join(prompts_dir, "alignment_check.md"), "r") as f:
                 align_prompt = f.read()
             
-            say(f"👉 IF checking for Jailbreaks/Injection, use this system prompt:\n")
-            say("-" * 20)
-            say(jb_prompt)
-            say("-" * 20)
-            say("\n")
+            print(f"👉 IF checking for Jailbreaks/Injection, use this system prompt:\n")
+            print("-" * 20)
+            print(jb_prompt)
+            print("-" * 20)
+            print("\n")
             
-            say(f"👉 IF checking for Business Scope alignment, use this system prompt:\n")
-            say("-" * 20)
-            say(align_prompt)
-            say("-" * 20)
+            print(f"👉 IF checking for Business Scope alignment, use this system prompt:\n")
+            print("-" * 20)
+            print(align_prompt)
+            print("-" * 20)
             
         except Exception as e:
-            say(f"⚠️ Could not load verification prompts: {e}")
+            print(f"⚠️ Could not load verification prompts: {e}")
 
     if risk == "DANGER":
         sys.exit(1)

@@ -6,7 +6,7 @@ neither can represent an em dash — surrogateescape rescues lone surrogates and
 nothing else. One `—` or `✓` in a report, or in an argparse `help=` string,
 took the whole command down.
 
-Measured before the fix: `full_audit.py <skill>` returned rc 1 and 0 bytes where UTF-8 returned 7263.
+Measured before the fix: `humanizer.py --genre technical` returned 0 bytes where UTF-8 returned 10809.
 
 The contract is OBEY the caller's codec, not ignore it. Writing UTF-8 into a
 terminal that declared cp1252 is mojibake, not robustness — so the fix degrades
@@ -26,7 +26,6 @@ import argparse
 import importlib.machinery
 import importlib.util
 import io
-import json
 import os
 import subprocess
 import sys
@@ -51,8 +50,7 @@ def _load(filename, name):
     return module
 
 
-sys.path.insert(0, str(SCRIPTS))
-import validate as H  # noqa: E402
+H = _load("humanizer.py", "text_humanizer_humanizer")
 
 GLYPHS = {"—": "--", "…": "...", "→": "->", "✓": "+", "✗": "x", "⚠": "!", "§": "S"}
 
@@ -221,50 +219,6 @@ class TestArgparseNeedsNoSubclass(unittest.TestCase):
         self.assertIn(b"sub -- prose", stream.buffer.getvalue())
 
 
-class TestTheMachineChannelIgnoresTheLocale(unittest.TestCase):
-    """The opposite contract, in the same file, on purpose.
-
-    Everything above obeys the caller's codec. `emit_json` must NOT: JSON is
-    UTF-8 by RFC 8259 §8.1, and a consumer parsing this stream did not agree to
-    read cp1251. `ensure_ascii` keeps its default so the document is pure ASCII
-    and the text layer's codec can neither alter these bytes nor abort
-    mid-write on them — which also means the human-channel handler installed on
-    the same stream never fires for them.
-
-    Here because the two contracts are one edit apart: flipping `ensure_ascii`
-    to False makes the JSON follow the locale like prose, and no test of the
-    human half would notice.
-    """
-
-    def _emit(self, payload, encoding):
-        stream = io.TextIOWrapper(io.BytesIO(), encoding=encoding, errors="strict")
-        H.install_human_channel(stream)
-        saved = sys.stdout
-        sys.stdout = stream
-        try:
-            H.emit_json(payload)
-        finally:
-            sys.stdout = saved
-        stream.flush()
-        return stream.buffer.getvalue()
-
-    def test_the_bytes_are_the_same_under_every_locale(self):
-        payload = {"note": "доклад — готово ✓", "path": "/tmp/café.md"}
-        first = self._emit(payload, "utf-8")
-        for encoding in ("ascii", "cp1251", "cp1252", "latin-1"):
-            with self.subTest(encoding=encoding):
-                self.assertEqual(self._emit(payload, encoding), first)
-
-    def test_it_is_not_transliterated_like_prose(self):
-        """`—` must stay `\u2014` in the document, not become `--`. The
-        difference is the whole reason the two channels are separate: a parser
-        round-trips the escape, and cannot round-trip `--`."""
-        got = self._emit({"note": "доклад — ✓"}, "ascii").decode("ascii")
-        self.assertIn(r"\u2014", got)
-        self.assertNotIn("--", got)
-        self.assertEqual(json.loads(got)["note"], "доклад — ✓")
-
-
 class TestEveryEntryPointInstallsIt(unittest.TestCase):
     """The regression test that matters.
 
@@ -342,8 +296,11 @@ class TestTheRealCommands(unittest.TestCase):
 
     CWD = Path(__file__).resolve().parents[4]
     COMMANDS = {
-        "full_audit.py": ["skills/skill-validator/scripts/full_audit.py",
-                          "skills/text-humanizer"],
+        "humanizer.py --genre technical": [
+            "skills/text-humanizer/scripts/humanizer.py", "--genre", "technical"],
+        "humanizer.py --mode audit": [
+            "skills/text-humanizer/scripts/humanizer.py", "--genre", "technical",
+            "--mode", "audit"],
     }
 
     def _require(self, argv):

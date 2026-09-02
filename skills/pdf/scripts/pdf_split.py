@@ -31,7 +31,7 @@ from pathlib import Path
 
 from pypdf import PdfReader, PdfWriter  # type: ignore
 
-from _errors import HumanArgumentParser, add_json_errors_argument, report_error, write_path_stdout
+from _errors import add_json_errors_argument, install_human_channel, report_error, write_path_stdout
 
 
 def _parse_ranges(spec: str) -> list[tuple[int, int, Path]]:
@@ -118,7 +118,8 @@ def split_every_n(reader: PdfReader, out_dir: Path, stem: str, n: int) -> list[P
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = HumanArgumentParser(description=__doc__.splitlines()[0])
+    install_human_channel()
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("input", type=Path, help="Source PDF")
     mode = parser.add_mutually_exclusive_group(required=True)
     mode.add_argument("--ranges", help="Comma-separated ranges like '1-5:part1.pdf,6-10:part2.pdf'")

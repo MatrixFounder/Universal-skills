@@ -50,7 +50,7 @@ from pathlib import Path
 from defusedxml.ElementTree import iterparse as defused_iterparse  # type: ignore
 from openpyxl import load_workbook  # type: ignore
 
-from _errors import HumanArgumentParser, add_json_errors_argument, report_error, write_json_stdout
+from _errors import add_json_errors_argument, install_human_channel, report_error, write_json_stdout
 from _soffice import SofficeError, convert_to as soffice_convert_to
 from office._encryption import EncryptedFileError, assert_not_encrypted
 from office._macros import warn_if_macros_will_be_dropped
@@ -223,7 +223,8 @@ def _stdout_closed(json_mode: bool) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = HumanArgumentParser(description=__doc__.splitlines()[0])
+    install_human_channel()
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("input", type=Path, help="Source .xlsx")
     parser.add_argument("--output", type=Path, default=None, help="Destination .xlsx (default: rewrite in place)")
     parser.add_argument("--timeout", type=int, default=120, help="soffice timeout (default 120s)")

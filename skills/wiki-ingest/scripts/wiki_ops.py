@@ -23,7 +23,7 @@ import argparse
 import sys
 
 from wiki_ingest import __version__ as _WIKI_INGEST_VERSION
-from wiki_ingest._stdout import HumanArgumentParser  # noqa: E402
+from wiki_ingest._stdout import install_human_channel  # noqa: E402
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -61,7 +61,7 @@ def build_parser() -> argparse.ArgumentParser:
         ingest,
     )
 
-    p = HumanArgumentParser(prog="wiki_ops", description=__doc__,
+    p = argparse.ArgumentParser(prog="wiki_ops", description=__doc__,
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--version", action="version",
                    version=f"wiki-ingest {_WIKI_INGEST_VERSION}")
@@ -72,6 +72,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
+    install_human_channel()
     if argv is None:
         argv = sys.argv[1:]
     # Fast path for `wiki-ingest --version` (TASK 017 R2 / CONTRACT §7):

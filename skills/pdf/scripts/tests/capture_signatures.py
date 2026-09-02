@@ -52,7 +52,7 @@ from pathlib import Path
 # is a documented user command (SKILL.md), so its progress output — which
 # interpolates fixture FILENAMES — goes through the locale-tolerant writer.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from _errors import HumanArgumentParser, say  # noqa: E402
+from _errors import install_human_channel  # noqa: E402
 
 HERE = Path(__file__).resolve().parent
 SCRIPTS = HERE.parent
@@ -249,7 +249,7 @@ def _capture_one(src: Path, mode: str, *, prev: dict | None = None) -> dict | No
         pdf = Path(td) / f"capture-{mode}.pdf"
         rc = _run_html2pdf(src, pdf, reader=(mode == "reader"))
         if rc != 0 or not pdf.exists() or pdf.stat().st_size < 1024:
-            say(
+            print(
                 f"  ! {mode}: render failed (rc={rc}, "
                 f"pdf={'missing' if not pdf.exists() else f'{pdf.stat().st_size}B'})",
                 file=sys.stderr,
@@ -260,7 +260,7 @@ def _capture_one(src: Path, mode: str, *, prev: dict | None = None) -> dict | No
         text = _pdf_text(pdf)
         needles = _sample_needles(text, REQUIRED_NEEDLE_COUNT)
         if len(needles) < 2:
-            say(
+            print(
                 f"  ! {mode}: only {len(needles)} stable needle(s) sampled "
                 "from rendered text — fixture has very little body content "
                 "(or render failed silently). Hand-add `required_needles` "
@@ -295,7 +295,7 @@ def _load_existing() -> dict:
     try:
         return json.loads(SIGNATURES_PATH.read_text(encoding="utf-8"))
     except json.JSONDecodeError as exc:
-        say(f"WARNING: could not parse existing {SIGNATURES_PATH.name}: {exc}",
+        print(f"WARNING: could not parse existing {SIGNATURES_PATH.name}: {exc}",
               file=sys.stderr)
         return {}
 
@@ -310,7 +310,8 @@ def _save(data: dict) -> None:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = HumanArgumentParser(description=__doc__.splitlines()[0])
+    install_human_channel()
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument(
         "--refresh", action="store_true",
         help="Refresh existing baselines (default: only ADD new fixtures).",
@@ -323,11 +324,11 @@ def main(argv: list[str] | None = None) -> int:
 
     tmp = Path(args.tmp_dir)
     if not tmp.is_dir():
-        say(f"ERROR: tmp dir not found: {tmp}", file=sys.stderr)
+        print(f"ERROR: tmp dir not found: {tmp}", file=sys.stderr)
         return 1
 
     if shutil.which("pdfinfo") is None or shutil.which("pdftotext") is None:
-        say("ERROR: pdfinfo / pdftotext (Poppler) required.", file=sys.stderr)
+        print("ERROR: pdfinfo / pdftotext (Poppler) required.", file=sys.stderr)
         return 1
 
     fixtures = sorted(
@@ -349,14 +350,14 @@ def main(argv: list[str] | None = None) -> int:
                 if f.is_file() and f.suffix.lower() in INPUT_EXTS
             ))
     if not fixtures:
-        say(f"No fixtures with extensions {INPUT_EXTS} in {tmp}", file=sys.stderr)
+        print(f"No fixtures with extensions {INPUT_EXTS} in {tmp}", file=sys.stderr)
         return 1
 
     existing = _load_existing()
-    say(f"Found {len(fixtures)} fixture(s) in {tmp}")
-    say(f"Existing baseline has {len(existing)} entries")
+    print(f"Found {len(fixtures)} fixture(s) in {tmp}")
+    print(f"Existing baseline has {len(existing)} entries")
     if args.refresh:
-        say("--refresh: ALL existing entries will be regenerated")
+        print("--refresh: ALL existing entries will be regenerated")
 
     on_linux = _on_linux()
     new_or_refresh: list[Path] = []
@@ -371,14 +372,14 @@ def main(argv: list[str] | None = None) -> int:
         )
         if not do_capture:
             committed = reason.startswith("committed")
-            say(f"{'keep' if committed else 'skip'}   {f.name} ({reason})")
+            print(f"{'keep' if committed else 'skip'}   {f.name} ({reason})")
             if committed:
                 kept_committed += 1
             continue
         new_or_refresh.append(f)
 
     if kept_committed:
-        say(
+        print(
             f"\nNOTE: kept {kept_committed} committed synthetic/platform "
             f"baseline(s) untouched — refreshing them off-Linux ({sys.platform}) "
             "would bake platform-specific sizes Ubuntu CI can't satisfy (the "
@@ -388,11 +389,11 @@ def main(argv: list[str] | None = None) -> int:
         )
 
     if not new_or_refresh:
-        say("Nothing to capture.")
+        print("Nothing to capture.")
         return 0
 
     for f in new_or_refresh:
-        say(f"capture {f.name}")
+        print(f"capture {f.name}")
         src = _source_of(f, SYNTHETIC_DIR, PLATFORM_DIR)
         # Preserve previous platform field + any user-added top-level
         # `_*` annotations across --refresh (HIGH-4 fix).
@@ -413,7 +414,7 @@ def main(argv: list[str] | None = None) -> int:
             prev_mode = prev_full.get(mode) if isinstance(prev_full, dict) else None
             entry = _capture_one(f, mode, prev=prev_mode)
             if entry is None:
-                say(f"  ! {mode}: capture FAILED — entry will be empty",
+                print(f"  ! {mode}: capture FAILED — entry will be empty",
                       file=sys.stderr)
                 sig[mode] = None
             else:
@@ -425,12 +426,12 @@ def main(argv: list[str] | None = None) -> int:
                 # keeps them untouched off-Linux.) Finalise/tighten on Ubuntu.
                 if src in ("synthetic", "platform") and not on_linux:
                     entry["min_size_kb"] = 1
-                    say(f"  ! {mode}: new committed {src} captured off-Linux "
+                    print(f"  ! {mode}: new committed {src} captured off-Linux "
                           "— forced min_size_kb=1; finalise on Ubuntu CI",
                           file=sys.stderr)
                 sig[mode] = entry
                 forbidden_n = len(entry.get("forbidden_needles", []))
-                say(
+                print(
                     f"  {mode}: pages={entry['min_pages']}–{entry['max_pages']}, "
                     f"size={entry['min_size_kb']}–{entry['max_size_kb']}kB, "
                     f"needles={len(entry['required_needles'])}"
@@ -439,11 +440,11 @@ def main(argv: list[str] | None = None) -> int:
         existing[f.name] = sig
 
     _save(existing)
-    say(f"\nWrote {SIGNATURES_PATH}")
-    say("\nNext steps:")
-    say("  1. Hand-add `forbidden_needles` per platform (chrome / sidebar / ad strings)")
-    say("  2. Run: python3 -m unittest tests.test_battery")
-    say("  3. Commit battery_signatures.json (the .webarchive files stay in tmp/)")
+    print(f"\nWrote {SIGNATURES_PATH}")
+    print("\nNext steps:")
+    print("  1. Hand-add `forbidden_needles` per platform (chrome / sidebar / ad strings)")
+    print("  2. Run: python3 -m unittest tests.test_battery")
+    print("  3. Commit battery_signatures.json (the .webarchive files stay in tmp/)")
     return 0
 
 

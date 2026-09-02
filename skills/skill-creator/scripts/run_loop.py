@@ -26,12 +26,12 @@ try:
     from scripts.generate_report import generate_html
     from scripts.improve_description import improve_description
     from scripts.run_eval import find_project_root, run_eval
-    from scripts.skill_utils import emit_json, parse_skill_md
+    from scripts.skill_utils import emit_json, install_human_channel, parse_skill_md
 except ImportError:
     from generate_report import generate_html
     from improve_description import improve_description
     from run_eval import find_project_root, run_eval
-    from skill_utils import emit_json, parse_skill_md
+    from skill_utils import emit_json, install_human_channel, parse_skill_md
 
 
 def split_eval_set(eval_set: list[dict], holdout: float, seed: int = 42) -> tuple[list[dict], list[dict]]:
@@ -260,6 +260,7 @@ def run_loop(
 
 
 def main():
+    install_human_channel()
     parser = argparse.ArgumentParser(description="Run eval + improve loop")
     parser.add_argument("--eval-set", required=True, help="Path to eval set JSON file")
     parser.add_argument("--skill-path", required=True, help="Path to skill directory")

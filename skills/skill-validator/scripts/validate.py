@@ -3,6 +3,8 @@
 Main entry point that orchestrates structure checks, bash scanning,
 static analysis, and Base64 payload inspection in a single file pass.
 """
+import atexit
+import codecs
 import sys
 import os
 import argparse
@@ -255,12 +257,11 @@ def emit_text(text):
     if sys.stdout is None:
         return False
     line = text + "\n"
-    # Degrade before writing: this helper's contract is "the line reached
-    # stdout", and a non-ASCII character used to break it by raising rather
-    # than by returning False. See ascii_fallback below.
-    _enc = getattr(sys.stdout, "encoding", None)
-    if _enc:
-        line = ascii_fallback(line, _enc)
+    # No degradation here. This helper's contract is "the line reached stdout",
+    # and a non-ASCII character used to break it by raising rather than by
+    # returning False -- but the repair belongs to the stream, not to every
+    # writer: `install_human_channel()` puts the ASCII-fallback handler on
+    # stdout once, and every write in the process inherits it.
     try:
         sys.stdout.write(line)
         sys.stdout.flush()
@@ -319,6 +320,7 @@ def emit_json(payload, indent=2):
 
 
 def main():
+    install_human_channel()
     parser = argparse.ArgumentParser(description="Skill Validator: Security & Compliance Audit")
     parser.add_argument("skill_path", help="Path to the skill directory to validate")
     parser.add_argument("--json", action="store_true", help="Output results in JSON format")
@@ -435,19 +437,35 @@ def main():
 # because UTF-8 written into a terminal that declared cp1252 is mojibake, not
 # robustness.
 #
-# Until this block existed it obeyed by dying. stderr is opened
+# Until this existed it obeyed by dying. stderr is opened
 # errors="backslashreplace" and survives; stdout gets "surrogateescape" (or
-# "strict" under an explicit PYTHONIOENCODING) and NEITHER can represent an em
-# dash — surrogateescape rescues lone surrogates and nothing else. So one `—`
-# or `✓` in a report, or in an argparse help= string, takes the whole command
-# down. Measured on a clean checkout, before this fix.
+# "strict" under an explicit PYTHONIOENCODING), and NEITHER can represent an
+# em dash — surrogateescape rescues lone surrogates and nothing else. So one
+# `—` or `✓` in a report, or in an argparse `help=` string, took the whole
+# command down.
+#
+# The fix belongs to the STREAM, not to the call sites. `codecs.register_error`
+# is the documented extension point for exactly this question — "what should
+# happen to a character this codec cannot represent?" — and once the handler
+# is on stdout it covers `print`, argparse's own `file.write`, a bare
+# `sys.stdout.write` deep inside a renderer, and any third-party write in the
+# same process. Nothing to remember at the call site, because there is no call
+# site to remember.
+#
+# The first version of this fix did the opposite: a `say()` wrapper, a
+# `HumanArgumentParser` subclass and a stream shim, ~157 lines copied into
+# every skill, with every `print` rewritten to match. It worked, and it was
+# the wrong shape — mutation testing showed a forgotten `print` still slipped
+# through, and the duplicated block was mechanism rather than data. What is
+# left below is data (the table) plus fifteen lines that hand it to CPython.
 #
 # Issue: docs/issues/human-cli-output-locale-class.md.
-#
-# This is a stdlib-only copy, not an import: the office skills carry the same
-# code in their proprietary `_errors.py`, and this skill is Apache-2.0
-# (CLAUDE.md §3). The duplication is the licence boundary, not an oversight —
-# the same reasoning that gave this file its `emit_json`/`emit_text` copies.
+
+#: Name under which the handler is registered process-wide. Also usable as an
+#: `errors=` argument anywhere: `text.encode("ascii", HUMAN_ERRORS)` gives
+#: exactly what a report would look like under that codec, which is how the
+#: tests state their expectations without restating the table.
+HUMAN_ERRORS = "human_channel.asciify"
 
 #: ASCII spellings for the decoration these reports print. A FALLBACK table,
 #: not a transliterator: consulted only for characters the caller's codec has
@@ -458,130 +476,121 @@ _ASCII_FALLBACK = {
     "✓": "+", "✔": "+", "✗": "x", "✘": "x", "×": "x",
     "⚠": "!", "❌": "x", "✅": "+", "❗": "!", "•": "*", "§": "S",
     "±": "+/-", "≥": ">=", "≤": "<=", "≠": "!=", "°": " deg",
-    "‘": "'", "’": "'", "“": '"', "”": '"', " ": " ",
+    "‘": "'", "’": "'", "“": '"', "”": '"', " ": " ",
+    # U+FE0F / U+FE0E only select an emoji's presentation; they carry no
+    # meaning of their own. `⚠️` is U+26A0 U+FE0F, so mapping just the base
+    # glyph left the selector behind and the report read `!️`. Dropping
+    # them is the whole fix — the base character already says it.
+    "️": "", "︎": "",
 }
 
 
-def _usable_codec(encoding):
-    """Can `str.encode` actually use this codec name?
+def _asciify(exc):
+    """Spell an unencodable run in ASCII instead of letting it kill the write.
 
-    Separate from `_text_encodable`, which asks about a *string*. A stream may
-    report a name that is unknown, empty, not a `str`, or a bytes-to-bytes
-    codec such as `base64` that `str.encode` refuses. Every encode below would
-    then raise — the crash this block exists to prevent, thrown from inside the
-    preventer.
+    The codec calls this once per unencodable RUN, not once per character:
+    `exc.object[exc.start:exc.end]` can be several characters long, hence the
+    loop. Degradation stays per character so a codec keeps everything it can
+    carry — under cp1251 `доклад — ✓` keeps the Cyrillic AND the em dash and
+    only the check mark moves.
+
+    Anything the table does not know falls back to `backslashreplace`, which
+    is what stderr has always done and precisely why stderr never crashed.
+
+    Re-raises anything that is not an encode error. A decode error reaching
+    here would mean the handler was installed on a readable stream, where
+    guessing would corrupt input rather than tidy output.
     """
-    try:
-        "".encode(encoding)
-    except (LookupError, TypeError):
-        return False
-    return True
-
-
-def _text_encodable(text, encoding):
-    """Can `encoding` represent every character of `text`?"""
-    try:
-        text.encode(encoding)
-    except (UnicodeError, LookupError, TypeError):
-        return False
-    return True
-
-
-def ascii_fallback(text, encoding):
-    """Return `text` reduced to something `encoding` can represent.
-
-    Pure, so it is testable without a stream.
-
-    The fast path is the point: a string the codec already accepts comes back
-    unchanged, by identity. That is the UTF-8 case — nearly every real run —
-    so this fix moves no bytes on a correctly configured machine.
-
-    The slow path is per character, so a codec keeps what it can carry: under
-    cp1251 `доклад — ✓` keeps the Cyrillic AND the em dash and degrades only
-    the check mark. The final re-check is a backstop for stateful codecs.
-    """
-    if not _usable_codec(encoding):
-        encoding = "ascii"
-    if _text_encodable(text, encoding):
-        return text
-    out = []
-    for ch in text:
-        if _text_encodable(ch, encoding):
-            out.append(ch)
-            continue
+    if not isinstance(exc, UnicodeEncodeError):
+        raise exc
+    spelled = []
+    for ch in exc.object[exc.start:exc.end]:
         replacement = _ASCII_FALLBACK.get(ch)
-        if replacement is not None and _text_encodable(replacement, encoding):
-            out.append(replacement)
-        else:
-            out.append(ch.encode(encoding, "backslashreplace").decode(encoding, "replace"))
-    joined = "".join(out)
-    if _text_encodable(joined, encoding):
-        return joined
-    return text.encode(encoding, "backslashreplace").decode(encoding, "replace")
+        if replacement is None:
+            # Escaped against ASCII, NOT against `exc.encoding`. For every
+            # charmap codec -- cp1251, cp1252, latin-1, cp850, cp932 -- the
+            # exception reports `exc.encoding == "charmap"`, the literal
+            # string, not the codec's name. Re-encoding through *that* does
+            # not raise: the bare `charmap` codec falls back to Latin-1 and
+            # hands back the RAW BYTE, so `é` came out of cp1251 as b"\xe9"
+            # and the following decode blew up. ASCII escapes are also the
+            # only universally safe answer -- the character is here precisely
+            # because the caller's codec rejected it.
+            replacement = ch.encode("ascii", "backslashreplace").decode("ascii")
+        spelled.append(replacement)
+    return "".join(spelled), exc.end
 
 
-def say(*values, sep=None, end=None, file=None, flush=True):
-    """`print()` for the human channel: it cannot raise `UnicodeEncodeError`
-    and it does not lie about the exit status.
+codecs.register_error(HUMAN_ERRORS, _asciify)
 
-    Stays on the TEXT layer, unlike the JSON writer above, which bypasses it to
-    force UTF-8 bytes. That asymmetry IS the contract.
 
-    A sink with no `encoding` attribute (a `StringIO`) is a pure-`str` sink
-    that can hold anything, so nothing is degraded for it.
+def _quiet_a_dead_stdout():
+    """Drain stdout at exit, and if it is already gone, point fd 1 at devnull.
 
-    The keyword is `file`, exactly as in `print`, because every call site is a
-    converted `print` and the migration is mechanical. Naming it anything else
-    turns a converted `print(..., file=sys.stderr)` into a TypeError on
-    whatever branch it sits on.
+    Registered by `install_human_channel`, and the second half of the exit-code
+    contract. `line_buffering` makes the CLI's own `except BrokenPipeError`
+    handler see the failure and return its verdict — but the interpreter then
+    flushes the SAME dead fd again during finalization, prints "Exception
+    ignored while flushing sys.stdout" on stderr, and replaces that verdict
+    with 120. Measured: `install_components.py` with no reader at all printed
+    its own broken-pipe line, returned 1, and exited 120.
 
-    The flush defaults to True: `print` leaves stdout block-buffered into a
-    pipe, so without it a dead reader surfaces in the interpreter's shutdown
-    flush — the path that replaces the exit status with 120.
+    atexit callbacks run before that final flush, so draining here leaves it
+    nothing to fail on. A stream with no real fd (a test's StringIO) has
+    nothing to redirect and needs nothing, hence the swallowed exceptions.
     """
-    sep = " " if sep is None else sep
-    end = "\n" if end is None else end
-    target = sys.stdout if file is None else file
-    if target is None:
-        # `prog >&-`: CPython sets sys.stdout to None and print() is a silent
-        # no-op. Match that; a dropped progress line is not a broken promise.
-        return
-    text = sep.join(str(v) for v in values) + end
-    encoding = getattr(target, "encoding", None)
-    if encoding:
-        text = ascii_fallback(text, encoding)
     try:
-        target.write(text)
-        if flush:
-            target.flush()
-    except BrokenPipeError:
-        abandon_stdout()
-        raise
-
-
-class HumanArgumentParser(argparse.ArgumentParser):
-    """`ArgumentParser` whose `--help` survives the caller's locale.
-
-    `help=` and `description=` strings are prose and collect the same `—`/`→`
-    as any other prose, and argparse writes them with a bare `file.write`. Its
-    own guard catches `AttributeError` and `OSError` but not
-    `UnicodeEncodeError`, so one em dash anywhere in a listing takes the whole
-    listing down. `--help` is the most-run human command there is, and no audit
-    of `print()` call sites finds it — the skill's own code never does the
-    writing.
-
-    `_print_message` is the single funnel for `print_help`, `print_usage`,
-    `error` and `exit`; overriding it covers all four, where patching the
-    public methods would still miss `exit`.
-    """
-
-    def _print_message(self, message, file=None):
-        if not message:
+        sys.stdout.flush()
+    except (BrokenPipeError, ValueError, OSError):
+        try:
+            fd = sys.stdout.fileno()
+        except (OSError, ValueError, AttributeError):
             return
         try:
-            say(message, end="", file=file if file is not None else sys.stderr)
-        except (AttributeError, OSError):
+            devnull = os.open(os.devnull, os.O_WRONLY)
+        except OSError:
+            return
+        try:
+            os.dup2(devnull, fd)
+        finally:
+            os.close(devnull)
+    except AttributeError:
+        pass
+
+
+def install_human_channel(*streams):
+    """Point stdout's and stderr's error handler at `_asciify`.
+
+    Call once, early in `main()` — NOT at import. Registering the handler
+    above is inert, but `reconfigure` mutates a process-wide stream, and a
+    module that does that on import imposes it on everything that merely
+    imports the module.
+
+    stderr is included even though it never crashed: its `backslashreplace`
+    turns an em dash into the six characters `\\u2014`, and `--` is strictly
+    better for the same cost.
+
+    `line_buffering` is set for a second, unrelated reason, and it matters:
+    piped stdout is BLOCK-buffered, so `report | head` surfaces the dead reader
+    during interpreter shutdown, where CPython prints "Exception ignored while
+    flushing sys.stdout" and **replaces the exit status with 120** — a command
+    contradicting the verdict it just gave. Line-buffered, the write itself
+    raises BrokenPipeError inside `main()`, where the CLI's own handler sees
+    it. This also just restores the behaviour stdout already has on a terminal;
+    only redirection took it away.
+
+    Failure is silent by design. A replaced stdout — a test's `StringIO`, a
+    capture proxy, `prog >&-` leaving `sys.stdout` as None — has no
+    `reconfigure` to call, and none of that is a reason to fail a report.
+    """
+    if not streams:
+        atexit.register(_quiet_a_dead_stdout)
+    for stream in streams or (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(errors=HUMAN_ERRORS, line_buffering=True)
+        except (AttributeError, ValueError, OSError):
             pass
+
 
 if __name__ == "__main__":
     main()

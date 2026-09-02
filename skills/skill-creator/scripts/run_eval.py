@@ -17,9 +17,9 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
 
 try:
-    from scripts.skill_utils import emit_json, parse_skill_md
+    from scripts.skill_utils import emit_json, install_human_channel, parse_skill_md
 except ImportError:
-    from skill_utils import emit_json, parse_skill_md
+    from skill_utils import emit_json, install_human_channel, parse_skill_md
 
 
 def find_project_root() -> Path:
@@ -535,6 +535,7 @@ def run_eval(
 
 
 def main():
+    install_human_channel()
     parser = argparse.ArgumentParser(description="Run trigger evaluation for a skill description")
     parser.add_argument("--eval-set", required=True, help="Path to eval set JSON file")
     parser.add_argument("--skill-path", required=True, help="Path to skill directory")

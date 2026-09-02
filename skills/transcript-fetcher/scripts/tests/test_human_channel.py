@@ -144,6 +144,20 @@ class _FakeSink:
         return "".join(self._parts)
 
 
+def _installed(encoding: str) -> io.TextIOWrapper:
+    """A strict stream with the human channel installed on it.
+
+    Under the wrapper-based fix each call site degraded for itself, so a bare
+    strict stream was enough to tell `print` from `say`. The fix now belongs to
+    the STREAM, so a test that patches `sys.stdout` has to configure what it
+    patched in — otherwise it is measuring an unconfigured stream and would
+    fail against perfectly correct code.
+    """
+    stream = _strict(encoding)
+    _human.install_human_channel(stream)
+    return stream
+
+
 def _strict(encoding: str) -> io.TextIOWrapper:
     """A real strict text stream — what ``sys.stdout`` actually is under
     ``LC_ALL=C``, and what a ``StringIO`` is not."""
@@ -151,293 +165,8 @@ def _strict(encoding: str) -> io.TextIOWrapper:
 
 
 # --------------------------------------------------------------------- #
-# ascii_fallback — the pure function
+# the codec error handler
 # --------------------------------------------------------------------- #
-class TestAsciiFallbackLeavesWorkingLocalesAlone(unittest.TestCase):
-    """Property 3, at the unit level: on a codec that can carry the string,
-    the function is the identity — not merely equal, but the same object."""
-
-    def test_utf8_text_is_returned_unchanged_by_identity(self):
-        text = "transcript-fetcher — doctor  [✓] [✗] → ⚠ café Привет"
-        self.assertIs(_human.ascii_fallback(text, "utf-8"), text)
-
-    def test_pure_ascii_is_returned_unchanged_under_every_codec(self):
-        text = "transcript-fetcher -- doctor [+] [x] -> ! ok"
-        for encoding in ("ascii", "utf-8", "cp1252", "utf-16"):
-            with self.subTest(encoding=encoding):
-                self.assertIs(_human.ascii_fallback(text, encoding), text)
-
-
-class TestAsciiFallbackSpellsTheDecorations(unittest.TestCase):
-    def test_every_glyph_the_reports_print_has_an_ascii_spelling(self):
-        """No glyph may fall through to a ``\\uXXXX`` escape: the escape is the
-        backstop for unforeseeable user data, not an acceptable rendering of
-        the skill's own furniture."""
-        for glyph, expected in GLYPHS.items():
-            with self.subTest(glyph=glyph):
-                self.assertEqual(_human.ascii_fallback(glyph, "ascii"), expected)
-
-    def test_the_heading_that_used_to_kill_both_commands(self):
-        self.assertEqual(
-            _human.ascii_fallback("transcript-fetcher — doctor", "ascii"),
-            "transcript-fetcher -- doctor",
-        )
-
-
-class TestAsciiFallbackIsPerCharacter(unittest.TestCase):
-    """The reason this is not a blanket ``.encode(errors=...)``: a codec must
-    keep everything it CAN represent. cp1252 has an em dash (0x97) and an é;
-    it lacks a check mark. Only the check mark may move."""
-
-    def test_cp1252_keeps_what_cp1252_has(self):
-        got = _human.ascii_fallback("café — ✓", "cp1252")
-        self.assertEqual(got, "café — +")
-        got.encode("cp1252")  # the assertion: still writable to that stream
-
-    def test_ascii_degrades_the_same_string_further(self):
-        self.assertEqual(_human.ascii_fallback("café — ✓", "ascii"),
-                         "caf\\xe9 -- +")
-
-
-class TestAsciiFallbackAlwaysProducesWritableText(unittest.TestCase):
-    """The backstop. Whatever comes in, the result must encode — otherwise
-    ``say`` would still raise and the fix would be a narrower crash, not a fix."""
-
-    CASES = {
-        "cyrillic": "Привет",
-        "latin1": "café naïve",
-        "astral": "\U0001F600 done",
-        "cjk": "日本語",
-        "lone surrogate": "/tmp/out\udcff.txt",
-        "mixed with glyphs": "✓ Привет — \U0001F600",
-    }
-
-    def test_result_encodes_under_every_codec_a_caller_can_set(self):
-        for label, text in self.CASES.items():
-            for encoding in ("ascii", "cp1252", "utf-8", "latin-1", "iso-2022-jp"):
-                with self.subTest(text=label, encoding=encoding):
-                    _human.ascii_fallback(text, encoding).encode(encoding)
-
-    def test_a_lone_surrogate_is_survivable_even_under_utf8(self):
-        """UTF-8 is the one codec with no representation for U+DC80-DCFF, and
-        POSIX puts them into ``str(out_path)`` via ``surrogateescape`` whenever
-        a filename holds undecodable bytes. So this crashed on a *correctly*
-        configured machine, with no exotic locale involved."""
-        path = "/tmp/out\udcff.txt"
-        with self.assertRaises(UnicodeEncodeError):
-            path.encode("utf-8")                       # the defect, restated
-        self.assertEqual(_human.ascii_fallback(path, "utf-8"), "/tmp/out\\udcff.txt")
-
-
-# --------------------------------------------------------------------- #
-# say — the writer
-# --------------------------------------------------------------------- #
-class TestTheCodecNameIsNotTrusted(unittest.TestCase):
-    """A crash-preventer that crashes is worse than no preventer.
-
-    ``.encoding`` is only conventionally a valid text-codec name. A wrapper or
-    proxy can report an unknown name, an empty string, a non-``str``, or a
-    bytes-to-bytes codec like ``base64`` that ``str.encode`` refuses outright.
-    Every ``encode`` in the degradation path would then raise — from inside
-    the function whose entire purpose is to stop that exception.
-    """
-
-    #: Truthy but unusable — the sink CLAIMS a codec that cannot encode text.
-    BAD = {"unknown": "not-a-codec", "bytes codec": "base64",
-           "bytes codec 2": "rot13", "not a str": 123}
-    #: Falsy — the sink claims NO codec, which is a different thing entirely.
-    NO_CODEC = {"None": None, "empty": ""}
-
-    def test_encodable_answers_false_instead_of_raising(self):
-        """``_encodable`` is guarded separately from ``_usable`` and must hold
-        on its own. Reached through ``ascii_fallback`` it never sees a bad
-        codec — ``_usable`` normalises those first — so without a direct test
-        its guards are unverified: a mutation removing the ``TypeError`` catch
-        survived the whole suite until this existed."""
-        for label, encoding in {**self.BAD, **self.NO_CODEC}.items():
-            with self.subTest(encoding=label):
-                self.assertIs(_human._encodable("a — b", encoding), False)
-        self.assertIs(_human._encodable("plain", "ascii"), True)
-        self.assertIs(_human._encodable("—", "ascii"), False)
-
-    def test_ascii_fallback_degrades_instead_of_raising(self):
-        """At the function level every one of these must degrade, because
-        ``ascii_fallback`` has been asked to target that codec explicitly."""
-        for label, encoding in {**self.BAD, **self.NO_CODEC}.items():
-            with self.subTest(encoding=label):
-                self.assertEqual(_human.ascii_fallback("a — b", encoding), "a -- b")
-
-    def test_say_degrades_when_the_sink_claims_an_unusable_codec(self):
-        for label, encoding in self.BAD.items():
-            with self.subTest(encoding=label):
-                sink = _FakeSink(encoding)
-                _human.say("✓ done — ok", file=sink)
-                self.assertEqual(sink.value(), "+ done -- ok\n")
-
-    def test_say_leaves_a_sink_that_claims_no_codec_alone(self):
-        """``None`` (and its degenerate twin ``""``) means "pure ``str`` sink",
-        not "broken codec" — a ``StringIO`` reports exactly that. Degrading for
-        it would mangle output that was never in danger, and would break the
-        in-process doctor tests in ``test_doctor.py`` that assert on real check
-        marks. The distinction is deliberate, so pin it."""
-        for label, encoding in self.NO_CODEC.items():
-            with self.subTest(encoding=label):
-                sink = _FakeSink(encoding)
-                _human.say("✓ done — ok", file=sink)
-                self.assertEqual(sink.value(), "✓ done — ok\n")
-
-
-class TestSayReallyIsAPrintDropIn(unittest.TestCase):
-    """The docstring argues at length for signature parity with ``print`` (it
-    is why the keyword is ``file``). Parity has to be tested, not asserted:
-    ``print`` accepts ``sep=None``/``end=None`` as "use the default" and takes
-    a ``flush`` keyword, and callers pass those through from their own
-    optionals."""
-
-    CASES = [
-        ({}, "a b\n"),
-        ({"sep": None}, "a b\n"),
-        ({"end": None}, "a b\n"),
-        ({"sep": "-"}, "a-b\n"),
-        ({"end": "!"}, "a b!"),
-        ({"flush": True}, "a b\n"),
-        ({"flush": False}, "a b\n"),
-        ({"sep": "", "end": ""}, "ab"),
-    ]
-
-    def test_say_matches_print_for_every_keyword_combination(self):
-        for kwargs, expected in self.CASES:
-            with self.subTest(kwargs=kwargs):
-                mine, theirs = io.StringIO(), io.StringIO()
-                _human.say("a", "b", file=mine, **kwargs)
-                print("a", "b", file=theirs, **kwargs)
-                self.assertEqual(mine.getvalue(), expected)
-                self.assertEqual(mine.getvalue(), theirs.getvalue(),
-                                 "say diverged from print")
-
-
-class TestSayNeverRaisesOnAStrictStream(unittest.TestCase):
-    def test_the_two_headings_reach_a_strict_ascii_stream(self):
-        for heading in ("transcript-fetcher — doctor",
-                        "transcript-fetcher — component status"):
-            with self.subTest(heading=heading):
-                stream = _strict("ascii")
-                _human.say(heading, file=stream)
-                stream.flush()
-                self.assertEqual(stream.buffer.getvalue(),
-                                 heading.replace("—", "--").encode("ascii") + b"\n")
-
-    def test_user_data_no_table_can_anticipate(self):
-        """``TRANSCRIPT_FETCHER_MW_BIN`` is interpolated straight into a
-        component label. ASCII-ifying the source literals would not have
-        covered this — measured: an all-ASCII format string with a Cyrillic
-        argument still raises."""
-        stream = _strict("ascii")
-        _human.say("  [x] MacWhisper CLI ('/opt/шёпот/mw')", file=stream)
-        stream.flush()
-        self.assertIn(b"\\u0448", stream.buffer.getvalue())
-
-
-class TestHumanArgumentParser(unittest.TestCase):
-    """``--help`` is human output too — the most-run of all, and the one no
-    audit of ``print()`` sites finds, because argparse does the writing."""
-
-    def _parser(self) -> _human.HumanArgumentParser:
-        p = _human.HumanArgumentParser(prog="demo", description="A tool — with prose.")
-        p.add_argument("--timeout", help="seconds — 0 disables it → forever")
-        return p
-
-    def test_help_reaches_a_strict_ascii_stream(self):
-        stream = _strict("ascii")
-        self._parser().print_help(stream)
-        stream.flush()
-        text = stream.buffer.getvalue().decode("ascii")
-        self.assertIn("A tool -- with prose.", text)
-        self.assertIn("0 disables it -> forever", text)
-
-    def test_help_is_untouched_on_a_stream_that_can_take_it(self):
-        stream = _strict("utf-8")
-        self._parser().print_help(stream)
-        stream.flush()
-        text = stream.buffer.getvalue().decode("utf-8")
-        self.assertIn("A tool — with prose.", text)
-        self.assertIn("0 disables it → forever", text)
-
-    def test_usage_and_error_go_through_the_same_override(self):
-        """``error()`` reaches ``_print_message`` via ``exit()``, not via
-        ``print_help`` — which is why the override is on the funnel and not on
-        the public methods."""
-        stream = _strict("ascii")
-        parser = self._parser()
-        with self.assertRaises(SystemExit) as caught:
-            parser._print_message("boom — now\n", stream)
-            raise SystemExit(2)
-        self.assertEqual(caught.exception.code, 2)
-        stream.flush()
-        self.assertIn(b"boom -- now", stream.buffer.getvalue())
-
-    def test_the_funnel_this_override_depends_on_still_exists(self):
-        """A guard, not a tautology. ``_print_message`` is private by name; if
-        a future CPython renames it or stops routing ``print_help`` through it,
-        this fails loudly here instead of silently restoring the crash in
-        production."""
-        self.assertTrue(hasattr(argparse.ArgumentParser, "_print_message"))
-        self.assertIn(
-            "_print_message",
-            argparse.ArgumentParser.print_help.__code__.co_names,
-        )
-        self.assertIn(
-            "_print_message",
-            argparse.ArgumentParser.print_usage.__code__.co_names,
-        )
-
-
-class TestSayHonoursTheCallersCodec(unittest.TestCase):
-    def test_it_does_not_write_utf8_into_a_cp1252_stream(self):
-        """The machine channel forces UTF-8 bytes; this channel must not.
-        Writing 0xE2 0x80 0x94 to a cp1252 terminal is mojibake — the caller
-        declared a codec and is entitled to it."""
-        stream = _strict("cp1252")
-        _human.say("café — done", file=stream)
-        stream.flush()
-        self.assertEqual(stream.buffer.getvalue(), b"caf\xe9 \x97 done\n")
-
-    def test_a_sink_without_an_encoding_gets_the_text_verbatim(self):
-        """A ``StringIO`` holds ``str``, not bytes, so there is no codec to
-        respect and nothing to degrade. This is what keeps the in-process
-        doctor tests in ``test_doctor.py`` asserting on real check marks."""
-        buf = io.StringIO()
-        _human.say("✓ Ready.", file=buf)
-        self.assertEqual(buf.getvalue(), "✓ Ready.\n")
-
-
-class TestSayMatchesPrintsSignature(unittest.TestCase):
-    def test_sep_and_end(self):
-        buf = io.StringIO()
-        _human.say("a", "b", sep="-", end="!", file=buf)
-        self.assertEqual(buf.getvalue(), "a-b!")
-
-    def test_no_arguments_is_a_blank_line(self):
-        buf = io.StringIO()
-        _human.say(file=buf)
-        self.assertEqual(buf.getvalue(), "\n")
-
-    def test_non_strings_are_stringified(self):
-        buf = io.StringIO()
-        _human.say(7, None, file=buf)
-        self.assertEqual(buf.getvalue(), "7 None\n")
-
-    def test_the_keyword_is_file_exactly_as_in_print(self):
-        """Not bikeshedding — a guard. Every call site is a converted
-        ``print``, and ``install_components._install_whisper`` converts one
-        that passes ``file=sys.stderr``. Naming this parameter anything else
-        turns that line into a ``TypeError`` on a branch reachable only when
-        pip fails, which is why no existing test would have caught it."""
-        buf = io.StringIO()
-        _human.say("✗ pip install failed", file=buf)
-        self.assertEqual(buf.getvalue(), "✗ pip install failed\n")
-
-
 class TestTheRarelyReachedBranchesStillRun(unittest.TestCase):
     """The report paths a happy-path suite never enters. These carry the same
     decorations as the main report and were converted in the same sweep, so
@@ -446,7 +175,7 @@ class TestTheRarelyReachedBranchesStillRun(unittest.TestCase):
     def test_the_pip_failure_line(self):
         import install_components as ic
 
-        out, err = _strict("ascii"), _strict("ascii")
+        out, err = _installed("ascii"), _installed("ascii")
         with mock.patch.object(ic.subprocess, "run",
                                return_value=mock.Mock(returncode=1)), \
                 mock.patch.object(sys, "stderr", err), \
@@ -458,14 +187,14 @@ class TestTheRarelyReachedBranchesStillRun(unittest.TestCase):
 
     def test_the_pip_success_line(self):
         """The other half of `_install_whisper`, and the reason the sink here
-        is a STRICT ascii stream rather than a `StringIO`: a `StringIO` holds
-        ``str``, so `print` and `say` are indistinguishable against it and a
-        mutation reverting this call site to `print` survives. Against a
-        strict stream `print` raises and `say` degrades — which is the whole
-        property under test."""
+        is a real byte stream rather than a `StringIO`: a `StringIO` holds
+        ``str``, so it accepts an em dash whatever the locale says and the
+        property under test cannot fail. Against a strict ascii stream with
+        the handler installed, the line degrades; against one without it, the
+        same line raises."""
         import install_components as ic
 
-        out, err = _strict("ascii"), _strict("ascii")
+        out, err = _installed("ascii"), _installed("ascii")
         with mock.patch.object(ic.subprocess, "run",
                                return_value=mock.Mock(returncode=0)), \
                 mock.patch.object(sys, "stderr", err), \
@@ -488,42 +217,6 @@ class TestTheRarelyReachedBranchesStillRun(unittest.TestCase):
         self.assertIn("Dry run", out.getvalue())
 
 
-class TestSayOnAVanishedStdout(unittest.TestCase):
-    def test_a_closed_fd_1_is_a_silent_no_op_like_print(self):
-        """``prog >&-``: CPython sets ``sys.stdout`` to None and ``print()``
-        quietly does nothing. Match that rather than raising — a dropped
-        progress line is not a broken promise, and an AttributeError inside a
-        report loop would be a new crash where we just removed one. (The
-        machine channel deliberately makes the opposite choice.)"""
-        saved = sys.stdout
-        sys.stdout = None
-        try:
-            _human.say("✓ nobody is listening")   # must not raise
-        finally:
-            sys.stdout = saved
-
-
-class TestSayOnADeadPipe(unittest.TestCase):
-    def test_it_redirects_the_fd_before_re_raising(self):
-        """Without the redirect the interpreter flushes the same dead fd at
-        shutdown, prints ``Exception ignored while flushing sys.stdout`` and
-        **replaces the exit status with 120**."""
-        read_fd, write_fd = os.pipe()
-        os.close(read_fd)
-        stream = io.TextIOWrapper(open(write_fd, "wb", buffering=0), encoding="ascii")
-        self.addCleanup(stream.close)
-        with self.assertRaises(BrokenPipeError):
-            _human.say("✓ into the void", file=stream)
-        # The fd now points at /dev/null, so a second write succeeds where the
-        # first died. That is the mechanism, not merely its symptom — a test
-        # that only asserted "rc is not 120" would pass against a no-op.
-        stream.write("second write")
-        stream.flush()
-
-
-# --------------------------------------------------------------------- #
-# The real commands, real file descriptors, real locales
-# --------------------------------------------------------------------- #
 class TestTheReportsSurviveALegacyLocale(unittest.TestCase):
     """Property 1. Was: rc 1 and 0 bytes for both, on a clean install."""
 
@@ -658,17 +351,37 @@ class TestTheComponentsPresentBranch(unittest.TestCase):
 
     TOOLS = ("yt-dlp", "ffmpeg", "mw", "whisper", "whisper-cli")
 
-    def _stub_path(self) -> str:
+    def _stub_dirs(self) -> dict:
+        """PATH and PYTHONPATH in which every component probe succeeds.
+
+        Two probes, two mechanisms. The ASR backends are looked up on PATH, so
+        a stub executable satisfies them. **yt-dlp is not**: `doctor` asks
+        `importlib.metadata.version("yt-dlp")`, which reads installed
+        *distributions* and never consults PATH. Stubbing only the executable
+        left yt-dlp MISSING, the "Ready." line unreachable, and this class's
+        verdict test passing or failing with whatever the developer's
+        interpreter happened to have installed. A `.dist-info` directory on
+        PYTHONPATH is what `importlib.metadata` actually scans, so this makes
+        the run hermetic instead of hopeful.
+        """
         d = tempfile.mkdtemp(prefix="tf-human-stubs-")
         self.addCleanup(shutil.rmtree, d, True)
         for tool in self.TOOLS:
             exe = Path(d) / tool
             exe.write_text("#!/bin/sh\necho 0.0.0\n")
             exe.chmod(0o755)
-        return d
+        site = Path(d) / "site"
+        dist = site / "yt_dlp-0.0.0.dist-info"
+        dist.mkdir(parents=True)
+        (dist / "METADATA").write_text(
+            "Metadata-Version: 2.1\nName: yt-dlp\nVersion: 0.0.0\n")
+        return {"PATH": d, "PYTHONPATH": str(site)}
+
+    def _stub_env(self, **extra: str) -> dict:
+        return _ascii_env(**self._stub_dirs(), **extra)
 
     def test_the_present_branch_degrades_instead_of_crashing(self):
-        env = _ascii_env(PATH=self._stub_path())
+        env = self._stub_env()
         for label, argv in {
             "install_components.py": [sys.executable, str(_INSTALL)],
             "fetch.py doctor": [sys.executable, str(_FETCH), "doctor"],
@@ -689,13 +402,12 @@ class TestTheComponentsPresentBranch(unittest.TestCase):
         unreachable while every other subprocess test pins PATH=/nonexistent.
         A mutation reverting that one `say` to `print` survived the whole suite
         until this test existed."""
-        proc = _run([sys.executable, str(_FETCH), "doctor"],
-                    _ascii_env(PATH=self._stub_path()))
+        proc = _run([sys.executable, str(_FETCH), "doctor"], self._stub_env())
         self.assertNotIn(b"UnicodeEncodeError", proc.stderr)
         self.assertIn("+ Ready.", proc.stdout.decode("ascii"))
 
     def test_the_same_run_under_utf8_still_shows_a_real_check_mark(self):
-        proc = _run([sys.executable, str(_INSTALL)], _utf8_env(PATH=self._stub_path()))
+        proc = _run([sys.executable, str(_INSTALL)], _utf8_env(**self._stub_dirs()))
         self.assertIn("✓", proc.stdout.decode("utf-8"))
 
 
@@ -714,7 +426,7 @@ class TestAWorkingLocaleIsUntouched(unittest.TestCase):
             with self.subTest(glyph=glyph):
                 self.assertIn(glyph, text)
 
-    def test_utf8_output_shows_no_sign_of_the_ascii_fallback(self):
+    def test_utf8_output_shows_no_sign_of_the_degradation(self):
         """Anchored on the exact strings the fallback would produce, NOT on a
         bare search for `--` or `x`: this report legitimately contains
         `--asr-allow-cloud` and `--install-whisper`, and a naive negative
@@ -732,15 +444,40 @@ class TestTheHumanReportsDoNotRewriteTheExitStatus(unittest.TestCase):
     ``fetch.py doctor | <reader that exits>`` reported 120 while its real
     answer was 7, and ``install_components.py`` reported 120 for 0."""
 
+    COMMANDS = {
+        "install_components.py": [sys.executable, str(_INSTALL)],
+        "fetch.py doctor": [sys.executable, str(_FETCH), "doctor"],
+    }
+
     def test_a_dead_reader_does_not_produce_120(self):
-        for label, argv in {
-            "install_components.py": [sys.executable, str(_INSTALL)],
-            "fetch.py doctor": [sys.executable, str(_FETCH), "doctor"],
-        }.items():
+        for label, argv in self.COMMANDS.items():
             with self.subTest(command=label):
                 rc, err = _run_with_dead_reader(argv, _utf8_env())
                 self.assertNotEqual(rc, 120)
                 self.assertNotIn(b"Exception ignored", err)
+
+    def test_a_dead_reader_is_reported_rather_than_passed_off_as_success(self):
+        """The half `assertNotEqual(rc, 120)` cannot see.
+
+        `install_human_channel` closes this in two independent steps, and only
+        one of them shows up in the exit code. The atexit guard stops the
+        shutdown flush from rewriting the status — but on its own it would let
+        a BLOCK-buffered stdout swallow the failure entirely: nothing raises
+        while `main()` runs, the CLI's `except BrokenPipeError` arm never runs,
+        and the command exits 0 having delivered nothing. Reporting success for
+        a report that reached no one is worse than reporting 120.
+
+        `line_buffering=True` is what makes the write itself fail where the
+        CLI can see it. Dropping it survived every other test in this file.
+        """
+        for label, argv in self.COMMANDS.items():
+            with self.subTest(command=label):
+                rc, err = _run_with_dead_reader(argv, _utf8_env())
+                self.assertIn(b"broken pipe", err.lower(),
+                              "%s exited %d without saying its output was lost"
+                              % (label, rc))
+                self.assertNotEqual(rc, 0,
+                                    "%s reported success with a dead reader" % label)
 
 
 if __name__ == "__main__":

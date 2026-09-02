@@ -79,7 +79,7 @@ WHAT THIS DOES NOT COVER (honest scope)
     raise ``UnicodeEncodeError`` under ``LC_ALL=C``; that is a presentation
     surface, not a machine channel, so its fix had to respect the caller's
     locale rather than override it — the opposite of this module. It lives in
-    ``_human.py`` (``say`` / ``HumanArgumentParser``) and closed
+    ``_human.py`` (``say`` / ``argparse.ArgumentParser``) and closed
     ``docs/issues/tf-human-report-locale-crash.md``. Nothing here changed:
     this module still owns stdout's MACHINE channel only.
   * **No process-wide reconfiguration.** Nothing here calls

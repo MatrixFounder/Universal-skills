@@ -10,7 +10,7 @@ import argparse
 import sys
 from pathlib import Path
 
-from _errors import HumanArgumentParser, add_json_errors_argument, report_error
+from _errors import add_json_errors_argument, install_human_channel, report_error
 
 from .cli_helpers import (
     assert_distinct_paths,
@@ -40,7 +40,7 @@ from .writer import ParsedTable, WriterOptions, write_workbook
 
 def build_parser() -> argparse.ArgumentParser:
     """Construct the argparse surface. Locked at 8 flags per TASK §9."""
-    parser = HumanArgumentParser(
+    parser = argparse.ArgumentParser(
         description=(
             "Convert markdown tables to a multi-sheet .xlsx workbook. "
             "Two table flavors auto-detected: GFM pipe tables (with "
@@ -208,6 +208,7 @@ def _run(args) -> int:
 
 def main(argv: list[str] | None = None) -> int:
     """argparse entrypoint. Wraps `_run` with cross-5 envelope catch."""
+    install_human_channel()
     raw_argv = argv if argv is not None else sys.argv[1:]
     json_mode = any(
         (a == "--json-errors" or a.startswith("--json-errors="))

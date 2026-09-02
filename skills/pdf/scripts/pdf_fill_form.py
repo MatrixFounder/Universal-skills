@@ -58,7 +58,10 @@ from pypdf import PdfReader, PdfWriter  # type: ignore
 from pypdf.generic import NameObject  # type: ignore
 
 from _errors import (
-    HumanArgumentParser, abandon_stdout, add_json_errors_argument, report_error,
+    abandon_stdout,
+    add_json_errors_argument,
+    install_human_channel,
+    report_error,
     write_json_stdout,
 )
 
@@ -319,7 +322,8 @@ def fill(input_pdf: Path, data: dict, output_pdf: Path, *, flatten: bool) -> dic
 # ---- CLI -----------------------------------------------------------------
 
 def main(argv: list[str] | None = None) -> int:
-    parser = HumanArgumentParser(description=__doc__.splitlines()[0])
+    install_human_channel()
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("input", type=Path, nargs="?", help="Input PDF")
     parser.add_argument("data", type=Path, nargs="?", help="JSON {field: value}")
     parser.add_argument("-o", "--output", type=Path, help="Output PDF (fill mode)")
