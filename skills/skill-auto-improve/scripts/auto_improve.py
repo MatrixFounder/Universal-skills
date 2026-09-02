@@ -922,7 +922,7 @@ def main(argv: list[str] | None = None) -> int:
     vendor = detect_vendor(artifact_path.parent)
     eval_set = None
     if args.eval_set:
-        raw = json.loads(Path(args.eval_set).read_text())
+        raw = json.loads(Path(args.eval_set).read_text(encoding="utf-8"))
         if not isinstance(raw, list) or not all(isinstance(x, dict) for x in raw):
             print("ABORT: --eval-set must be a JSON list of objects.", file=sys.stderr)
             return 2

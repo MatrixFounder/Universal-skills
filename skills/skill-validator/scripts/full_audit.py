@@ -85,9 +85,9 @@ def main():
         prompts_dir = os.path.join(base_dir, "references", "prompts")
         
         try:
-            with open(os.path.join(prompts_dir, "jailbreak_check.md"), "r") as f:
+            with open(os.path.join(prompts_dir, "jailbreak_check.md"), "r", encoding="utf-8") as f:
                 jb_prompt = f.read()
-            with open(os.path.join(prompts_dir, "alignment_check.md"), "r") as f:
+            with open(os.path.join(prompts_dir, "alignment_check.md"), "r", encoding="utf-8") as f:
                 align_prompt = f.read()
             
             print(f"👉 IF checking for Jailbreaks/Injection, use this system prompt:\n")

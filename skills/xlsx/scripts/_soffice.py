@@ -123,7 +123,7 @@ def _shim_library_path() -> Path | None:
     lock_path = _SHIM_DIR / ".build.lock"
     try:
         lock_path.parent.mkdir(parents=True, exist_ok=True)
-        with open(lock_path, "w") as lock_fp:
+        with open(lock_path, "w", encoding="utf-8") as lock_fp:
             fcntl.flock(lock_fp.fileno(), fcntl.LOCK_EX)
             # Re-check under the lock: another process may have built
             # the library while we were waiting.

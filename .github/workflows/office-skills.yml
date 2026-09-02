@@ -132,7 +132,7 @@ jobs:
         run: bash skills/${{ matrix.skill }}/scripts/tests/test_e2e.sh
 
   harness:
-    # Guards two repo-wide classes of defect that the matrix job structurally
+    # Guards three repo-wide classes of defect that the matrix job structurally
     # cannot see. Pure stdlib: no venv, no system deps.
     #
     # 1. Symlinked invocation. The matrix always runs the suites from the repo
@@ -143,6 +143,10 @@ jobs:
     #    locale, so a `subprocess.run(..., text=True)` that never named a
     #    codec passes there and dies on a user's cp1251 or SJIS host. The
     #    guard is a static AST walk, so it holds regardless of CI's locale.
+    # 3. Locale-decoded FILE I/O, the same defect one channel over: a
+    #    `Path.read_text()` that never named a codec reads SKILL.md with the
+    #    locale's. Measured: one em dash added to a skill's prose turned
+    #    `package_skill.py` into a traceback under LC_ALL=C.
     name: test harness
     runs-on: ubuntu-22.04
     steps:
@@ -151,6 +155,8 @@ jobs:
         run: bash tests/test_symlink_invocation.sh
       - name: subprocess-decode guard
         run: python3 tests/test_subprocess_decode.py
+      - name: file-codec guard
+        run: python3 tests/test_file_codec.py
 
   property:
     name: property fuzz

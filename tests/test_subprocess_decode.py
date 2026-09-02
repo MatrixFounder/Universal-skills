@@ -60,7 +60,14 @@ TEXT_MODE_KEYWORDS = ("text", "universal_newlines")
 def _python_sources():
     """Every Python file in the repo, including extensionless CLIs."""
     for path in sorted(REPO.rglob("*")):
-        if not path.is_file() or any(p in SKIP_DIRS for p in path.parts):
+        # `relative_to(REPO)`, not `path.parts`: the absolute prefix is not
+        # ours to filter on. A checkout under ~/tmp/ or /private/tmp/ made every
+        # part-wise match hit on "tmp" and skipped the whole repository, leaving
+        # the gate vacuous. Measured: 0 files walked from
+        # /private/tmp/.../Universal-skills.
+        if not path.is_file():
+            continue
+        if any(p in SKIP_DIRS for p in path.relative_to(REPO).parts):
             continue
         if path.suffix == ".py":
             yield path
@@ -75,7 +82,12 @@ def _python_sources():
 
 
 def _is_test_file(path):
-    return "tests" in path.parts or path.name.startswith("test_")
+    # `relative_to(REPO)` for the same reason `_python_sources` uses it: matched
+    # against absolute parts, a checkout under any directory named `tests`
+    # classifies the whole repository as test code and the gate passes on
+    # everything.
+    return ("tests" in path.relative_to(REPO).parts
+            or path.name.startswith("test_"))
 
 
 def _goes_textual(keywords):
@@ -221,6 +233,42 @@ class TestEveryTextualSubprocessNamesItsCodec(unittest.TestCase):
             scratch = Path(tmp) / "scratch.py"
             scratch.write_text(source, encoding="utf-8")
             return _unpinned_sites(scratch)
+
+    def test_the_walker_is_not_fooled_by_the_path_above_the_repo(self):
+        """A checkout under ~/tmp/ must not skip the whole repository.
+
+        SKIP_DIRS is matched against parts RELATIVE to the repo. Matched against
+        the absolute parts, a repo living under any directory named `tmp`,
+        `archive`, `node_modules`, `.git` ... walks ZERO files and the gate
+        passes on everything. Measured before the fix: 0 sources found from
+        /private/tmp/.../Universal-skills, in both this guard and
+        test_subprocess_decode.py.
+
+        The fixture puts a repo under a directory named `tmp` and one named
+        `archive`, and asserts the walker still sees inside it.
+        """
+        global REPO
+        self.assertIn("tmp", SKIP_DIRS, "this test guards the tmp entry")
+        original = REPO
+        try:
+            for outer in ("tmp", "archive", "node_modules"):
+                with self.subTest(outer_dir=outer), tempfile.TemporaryDirectory() as td:
+                    fake = Path(td) / outer / "checkout"
+                    (fake / "skills" / "s" / "scripts").mkdir(parents=True)
+                    (fake / "skills" / "s" / "scripts" / "run.py").write_text(
+                        "from pathlib import Path\nPath('a').read_text()\n",
+                        encoding="utf-8")
+                    (fake / ".venv").mkdir()
+                    (fake / ".venv" / "vendored.py").write_text(
+                        "open('a')\n", encoding="utf-8")
+                    REPO = fake
+                    found = {p.name for p in _python_sources()}
+                    self.assertIn("run.py", found,
+                                  f"a repo under {outer}/ walked zero files")
+                    self.assertNotIn("vendored.py", found,
+                                     "SKIP_DIRS stopped applying inside the repo")
+        finally:
+            REPO = original
 
     def test_the_walker_flags_every_known_bad_shape(self):
         """Negative controls: the gate must be able to fail, in each shape."""
