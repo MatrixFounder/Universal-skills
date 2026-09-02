@@ -545,13 +545,22 @@ class TestUnclosedFenceDoesNotBlindTheRest(unittest.TestCase):
             _, report = run_json(skill)
         self.assertEqual(gaps_matching(report, "Lazy"), [])
 
-    def test_an_unclosed_fence_is_reported_by_the_size_check(self):
-        for opener in ("```", "~~~"):
-            with self.subTest(opener=opener):
-                errors, _ = analyze_gaps.check_inline_efficiency(
-                    f"a\n{opener}\ncode\nmore\n")
-                self.assertTrue(any("Unclosed code fence" in e for e in errors),
-                                f"{opener} unterminated but unreported")
+    def test_an_unclosed_backtick_fence_is_reported_by_the_size_check(self):
+        errors, _ = analyze_gaps.check_inline_efficiency("a\n```\ncode\nmore\n")
+        self.assertTrue(any("Unclosed code fence" in e for e in errors))
+
+    def test_an_unclosed_tilde_fence_is_deliberately_not_an_error(self):
+        """`check_inline_efficiency` tracks backtick fences only, on purpose.
+
+        Teaching it `~~~` would make a decorative rule line — `~~~~~~~~~~~~` —
+        read as an unterminated fence and fail a skill that passed before. The
+        swallow this was guarding against is already gone: `mask_code` does not
+        mask an unclosed fence, so the rules still see the rest of the body
+        (the test above this pair). Reporting it is not worth a gate that is
+        stricter than it was.
+        """
+        errors, _ = analyze_gaps.check_inline_efficiency("a\n~~~\ncode\nmore\n")
+        self.assertEqual(errors, [])
 
 
 class TestTodoMarkerForms(unittest.TestCase):

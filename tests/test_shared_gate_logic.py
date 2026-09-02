@@ -13,9 +13,11 @@ line since Task 064:
     tests/test_inline_efficiency.py asserts the two copies stay behaviourally
     identical.
 
-**That file never existed.** The claim was documentation of a test rather than a
-test, which `CLAUDE.md` §3 ("Honest scope, not aspirational") forbids. This file
-is that gate, widened to every function the two share.
+That file exists in `agentic-development`, where these two skills are also
+maintained, and it does check one function — `check_inline_efficiency` — for
+behavioural agreement. It has never existed **in this repository**, so the
+promise was unbacked here, and it covers one of the nine functions the two
+files now share. This is that gate for both: byte-identity across all nine.
 
 The second half is the property the duplication exists to protect: on any given
 `SKILL.md` the two gates must not return contradictory verdicts. WI-033 was filed
@@ -130,7 +132,66 @@ class TestTheTwoGatesDoNotContradictEachOther(unittest.TestCase):
             capture_output=True, text=True, encoding="utf-8", errors="replace",
             cwd=str(REPO)).returncode
 
+    def test_a_rule_in_both_gates_carries_the_same_severity(self):
+        """The property WI-033 actually needed.
+
+        Exit-code parity on every input is TOO STRONG: `analyze_gaps.py` owns
+        prose rules (`[Language]`, `[Lazy]`, `[Richness]`) that the structural
+        gate has no counterpart for, and those are its opinion rather than a
+        contradiction. What must never happen is one rule, implemented in both,
+        blocking in one and passing in the other — that is how `skills/pdf`
+        came to fail one gate and pass the other.
+
+        `required_sections` is the live example. Promoting it to an error here
+        would have made the gate stricter than it had ever been: measured
+        2026-09-02, 34 of 46 skills in `agentic-development` and 11 of 23 in
+        `obsidian-llm-wiki` flipped from passing to failing. It is advisory in
+        both instead.
+        """
+        no_sections = textwrap.dedent("""\
+            ---
+            name: nosectionskill
+            description: Use when a skill carries no house-convention sections.
+            tier: 2
+            version: 1.0
+            ---
+            # nosectionskill
+
+            A body with none of the house-convention headings.
+            """)
+        with tempfile.TemporaryDirectory() as tmp:
+            skill = Path(tmp) / "nosectionskill"
+            (skill / "examples").mkdir(parents=True)
+            (skill / "examples" / "e.md").write_text(
+                "# Example\n\nLong enough to clear the size floor.\n",
+                encoding="utf-8")
+            (skill / "SKILL.md").write_text(no_sections, encoding="utf-8")
+            import json
+            reports = {}
+            for tool, blocking, advisory in ((ANALYZE, "gaps", "advisories"),
+                                             (VALIDATE, "errors", "warnings")):
+                out = subprocess.run(
+                    [sys.executable, str(tool), str(skill), "--json"],
+                    capture_output=True, text=True, encoding="utf-8",
+                    errors="replace", cwd=str(REPO)).stdout
+                reports[tool.name] = (json.loads(out), blocking, advisory)
+        for name, (doc, blocking, advisory) in reports.items():
+            with self.subTest(tool=name):
+                self.assertFalse(
+                    [x for x in doc[blocking] if "Red Flags" in x or "Rationalization" in x],
+                    f"{name} blocks on a house-convention section")
+                self.assertTrue(
+                    [x for x in doc[advisory] if "Red Flags" in x],
+                    f"{name} stopped reporting the missing section at all")
+
     def test_both_gates_return_the_same_verdict_on_every_skill(self):
+        """Repo-local: true of THIS corpus, not a general property.
+
+        It holds here because every skill in `skills/` clears both gates. In
+        the sibling repositories `analyze_gaps.py` legitimately fails skills
+        that `validate_skill.py` passes, on rules only it implements. The
+        general property is the test above.
+        """
         disagreements = []
         for skill in self._skills():
             analyze = self._exit(ANALYZE, skill)
@@ -147,11 +208,14 @@ class TestTheTwoGatesDoNotContradictEachOther(unittest.TestCase):
 
     def test_a_skill_that_fails_one_gate_fails_the_other(self):
         """The property under a skill that is actually broken, not just the
-        corpus that happens to be clean today."""
-        # The body must not NAME the missing sections. `required_sections` is a
-        # substring test over the whole body in both gates, so a fixture saying
-        # "no Red Flags here" satisfies the check it is trying to fail — which
-        # is exactly what the first draft of this test did.
+        corpus that happens to be clean today.
+
+        The fixture is an oversized fenced block, which both gates treat as an
+        error. An earlier draft used a skill with no Red Flags — that stopped
+        working the day `required_sections` became advisory in both, which is
+        the right outcome for the rule and the wrong fixture for this test.
+        """
+        oversized = "\n".join(f"line {i}" for i in range(70))
         broken = textwrap.dedent("""\
             ---
             name: brokenskill
@@ -161,8 +225,17 @@ class TestTheTwoGatesDoNotContradictEachOther(unittest.TestCase):
             ---
             # brokenskill
 
-            A body with none of the sections the standard requires.
-            """)
+            ## Red Flags
+            - "x" -> **WRONG**.
+
+            ## Rationalization Table
+            | A | B |
+            | :--- | :--- |
+            | x | y |
+
+            ## Notes
+            ```python
+            """) + oversized + "\n```\n"
         with tempfile.TemporaryDirectory() as tmp:
             skill = Path(tmp) / "brokenskill"
             (skill / "examples").mkdir(parents=True)

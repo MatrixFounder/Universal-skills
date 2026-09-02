@@ -150,7 +150,7 @@ and `Structure` 0.
 | `Lazy` TODO (2) | 2 of 2 correct content: a CLI subcommand name (`obsidian tasks todo`) and prose describing a generated deck's placeholder | Rule narrowed: a marker is `TODO:` / `- TODO` / `<!-- TODO -->`, not `TODO` followed by a lowercase word. |
 | `Language` (31 lines) | 4 mechanical misfires (`can't` read as `can`, a hyphenated `should-trigger`, questions in an interview script). The remaining 27 are a judgement call per instruction. | Rule narrowed for the 4; the rest reclassified **advisory** — see "What stands". |
 | `Execution Policy` (31) | Both gates emit the identical 31 findings on the identical 6 skills; `validate_skill.py` exits 0, `analyze_gaps.py` exited 1. Of the 31, roughly half are sections genuinely absent and half exist under a different heading (`obsidian-cli`'s "Safety tiers" *is* Safety Boundaries). | Reclassified **advisory**, matching the twin implementation. The skill work is [WI-034](wi-034-execution-policy-migration.md). |
-| `Resilience` (7) | 7 of 7 real. The five skills genuinely lack the sections; the substring check and a heading check agree on the whole corpus. | Sections authored in `html`, `obsidian-cli`, `skill-creator`, `skill-validator`, `text-humanizer`. |
+| `Resilience` (7) | 7 of 7 real. The five skills genuinely lack the sections; the substring check and a heading check agree on the whole corpus. | Sections authored in `html`, `obsidian-cli`, `skill-creator`, `skill-validator`, `text-humanizer`. Severity later lowered to **advisory in both gates** — see the amendment below. |
 | `CSO` (2) | 2 of 2 a gate disagreement, not a defect: `validate_skill.py` honours `enforce_cso_prefix` (the overlay sets it `false`), `analyze_gaps.py` ignored it. | `enforce_cso_prefix` honoured; `inline_exempt_skills` too, the same asymmetry one rule over. |
 | `Richness` (2) | 2 of 2 real: `obsidian-cli` and `text-humanizer` ship no `examples/`. | `examples/usage.md` authored for both. |
 | `Structure` (1) | Correct content: `skills/html/tmp` is a gitignored scratch directory, absent from a packaged `.skill`. | Rule narrowed: skip directories git already ignores. |
@@ -252,3 +252,47 @@ them fire is a deliberate widening rather than a silent disagreement.
 - `skills/{html,obsidian-cli,skill-creator,skill-validator,text-humanizer}/SKILL.md` —
   Red Flags / Rationalization Table sections.
 - `skills/{obsidian-cli,text-humanizer}/examples/usage.md` — new.
+
+
+---
+
+## Amendment (2026-09-02) — `required_sections` is advisory, in both gates
+
+The first cut of this work made `validate_skill.py` block on
+`validation.required_sections` so that it would agree with `analyze_gaps.py`,
+which had always blocked on it. Aligning the two by raising the quieter one was
+the wrong direction, and the measurement says so.
+
+`analyze_gaps.py` is not the only consumer of these gates, and `skills/` is not
+the only corpus. Measured across the three repositories that run them:
+
+| Repository | Skills | Newly failing `validate_skill.py` |
+|---|---|---|
+| `Universal-skills` | 22 | 0 |
+| `agentic-development` | 46 | **34** |
+| `obsidian-llm-wiki` | 23 | **11** |
+
+`agentic-development`'s CI gate runs this validator through
+`System/scripts/validate_skills.py`; it went from 46/46 to 12/46. None of those
+45 skills had changed. Red Flags and a Rationalization Table are a house
+convention, not a structural requirement — `obsidian-llm-wiki` carries the same
+material under a different notation, and a reference skill may legitimately
+carry none.
+
+So the rule is now **advisory in both gates**: reported on every run, in
+`advisories` / `warnings`, promoted by `--strict`, and blocking nothing. Two
+further rules that this work had newly made blocking were reverted for the same
+reason — `prohibited_files` (never checked by `analyze_gaps.py` before) and the
+unclosed-`~~~` error in `check_inline_efficiency` (a decorative `~~~~~~~~` line
+would have read as an unterminated fence).
+
+Re-measured after the climb-down: **zero skills anywhere fail a gate they used
+to pass**, and `analyze_gaps.py` fails strictly fewer than before — 14 -> 0 here,
+44 -> 24 in `agentic-development`, 23 -> 23 in `obsidian-llm-wiki`.
+
+This also corrects the property this record claimed. "The two gates return the
+same verdict on every skill" is repo-local and too strong to state generally:
+`analyze_gaps.py` owns prose rules the structural gate has no counterpart for,
+and those are its opinion, not a contradiction. The property that must hold, and
+is now pinned by `test_a_rule_in_both_gates_carries_the_same_severity`, is that
+**a rule implemented in both gates carries the same severity in both**.

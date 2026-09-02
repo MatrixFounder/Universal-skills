@@ -42,9 +42,7 @@ def check_inline_efficiency(content, warn_lines=20, fail_lines=60,
 
     for i, raw_line in enumerate(lines):
         line = raw_line.strip()
-        # `~~~` as well as ```` ``` ````: an unterminated tilde fence used to be
-        # invisible to both gates while masking the rest of the body.
-        if not (line.startswith("```") or line.startswith("~~~")):
+        if not line.startswith("```"):
             continue
         if in_block:
             block_length = i - block_start - 1
@@ -369,10 +367,20 @@ def collect_execution_policy_findings(skill_path, body, validation_config):
 def check_required_sections(body: str, validation_config: dict) -> list[str]:
     """`validation.required_sections` — Red Flags, Rationalization Table.
 
-    Read here for the same reason `enforce_cso_prefix` is read in
-    `analyze_gaps.py`: a key declared in one project config must reach both
-    gates, or the two return different verdicts on the same file. Before this,
-    a skill with no Red Flags section failed `analyze_gaps.py` and passed here.
+    **Advisory, not an error, and that is the point.** Read here for the same
+    reason `enforce_cso_prefix` is read in `analyze_gaps.py`: a key declared in
+    one project config must reach both gates, or the two return different
+    verdicts on the same file. But it reaches both at the WARNING tier: these
+    sections are a house convention, not a structural requirement, and a skill
+    is free to carry its anti-rationalization material under another name or
+    not at all.
+
+    Measured 2026-09-02 before that was settled, with the rule blocking: 34 of
+    46 skills in `agentic-development` and 11 of 23 in `obsidian-llm-wiki`
+    flipped from passing to failing, and the CI gate that runs this validator
+    went from 46/46 to 12/46. The rule had never blocked HERE, so promoting it
+    made the gate stricter than it had ever been for every consumer — which is
+    not what aligning two gates is supposed to mean.
 
     Substring, not heading, matching — deliberately the same rule the sibling
     gate applies, so the two cannot disagree on a skill that names the section
@@ -516,7 +524,7 @@ def validate_skill(skill_path, config, strict_exec_policy=False, json_output=Fal
                 warnings.extend(eff_warnings)
 
             body_content = extract_body_content(skill_md_path)
-            errors.extend(check_required_sections(body_content, validation_config))
+            warnings.extend(check_required_sections(body_content, validation_config))
             warnings.extend(
                 f"Execution Policy: {msg}" for msg in
                 collect_execution_policy_findings(

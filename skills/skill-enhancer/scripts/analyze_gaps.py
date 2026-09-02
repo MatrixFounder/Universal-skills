@@ -423,9 +423,7 @@ def check_inline_efficiency(content, warn_lines=20, fail_lines=60,
 
     for i, raw_line in enumerate(lines):
         line = raw_line.strip()
-        # `~~~` as well as ```` ``` ````: an unterminated tilde fence used to be
-        # invisible to both gates while masking the rest of the body.
-        if not (line.startswith("```") or line.startswith("~~~")):
+        if not line.startswith("```"):
             continue
         if in_block:
             block_length = i - block_start - 1
@@ -523,10 +521,14 @@ def analyze_skill(skill_path, config, json_output=False, strict=False):
         gaps.append("[Critical] Missing 'description' in frontmatter")
 
     # 3. Check Required Sections (Configurable)
+    # Advisory, at the same tier validate_skill.py reports it. These sections
+    # are a house convention rather than a structural requirement: a skill may
+    # carry the same material under another heading, and 45 skills across the
+    # two sibling repositories legitimately do not carry it at all.
     req_sections = validation_config.get('required_sections', [])
     for sec in req_sections:
         if sec.lower() not in body_lower:
-            gaps.append(f"[Resilience] Missing '{sec}' section")
+            advisories.append(f"[Resilience] Missing '{sec}' section")
 
     # 3.5 Execution Policy Checks (warning-first migration path)
     #
@@ -606,13 +608,6 @@ def analyze_skill(skill_path, config, json_output=False, strict=False):
 
     if real_placeholders:
         gaps.append(f"[Lazy] Found {len(real_placeholders)} bracket placeholders (e.g., '[{real_placeholders[0]}]'). Fill them in.")
-
-    # 5.4 Files the project forbids. `prohibited_files` is an error in
-    # validate_skill.py; blocking here so the two gates agree about it.
-    for item in sorted(os.listdir(skill_path)):
-        if item in validation_config.get('prohibited_files', []):
-            gaps.append(f"[Structure] Prohibited file '{item}' "
-                        f"(validation.prohibited_files).")
 
     # 5.5 Check Directory Structure Deviations
     allowed_dirs = ["scripts", "examples", "assets", "references", "config", "agents", "evals", "eval-viewer", "data"]
