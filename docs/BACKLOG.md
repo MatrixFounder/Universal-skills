@@ -9,6 +9,7 @@ Skill-scoped roadmap items live in
 cross-cutting work-items that do not belong to one skill's roadmap row.
 
 <!-- feedback:discovered-issues -->
+- **WI-033** [analyze_gaps.py: adjudicate its findings, rule by rule](backlog/wi-033-analyze-gaps-adjudicate-findings.md) — effort `M`, status `open`, opened 2026-09-02
 - **WI-032** [Windows support for the office skills](backlog/wi-032-windows-support.md) — effort `L`, status `open`, opened 2026-08-29
 
 ## Closed

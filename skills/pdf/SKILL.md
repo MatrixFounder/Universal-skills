@@ -1,6 +1,6 @@
 ---
 name: pdf
-description: Use when the user asks to create, combine, split, preview, or extract content from PDF files. Triggers include "markdown to pdf", "mermaid in pdf", "math/LaTeX in pdf", "merge PDFs", "split a PDF", "extract text from pdf", "fill AcroForm", "preview pdf as image", and similar PDF generation or manipulation tasks.
+description: Use when the user asks to create, combine, split, preview, or extract content from PDF files. Triggers include "markdown to pdf", "html to pdf", "webarchive/MHTML to pdf", "export this deck to pdf", "mermaid in pdf", "math/LaTeX in pdf", "merge PDFs", "split a PDF", "extract text from pdf", "fill AcroForm", "preview pdf as image", and similar PDF generation, conversion, or manipulation tasks.
 tier: 2
 version: 1.0
 license: LicenseRef-Proprietary
@@ -22,6 +22,9 @@ scripts that embed those choices removes the variance.
 - "I'll reach for `playwright` for Markdown → PDF because it handles everything." → **WRONG**. Playwright pulls a 200 MB Chromium install. `weasyprint` handles 95% of Markdown/HTML inputs with a fraction of the footprint.
 - "I'll fill this XFA form with `pypdf`." → **WRONG**. `pypdf` doesn't fill XFA — only AcroForm. Detect the form type first (see [references/forms.md](references/forms.md)) and fail loudly if it's XFA rather than silently writing an unchanged file.
 - "I'll skip checking exit codes from `pdf_merge.py`." → **WRONG**. Missing an input file produces exit 1 and the output is absent — silently assuming success ships a broken deliverable.
+- "This HTML carries its own `@media print` and `@page` rules, so `html2pdf.py` will honour them." → **PARTLY WRONG, and the two engines fail differently.** `weasyprint` *does* apply `@media print` and `@page` (measured: a 41-slide deck rendered 41 pages at its declared 297×176 mm) but supports no **container queries** — a layout whose type scale is built on `cqw` collapses into overlapping text on most pages. `--engine chrome` has the layout engine but forces `media: screen` and scales to fit the paper (§2), so an authored print stylesheet never applies at all. For a document *authored for print* — its own `@page` size, its own break rules, modern layout — drive headless Chrome directly (`--headless=new --print-to-pdf`), which keeps `media: print`, then verify with `preview.py`.
+- "The PDF has the right page count, so the render is fine." → **WRONG**. Page count catches split pages and nothing else. Render every page with `preview.py` and look: web fonts silently fall back to system faces, and a `@media (max-width:…)` block with no `screen` qualifier also applies to print, collapsing multi-column layouts.
+- "I'll grep the PDF bytes for `/BaseFont` to confirm the fonts embedded." → **WRONG**. Font descriptors live in compressed object streams, so the grep reports only the few uncompressed entries and shows system fallbacks even when the real fonts *are* embedded. This misreads a working file as broken. Judge embedding from a rendered page, or with `pypdf`.
 
 ## 2. Capabilities
 - Render Markdown (+ optional custom CSS) to a typeset PDF via `weasyprint`. Fenced ```mermaid blocks pre-render to PNG via `mmdc`; bundled `scripts/mermaid-config.json` ships an office-friendly Cyrillic-capable font stack (override with `--mermaid-config PATH`, opt out with `--no-mermaid-config`). Inline `$…$` and display `$$…$$` **math** pre-render to MathML via the bundled `katex` (weasyprint typesets MathML natively; it runs no JS, so client-side KaTeX/MathJax can't be used) — currency (`$5`) and `$` inside code/fences are left untouched, and without node/KaTeX formulas degrade to literal text (opt out with `--no-math`, fail-hard with `--strict-math`). The PDF carries a navigable **outline (bookmarks)** auto-built from `h1`–`h6` headings — no flag needed.
@@ -159,6 +162,8 @@ Extract text (inline, no bundled script):
 | Detect AcroForm vs XFA before filling. | Try to fill XFA with `pypdf` and ship an unchanged file. |
 | Pass `--base-url` so relative images resolve. | Assume weasyprint reads relative paths the same way your shell does. |
 | Check exit codes of the bundled scripts. | Assume success because no exception was raised. |
+| Render **every** page with `preview.py` before calling a PDF correct. | Judge a multi-page PDF from page 1 — `sips` and Quick Look convert only the first page. |
+| Drive headless Chrome directly for HTML authored *for print* (own `@page`, own break rules, container queries). | Reach for `html2pdf.py` reflexively: weasyprint drops container queries, and `--engine chrome` overrides the document's print media. |
 
 ### Rationalization Table
 
