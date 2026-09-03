@@ -1,0 +1,1 @@
+Calibrates a supplied text against this project's house register. The register is defined in the project's own reference files and cannot be inferred from the text or from general usage.

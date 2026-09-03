@@ -1,0 +1,1 @@
+Use when you need to humanize AI-generated text. The pass applies this project's own calibrated pattern lists and intensity throttle, which are defined in its reference files and cannot be reconstructed from the text alone. Supports multiple non-fiction genres. Not for prose fiction.

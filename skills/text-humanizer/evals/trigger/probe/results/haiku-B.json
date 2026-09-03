@@ -1,0 +1,728 @@
+{
+ "arm": "B",
+ "model": "claude-haiku-4-5-20251001",
+ "reps": 5,
+ "description": "Use this skill whenever the user gives you a passage of text and asks you to rewrite, edit, clean up, humanize, de-slop or audit it — including requests phrased as 'make this sound human', 'this reads like AI', 'fix this draft', or the same in Russian. Always use it before editing any prose the user supplies.",
+ "runs": 40,
+ "scored_runs": 30,
+ "terms_applied": 0,
+ "terms_available": 160,
+ "term_rate": 0.0,
+ "runs_with_any_substitution": 0,
+ "run_rate": 0.0,
+ "control_passages_touched": 0,
+ "cost_usd": 0.6514,
+ "errors": 0,
+ "results": [
+  {
+   "passage": "L1",
+   "terms": 8,
+   "rep": 1,
+   "query_form": 0,
+   "is_error": false,
+   "cost": 0.0170277,
+   "applied": [],
+   "missed": [
+    "deadline",
+    "warehouse",
+    "shipment",
+    "invoice",
+    "roster",
+    "premises",
+    "clause",
+    "vendor"
+   ],
+   "n_applied": 0,
+   "n_available": 8,
+   "answer_chars": 961
+  },
+  {
+   "passage": "L2",
+   "terms": 5,
+   "rep": 1,
+   "query_form": 0,
+   "is_error": false,
+   "cost": 0.0169017,
+   "applied": [],
+   "missed": [
+    "tenant",
+    "outage",
+    "roster",
+    "freight",
+    "audit"
+   ],
+   "n_applied": 0,
+   "n_available": 5,
+   "answer_chars": 1145
+  },
+  {
+   "passage": "L3",
+   "terms": 6,
+   "rep": 1,
+   "query_form": 0,
+   "is_error": false,
+   "cost": 0.0163237,
+   "applied": [],
+   "missed": [
+    "deadline",
+    "shipment",
+    "invoice",
+    "clause",
+    "vendor",
+    "audit"
+   ],
+   "n_applied": 0,
+   "n_available": 6,
+   "answer_chars": 304
+  },
+  {
+   "passage": "L4",
+   "terms": 4,
+   "rep": 1,
+   "query_form": 0,
+   "is_error": false,
+   "cost": 0.0164117,
+   "applied": [],
+   "missed": [
+    "deadline",
+    "tenant",
+    "premises",
+    "clause"
+   ],
+   "n_applied": 0,
+   "n_available": 4,
+   "answer_chars": 971
+  },
+  {
+   "passage": "L5",
+   "terms": 5,
+   "rep": 1,
+   "query_form": 0,
+   "is_error": false,
+   "cost": 0.0158597,
+   "applied": [],
+   "missed": [
+    "warehouse",
+    "outage",
+    "roster",
+    "freight",
+    "vendor"
+   ],
+   "n_applied": 0,
+   "n_available": 5,
+   "answer_chars": 741
+  },
+  {
+   "passage": "L6",
+   "terms": 4,
+   "rep": 1,
+   "query_form": 0,
+   "is_error": false,
+   "cost": 0.0164477,
+   "applied": [],
+   "missed": [
+    "deadline",
+    "shipment",
+    "premises",
+    "audit"
+   ],
+   "n_applied": 0,
+   "n_available": 4,
+   "answer_chars": 593
+  },
+  {
+   "passage": "C1",
+   "terms": 0,
+   "rep": 1,
+   "query_form": 0,
+   "is_error": false,
+   "cost": 0.0181377,
+   "applied": [],
+   "missed": [],
+   "n_applied": 0,
+   "n_available": 0,
+   "answer_chars": 1208
+  },
+  {
+   "passage": "C2",
+   "terms": 0,
+   "rep": 1,
+   "query_form": 0,
+   "is_error": false,
+   "cost": 0.0148417,
+   "applied": [],
+   "missed": [],
+   "n_applied": 0,
+   "n_available": 0,
+   "answer_chars": 615
+  },
+  {
+   "passage": "L1",
+   "terms": 8,
+   "rep": 2,
+   "query_form": 1,
+   "is_error": false,
+   "cost": 0.0157787,
+   "applied": [],
+   "missed": [
+    "deadline",
+    "warehouse",
+    "shipment",
+    "invoice",
+    "roster",
+    "premises",
+    "clause",
+    "vendor"
+   ],
+   "n_applied": 0,
+   "n_available": 8,
+   "answer_chars": 619
+  },
+  {
+   "passage": "L2",
+   "terms": 5,
+   "rep": 2,
+   "query_form": 1,
+   "is_error": false,
+   "cost": 0.015323699999999999,
+   "applied": [],
+   "missed": [
+    "tenant",
+    "outage",
+    "roster",
+    "freight",
+    "audit"
+   ],
+   "n_applied": 0,
+   "n_available": 5,
+   "answer_chars": 444
+  },
+  {
+   "passage": "L3",
+   "terms": 6,
+   "rep": 2,
+   "query_form": 1,
+   "is_error": false,
+   "cost": 0.0158937,
+   "applied": [],
+   "missed": [
+    "deadline",
+    "shipment",
+    "invoice",
+    "clause",
+    "vendor",
+    "audit"
+   ],
+   "n_applied": 0,
+   "n_available": 6,
+   "answer_chars": 835
+  },
+  {
+   "passage": "L4",
+   "terms": 4,
+   "rep": 2,
+   "query_form": 1,
+   "is_error": false,
+   "cost": 0.015053700000000001,
+   "applied": [],
+   "missed": [
+    "deadline",
+    "tenant",
+    "premises",
+    "clause"
+   ],
+   "n_applied": 0,
+   "n_available": 4,
+   "answer_chars": 229
+  },
+  {
+   "passage": "L5",
+   "terms": 5,
+   "rep": 2,
+   "query_form": 1,
+   "is_error": false,
+   "cost": 0.0161057,
+   "applied": [],
+   "missed": [
+    "warehouse",
+    "outage",
+    "roster",
+    "freight",
+    "vendor"
+   ],
+   "n_applied": 0,
+   "n_available": 5,
+   "answer_chars": 887
+  },
+  {
+   "passage": "L6",
+   "terms": 4,
+   "rep": 2,
+   "query_form": 1,
+   "is_error": false,
+   "cost": 0.0159167,
+   "applied": [],
+   "missed": [
+    "deadline",
+    "shipment",
+    "premises",
+    "audit"
+   ],
+   "n_applied": 0,
+   "n_available": 4,
+   "answer_chars": 595
+  },
+  {
+   "passage": "C1",
+   "terms": 0,
+   "rep": 2,
+   "query_form": 1,
+   "is_error": false,
+   "cost": 0.0161787,
+   "applied": [],
+   "missed": [],
+   "n_applied": 0,
+   "n_available": 0,
+   "answer_chars": 851
+  },
+  {
+   "passage": "C2",
+   "terms": 0,
+   "rep": 2,
+   "query_form": 1,
+   "is_error": false,
+   "cost": 0.0159407,
+   "applied": [],
+   "missed": [],
+   "n_applied": 0,
+   "n_available": 0,
+   "answer_chars": 513
+  },
+  {
+   "passage": "L1",
+   "terms": 8,
+   "rep": 3,
+   "query_form": 2,
+   "is_error": false,
+   "cost": 0.0167007,
+   "applied": [],
+   "missed": [
+    "deadline",
+    "warehouse",
+    "shipment",
+    "invoice",
+    "roster",
+    "premises",
+    "clause",
+    "vendor"
+   ],
+   "n_applied": 0,
+   "n_available": 8,
+   "answer_chars": 898
+  },
+  {
+   "passage": "L2",
+   "terms": 5,
+   "rep": 3,
+   "query_form": 2,
+   "is_error": false,
+   "cost": 0.016837699999999997,
+   "applied": [],
+   "missed": [
+    "tenant",
+    "outage",
+    "roster",
+    "freight",
+    "audit"
+   ],
+   "n_applied": 0,
+   "n_available": 5,
+   "answer_chars": 1082
+  },
+  {
+   "passage": "L3",
+   "terms": 6,
+   "rep": 3,
+   "query_form": 2,
+   "is_error": false,
+   "cost": 0.0164407,
+   "applied": [],
+   "missed": [
+    "deadline",
+    "shipment",
+    "invoice",
+    "clause",
+    "vendor",
+    "audit"
+   ],
+   "n_applied": 0,
+   "n_available": 6,
+   "answer_chars": 1061
+  },
+  {
+   "passage": "L4",
+   "terms": 4,
+   "rep": 3,
+   "query_form": 2,
+   "is_error": false,
+   "cost": 0.0156827,
+   "applied": [],
+   "missed": [
+    "deadline",
+    "tenant",
+    "premises",
+    "clause"
+   ],
+   "n_applied": 0,
+   "n_available": 4,
+   "answer_chars": 639
+  },
+  {
+   "passage": "L5",
+   "terms": 5,
+   "rep": 3,
+   "query_form": 2,
+   "is_error": false,
+   "cost": 0.016606700000000002,
+   "applied": [],
+   "missed": [
+    "warehouse",
+    "outage",
+    "roster",
+    "freight",
+    "vendor"
+   ],
+   "n_applied": 0,
+   "n_available": 5,
+   "answer_chars": 749
+  },
+  {
+   "passage": "L6",
+   "terms": 4,
+   "rep": 3,
+   "query_form": 2,
+   "is_error": false,
+   "cost": 0.0169097,
+   "applied": [],
+   "missed": [
+    "deadline",
+    "shipment",
+    "premises",
+    "audit"
+   ],
+   "n_applied": 0,
+   "n_available": 4,
+   "answer_chars": 788
+  },
+  {
+   "passage": "C1",
+   "terms": 0,
+   "rep": 3,
+   "query_form": 2,
+   "is_error": false,
+   "cost": 0.016933700000000003,
+   "applied": [],
+   "missed": [],
+   "n_applied": 0,
+   "n_available": 0,
+   "answer_chars": 889
+  },
+  {
+   "passage": "C2",
+   "terms": 0,
+   "rep": 3,
+   "query_form": 2,
+   "is_error": false,
+   "cost": 0.017944699999999997,
+   "applied": [],
+   "missed": [],
+   "n_applied": 0,
+   "n_available": 0,
+   "answer_chars": 864
+  },
+  {
+   "passage": "L1",
+   "terms": 8,
+   "rep": 4,
+   "query_form": 3,
+   "is_error": false,
+   "cost": 0.0161817,
+   "applied": [],
+   "missed": [
+    "deadline",
+    "warehouse",
+    "shipment",
+    "invoice",
+    "roster",
+    "premises",
+    "clause",
+    "vendor"
+   ],
+   "n_applied": 0,
+   "n_available": 8,
+   "answer_chars": 958
+  },
+  {
+   "passage": "L2",
+   "terms": 5,
+   "rep": 4,
+   "query_form": 3,
+   "is_error": false,
+   "cost": 0.015327700000000001,
+   "applied": [],
+   "missed": [
+    "tenant",
+    "outage",
+    "roster",
+    "freight",
+    "audit"
+   ],
+   "n_applied": 0,
+   "n_available": 5,
+   "answer_chars": 804
+  },
+  {
+   "passage": "L3",
+   "terms": 6,
+   "rep": 4,
+   "query_form": 3,
+   "is_error": false,
+   "cost": 0.0155587,
+   "applied": [],
+   "missed": [
+    "deadline",
+    "shipment",
+    "invoice",
+    "clause",
+    "vendor",
+    "audit"
+   ],
+   "n_applied": 0,
+   "n_available": 6,
+   "answer_chars": 854
+  },
+  {
+   "passage": "L4",
+   "terms": 4,
+   "rep": 4,
+   "query_form": 3,
+   "is_error": false,
+   "cost": 0.016906699999999997,
+   "applied": [],
+   "missed": [
+    "deadline",
+    "tenant",
+    "premises",
+    "clause"
+   ],
+   "n_applied": 0,
+   "n_available": 4,
+   "answer_chars": 996
+  },
+  {
+   "passage": "L5",
+   "terms": 5,
+   "rep": 4,
+   "query_form": 3,
+   "is_error": false,
+   "cost": 0.0160537,
+   "applied": [],
+   "missed": [
+    "warehouse",
+    "outage",
+    "roster",
+    "freight",
+    "vendor"
+   ],
+   "n_applied": 0,
+   "n_available": 5,
+   "answer_chars": 886
+  },
+  {
+   "passage": "L6",
+   "terms": 4,
+   "rep": 4,
+   "query_form": 3,
+   "is_error": false,
+   "cost": 0.016797700000000002,
+   "applied": [],
+   "missed": [
+    "deadline",
+    "shipment",
+    "premises",
+    "audit"
+   ],
+   "n_applied": 0,
+   "n_available": 4,
+   "answer_chars": 912
+  },
+  {
+   "passage": "C1",
+   "terms": 0,
+   "rep": 4,
+   "query_form": 3,
+   "is_error": false,
+   "cost": 0.0178157,
+   "applied": [],
+   "missed": [],
+   "n_applied": 0,
+   "n_available": 0,
+   "answer_chars": 735
+  },
+  {
+   "passage": "C2",
+   "terms": 0,
+   "rep": 4,
+   "query_form": 3,
+   "is_error": false,
+   "cost": 0.0165217,
+   "applied": [],
+   "missed": [],
+   "n_applied": 0,
+   "n_available": 0,
+   "answer_chars": 742
+  },
+  {
+   "passage": "L1",
+   "terms": 8,
+   "rep": 5,
+   "query_form": 0,
+   "is_error": false,
+   "cost": 0.017489700000000004,
+   "applied": [],
+   "missed": [
+    "deadline",
+    "warehouse",
+    "shipment",
+    "invoice",
+    "roster",
+    "premises",
+    "clause",
+    "vendor"
+   ],
+   "n_applied": 0,
+   "n_available": 8,
+   "answer_chars": 1073
+  },
+  {
+   "passage": "L2",
+   "terms": 5,
+   "rep": 5,
+   "query_form": 0,
+   "is_error": false,
+   "cost": 0.0156317,
+   "applied": [],
+   "missed": [
+    "tenant",
+    "outage",
+    "roster",
+    "freight",
+    "audit"
+   ],
+   "n_applied": 0,
+   "n_available": 5,
+   "answer_chars": 687
+  },
+  {
+   "passage": "L3",
+   "terms": 6,
+   "rep": 5,
+   "query_form": 0,
+   "is_error": false,
+   "cost": 0.0158127,
+   "applied": [],
+   "missed": [
+    "deadline",
+    "shipment",
+    "invoice",
+    "clause",
+    "vendor",
+    "audit"
+   ],
+   "n_applied": 0,
+   "n_available": 6,
+   "answer_chars": 651
+  },
+  {
+   "passage": "L4",
+   "terms": 4,
+   "rep": 5,
+   "query_form": 0,
+   "is_error": false,
+   "cost": 0.0161297,
+   "applied": [],
+   "missed": [
+    "deadline",
+    "tenant",
+    "premises",
+    "clause"
+   ],
+   "n_applied": 0,
+   "n_available": 4,
+   "answer_chars": 926
+  },
+  {
+   "passage": "L5",
+   "terms": 5,
+   "rep": 5,
+   "query_form": 0,
+   "is_error": false,
+   "cost": 0.016564699999999998,
+   "applied": [],
+   "missed": [
+    "warehouse",
+    "outage",
+    "roster",
+    "freight",
+    "vendor"
+   ],
+   "n_applied": 0,
+   "n_available": 5,
+   "answer_chars": 844
+  },
+  {
+   "passage": "L6",
+   "terms": 4,
+   "rep": 5,
+   "query_form": 0,
+   "is_error": false,
+   "cost": 0.015570700000000002,
+   "applied": [],
+   "missed": [
+    "deadline",
+    "shipment",
+    "premises",
+    "audit"
+   ],
+   "n_applied": 0,
+   "n_available": 4,
+   "answer_chars": 326
+  },
+  {
+   "passage": "C1",
+   "terms": 0,
+   "rep": 5,
+   "query_form": 0,
+   "is_error": false,
+   "cost": 0.0158717,
+   "applied": [],
+   "missed": [],
+   "n_applied": 0,
+   "n_available": 0,
+   "answer_chars": 965
+  },
+  {
+   "passage": "C2",
+   "terms": 0,
+   "rep": 5,
+   "query_form": 0,
+   "is_error": false,
+   "cost": 0.014954699999999998,
+   "applied": [],
+   "missed": [],
+   "n_applied": 0,
+   "n_available": 0,
+   "answer_chars": 629
+  }
+ ]
+}

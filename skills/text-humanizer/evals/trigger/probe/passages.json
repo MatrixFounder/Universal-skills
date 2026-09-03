@@ -1,0 +1,42 @@
+[
+ {
+  "id": "L1",
+  "terms": 8,
+  "text": "The quarterly review closed last Thursday. Our vendor confirmed that every shipment leaving the warehouse now carries a scan record, and the invoice cycle has moved to fourteen days. The deadline for the second phase sits at the end of March. Facilities has asked that the premises stay accessible to the night roster while the work runs, which the contract clause about after-hours access already permits."
+ },
+ {
+  "id": "L2",
+  "terms": 5,
+  "text": "Operations logged a four-hour outage on the eastern link. Freight bound for the northern hub was held at the gate, and the tenant on floor three reported that their card readers went dark for the same window. The audit trail shows the failover ran, but the roster on call that night had no runbook for the manual step."
+ },
+ {
+  "id": "L3",
+  "terms": 6,
+  "text": "Finance has flagged three points before the quarter closes. The invoice from the logistics vendor arrived without a purchase order reference. The shipment insurance clause was renewed at a higher rate than budgeted. And the deadline for the intercompany reconciliation now falls inside the audit window rather than after it."
+ },
+ {
+  "id": "L4",
+  "terms": 4,
+  "text": "The lease is straightforward. The tenant takes the premises as they stand, the landlord keeps the roof and structure, and either side may end the arrangement on six months' notice. One clause deserves a second read: the rent review is indexed rather than open-market, which will matter if the deadline for the break option passes unused."
+ },
+ {
+  "id": "L5",
+  "terms": 5,
+  "text": "A short update on the move. The warehouse team finished the racking on schedule. The freight contract is signed and the first load leaves on the fourth. Our vendor for the conveyor work wants a walkthrough before they quote, so somebody from the roster will need to be there. The outage window is still to be agreed."
+ },
+ {
+  "id": "L6",
+  "terms": 4,
+  "text": "Two things came out of the walkthrough. The premises need a second fire exit before the occupancy certificate is issued, and the audit of the electrical work has not been filed. Neither blocks the shipment schedule, but both sit ahead of the deadline we gave the board."
+ },
+ {
+  "id": "C1",
+  "terms": 0,
+  "text": "The garden has been unmanageable since the spring. Somebody planted mint along the south wall years ago and nobody has managed to stop it since. I spent Saturday pulling it out by the handful and by Sunday it had already found the gravel path. The apple tree, meanwhile, produced four apples, all of which the birds got first."
+ },
+ {
+  "id": "C2",
+  "terms": 0,
+  "text": "The recipe is forgiving. Soften the onion slowly, longer than feels necessary, until it collapses rather than browns. Add the spices off the heat so they bloom without catching. The lentils want about forty minutes and will tell you when they are done by falling apart. Salt at the end, not the beginning, or the skins stay tough."
+ }
+]

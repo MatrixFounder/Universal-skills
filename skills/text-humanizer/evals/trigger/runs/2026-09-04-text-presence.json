@@ -1,0 +1,171 @@
+{
+  "skill_name": "text-humanizer",
+  "description": "Use when you need to humanize AI-generated text or generate untraceable system prompts. Supports multiple non-fiction genres (Wiki, Blog, Crypto, etc.). Not for prose fiction (a short story, a novel chapter, a screenplay).",
+  "results": [
+    {
+      "query": "\u0443\u0431\u0435\u0440\u0438 \u0438\u0437 \u044d\u0442\u043e\u0433\u043e \u0442\u0435\u043a\u0441\u0442\u0430 \u043f\u0440\u0438\u0437\u043d\u0430\u043a\u0438, \u0447\u0442\u043e \u0435\u0433\u043e \u043f\u0438\u0441\u0430\u043b AI",
+      "should_trigger": true,
+      "trigger_rate": 0.0,
+      "triggers": 0,
+      "runs": 3,
+      "pass": false,
+      "canonical_matches": 0,
+      "instrument_failures": 3
+    },
+    {
+      "query": "\u0443\u0431\u0435\u0440\u0438 \u0438\u0437 \u044d\u0442\u043e\u0433\u043e \u0442\u0435\u043a\u0441\u0442\u0430 \u043f\u0440\u0438\u0437\u043d\u0430\u043a\u0438, \u0447\u0442\u043e \u0435\u0433\u043e \u043f\u0438\u0441\u0430\u043b AI\n\nCertainly! Here is a breakdown of what is new in Vantage 3.2. We are excited to unveil a release that is not just an update \u2014 it's a fundamental reimagining of how teams navigate their data. Vantage 3.2 delivers a seamless, intuitive, and robust experience that will delve into the intricacies of your workflow and foster genuine collaboration. Query latency dropped from 840 ms to 210 ms in our internal benchmark. The new export pipeline handles 2.4 million rows without paging. SSO now supports Okta and Azure AD. This release stands as a testament to our unwavering commitment to excellence, underscoring the vibrant landscape of modern analytics. I hope this",
+      "should_trigger": true,
+      "trigger_rate": 1.0,
+      "triggers": 3,
+      "runs": 3,
+      "pass": true,
+      "canonical_matches": 3,
+      "instrument_failures": 0
+    },
+    {
+      "query": "humanize this marketing email, it's full of 'delve' and 'seamless'",
+      "should_trigger": true,
+      "trigger_rate": 0.6666666666666666,
+      "triggers": 2,
+      "runs": 3,
+      "pass": true,
+      "canonical_matches": 2,
+      "instrument_failures": 0
+    },
+    {
+      "query": "humanize this marketing email, it's full of 'delve' and 'seamless'\n\nCertainly! Here is a breakdown of what is new in Vantage 3.2. We are excited to unveil a release that is not just an update \u2014 it's a fundamental reimagining of how teams navigate their data. Vantage 3.2 delivers a seamless, intuitive, and robust experience that will delve into the intricacies of your workflow and foster genuine collaboration. Query latency dropped from 840 ms to 210 ms in our internal benchmark. The new export pipeline handles 2.4 million rows without paging. SSO now supports Okta and Azure AD. This release stands as a testament to our unwavering commitment to excellence, underscoring the vibrant landscape of modern analytics. I hope this",
+      "should_trigger": true,
+      "trigger_rate": 1.0,
+      "triggers": 3,
+      "runs": 3,
+      "pass": true,
+      "canonical_matches": 3,
+      "instrument_failures": 0
+    },
+    {
+      "query": "audit this article for AI markers \u2014 just tell me what's wrong, don't rewrite it yet",
+      "should_trigger": true,
+      "trigger_rate": 0.0,
+      "triggers": 0,
+      "runs": 3,
+      "pass": false,
+      "canonical_matches": 0,
+      "instrument_failures": 0
+    },
+    {
+      "query": "audit this article for AI markers \u2014 just tell me what's wrong, don't rewrite it yet\n\nMoreover, this study delves into the intricate relationship between sleep fragmentation and working memory. It is important to note that prior work has undoubtedly established a correlation. We recruited 84 participants aged 19 to 34. Each completed the n-back task after two nights of restricted sleep (4 hours) and two nights of habitual sleep. Accuracy fell by 12.3% under restriction (p = 0.004). Furthermore, these findings underscore the pivotal role of consolidated sleep, highlighting the need for further research.",
+      "should_trigger": true,
+      "trigger_rate": 1.0,
+      "triggers": 3,
+      "runs": 3,
+      "pass": true,
+      "canonical_matches": 3,
+      "instrument_failures": 0
+    },
+    {
+      "query": "de-slop this blog post before I publish it",
+      "should_trigger": true,
+      "trigger_rate": 0.0,
+      "triggers": 0,
+      "runs": 3,
+      "pass": false,
+      "canonical_matches": 0,
+      "instrument_failures": 0
+    },
+    {
+      "query": "de-slop this blog post before I publish it\n\nCertainly! Let's delve into this. We migrated our job queue from Redis to Postgres last quarter \u2014 and it was not just a migration, it was a fundamental rethinking of our robust, seamless, and intuitive infrastructure. The reason was simple. Redis lost jobs on failover: about 40 per week out of 2.1 million. Postgres with SKIP LOCKED gave us 0 in eleven weeks, at the cost of p99 enqueue latency going from 1.2 ms to 6.8 ms. Moreover, this underscores the importance of durability, highlighting the trade-offs inherent in queue design.",
+      "should_trigger": true,
+      "trigger_rate": 1.0,
+      "triggers": 3,
+      "runs": 3,
+      "pass": true,
+      "canonical_matches": 3,
+      "instrument_failures": 0
+    },
+    {
+      "query": "make this sound like a person wrote it, not a model",
+      "should_trigger": true,
+      "trigger_rate": 0.0,
+      "triggers": 0,
+      "runs": 3,
+      "pass": false,
+      "canonical_matches": 0,
+      "instrument_failures": 2
+    },
+    {
+      "query": "make this sound like a person wrote it, not a model\n\nHi team \u2014 I hope this finds you well! Due to the fact that our Q3 synergy targets remain a moving target, we are going to circle back on the low-hanging fruit in order to align on next steps. This initiative is a testament to our commitment to excellence. Concretely: the Helsinki migration slips from 12 September to 3 October. Two engineers move off billing to cover it. The Q3 revenue forecast drops by 180,000 euros. Exciting journey ahead!",
+      "should_trigger": true,
+      "trigger_rate": 0.6666666666666666,
+      "triggers": 2,
+      "runs": 3,
+      "pass": true,
+      "canonical_matches": 2,
+      "instrument_failures": 1
+    },
+    {
+      "query": "\u043f\u0440\u043e\u0432\u0435\u0440\u044c \u043c\u043e\u044e \u0441\u0442\u0430\u0442\u044c\u044e \u043d\u0430 AI-\u043e\u0431\u043e\u0440\u043e\u0442\u044b \u0438 \u043a\u0430\u043d\u0446\u0435\u043b\u044f\u0440\u0438\u0442",
+      "should_trigger": true,
+      "trigger_rate": 0.0,
+      "triggers": 0,
+      "runs": 3,
+      "pass": false,
+      "canonical_matches": 0,
+      "instrument_failures": 0
+    },
+    {
+      "query": "\u043f\u0440\u043e\u0432\u0435\u0440\u044c \u043c\u043e\u044e \u0441\u0442\u0430\u0442\u044c\u044e \u043d\u0430 AI-\u043e\u0431\u043e\u0440\u043e\u0442\u044b \u0438 \u043a\u0430\u043d\u0446\u0435\u043b\u044f\u0440\u0438\u0442\n\nCertainly! Here is the report. A fire destroyed a warehouse on Kellogg Street early Tuesday. Critics argue the city's inspection regime is not just outdated \u2014 it is dangerous. The blaze was reported at 3:12 a.m. and brought under control by 6:40 a.m., according to the Fire Department. No injuries were reported. The building, owned by Harlan Logistics since 2014, held roughly 900 pallets of paper stock. Observers have cited the incident as a pivotal moment. Only time will tell.",
+      "should_trigger": true,
+      "trigger_rate": 1.0,
+      "triggers": 3,
+      "runs": 3,
+      "pass": true,
+      "canonical_matches": 3,
+      "instrument_failures": 0
+    },
+    {
+      "query": "strip the em dashes and the 'it's important to note' stuff out of this draft",
+      "should_trigger": true,
+      "trigger_rate": 0.0,
+      "triggers": 0,
+      "runs": 3,
+      "pass": false,
+      "canonical_matches": 0,
+      "instrument_failures": 0
+    },
+    {
+      "query": "strip the em dashes and the 'it's important to note' stuff out of this draft\n\nDear community! We are thrilled to announce that our protocol is revolutionizing finance and unlocking potential for everyone. This is not just a launch \u2014 it is a game-changer. TVL crossed $42M on Tuesday. The perp market on Arbitrum now clears 11,000 trades a day and the LP vault APY sits at 18.4%. Price reclaimed the range high at $1.27. We delve into the vibrant landscape of DeFi with unwavering commitment. To the moon!",
+      "should_trigger": true,
+      "trigger_rate": 1.0,
+      "triggers": 3,
+      "runs": 3,
+      "pass": true,
+      "canonical_matches": 3,
+      "instrument_failures": 0
+    },
+    {
+      "query": "before I send this to the client \u2014 does it read as AI-written? give me a per-paragraph verdict",
+      "should_trigger": true,
+      "trigger_rate": 0.0,
+      "triggers": 0,
+      "runs": 3,
+      "pass": false,
+      "canonical_matches": 0,
+      "instrument_failures": 0
+    },
+    {
+      "query": "before I send this to the client \u2014 does it read as AI-written? give me a per-paragraph verdict\n\nWe are thrilled to announce a significant milestone! Northwind Analytics has entered into a strategic partnership that is not just an agreement \u2014 it is a paradigm shift. Northwind will acquire Bellhouse Data for $46 million in cash, the companies said Monday. The deal covers 31 employees and Bellhouse's two data centres in Dublin. Closing is expected in Q1 2026, subject to regulatory approval. This partnership is a testament to our unwavering commitment to excellence, and the future looks bright.",
+      "should_trigger": true,
+      "trigger_rate": 1.0,
+      "triggers": 3,
+      "runs": 3,
+      "pass": true,
+      "canonical_matches": 3,
+      "instrument_failures": 0
+    }
+  ],
+  "summary": {
+    "total": 16,
+    "passed": 9,
+    "failed": 7
+  }
+}

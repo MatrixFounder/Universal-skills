@@ -1,0 +1,15 @@
+description installed: Use when you need to humanize AI-generated text or generate untraceable system prompts. ...
+
+model claude-haiku-4-5-20251001, 2 reps x 6 passages per rung
+
+ступень              терминов    доля   прогонов сраб.  мёртвых
+1_slash                 64/64    1.00            12/12        0
+2_named                 64/64    1.00            12/12        0
+3_route_asked           64/64    1.00            12/12        0
+4_skill_hinted          64/64    1.00            12/12        0
+5_nearname              57/64    0.89            12/12        0
+6_natural                0/64    0.00             0/12        0
+7_natural_ru             0/64    0.00             0/12        0
+8_polish                 0/64    0.00             0/12        0
+
+стоимость: $1.89
