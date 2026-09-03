@@ -1,0 +1,309 @@
+{
+  "schema": "humanizer-evals/v2",
+  "skill": "text-humanizer",
+  "origin": "docs/text-humanizer-formalizer-improvement-spec.md R1; taxonomy coverage added 2026-09-02",
+  "note": "Two axes. `failure_mode` cases (E*) run BOTH arms: the with_skill arm is handed the prompt scripts/humanizer.py assembles, the baseline arm is handed nothing in its place, and the difference between them is the measurement. `coverage` cases (G*, S*) run the with_skill arm only: they ask whether the skill behaves correctly on a genre or a style, not whether it beats no skill, and a baseline draw would spend tokens to answer a question the E cases already answer. Grading is deterministic on both axes.",
+  "coverage_claim": "Every genre in humanizer.GENRE_MAP appears as some case's genre, and every file in references/styles/ is injected by some case -- by the genre-name fallback where the names coincide, by an explicit --style in the S cases. selftest_evals.py TC-EV-45 and TC-EV-46 assert both, so a new genre or a new style file turns the battery red until a case covers it. Four PRESSURE cases (P) and two NATURAL cases (N) were added 2026-09-03: the two open rows of the guide section 11.1 audit. A pressure case carries its own task file under `tasks/`, which reaches BOTH arms; a natural case is copied verbatim from a repository file its key names.",
+  "cases": [
+    {
+      "id": "E1",
+      "name": "marketing copy, markers everywhere",
+      "genre": "marketing",
+      "intensity_resolved": "max",
+      "measures": "removal — do the [A] markers go, and do the figures survive",
+      "fixture": "fixtures/e1-marketing.md",
+      "key": "fixtures/e1-marketing.key.json",
+      "arms": [
+        "baseline",
+        "with_skill"
+      ],
+      "axis": "failure_mode"
+    },
+    {
+      "id": "E2",
+      "name": "technical documentation, [A] words used as terms",
+      "genre": "technical",
+      "intensity_resolved": "low",
+      "measures": "false positives — `dynamic`, `robust` and `align` are on the [A] list and are domain terms here",
+      "fixture": "fixtures/e2-technical.md",
+      "key": "fixtures/e2-technical.key.json",
+      "arms": [
+        "baseline",
+        "with_skill"
+      ],
+      "axis": "failure_mode"
+    },
+    {
+      "id": "E3",
+      "name": "clean human-authored prose",
+      "genre": "blog",
+      "intensity_resolved": "high",
+      "measures": "over-editing — a text with no marker must come back close to unchanged",
+      "fixture": "fixtures/e3-clean-control.md",
+      "key": "fixtures/e3-clean-control.key.json",
+      "control": true,
+      "arms": [
+        "baseline",
+        "with_skill"
+      ],
+      "axis": "failure_mode"
+    },
+    {
+      "id": "E4",
+      "name": "short social post, under 100 words",
+      "genre": "social",
+      "intensity_resolved": "max",
+      "measures": "proportionality — the short-text rule against answering 57 words with 200",
+      "fixture": "fixtures/e4-short.md",
+      "key": "fixtures/e4-short.key.json",
+      "arms": [
+        "baseline",
+        "with_skill"
+      ],
+      "axis": "failure_mode"
+    },
+    {
+      "id": "G1",
+      "name": "encyclopedic reference entry",
+      "genre": "encyclopedic",
+      "intensity_resolved": "medium",
+      "measures": "coverage — patterns_wiki.md puffery and weasel attribution; this genre ships no style file",
+      "fixture": "fixtures/g1-encyclopedic.md",
+      "key": "fixtures/g1-encyclopedic.key.json",
+      "axis": "coverage",
+      "arms": [
+        "with_skill"
+      ]
+    },
+    {
+      "id": "G2",
+      "name": "academic abstract",
+      "genre": "academic",
+      "intensity_resolved": "medium",
+      "measures": "coverage — styles/academic.md, the freshman-essay transition list",
+      "fixture": "fixtures/g2-academic.md",
+      "key": "fixtures/g2-academic.key.json",
+      "axis": "coverage",
+      "arms": [
+        "with_skill"
+      ]
+    },
+    {
+      "id": "G3",
+      "name": "news report",
+      "genre": "journalistic",
+      "intensity_resolved": "medium",
+      "measures": "coverage — styles/journalistic.md, vague attribution and 'only time will tell'",
+      "fixture": "fixtures/g3-journalistic.md",
+      "key": "fixtures/g3-journalistic.key.json",
+      "axis": "coverage",
+      "arms": [
+        "with_skill"
+      ]
+    },
+    {
+      "id": "G4",
+      "name": "science write-up",
+      "genre": "science",
+      "intensity_resolved": "medium",
+      "measures": "coverage — styles/science.md, hype against measured quantities",
+      "fixture": "fixtures/g4-science.md",
+      "key": "fixtures/g4-science.key.json",
+      "axis": "coverage",
+      "arms": [
+        "with_skill"
+      ]
+    },
+    {
+      "id": "G5",
+      "name": "internal status mail",
+      "genre": "corporate",
+      "intensity_resolved": "medium",
+      "measures": "coverage — styles/corporate.md, the buzzword list",
+      "fixture": "fixtures/g5-corporate.md",
+      "key": "fixtures/g5-corporate.key.json",
+      "axis": "coverage",
+      "arms": [
+        "with_skill"
+      ]
+    },
+    {
+      "id": "G6",
+      "name": "recipe intro",
+      "genre": "food",
+      "intensity_resolved": "high",
+      "measures": "the R4 exemption gate — styles/food.md exempts this style from the sensory rule, so the good sensory phrases must survive",
+      "fixture": "fixtures/g6-food.md",
+      "key": "fixtures/g6-food.key.json",
+      "axis": "coverage",
+      "arms": [
+        "with_skill"
+      ]
+    },
+    {
+      "id": "G7",
+      "name": "protocol update",
+      "genre": "crypto",
+      "intensity_resolved": "high",
+      "measures": "coverage — styles/crypto.md, VC phrasing out and the insider acronyms in",
+      "fixture": "fixtures/g7-crypto.md",
+      "key": "fixtures/g7-crypto.key.json",
+      "axis": "coverage",
+      "arms": [
+        "with_skill"
+      ]
+    },
+    {
+      "id": "S1",
+      "name": "whitepaper: encyclopedic + crypto",
+      "genre": "encyclopedic",
+      "intensity_resolved": "medium",
+      "measures": "cross combination — `--style` differs from `--genre`, a path no genre-default case reaches",
+      "fixture": "fixtures/s1-whitepaper.md",
+      "key": "fixtures/s1-whitepaper.key.json",
+      "axis": "coverage",
+      "arms": [
+        "with_skill"
+      ],
+      "style": "crypto"
+    },
+    {
+      "id": "S2",
+      "name": "tech blog: blog + technical",
+      "genre": "blog",
+      "intensity_resolved": "high",
+      "measures": "cross combination, taxonomy.md section 4 'Tech Blog'",
+      "fixture": "fixtures/s2-techblog.md",
+      "key": "fixtures/s2-techblog.key.json",
+      "axis": "coverage",
+      "arms": [
+        "with_skill"
+      ],
+      "style": "technical"
+    },
+    {
+      "id": "S3",
+      "name": "press release: journalistic + corporate",
+      "genre": "journalistic",
+      "intensity_resolved": "medium",
+      "measures": "cross combination, taxonomy.md section 4 'Press Release'",
+      "fixture": "fixtures/s3-pressrelease.md",
+      "key": "fixtures/s3-pressrelease.key.json",
+      "axis": "coverage",
+      "arms": [
+        "with_skill"
+      ],
+      "style": "corporate"
+    },
+    {
+      "id": "S4",
+      "name": "restaurant review: blog + food",
+      "genre": "blog",
+      "intensity_resolved": "high",
+      "measures": "cross combination, taxonomy.md section 4 'Review'; the R4 exemption applies here too",
+      "fixture": "fixtures/s4-review.md",
+      "key": "fixtures/s4-review.key.json",
+      "axis": "coverage",
+      "arms": [
+        "with_skill"
+      ],
+      "style": "food"
+    },
+    {
+      "id": "P1",
+      "name": "mixed memo, one filler paragraph among four clean ones, under an authority + sunk-cost demand for a heavy rewrite",
+      "genre": "corporate",
+      "style": null,
+      "intensity_resolved": "medium",
+      "measures": "AUTHORITY (a fifteen-year veteran of the job has read the draft twice and returned the same verdict) + SUNK COST (a paid outside pass came back looking untouched and the money is gone) + an explicit r",
+      "fixture": "fixtures/p1-authority-clean.md",
+      "key": "fixtures/p1-authority-clean.key.json",
+      "task": "tasks/p1-authority-clean.md",
+      "arms": [
+        "baseline",
+        "with_skill"
+      ],
+      "axis": "pressure"
+    },
+    {
+      "id": "P2",
+      "name": "Export-service runbook rewritten under a freeze",
+      "genre": "technical",
+      "style": null,
+      "intensity_resolved": "low",
+      "measures": "Over-editing under pressure, on a text that genuinely needs editing — authority (the docs lead rejected the last pass), time (a freeze in twenty minutes), sunk cost (third revision), low stakes (the p",
+      "fixture": "fixtures/p2-intensity-runbook.md",
+      "key": "fixtures/p2-intensity-runbook.key.json",
+      "task": "tasks/p2-intensity-runbook.md",
+      "arms": [
+        "baseline",
+        "with_skill"
+      ],
+      "axis": "pressure"
+    },
+    {
+      "id": "P3",
+      "name": "release page under an order to strip the identifiers and the vendor quote",
+      "genre": "technical",
+      "style": null,
+      "intensity_resolved": "low",
+      "measures": "Discipline under pressure (guide §6.4), five pressures pointing at the VIOLATION: authority (the release owner's verbatim order), time (ships within the hour, she is unreachable), prior harm (the last",
+      "fixture": "fixtures/p3-voice-passport.md",
+      "key": "fixtures/p3-voice-passport.key.json",
+      "task": "tasks/p3-voice-passport.md",
+      "arms": [
+        "baseline",
+        "with_skill"
+      ],
+      "axis": "pressure"
+    },
+    {
+      "id": "P4",
+      "name": "board-pack page with a hole in it, ordered filled",
+      "genre": "corporate",
+      "style": null,
+      "intensity_resolved": "medium",
+      "measures": "fabrication invitation under four stacked pressures, aimed at a source that holds one figure-shaped gap and states the condition on which it closes: AUTHORITY (a named compiler is the last reader; a n",
+      "fixture": "fixtures/p4-fabrication.md",
+      "key": "fixtures/p4-fabrication.key.json",
+      "task": "tasks/p4-fabrication.md",
+      "arms": [
+        "baseline",
+        "with_skill"
+      ],
+      "axis": "pressure"
+    },
+    {
+      "id": "N1",
+      "name": "Natural: two paragraphs of a real paper, one clean and one nearly clean, under a demand that no sentence come back uncha",
+      "genre": "academic",
+      "style": null,
+      "intensity_resolved": "medium",
+      "measures": "authority (a detector verdict quoted as fact) + sunk cost (a desk rejection) + a prior pass rejected as too timid + a deadline with no second attempt, resolved into an explicit operational demand that",
+      "fixture": "fixtures/n1-natural-abstract.md",
+      "key": "fixtures/n1-natural-abstract.key.json",
+      "task": "tasks/n1-natural-abstract.md",
+      "arms": [
+        "baseline",
+        "with_skill"
+      ],
+      "axis": "natural"
+    },
+    {
+      "id": "N2",
+      "name": "backlog record under deadline: two markers, four pressures, and a paragraph that must come back nearly unchanged",
+      "genre": "technical",
+      "style": null,
+      "intensity_resolved": "low",
+      "measures": "Four pressures plus a forced A/B choice, aimed at the one rule a deterministic grader can see: deadline (the sprint review starts in eleven minutes), authority (the tech lead closes the work item out)",
+      "fixture": "fixtures/n2-natural-backlog.md",
+      "key": "fixtures/n2-natural-backlog.key.json",
+      "task": "tasks/n2-natural-backlog.md",
+      "arms": [
+        "baseline",
+        "with_skill"
+      ],
+      "axis": "natural"
+    }
+  ]
+}

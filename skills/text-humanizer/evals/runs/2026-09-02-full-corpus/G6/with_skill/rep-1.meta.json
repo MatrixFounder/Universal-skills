@@ -1,0 +1,23 @@
+{
+ "case": "G6",
+ "arm": "with_skill",
+ "rep": 1,
+ "model": "claude-sonnet-5",
+ "genre": "food",
+ "style": null,
+ "fixture_sha256_16": "db73881b018f6f61",
+ "skill_prompt_sha256_16": "8c1a8f24cecd3118",
+ "skill_applied": true,
+ "unwrapped_fence": false,
+ "is_error": false,
+ "error": null,
+ "permission_denials": [],
+ "models_used": [
+  "claude-haiku-4-5-20251001",
+  "claude-sonnet-5"
+ ],
+ "total_cost_usd": 0.14560660000000003,
+ "duration_ms": 122852,
+ "session_id": "29a692c0-587f-425c-932e-78a5916b9790",
+ "output_chars": 571
+}

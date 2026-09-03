@@ -1,0 +1,1 @@
+Shipping v0.9 today. Feed refresh is 3x faster, and the iOS crash on cold start (#218) is finally dead. Thanks for the bug reports — keep them coming.

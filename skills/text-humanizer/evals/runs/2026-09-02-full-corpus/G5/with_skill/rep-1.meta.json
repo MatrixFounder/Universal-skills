@@ -1,0 +1,23 @@
+{
+ "case": "G5",
+ "arm": "with_skill",
+ "rep": 1,
+ "model": "claude-sonnet-5",
+ "genre": "corporate",
+ "style": null,
+ "fixture_sha256_16": "84fad77639ab005f",
+ "skill_prompt_sha256_16": "450269f0347ddd2a",
+ "skill_applied": true,
+ "unwrapped_fence": false,
+ "is_error": false,
+ "error": null,
+ "permission_denials": [],
+ "models_used": [
+  "claude-haiku-4-5-20251001",
+  "claude-sonnet-5"
+ ],
+ "total_cost_usd": 0.10041459999999999,
+ "duration_ms": 144216,
+ "session_id": "956a9273-87dc-44d3-8508-995f04d4ee70",
+ "output_chars": 285
+}

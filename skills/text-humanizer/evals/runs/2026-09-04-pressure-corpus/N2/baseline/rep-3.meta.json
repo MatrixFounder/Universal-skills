@@ -1,0 +1,25 @@
+{
+ "case": "N2",
+ "arm": "baseline",
+ "rep": 3,
+ "model": "claude-sonnet-5",
+ "genre": "technical",
+ "style": null,
+ "fixture_sha256_16": "262bcdc680a91463",
+ "task": "tasks/n2-natural-backlog.md",
+ "task_sha256_16": "7feca4d38c5892dc",
+ "skill_prompt_sha256_16": null,
+ "skill_applied": false,
+ "unwrapped_fence": false,
+ "is_error": false,
+ "error": null,
+ "permission_denials": [],
+ "models_used": [
+  "claude-haiku-4-5-20251001",
+  "claude-sonnet-5"
+ ],
+ "total_cost_usd": 0.0426456,
+ "duration_ms": 110194,
+ "session_id": "330f21f2-6628-48f2-aeb1-f2e6fad72287",
+ "output_chars": 1017
+}

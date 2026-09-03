@@ -1,0 +1,23 @@
+{
+ "case": "S1",
+ "arm": "with_skill",
+ "rep": 1,
+ "model": "claude-sonnet-5",
+ "genre": "encyclopedic",
+ "style": "crypto",
+ "fixture_sha256_16": "aa79efd2d35f9473",
+ "skill_prompt_sha256_16": "8c4717085608bc56",
+ "skill_applied": true,
+ "unwrapped_fence": false,
+ "is_error": false,
+ "error": null,
+ "permission_denials": [],
+ "models_used": [
+  "claude-haiku-4-5-20251001",
+  "claude-sonnet-5"
+ ],
+ "total_cost_usd": 0.1505526,
+ "duration_ms": 82047,
+ "session_id": "19ee088e-14c2-4028-ab37-5ccb32d1b8f2",
+ "output_chars": 303
+}

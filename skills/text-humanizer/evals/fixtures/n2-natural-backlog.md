@@ -1,0 +1,11 @@
+All 32 `[Execution Policy]` advisories are closed. Each skill's sections were authored by an
+independent reader and then put to an adversarial verifier whose only job was to find a
+plausible section documenting a flag, an exit code or a file that does not exist. Five such
+claims were caught and corrected before anything was applied; none survived into the files.
+
+Repo-wide, over the 22 skills carrying a `SKILL.md`: `[Execution Policy]` went from **31
+advisories across 6 skills** to **2 across 2 skills**, and both remaining ones are a different
+sub-rule — the `Validation Evidence is N lines` soft limit on `docx` (13) and
+`transcript-fetcher` (15), which `validate_skill.py` had been warning about all along and which
+`analyze_gaps.py` only started reading when the two gates' config keys were aligned. Blocking
+gaps stay at 0 and the two gates return the same verdict on all 22 skills.

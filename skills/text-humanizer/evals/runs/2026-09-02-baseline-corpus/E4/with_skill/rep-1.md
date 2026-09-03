@@ -1,0 +1,1 @@
+v0.9 is live today. Doesn't feel like a minor patch to me. Feels like the feed finally does what it should. We went through your feedback, all of it, and feed refresh clocks in 3x faster now. The iOS crash on cold start? Gone. That's #218, closed. Questions? Hit reply.

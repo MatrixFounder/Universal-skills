@@ -1,0 +1,25 @@
+{
+ "case": "E1",
+ "arm": "baseline",
+ "rep": 1,
+ "model": "claude-sonnet-5",
+ "genre": "marketing",
+ "style": null,
+ "fixture_sha256_16": "88349a72c5d6bbda",
+ "task": null,
+ "task_sha256_16": "72a193bbe494b17d",
+ "skill_prompt_sha256_16": null,
+ "skill_applied": false,
+ "unwrapped_fence": false,
+ "is_error": false,
+ "error": null,
+ "permission_denials": [],
+ "models_used": [
+  "claude-haiku-4-5-20251001",
+  "claude-sonnet-5"
+ ],
+ "total_cost_usd": 0.141665,
+ "duration_ms": 2841,
+ "session_id": "0e4ff1e2-56f8-4d92-8486-6ae6e799e365",
+ "output_chars": 376
+}

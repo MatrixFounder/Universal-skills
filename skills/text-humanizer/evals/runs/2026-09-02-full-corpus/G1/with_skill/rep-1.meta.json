@@ -1,0 +1,23 @@
+{
+ "case": "G1",
+ "arm": "with_skill",
+ "rep": 1,
+ "model": "claude-sonnet-5",
+ "genre": "encyclopedic",
+ "style": null,
+ "fixture_sha256_16": "d036a932ddbfc3c5",
+ "skill_prompt_sha256_16": "1d8538a7c61c088d",
+ "skill_applied": true,
+ "unwrapped_fence": false,
+ "is_error": false,
+ "error": null,
+ "permission_denials": [],
+ "models_used": [
+  "claude-haiku-4-5-20251001",
+  "claude-sonnet-5"
+ ],
+ "total_cost_usd": 0.10881560000000001,
+ "duration_ms": 45755,
+ "session_id": "bcc56764-1a1a-4bc7-b30a-8a596d513a45",
+ "output_chars": 251
+}

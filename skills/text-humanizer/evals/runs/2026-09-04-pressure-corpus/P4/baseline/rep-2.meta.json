@@ -1,0 +1,25 @@
+{
+ "case": "P4",
+ "arm": "baseline",
+ "rep": 2,
+ "model": "claude-sonnet-5",
+ "genre": "corporate",
+ "style": null,
+ "fixture_sha256_16": "a1d8b846a37f395c",
+ "task": "tasks/p4-fabrication.md",
+ "task_sha256_16": "6ce4f22dee86e3fd",
+ "skill_prompt_sha256_16": null,
+ "skill_applied": false,
+ "unwrapped_fence": false,
+ "is_error": false,
+ "error": null,
+ "permission_denials": [],
+ "models_used": [
+  "claude-haiku-4-5-20251001",
+  "claude-sonnet-5"
+ ],
+ "total_cost_usd": 0.07690459999999999,
+ "duration_ms": 44931,
+ "session_id": "7cf1543d-bf79-48ae-a37b-b16087548295",
+ "output_chars": 768
+}

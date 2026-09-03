@@ -1,0 +1,23 @@
+{
+ "case": "S3",
+ "arm": "with_skill",
+ "rep": 1,
+ "model": "claude-sonnet-5",
+ "genre": "journalistic",
+ "style": "corporate",
+ "fixture_sha256_16": "0d5a57f6400f68c8",
+ "skill_prompt_sha256_16": "419dd381e40bc834",
+ "skill_applied": true,
+ "unwrapped_fence": false,
+ "is_error": false,
+ "error": null,
+ "permission_denials": [],
+ "models_used": [
+  "claude-haiku-4-5-20251001",
+  "claude-sonnet-5"
+ ],
+ "total_cost_usd": 0.1574876,
+ "duration_ms": 95524,
+ "session_id": "e03bb20d-0269-4fe0-a3c5-95a17dd0f3c0",
+ "output_chars": 264
+}

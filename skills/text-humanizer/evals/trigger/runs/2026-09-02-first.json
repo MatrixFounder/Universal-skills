@@ -1,0 +1,211 @@
+{
+  "skill_name": "text-humanizer",
+  "description": "Use when you need to humanize AI-generated text or generate untraceable system prompts. Supports multiple genres (Wiki, Creative, Crypto, etc.).",
+  "results": [
+    {
+      "query": "\u0443\u0431\u0435\u0440\u0438 \u0438\u0437 \u044d\u0442\u043e\u0433\u043e \u0442\u0435\u043a\u0441\u0442\u0430 \u043f\u0440\u0438\u0437\u043d\u0430\u043a\u0438, \u0447\u0442\u043e \u0435\u0433\u043e \u043f\u0438\u0441\u0430\u043b AI",
+      "should_trigger": true,
+      "trigger_rate": 0.0,
+      "triggers": 0,
+      "runs": 3,
+      "pass": false,
+      "canonical_matches": 0,
+      "instrument_failures": 0
+    },
+    {
+      "query": "this landing page copy reads like ChatGPT wrote it \u2014 fix it but keep every number",
+      "should_trigger": true,
+      "trigger_rate": 0.0,
+      "triggers": 0,
+      "runs": 3,
+      "pass": false,
+      "canonical_matches": 0,
+      "instrument_failures": 0
+    },
+    {
+      "query": "humanize this marketing email, it's full of 'delve' and 'seamless'",
+      "should_trigger": true,
+      "trigger_rate": 0.3333333333333333,
+      "triggers": 1,
+      "runs": 3,
+      "pass": false,
+      "canonical_matches": 1,
+      "instrument_failures": 0
+    },
+    {
+      "query": "\u0441\u0434\u0435\u043b\u0430\u0439 \u0442\u0435\u043a\u0441\u0442 \u0431\u043e\u043b\u0435\u0435 \u0447\u0435\u043b\u043e\u0432\u0435\u0447\u0435\u0441\u043a\u0438\u043c, \u043d\u043e \u043d\u0435 \u043c\u0435\u043d\u044f\u0439 \u0441\u043c\u044b\u0441\u043b \u0438 \u0446\u0438\u0444\u0440\u044b",
+      "should_trigger": true,
+      "trigger_rate": 0.0,
+      "triggers": 0,
+      "runs": 3,
+      "pass": false,
+      "canonical_matches": 0,
+      "instrument_failures": 0
+    },
+    {
+      "query": "audit this article for AI markers \u2014 just tell me what's wrong, don't rewrite it yet",
+      "should_trigger": true,
+      "trigger_rate": 0.6666666666666666,
+      "triggers": 2,
+      "runs": 3,
+      "pass": true,
+      "canonical_matches": 2,
+      "instrument_failures": 0
+    },
+    {
+      "query": "de-slop this blog post before I publish it",
+      "should_trigger": true,
+      "trigger_rate": 0.0,
+      "triggers": 0,
+      "runs": 3,
+      "pass": false,
+      "canonical_matches": 0,
+      "instrument_failures": 0
+    },
+    {
+      "query": "make this sound like a person wrote it, not a model",
+      "should_trigger": true,
+      "trigger_rate": 0.0,
+      "triggers": 0,
+      "runs": 3,
+      "pass": false,
+      "canonical_matches": 0,
+      "instrument_failures": 0
+    },
+    {
+      "query": "\u043f\u0440\u043e\u0432\u0435\u0440\u044c \u043c\u043e\u044e \u0441\u0442\u0430\u0442\u044c\u044e \u043d\u0430 AI-\u043e\u0431\u043e\u0440\u043e\u0442\u044b \u0438 \u043a\u0430\u043d\u0446\u0435\u043b\u044f\u0440\u0438\u0442",
+      "should_trigger": true,
+      "trigger_rate": 0.0,
+      "triggers": 0,
+      "runs": 3,
+      "pass": false,
+      "canonical_matches": 0,
+      "instrument_failures": 0
+    },
+    {
+      "query": "I need a reusable system prompt for writing food reviews that don't sound generated",
+      "should_trigger": true,
+      "trigger_rate": 1.0,
+      "triggers": 3,
+      "runs": 3,
+      "pass": true,
+      "canonical_matches": 3,
+      "instrument_failures": 0
+    },
+    {
+      "query": "rewrite ~/drafts/announce.md so it doesn't read as machine-written, it's a crypto launch post",
+      "should_trigger": true,
+      "trigger_rate": 0.3333333333333333,
+      "triggers": 1,
+      "runs": 3,
+      "pass": false,
+      "canonical_matches": 1,
+      "instrument_failures": 0
+    },
+    {
+      "query": "this doc passed the linter but every paragraph is the same length and it's all 'not just X but Y' \u2014 clean it up",
+      "should_trigger": true,
+      "trigger_rate": 0.0,
+      "triggers": 0,
+      "runs": 3,
+      "pass": false,
+      "canonical_matches": 0,
+      "instrument_failures": 0
+    },
+    {
+      "query": "generate an untraceable prompt for writing wiki-style entries",
+      "should_trigger": true,
+      "trigger_rate": 1.0,
+      "triggers": 3,
+      "runs": 3,
+      "pass": true,
+      "canonical_matches": 3,
+      "instrument_failures": 0
+    },
+    {
+      "query": "\u043d\u0430\u043f\u0438\u0448\u0438 CHANGELOG \u0434\u043b\u044f \u0440\u0435\u043b\u0438\u0437\u0430 2.4 \u0438 \u043f\u0440\u043e\u0432\u0435\u0440\u044c \u0440\u0435\u0433\u0438\u0441\u0442\u0440 \u0444\u043e\u0440\u043c\u0443\u043b\u0438\u0440\u043e\u0432\u043e\u043a",
+      "should_trigger": false,
+      "trigger_rate": 0.0,
+      "triggers": 0,
+      "runs": 3,
+      "pass": true,
+      "canonical_matches": 0,
+      "instrument_failures": 0
+    },
+    {
+      "query": "formalize this task spec \u2014 it reads like an essay, too many evaluative words",
+      "should_trigger": false,
+      "trigger_rate": 0.0,
+      "triggers": 0,
+      "runs": 3,
+      "pass": true,
+      "canonical_matches": 0,
+      "instrument_failures": 0
+    },
+    {
+      "query": "write a LinkedIn post about our new retry logic",
+      "should_trigger": false,
+      "trigger_rate": 0.0,
+      "triggers": 0,
+      "runs": 3,
+      "pass": true,
+      "canonical_matches": 0,
+      "instrument_failures": 0
+    },
+    {
+      "query": "convert this saved html page to clean markdown for Obsidian",
+      "should_trigger": false,
+      "trigger_rate": 0.0,
+      "triggers": 0,
+      "runs": 3,
+      "pass": true,
+      "canonical_matches": 0,
+      "instrument_failures": 0
+    },
+    {
+      "query": "summarize this meeting transcript into a structured note",
+      "should_trigger": false,
+      "trigger_rate": 0.0,
+      "triggers": 0,
+      "runs": 3,
+      "pass": true,
+      "canonical_matches": 0,
+      "instrument_failures": 0
+    },
+    {
+      "query": "make slides out of this outline",
+      "should_trigger": false,
+      "trigger_rate": 0.0,
+      "triggers": 0,
+      "runs": 3,
+      "pass": true,
+      "canonical_matches": 0,
+      "instrument_failures": 0
+    },
+    {
+      "query": "review this branch for correctness bugs",
+      "should_trigger": false,
+      "trigger_rate": 0.0,
+      "triggers": 0,
+      "runs": 3,
+      "pass": true,
+      "canonical_matches": 0,
+      "instrument_failures": 0
+    },
+    {
+      "query": "translate this paragraph into Russian, keep the terminology",
+      "should_trigger": false,
+      "trigger_rate": 0.0,
+      "triggers": 0,
+      "runs": 3,
+      "pass": true,
+      "canonical_matches": 0,
+      "instrument_failures": 0
+    }
+  ],
+  "summary": {
+    "total": 20,
+    "passed": 11,
+    "failed": 9
+  }
+}

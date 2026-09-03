@@ -1,0 +1,54 @@
+{
+  "summary": {
+    "pass_rate": 1.0,
+    "passed": 5,
+    "failed": 0,
+    "total": 5
+  },
+  "expectations": [
+    {
+      "text": "no_invented_numbers",
+      "passed": true,
+      "evidence": "0 figure(s) absent from the source"
+    },
+    {
+      "text": "facts_kept",
+      "passed": true,
+      "evidence": "5/5 kept"
+    },
+    {
+      "text": "markers_removed",
+      "passed": true,
+      "evidence": "0/0 declared surfaces survived"
+    },
+    {
+      "text": "not_over_edited",
+      "passed": true,
+      "evidence": "similarity 0.9421 against a floor of 0.75"
+    },
+    {
+      "text": "proportionate_length",
+      "passed": true,
+      "evidence": "growth 0.978x against a ceiling of 1.15x"
+    }
+  ],
+  "execution_metrics": {
+    "output_chars": 464,
+    "total_tool_calls": 0,
+    "errors_encountered": 0
+  },
+  "notes": {
+    "case": "E3",
+    "genre": "blog",
+    "measured": true,
+    "unmeasured_reason": null,
+    "markers_before": 0,
+    "markers_after": 0,
+    "facts_kept": 5,
+    "facts_total": 5,
+    "similarity": 0.9421,
+    "growth": 0.978
+  },
+  "grader": "text-humanizer/evals/grade_run.py — deterministic, no model judge",
+  "pass_rate_means": "fraction of this run's deterministic checks that passed; NOT an LLM judge verdict, and not comparable to one"
+}

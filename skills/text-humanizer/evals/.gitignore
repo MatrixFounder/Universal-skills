@@ -1,0 +1,7 @@
+# Byte-code, and the throwaway campaign `run_humanize.py` writes when no
+# --out-root is given. A campaign whose numbers get quoted goes to
+# runs/<date>-<label>-corpus/ and is committed with its report; TC-EV-68 fails a
+# corpus that has none, and skips this one by name.
+__pycache__/
+*.pyc
+runs/scratch-*

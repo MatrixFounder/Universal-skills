@@ -1,0 +1,94 @@
+[
+ {
+  "query": "our docs read like marketing brochures now — too many 'seamless' and 'robust'. clean the tone without touching the API descriptions",
+  "should_trigger": true
+ },
+ {
+  "query": "нужен промпт, который будет писать telegram-посты про крипту без AI-штампов",
+  "should_trigger": true
+ },
+ {
+  "query": "make this sound like a person wrote it, not a model",
+  "should_trigger": true
+ },
+ {
+  "query": "my editor says this whitepaper sounds like it came out of a model. can you take the AI flavour out of it",
+  "should_trigger": true
+ },
+ {
+  "query": "before I send this to the client — does it read as AI-written? give me a per-paragraph verdict",
+  "should_trigger": true
+ },
+ {
+  "query": "this doc passed the linter but every paragraph is the same length and it's all 'not just X but Y' — clean it up",
+  "should_trigger": true
+ },
+ {
+  "query": "this landing page copy reads like ChatGPT wrote it — fix it but keep every number",
+  "should_trigger": true
+ },
+ {
+  "query": "generate an untraceable prompt for writing wiki-style entries",
+  "should_trigger": true
+ },
+ {
+  "query": "humanize this marketing email, it's full of 'delve' and 'seamless'",
+  "should_trigger": true
+ },
+ {
+  "query": "unslop this. it's a 900-word Substack piece and it's unreadable",
+  "should_trigger": true
+ },
+ {
+  "query": "проверь мою статью на AI-обороты и канцелярит",
+  "should_trigger": true
+ },
+ {
+  "query": "I need a reusable system prompt for writing food reviews that don't sound generated",
+  "should_trigger": true
+ },
+ {
+  "query": "убери из этого текста признаки, что его писал AI",
+  "should_trigger": true
+ },
+ {
+  "query": "сделай текст более человеческим, но не меняй смысл и цифры",
+  "should_trigger": true
+ },
+ {
+  "query": "напиши CHANGELOG для релиза 2.4 и проверь регистр формулировок",
+  "should_trigger": false
+ },
+ {
+  "query": "write a LinkedIn post about our new retry logic",
+  "should_trigger": false
+ },
+ {
+  "query": "summarize this meeting transcript into a structured note",
+  "should_trigger": false
+ },
+ {
+  "query": "translate this paragraph into Russian, keep the terminology",
+  "should_trigger": false
+ },
+ {
+  "query": "proofread this chapter for typos and grammar",
+  "should_trigger": false
+ },
+ {
+  "query": "review this branch for correctness bugs",
+  "should_trigger": false
+ },
+ {
+  "query": "shorten this email to three sentences",
+  "should_trigger": false
+ },
+ {
+  "query": "convert this saved html page to clean markdown for Obsidian",
+  "should_trigger": false
+ },
+ {
+  "query": "убери AI из моего рассказа — это фэнтези-новелла на 6000 слов, финал звучит как мораль из басни",
+  "should_trigger": false
+ }
+]

@@ -1,0 +1,25 @@
+{
+ "case": "N1",
+ "arm": "baseline",
+ "rep": 3,
+ "model": "claude-sonnet-5",
+ "genre": "academic",
+ "style": null,
+ "fixture_sha256_16": "b922b7a84bb98a31",
+ "task": "tasks/n1-natural-abstract.md",
+ "task_sha256_16": "2dd682ebb983255c",
+ "skill_prompt_sha256_16": null,
+ "skill_applied": false,
+ "unwrapped_fence": false,
+ "is_error": false,
+ "error": null,
+ "permission_denials": [],
+ "models_used": [
+  "claude-haiku-4-5-20251001",
+  "claude-sonnet-5"
+ ],
+ "total_cost_usd": 0.0540266,
+ "duration_ms": 17285,
+ "session_id": "aa9e50f7-1dd5-4198-91d8-295053c812fd",
+ "output_chars": 1251
+}

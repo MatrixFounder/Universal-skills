@@ -1,0 +1,1305 @@
+{
+ "schema": "humanizer-evals-report/v1",
+ "detectors": 31,
+ "provenance": {
+  "skill_version": "2.1",
+  "corpus": "2026-09-02-full-corpus",
+  "models": [
+   "claude-sonnet-5"
+  ],
+  "detectors": 31,
+  "detectors_derived": 29,
+  "skill_prompt_sha256_16": {
+   "E1": "8e41e7ca4e34e3d8",
+   "E2": "62addcfefd65fb73",
+   "E3": "c2f5ceafad9ffa10",
+   "E4": "b51dd89efda789c9",
+   "G1": "1d8538a7c61c088d",
+   "G2": "bb68b4330f67431c",
+   "G3": "efdc39819340a0aa",
+   "G4": "5b64180a5b14a811",
+   "G5": "450269f0347ddd2a",
+   "G6": "8c1a8f24cecd3118",
+   "G7": "0f7ab4de213cfb6a",
+   "S1": "8c4717085608bc56",
+   "S2": "862899a6eb0f1fdd",
+   "S3": "419dd381e40bc834",
+   "S4": "45a185626c096d37"
+  },
+  "task_sha256_16": {},
+  "fixture_sha256_16": {
+   "E1": "88349a72c5d6bbda",
+   "E2": "01a78dcd6c70c9af",
+   "E3": "28e2b3defd487fc5",
+   "E4": "6b2d969201edcbc2",
+   "G1": "d036a932ddbfc3c5",
+   "G2": "5f92d268d2138c43",
+   "G3": "bcced0fcfb5926b5",
+   "G4": "d7fa2aa8c78eec23",
+   "G5": "84fad77639ab005f",
+   "G6": "db73881b018f6f61",
+   "G7": "9db4d72dfda9d4a9",
+   "S1": "aa79efd2d35f9473",
+   "S2": "cc76628536d5eb7d",
+   "S3": "0d5a57f6400f68c8",
+   "S4": "1a7016985e3948c9"
+  },
+  "stale_vs_today": [
+   "E1",
+   "E2",
+   "E3",
+   "E4",
+   "G1",
+   "G2",
+   "G3",
+   "G4",
+   "G5",
+   "G6",
+   "G7",
+   "S1",
+   "S2",
+   "S3",
+   "S4"
+  ],
+  "stale_note": "Cases whose recorded skill prompt no longer matches what humanizer.py assembles today. Their figures describe a DIFFERENT skill and must not be quoted as current -- guide section 8. Empty is the healthy state; a non-empty list means re-draw."
+ },
+ "cases": [
+  {
+   "id": "E1",
+   "name": "marketing copy, markers everywhere",
+   "genre": "marketing",
+   "intensity_resolved": "max",
+   "measures": "removal — do the [A] markers go, and do the figures survive",
+   "control": false,
+   "markers_in_fixture": 14,
+   "arms": {
+    "baseline": [
+     {
+      "measured": true,
+      "unmeasured_reason": null,
+      "markers_before": 14,
+      "markers_after": 1,
+      "markers_by_kind_after": {
+       "em_dash": 1
+      },
+      "markers_surviving": [
+       {
+        "kind": "em_dash",
+        "term": "em dash",
+        "count": 1
+       }
+      ],
+      "invented_numbers": [],
+      "facts_kept": 6,
+      "facts_total": 6,
+      "facts_lost": [],
+      "declared_surfaces_surviving": [],
+      "reinjected_surfaces": [],
+      "template_signatures": [],
+      "similarity": 0.3012,
+      "growth": 0.946,
+      "words": 105,
+      "chars": 548,
+      "checks": [
+       {
+        "name": "no_invented_numbers",
+        "passed": true,
+        "detail": "0 figure(s) absent from the source"
+       },
+       {
+        "name": "facts_kept",
+        "passed": true,
+        "detail": "6/6 kept"
+       },
+       {
+        "name": "markers_removed",
+        "passed": true,
+        "detail": "0/8 declared surfaces survived"
+       },
+       {
+        "name": "proportionate_length",
+        "passed": true,
+        "detail": "growth 0.946x against a ceiling of 1.15x"
+       }
+      ],
+      "checks_passed": 4,
+      "checks_total": 4,
+      "rep": "rep-1",
+      "model": "claude-sonnet-5",
+      "cost_usd": 0.141877
+     }
+    ],
+    "with_skill": [
+     {
+      "measured": true,
+      "unmeasured_reason": null,
+      "markers_before": 14,
+      "markers_after": 0,
+      "markers_by_kind_after": {},
+      "markers_surviving": [],
+      "invented_numbers": [],
+      "facts_kept": 6,
+      "facts_total": 6,
+      "facts_lost": [],
+      "declared_surfaces_surviving": [],
+      "reinjected_surfaces": [],
+      "template_signatures": [],
+      "similarity": 0.1357,
+      "growth": 0.874,
+      "words": 97,
+      "chars": 556,
+      "checks": [
+       {
+        "name": "no_invented_numbers",
+        "passed": true,
+        "detail": "0 figure(s) absent from the source"
+       },
+       {
+        "name": "facts_kept",
+        "passed": true,
+        "detail": "6/6 kept"
+       },
+       {
+        "name": "markers_removed",
+        "passed": true,
+        "detail": "0/8 declared surfaces survived"
+       },
+       {
+        "name": "proportionate_length",
+        "passed": true,
+        "detail": "growth 0.874x against a ceiling of 1.15x"
+       }
+      ],
+      "checks_passed": 4,
+      "checks_total": 4,
+      "rep": "rep-1",
+      "model": "claude-sonnet-5",
+      "cost_usd": 0.1434996
+     }
+    ]
+   }
+  },
+  {
+   "id": "E2",
+   "name": "technical documentation, [A] words used as terms",
+   "genre": "technical",
+   "intensity_resolved": "low",
+   "measures": "false positives — `dynamic`, `robust` and `align` are on the [A] list and are domain terms here",
+   "control": false,
+   "markers_in_fixture": 6,
+   "arms": {
+    "baseline": [
+     {
+      "measured": true,
+      "unmeasured_reason": null,
+      "markers_before": 6,
+      "markers_after": 6,
+      "markers_by_kind_after": {
+       "ai_vocabulary": 5,
+       "em_dash": 1
+      },
+      "markers_surviving": [
+       {
+        "kind": "ai_vocabulary",
+        "term": "dynamic",
+        "count": 2
+       },
+       {
+        "kind": "ai_vocabulary",
+        "term": "robust",
+        "count": 2
+       },
+       {
+        "kind": "ai_vocabulary",
+        "term": "align",
+        "count": 1
+       },
+       {
+        "kind": "em_dash",
+        "term": "em dash",
+        "count": 1
+       }
+      ],
+      "invented_numbers": [],
+      "facts_kept": 8,
+      "facts_total": 8,
+      "facts_lost": [],
+      "declared_surfaces_surviving": [],
+      "reinjected_surfaces": [],
+      "template_signatures": [],
+      "similarity": 0.2863,
+      "growth": 1.107,
+      "words": 83,
+      "chars": 499,
+      "checks": [
+       {
+        "name": "no_invented_numbers",
+        "passed": true,
+        "detail": "0 figure(s) absent from the source"
+       },
+       {
+        "name": "facts_kept",
+        "passed": true,
+        "detail": "8/8 kept"
+       },
+       {
+        "name": "markers_removed",
+        "passed": true,
+        "detail": "0/1 declared surfaces survived"
+       }
+      ],
+      "checks_passed": 3,
+      "checks_total": 3,
+      "rep": "rep-1",
+      "model": "claude-sonnet-5",
+      "cost_usd": 0.141593
+     }
+    ],
+    "with_skill": [
+     {
+      "measured": true,
+      "unmeasured_reason": null,
+      "markers_before": 6,
+      "markers_after": 5,
+      "markers_by_kind_after": {
+       "ai_vocabulary": 5
+      },
+      "markers_surviving": [
+       {
+        "kind": "ai_vocabulary",
+        "term": "dynamic",
+        "count": 2
+       },
+       {
+        "kind": "ai_vocabulary",
+        "term": "robust",
+        "count": 2
+       },
+       {
+        "kind": "ai_vocabulary",
+        "term": "align",
+        "count": 1
+       }
+      ],
+      "invented_numbers": [],
+      "facts_kept": 8,
+      "facts_total": 8,
+      "facts_lost": [],
+      "declared_surfaces_surviving": [],
+      "reinjected_surfaces": [],
+      "template_signatures": [],
+      "similarity": 0.9881,
+      "growth": 0.987,
+      "words": 74,
+      "chars": 462,
+      "checks": [
+       {
+        "name": "no_invented_numbers",
+        "passed": true,
+        "detail": "0 figure(s) absent from the source"
+       },
+       {
+        "name": "facts_kept",
+        "passed": true,
+        "detail": "8/8 kept"
+       },
+       {
+        "name": "markers_removed",
+        "passed": true,
+        "detail": "0/1 declared surfaces survived"
+       }
+      ],
+      "checks_passed": 3,
+      "checks_total": 3,
+      "rep": "rep-1",
+      "model": "claude-sonnet-5",
+      "cost_usd": 0.1126476
+     }
+    ]
+   }
+  },
+  {
+   "id": "E3",
+   "name": "clean human-authored prose",
+   "genre": "blog",
+   "intensity_resolved": "high",
+   "measures": "over-editing — a text with no marker must come back close to unchanged",
+   "control": true,
+   "markers_in_fixture": 0,
+   "arms": {
+    "baseline": [
+     {
+      "measured": true,
+      "unmeasured_reason": null,
+      "markers_before": 0,
+      "markers_after": 0,
+      "markers_by_kind_after": {},
+      "markers_surviving": [],
+      "invented_numbers": [],
+      "facts_kept": 5,
+      "facts_total": 5,
+      "facts_lost": [],
+      "declared_surfaces_surviving": [],
+      "reinjected_surfaces": [],
+      "template_signatures": [],
+      "similarity": 0.2695,
+      "growth": 1.122,
+      "words": 101,
+      "chars": 534,
+      "checks": [
+       {
+        "name": "no_invented_numbers",
+        "passed": true,
+        "detail": "0 figure(s) absent from the source"
+       },
+       {
+        "name": "facts_kept",
+        "passed": true,
+        "detail": "5/5 kept"
+       },
+       {
+        "name": "markers_removed",
+        "passed": true,
+        "detail": "0/0 declared surfaces survived"
+       },
+       {
+        "name": "not_over_edited",
+        "passed": false,
+        "detail": "similarity 0.2695 against a floor of 0.75"
+       },
+       {
+        "name": "proportionate_length",
+        "passed": true,
+        "detail": "growth 1.122x against a ceiling of 1.15x"
+       }
+      ],
+      "checks_passed": 4,
+      "checks_total": 5,
+      "rep": "rep-1",
+      "model": "claude-sonnet-5",
+      "cost_usd": 0.0350436
+     }
+    ],
+    "with_skill": [
+     {
+      "measured": true,
+      "unmeasured_reason": null,
+      "markers_before": 0,
+      "markers_after": 0,
+      "markers_by_kind_after": {},
+      "markers_surviving": [],
+      "invented_numbers": [],
+      "facts_kept": 5,
+      "facts_total": 5,
+      "facts_lost": [],
+      "declared_surfaces_surviving": [],
+      "reinjected_surfaces": [],
+      "template_signatures": [],
+      "similarity": 1.0,
+      "growth": 1.0,
+      "words": 90,
+      "chars": 472,
+      "checks": [
+       {
+        "name": "no_invented_numbers",
+        "passed": true,
+        "detail": "0 figure(s) absent from the source"
+       },
+       {
+        "name": "facts_kept",
+        "passed": true,
+        "detail": "5/5 kept"
+       },
+       {
+        "name": "markers_removed",
+        "passed": true,
+        "detail": "0/0 declared surfaces survived"
+       },
+       {
+        "name": "not_over_edited",
+        "passed": true,
+        "detail": "similarity 1.0 against a floor of 0.75"
+       },
+       {
+        "name": "proportionate_length",
+        "passed": true,
+        "detail": "growth 1.0x against a ceiling of 1.15x"
+       }
+      ],
+      "checks_passed": 5,
+      "checks_total": 5,
+      "rep": "rep-1",
+      "model": "claude-sonnet-5",
+      "cost_usd": 0.0983916
+     }
+    ]
+   }
+  },
+  {
+   "id": "E4",
+   "name": "short social post, under 100 words",
+   "genre": "social",
+   "intensity_resolved": "max",
+   "measures": "proportionality — the short-text rule against answering 57 words with 200",
+   "control": false,
+   "markers_in_fixture": 4,
+   "arms": {
+    "baseline": [
+     {
+      "measured": true,
+      "unmeasured_reason": null,
+      "markers_before": 4,
+      "markers_after": 1,
+      "markers_by_kind_after": {
+       "em_dash": 1
+      },
+      "markers_surviving": [
+       {
+        "kind": "em_dash",
+        "term": "em dash",
+        "count": 1
+       }
+      ],
+      "invented_numbers": [],
+      "facts_kept": 4,
+      "facts_total": 4,
+      "facts_lost": [],
+      "declared_surfaces_surviving": [],
+      "reinjected_surfaces": [],
+      "template_signatures": [],
+      "similarity": 0.4198,
+      "growth": 0.877,
+      "words": 50,
+      "chars": 270,
+      "checks": [
+       {
+        "name": "no_invented_numbers",
+        "passed": true,
+        "detail": "0 figure(s) absent from the source"
+       },
+       {
+        "name": "facts_kept",
+        "passed": true,
+        "detail": "4/4 kept"
+       },
+       {
+        "name": "markers_removed",
+        "passed": true,
+        "detail": "0/5 declared surfaces survived"
+       },
+       {
+        "name": "proportionate_length",
+        "passed": true,
+        "detail": "growth 0.877x against a ceiling of 1.4x"
+       }
+      ],
+      "checks_passed": 4,
+      "checks_total": 4,
+      "rep": "rep-1",
+      "model": "claude-sonnet-5",
+      "cost_usd": 0.0340436
+     }
+    ],
+    "with_skill": [
+     {
+      "measured": true,
+      "unmeasured_reason": null,
+      "markers_before": 4,
+      "markers_after": 1,
+      "markers_by_kind_after": {
+       "em_dash": 1
+      },
+      "markers_surviving": [
+       {
+        "kind": "em_dash",
+        "term": "em dash",
+        "count": 1
+       }
+      ],
+      "invented_numbers": [],
+      "facts_kept": 4,
+      "facts_total": 4,
+      "facts_lost": [],
+      "declared_surfaces_surviving": [],
+      "reinjected_surfaces": [],
+      "template_signatures": [],
+      "similarity": 0.5702,
+      "growth": 0.561,
+      "words": 32,
+      "chars": 166,
+      "checks": [
+       {
+        "name": "no_invented_numbers",
+        "passed": true,
+        "detail": "0 figure(s) absent from the source"
+       },
+       {
+        "name": "facts_kept",
+        "passed": true,
+        "detail": "4/4 kept"
+       },
+       {
+        "name": "markers_removed",
+        "passed": true,
+        "detail": "0/5 declared surfaces survived"
+       },
+       {
+        "name": "proportionate_length",
+        "passed": true,
+        "detail": "growth 0.561x against a ceiling of 1.4x"
+       }
+      ],
+      "checks_passed": 4,
+      "checks_total": 4,
+      "rep": "rep-1",
+      "model": "claude-sonnet-5",
+      "cost_usd": 0.10944559999999999
+     }
+    ]
+   }
+  },
+  {
+   "id": "G1",
+   "name": "encyclopedic reference entry",
+   "genre": "encyclopedic",
+   "intensity_resolved": "medium",
+   "measures": "coverage — patterns_wiki.md puffery and weasel attribution; this genre ships no style file",
+   "control": false,
+   "markers_in_fixture": 4,
+   "arms": {
+    "with_skill": [
+     {
+      "measured": true,
+      "unmeasured_reason": null,
+      "markers_before": 4,
+      "markers_after": 3,
+      "markers_by_kind_after": {
+       "ai_vocabulary": 3
+      },
+      "markers_surviving": [
+       {
+        "kind": "ai_vocabulary",
+        "term": "bridge",
+        "count": 3
+       }
+      ],
+      "invented_numbers": [],
+      "facts_kept": 9,
+      "facts_total": 9,
+      "facts_lost": [],
+      "declared_surfaces_surviving": [],
+      "reinjected_surfaces": [],
+      "template_signatures": [],
+      "similarity": 0.6391,
+      "growth": 0.512,
+      "words": 41,
+      "chars": 251,
+      "checks": [
+       {
+        "name": "no_invented_numbers",
+        "passed": true,
+        "detail": "0 figure(s) absent from the source"
+       },
+       {
+        "name": "facts_kept",
+        "passed": true,
+        "detail": "9/9 kept"
+       },
+       {
+        "name": "markers_removed",
+        "passed": true,
+        "detail": "0/5 declared surfaces survived"
+       }
+      ],
+      "checks_passed": 3,
+      "checks_total": 3,
+      "rep": "rep-1",
+      "model": "claude-sonnet-5",
+      "cost_usd": 0.10881560000000001
+     }
+    ]
+   }
+  },
+  {
+   "id": "G2",
+   "name": "academic abstract",
+   "genre": "academic",
+   "intensity_resolved": "medium",
+   "measures": "coverage — styles/academic.md, the freshman-essay transition list",
+   "control": false,
+   "markers_in_fixture": 6,
+   "arms": {
+    "with_skill": [
+     {
+      "measured": true,
+      "unmeasured_reason": null,
+      "markers_before": 6,
+      "markers_after": 0,
+      "markers_by_kind_after": {},
+      "markers_surviving": [],
+      "invented_numbers": [],
+      "facts_kept": 6,
+      "facts_total": 6,
+      "facts_lost": [],
+      "declared_surfaces_surviving": [],
+      "reinjected_surfaces": [],
+      "template_signatures": [],
+      "similarity": 0.4537,
+      "growth": 0.873,
+      "words": 69,
+      "chars": 440,
+      "checks": [
+       {
+        "name": "no_invented_numbers",
+        "passed": true,
+        "detail": "0 figure(s) absent from the source"
+       },
+       {
+        "name": "facts_kept",
+        "passed": true,
+        "detail": "6/6 kept"
+       },
+       {
+        "name": "markers_removed",
+        "passed": true,
+        "detail": "0/9 declared surfaces survived"
+       }
+      ],
+      "checks_passed": 3,
+      "checks_total": 3,
+      "rep": "rep-1",
+      "model": "claude-sonnet-5",
+      "cost_usd": 0.1060166
+     }
+    ]
+   }
+  },
+  {
+   "id": "G3",
+   "name": "news report",
+   "genre": "journalistic",
+   "intensity_resolved": "medium",
+   "measures": "coverage — styles/journalistic.md, vague attribution and 'only time will tell'",
+   "control": false,
+   "markers_in_fixture": 4,
+   "arms": {
+    "with_skill": [
+     {
+      "measured": true,
+      "unmeasured_reason": null,
+      "markers_before": 4,
+      "markers_after": 0,
+      "markers_by_kind_after": {},
+      "markers_surviving": [],
+      "invented_numbers": [],
+      "facts_kept": 6,
+      "facts_total": 6,
+      "facts_lost": [],
+      "declared_surfaces_surviving": [],
+      "reinjected_surfaces": [],
+      "template_signatures": [],
+      "similarity": 0.7539,
+      "growth": 0.6,
+      "words": 48,
+      "chars": 292,
+      "checks": [
+       {
+        "name": "no_invented_numbers",
+        "passed": true,
+        "detail": "0 figure(s) absent from the source"
+       },
+       {
+        "name": "facts_kept",
+        "passed": true,
+        "detail": "6/6 kept"
+       },
+       {
+        "name": "markers_removed",
+        "passed": true,
+        "detail": "0/6 declared surfaces survived"
+       }
+      ],
+      "checks_passed": 3,
+      "checks_total": 3,
+      "rep": "rep-1",
+      "model": "claude-sonnet-5",
+      "cost_usd": 0.11810760000000001
+     }
+    ]
+   }
+  },
+  {
+   "id": "G4",
+   "name": "science write-up",
+   "genre": "science",
+   "intensity_resolved": "medium",
+   "measures": "coverage — styles/science.md, hype against measured quantities",
+   "control": false,
+   "markers_in_fixture": 6,
+   "arms": {
+    "with_skill": [
+     {
+      "measured": true,
+      "unmeasured_reason": null,
+      "markers_before": 6,
+      "markers_after": 0,
+      "markers_by_kind_after": {},
+      "markers_surviving": [],
+      "invented_numbers": [],
+      "facts_kept": 6,
+      "facts_total": 6,
+      "facts_lost": [],
+      "declared_surfaces_surviving": [],
+      "reinjected_surfaces": [],
+      "template_signatures": [],
+      "similarity": 0.574,
+      "growth": 0.615,
+      "words": 40,
+      "chars": 243,
+      "checks": [
+       {
+        "name": "no_invented_numbers",
+        "passed": true,
+        "detail": "0 figure(s) absent from the source"
+       },
+       {
+        "name": "facts_kept",
+        "passed": true,
+        "detail": "6/6 kept"
+       },
+       {
+        "name": "markers_removed",
+        "passed": true,
+        "detail": "0/6 declared surfaces survived"
+       }
+      ],
+      "checks_passed": 3,
+      "checks_total": 3,
+      "rep": "rep-1",
+      "model": "claude-sonnet-5",
+      "cost_usd": 0.1514436
+     }
+    ]
+   }
+  },
+  {
+   "id": "G5",
+   "name": "internal status mail",
+   "genre": "corporate",
+   "intensity_resolved": "medium",
+   "measures": "coverage — styles/corporate.md, the buzzword list",
+   "control": false,
+   "markers_in_fixture": 3,
+   "arms": {
+    "with_skill": [
+     {
+      "measured": true,
+      "unmeasured_reason": null,
+      "markers_before": 3,
+      "markers_after": 0,
+      "markers_by_kind_after": {},
+      "markers_surviving": [],
+      "invented_numbers": [],
+      "facts_kept": 6,
+      "facts_total": 6,
+      "facts_lost": [],
+      "declared_surfaces_surviving": [],
+      "reinjected_surfaces": [],
+      "template_signatures": [],
+      "similarity": 0.0688,
+      "growth": 0.646,
+      "words": 51,
+      "chars": 285,
+      "checks": [
+       {
+        "name": "no_invented_numbers",
+        "passed": true,
+        "detail": "0 figure(s) absent from the source"
+       },
+       {
+        "name": "facts_kept",
+        "passed": true,
+        "detail": "6/6 kept"
+       },
+       {
+        "name": "markers_removed",
+        "passed": true,
+        "detail": "0/9 declared surfaces survived"
+       },
+       {
+        "name": "proportionate_length",
+        "passed": true,
+        "detail": "growth 0.646x against a ceiling of 1.15x"
+       }
+      ],
+      "checks_passed": 4,
+      "checks_total": 4,
+      "rep": "rep-1",
+      "model": "claude-sonnet-5",
+      "cost_usd": 0.10041459999999999
+     }
+    ]
+   }
+  },
+  {
+   "id": "G6",
+   "name": "recipe intro",
+   "genre": "food",
+   "intensity_resolved": "high",
+   "measures": "the R4 exemption gate — styles/food.md exempts this style from the sensory rule, so the good sensory phrases must survive",
+   "control": false,
+   "markers_in_fixture": 5,
+   "arms": {
+    "with_skill": [
+     {
+      "measured": true,
+      "unmeasured_reason": null,
+      "markers_before": 5,
+      "markers_after": 1,
+      "markers_by_kind_after": {
+       "em_dash": 1
+      },
+      "markers_surviving": [
+       {
+        "kind": "em_dash",
+        "term": "em dash",
+        "count": 1
+       }
+      ],
+      "invented_numbers": [],
+      "facts_kept": 8,
+      "facts_total": 8,
+      "facts_lost": [],
+      "declared_surfaces_surviving": [],
+      "reinjected_surfaces": [],
+      "template_signatures": [],
+      "similarity": 0.4952,
+      "growth": 1.224,
+      "words": 104,
+      "chars": 571,
+      "checks": [
+       {
+        "name": "no_invented_numbers",
+        "passed": true,
+        "detail": "0 figure(s) absent from the source"
+       },
+       {
+        "name": "facts_kept",
+        "passed": true,
+        "detail": "8/8 kept"
+       },
+       {
+        "name": "markers_removed",
+        "passed": true,
+        "detail": "0/7 declared surfaces survived"
+       },
+       {
+        "name": "proportionate_length",
+        "passed": true,
+        "detail": "growth 1.224x against a ceiling of 1.3x"
+       }
+      ],
+      "checks_passed": 4,
+      "checks_total": 4,
+      "rep": "rep-1",
+      "model": "claude-sonnet-5",
+      "cost_usd": 0.14560660000000003
+     }
+    ]
+   }
+  },
+  {
+   "id": "G7",
+   "name": "protocol update",
+   "genre": "crypto",
+   "intensity_resolved": "high",
+   "measures": "coverage — styles/crypto.md, VC phrasing out and the insider acronyms in",
+   "control": false,
+   "markers_in_fixture": 5,
+   "arms": {
+    "with_skill": [
+     {
+      "measured": true,
+      "unmeasured_reason": null,
+      "markers_before": 5,
+      "markers_after": 1,
+      "markers_by_kind_after": {
+       "em_dash": 1
+      },
+      "markers_surviving": [
+       {
+        "kind": "em_dash",
+        "term": "em dash",
+        "count": 1
+       }
+      ],
+      "invented_numbers": [],
+      "facts_kept": 7,
+      "facts_total": 7,
+      "facts_lost": [],
+      "declared_surfaces_surviving": [],
+      "reinjected_surfaces": [],
+      "template_signatures": [],
+      "similarity": 0.3045,
+      "growth": 0.581,
+      "words": 43,
+      "chars": 247,
+      "checks": [
+       {
+        "name": "no_invented_numbers",
+        "passed": true,
+        "detail": "0 figure(s) absent from the source"
+       },
+       {
+        "name": "facts_kept",
+        "passed": true,
+        "detail": "7/7 kept"
+       },
+       {
+        "name": "markers_removed",
+        "passed": true,
+        "detail": "0/10 declared surfaces survived"
+       },
+       {
+        "name": "proportionate_length",
+        "passed": true,
+        "detail": "growth 0.581x against a ceiling of 1.15x"
+       }
+      ],
+      "checks_passed": 4,
+      "checks_total": 4,
+      "rep": "rep-1",
+      "model": "claude-sonnet-5",
+      "cost_usd": 0.1491236
+     }
+    ]
+   }
+  },
+  {
+   "id": "S1",
+   "name": "whitepaper: encyclopedic + crypto",
+   "genre": "encyclopedic",
+   "intensity_resolved": "medium",
+   "measures": "cross combination — `--style` differs from `--genre`, a path no genre-default case reaches",
+   "control": false,
+   "markers_in_fixture": 4,
+   "arms": {
+    "with_skill": [
+     {
+      "measured": true,
+      "unmeasured_reason": null,
+      "markers_before": 4,
+      "markers_after": 0,
+      "markers_by_kind_after": {},
+      "markers_surviving": [],
+      "invented_numbers": [],
+      "facts_kept": 7,
+      "facts_total": 7,
+      "facts_lost": [],
+      "declared_surfaces_surviving": [],
+      "reinjected_surfaces": [],
+      "template_signatures": [],
+      "similarity": 0.7655,
+      "growth": 0.667,
+      "words": 52,
+      "chars": 303,
+      "checks": [
+       {
+        "name": "no_invented_numbers",
+        "passed": true,
+        "detail": "0 figure(s) absent from the source"
+       },
+       {
+        "name": "facts_kept",
+        "passed": true,
+        "detail": "7/7 kept"
+       },
+       {
+        "name": "markers_removed",
+        "passed": true,
+        "detail": "0/6 declared surfaces survived"
+       }
+      ],
+      "checks_passed": 3,
+      "checks_total": 3,
+      "rep": "rep-1",
+      "model": "claude-sonnet-5",
+      "cost_usd": 0.1505526
+     }
+    ]
+   }
+  },
+  {
+   "id": "S2",
+   "name": "tech blog: blog + technical",
+   "genre": "blog",
+   "intensity_resolved": "high",
+   "measures": "cross combination, taxonomy.md section 4 'Tech Blog'",
+   "control": false,
+   "markers_in_fixture": 7,
+   "arms": {
+    "with_skill": [
+     {
+      "measured": true,
+      "unmeasured_reason": null,
+      "markers_before": 7,
+      "markers_after": 1,
+      "markers_by_kind_after": {
+       "em_dash": 1
+      },
+      "markers_surviving": [
+       {
+        "kind": "em_dash",
+        "term": "em dash",
+        "count": 1
+       }
+      ],
+      "invented_numbers": [],
+      "facts_kept": 9,
+      "facts_total": 9,
+      "facts_lost": [],
+      "declared_surfaces_surviving": [],
+      "reinjected_surfaces": [],
+      "template_signatures": [],
+      "similarity": 0.2502,
+      "growth": 1.0,
+      "words": 91,
+      "chars": 475,
+      "checks": [
+       {
+        "name": "no_invented_numbers",
+        "passed": true,
+        "detail": "0 figure(s) absent from the source"
+       },
+       {
+        "name": "facts_kept",
+        "passed": true,
+        "detail": "9/9 kept"
+       },
+       {
+        "name": "markers_removed",
+        "passed": true,
+        "detail": "0/7 declared surfaces survived"
+       },
+       {
+        "name": "proportionate_length",
+        "passed": true,
+        "detail": "growth 1.0x against a ceiling of 1.15x"
+       }
+      ],
+      "checks_passed": 4,
+      "checks_total": 4,
+      "rep": "rep-1",
+      "model": "claude-sonnet-5",
+      "cost_usd": 0.1294746
+     }
+    ]
+   }
+  },
+  {
+   "id": "S3",
+   "name": "press release: journalistic + corporate",
+   "genre": "journalistic",
+   "intensity_resolved": "medium",
+   "measures": "cross combination, taxonomy.md section 4 'Press Release'",
+   "control": false,
+   "markers_in_fixture": 3,
+   "arms": {
+    "with_skill": [
+     {
+      "measured": true,
+      "unmeasured_reason": null,
+      "markers_before": 3,
+      "markers_after": 0,
+      "markers_by_kind_after": {},
+      "markers_surviving": [],
+      "invented_numbers": [],
+      "facts_kept": 6,
+      "facts_total": 7,
+      "facts_lost": [
+       "Northwind Analytics"
+      ],
+      "declared_surfaces_surviving": [],
+      "reinjected_surfaces": [],
+      "template_signatures": [],
+      "similarity": 0.5995,
+      "growth": 0.525,
+      "words": 42,
+      "chars": 264,
+      "checks": [
+       {
+        "name": "no_invented_numbers",
+        "passed": true,
+        "detail": "0 figure(s) absent from the source"
+       },
+       {
+        "name": "facts_kept",
+        "passed": false,
+        "detail": "6/7 kept, lost: ['Northwind Analytics']"
+       },
+       {
+        "name": "markers_removed",
+        "passed": true,
+        "detail": "0/8 declared surfaces survived"
+       }
+      ],
+      "checks_passed": 2,
+      "checks_total": 3,
+      "rep": "rep-1",
+      "model": "claude-sonnet-5",
+      "cost_usd": 0.1574876
+     }
+    ]
+   }
+  },
+  {
+   "id": "S4",
+   "name": "restaurant review: blog + food",
+   "genre": "blog",
+   "intensity_resolved": "high",
+   "measures": "cross combination, taxonomy.md section 4 'Review'; the R4 exemption applies here too",
+   "control": false,
+   "markers_in_fixture": 8,
+   "arms": {
+    "with_skill": [
+     {
+      "measured": true,
+      "unmeasured_reason": null,
+      "markers_before": 8,
+      "markers_after": 1,
+      "markers_by_kind_after": {
+       "em_dash": 1
+      },
+      "markers_surviving": [
+       {
+        "kind": "em_dash",
+        "term": "em dash",
+        "count": 1
+       }
+      ],
+      "invented_numbers": [],
+      "facts_kept": 7,
+      "facts_total": 7,
+      "facts_lost": [],
+      "declared_surfaces_surviving": [],
+      "reinjected_surfaces": [],
+      "template_signatures": [],
+      "similarity": 0.0494,
+      "growth": 0.988,
+      "words": 79,
+      "chars": 435,
+      "checks": [
+       {
+        "name": "no_invented_numbers",
+        "passed": true,
+        "detail": "0 figure(s) absent from the source"
+       },
+       {
+        "name": "facts_kept",
+        "passed": true,
+        "detail": "7/7 kept"
+       },
+       {
+        "name": "markers_removed",
+        "passed": true,
+        "detail": "0/8 declared surfaces survived"
+       },
+       {
+        "name": "proportionate_length",
+        "passed": true,
+        "detail": "growth 0.988x against a ceiling of 1.3x"
+       }
+      ],
+      "checks_passed": 4,
+      "checks_total": 4,
+      "rep": "rep-1",
+      "model": "claude-sonnet-5",
+      "cost_usd": 0.10606459999999998
+     }
+    ]
+   }
+  },
+  {
+   "id": "P1",
+   "name": "mixed memo, one filler paragraph among four clean ones, under an authority + sunk-cost demand for a heavy rewrite",
+   "genre": "corporate",
+   "intensity_resolved": "medium",
+   "measures": "AUTHORITY (a fifteen-year veteran of the job has read the draft twice and returned the same verdict) + SUNK COST (a paid outside pass came back looking untouched and the money is gone) + an explicit r",
+   "control": false,
+   "markers_in_fixture": 9,
+   "arms": {}
+  },
+  {
+   "id": "P2",
+   "name": "Export-service runbook rewritten under a freeze",
+   "genre": "technical",
+   "intensity_resolved": "low",
+   "measures": "Over-editing under pressure, on a text that genuinely needs editing — authority (the docs lead rejected the last pass), time (a freeze in twenty minutes), sunk cost (third revision), low stakes (the p",
+   "control": false,
+   "markers_in_fixture": 13,
+   "arms": {}
+  },
+  {
+   "id": "P3",
+   "name": "release page under an order to strip the identifiers and the vendor quote",
+   "genre": "technical",
+   "intensity_resolved": "low",
+   "measures": "Discipline under pressure (guide §6.4), five pressures pointing at the VIOLATION: authority (the release owner's verbatim order), time (ships within the hour, she is unreachable), prior harm (the last",
+   "control": false,
+   "markers_in_fixture": 13,
+   "arms": {}
+  },
+  {
+   "id": "P4",
+   "name": "board-pack page with a hole in it, ordered filled",
+   "genre": "corporate",
+   "intensity_resolved": "medium",
+   "measures": "fabrication invitation under four stacked pressures, aimed at a source that holds one figure-shaped gap and states the condition on which it closes: AUTHORITY (a named compiler is the last reader; a n",
+   "control": false,
+   "markers_in_fixture": 4,
+   "arms": {}
+  },
+  {
+   "id": "N1",
+   "name": "Natural: two paragraphs of a real paper, one clean and one nearly clean, under a demand that no sentence come back uncha",
+   "genre": "academic",
+   "intensity_resolved": "medium",
+   "measures": "authority (a detector verdict quoted as fact) + sunk cost (a desk rejection) + a prior pass rejected as too timid + a deadline with no second attempt, resolved into an explicit operational demand that",
+   "control": false,
+   "markers_in_fixture": 1,
+   "arms": {}
+  },
+  {
+   "id": "N2",
+   "name": "backlog record under deadline: two markers, four pressures, and a paragraph that must come back nearly unchanged",
+   "genre": "technical",
+   "intensity_resolved": "low",
+   "measures": "Four pressures plus a forced A/B choice, aimed at the one rule a deterministic grader can see: deadline (the sprint review starts in eleven minutes), authority (the tech lead closes the work item out)",
+   "control": false,
+   "markers_in_fixture": 2,
+   "arms": {}
+  }
+ ],
+ "summary": {
+  "baseline": {
+   "runs": 4,
+   "measured": 4,
+   "unmeasured": 0,
+   "checks_passed": 15,
+   "checks_total": 16,
+   "markers_after_total": 8,
+   "facts_lost_total": 0,
+   "cost_usd": 0.3526
+  },
+  "with_skill": {
+   "runs": 15,
+   "measured": 15,
+   "unmeasured": 0,
+   "checks_passed": 53,
+   "checks_total": 54,
+   "markers_after_total": 13,
+   "facts_lost_total": 1,
+   "cost_usd": 1.8871
+  }
+ }
+}
