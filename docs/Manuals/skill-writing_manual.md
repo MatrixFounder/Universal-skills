@@ -147,9 +147,12 @@ Gap analysis includes:
 2. **Graduated Instructions**: Use strict imperatives (`MUST`, `NEVER`) ONLY for safety-critical boundaries. For general behavioral steps, use softer verbs (`Apply`, `Consider`, `Review`). This prevents "pushy" behavior from LLMs.
 3. **Behavioral Analysis**: Pay attention to *how* the skill instructs the agent to act. Skills shouldn't make the agent unnecessarily aggressive or robotic. The `analyze_gaps.py` tool will flag overly rigid language outside of safety rules.
 4. **Description Pushiness (CSO)**: Keep `description:` fields under 50 words. Start with an action prefix (like `Use when`, `Standards for`). Avoid selling the skill ("This amazing skill will...").
-5. **Examples first**: keep realistic examples in `examples/`.
-6. **Deterministic evidence**: include validation commands and expected outputs.
-7. **No hidden defaults**: every new parameter must be documented in `references/default_parameters.md`.
+5. **Write the words a user will type, not the capability you provide**: list the verbs they use and quote two or three phrasings verbatim. Measured on `text-humanizer`: a description written that way was picked up in **9 runs out of 10**; the same skill described as a capability ("humanize AI-generated text, supports multiple genres") was picked up in **1 out of 10**.
+6. **Do not write a description that sounds like a refusal**: "not derivable from ordinary judgement" was picked up **0 times out of 10** — worse than the plain description it replaced. Saying the skill applies project-specific rules is a milder version that does help, but only up to 3 in 10.
+7. **Know the ceiling**: when the model can do the job unaided it often never looks for a skill at all. Three ordinary phrasings were picked up 0 times under *every* description tried, including the best one. Tell users to name the skill instead of tuning the wording further.
+8. **Examples first**: keep realistic examples in `examples/`.
+9. **Deterministic evidence**: include validation commands and expected outputs.
+10. **No hidden defaults**: every new parameter must be documented in `references/default_parameters.md`.
 
 ---
 

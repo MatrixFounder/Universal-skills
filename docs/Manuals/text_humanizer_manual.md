@@ -11,6 +11,8 @@ The skill is built on the strict analysis of AI writing patterns provided by the
 4.  [Intensity Levels](#4-intensity-levels)
 5.  [Advanced Usage (Mix & Match)](#5-advanced-usage-mix--match)
 6.  [Recommended Workflows](#6-recommended-workflows)
+7.  [Scope Boundary](#7-scope-boundary)
+8.  [Invoking the Skill](#8-invoking-the-skill)
     *   [Workflow 1: Write It Right the First Time](#workflow-1-write-it-right-the-first-time)
     *   [Workflow 2: Advanced RAG / "Clone Yourself" Agent](#workflow-2-advanced-rag--clone-yourself-agent)
     *   [Workflow 3: Voice Passport (Style Matching)](#workflow-3-voice-passport-style-matching)
@@ -222,3 +224,46 @@ You can inject specific, one-time rules into the prompt generation without creat
 *   The Agent passes `--extra-rules` to the script.
 *   The script injects this into the "User Custom Constraints" section of the System Prompt.
 *   **Result:** A standard Crypto prompt + your specific constraints.
+
+---
+
+## 7. Scope Boundary
+
+**Long-form fiction is out of scope.** A short story, a novel chapter, a screenplay: this skill
+edits the surface of a text — vocabulary, syntax, punctuation, rhythm — and in fiction that
+surface carries a small share of what marks a text as machine-written.
+
+This is measured rather than assumed. A study that looked only at story-level features — how the
+plot holds together, how feelings are conveyed, how time is handled — could tell human fiction
+from machine fiction correctly in about 93 cases out of 100. Rewriting the wording, which is what
+this skill does, barely moved that number (StoryScope, arXiv:2604.03136).
+
+The nearest thing in scope is `--genre blog`, for essayistic and personal writing.
+
+## 8. Invoking the Skill
+
+**Name the skill when you want it.** Asking in the ordinary way — *"make this sound like a person
+wrote it"* — reaches this skill roughly one time in ten. Saying *"use the text-humanizer skill"*,
+or typing `/text-humanizer`, reaches it every time.
+
+| How you ask | It runs |
+| :--- | ---: |
+| `/text-humanizer <text>` or "use the text-humanizer skill" | reliably |
+| "use whichever of your skills fits, then clean this up" | reliably |
+| "make this sound like a person wrote it" | about 1 in 10 |
+| "tidy up the wording here" | rarely |
+
+**Why.** When the model can handle a request on its own, it usually just does — it rewrites your
+text directly instead of checking whether a skill exists. What you get back is an ordinary
+rewrite. None of this skill's machinery runs: the genre is not resolved, the intensity level of
+[§4](#4-intensity-levels) is not applied, the exceptions that protect your domain terms are not
+consulted, and the checking passes after the rewrite do not happen. Often that is fine. It is just
+not this skill.
+
+**When it matters most.** Technical, legal and contractual text. That is exactly where `low` and
+`minimal` intensity exist, and where a wrongly "improved" word can change what the document
+commits to. Name the skill there.
+
+This is measured, not guessed, and rewording the description does not fix it: five variants were
+tried, including one written specifically to match how people phrase these requests. Method and
+data: `skills/text-humanizer/evals/trigger/probe/`.

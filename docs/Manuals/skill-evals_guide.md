@@ -163,6 +163,19 @@ a machine-readable result (JSON, numbers, file structure) -> script. More on thi
 > `wiki-verify` is merely an illustration. Sources:
 > <https://github.com/MatrixFounder/llm-wiki/tree/main/skills/wiki-verify>
 
+### 1.3. What text-humanizer is (our second running example)
+
+> **📦 A case from practice — text-humanizer**
+>
+> `text-humanizer` is a skill from this repository. Its job: take a finished text and remove the
+> traces of a language model having written it — stock words like "delve" and "testament",
+> paragraphs of identical length, transitions between thoughts that are too smooth.
+>
+> **Why we refer to it:** `wiki-verify` shows what mature evals look like. `text-humanizer` shows
+> something else — **how they are built from nothing, and what goes wrong on the way**. Nearly
+> every example from it in this guide is a defect that was found: first in the skill, then in the
+> measuring instrument itself. Sources and every campaign: `skills/text-humanizer/evals/`.
+
 > **✅ Key takeaways from §1.** A skill is an instruction for an AI. An eval is a test for that
 > instruction. A grader is the examiner who turns a result into an honest
 > "pass/fail." Everything else is detail layered on top of these three concepts.
@@ -792,7 +805,76 @@ risk with no benefit. Maturity is also the ability to leave things as they are, 
 Handle it as carefully as untrusted input in production: isolate it,
 do not execute it, escape it.
 
-> **✅ Key takeaways from §7 (all seven principles at once):**
+### 7.8. Check the call by the answer, not by the log
+
+**The principle.** To find out whether a skill fired, people usually look in the log for a call to
+it. That is unreliable. First, it cannot separate "the skill was not chosen" from "it was chosen
+and then not applied". Second, if the call is in the log but the search misses it, the answer
+comes out the same — "did not fire".
+
+It is safer to make the call **visible in the answer itself**. Give the skill an instruction whose
+execution is unmistakable: replacing certain words with others, for instance. If the answer says
+`depot` where the source said `warehouse`, the instruction from the skill reached the model and
+was carried out. An ordinary string search settles it.
+
+> **📦 text-humanizer.** A stand-in skill was built for the check: the same description, but a body
+> holding twelve substitutions (`warehouse` → `depot`, and so on). Then four sets of runs:
+>
+> 1. **the description under test** — the thing being measured;
+> 2. **a description written specially for such a request** — shows what a description can achieve
+>    at all, if you try;
+> 3. **no skill installed at all** — how many substitutions the model makes on its own;
+> 4. **the query names the skill outright** — the check that the rig itself works.
+>
+> **Until the fourth set fires, the first three cannot be read.**
+
+### 7.9. "0 of 30" means nothing until the rig has shown a non-zero
+
+**The principle.** A trigger eval often ends in a line like "fired in 0 runs out of 30". That
+result has two readings: **the skill really was not invoked**, or **the rig cannot see that it
+was**. The number itself does not separate them — it is the same in both cases.
+
+So the set always needs a deliberately rigged check: a run that **must** fire, for instance one
+whose query names the skill outright. Until that run shows a non-zero, none of the other zeros can
+be read — any of them may be a broken rig.
+
+> **📦 text-humanizer.** Three times in one evening "0 of 30" turned out to be a broken rig rather
+> than a finding.
+>
+> **First.** The stand-in skill was given the same name as a real skill. The real one shadowed it,
+> and the queries never reached the stand-in at all — yet it looked like an honest zero.
+>
+> **Second.** On the cheap model every description scored zero, including one written to be
+> obviously good. So that model simply does not tell descriptions apart — which is not the same as
+> "descriptions do not matter".
+>
+> **Third.** A run that died on timeout was counted as "the skill did not fire". Count those
+> separately and print their number beside the result.
+
+### 7.10. Measure on the model that will run the skill
+
+**The principle.** Models differ in price. A cheap one (Haiku, say) is tempting for these runs: it
+answers fast, and repeating a hundred times costs almost nothing. But **models decide "reach for a
+skill or just do it myself" differently**, and on a cheap one you can reach the opposite of the
+right conclusion.
+
+The rule is simple: debug the **rig** on the cheap model, and read the result on the model that
+will actually work with the skill.
+
+> **📦 text-humanizer.** The same descriptions, the same texts. The table gives the share of runs
+> in which the skill fired:
+>
+> | What the description says | Haiku (cheap) | Sonnet (working) |
+> | :--- | ---: | ---: |
+> | the query names the skill outright | 1.00 | 0.93 |
+> | a description written specially for such a request | **0.00** | **0.90** |
+> | the description the skill ships today | 0.00 | **0.10** |
+>
+> The Haiku column suggested "the description changes nothing, every variant is zero". The Sonnet
+> column shows that is untrue — there the two descriptions differ ninefold. And Sonnet is what
+> works with the skill.
+
+> **✅ Key takeaways from §7 (all ten principles at once):**
 > 1. The grader **calls** the production logic, does not copy it (no drift).
 > 2. **Pin** the raw results and the report (the numbers will not drift away).
 > 3. **Diversify** the set (otherwise a "mirage").
@@ -800,6 +882,9 @@ do not execute it, escape it.
 > 5. Noisy metrics — **repeatedly + interval**, state conclusions honestly.
 > 6. Know how **not to fix** what does not affect the result.
 > 7. **Fixtures are untrusted** — handle them like input from the internet.
+> 8. Check a call **by the answer**, not by the log.
+> 9. **Read "0 of N" last** — first let the run that must fire, fire.
+> 10. Read trigger runs **on the working model**, not the cheap one.
 
 ---
 
@@ -999,6 +1084,9 @@ flowchart LR
 - [ ] The grader **calls the production logic** (if it exists), rather than copying it.
 - [ ] Reports/results are **pinned** with a test; a new version is a **new file**.
 - [ ] Jittery metrics are measured **repeatedly + interval**.
+- [ ] The set holds a run that **must fire**, and it did — otherwise the other zeros may be a broken rig.
+- [ ] Trigger runs are read on the model that will work with the skill, not on a cheap one.
+- [ ] No check would **fail a correct answer too** (demanding a verbatim quote where the skill must rephrase).
 
 ### 11.2. Antipatterns
 
@@ -1013,6 +1101,11 @@ flowchart LR
 | Fix what does not affect the verdict | work and risk with no benefit | leave it and document it |
 | "-70% in one run" as advertising | false confidence | "measured across N verified iterations" |
 | Lose the run timing | no tokens/time -> a rerun | save at the moment of completion |
+| Read "0 of N" without checking the rig | "does not fire" may be "we cannot see" | first run the one that must fire |
+| Judge the call on a cheap model | there every description scores zero and none can be told apart | read the result on the working model |
+| A crashed run counted as "did not fire" | a broken rig reads as a bad description | count crashes separately and print their number |
+| A check a correct answer would also fail | demanding a 20-word verbatim quote where the skill must rephrase | check names, numbers and identifiers; for wording, list the acceptable forms |
+| The rig reads what it varies from disk | another campaign writes that same file | the rig writes the variable and prints it |
 
 ### 11.3. The golden rule
 

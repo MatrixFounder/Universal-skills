@@ -74,6 +74,8 @@ All subdirectories are optional. Do NOT create `README.md`, `CHANGELOG.md`, or o
   - Behavioral: Explain why + imperative verb
   - Prohibited: `MUST NOT` + consequence
 - **CSO (Search Optimization)**: The `description` field determines if a skill is loaded. Start with `Use when...` (preferred), `Guidelines for...`, `Helps with...`, `Standards for...`, or `Defines...`. Keep under 50 words. Make descriptions "pushy" to prevent under-triggering.
+  - Carry the **user's own words** — the verbs they type, two or three real phrasings quoted. Measured: written that way, a skill was picked up in 9 runs out of 10; described as a capability, 1 out of 10; described in a way that sounds like a refusal, 0 out of 10.
+  - Read those results on the model that will **run** the skill. A small model picks up nothing it is not told to use by name, so descriptions cannot be compared there at all. Method: [`advanced-eval-patterns.md`](references/advanced-eval-patterns.md).
 - **Red Flags**: Every skill MUST include a "Red Flags" section to prevent agent rationalization.
 - **Naming**: Use gerund form `verb-ing-noun` (e.g., `processing-pdfs`). Always lowercase kebab-case.
 

@@ -140,3 +140,31 @@ the measurement shows no problem, don't invent work.
   A/B, multi-rep, script-grader + pinning) for gates where a wrong PASS is expensive.
 
 See `docs/Manuals/skill-evals_guide.md` for the full worked numbers and diagrams.
+
+---
+
+## Measuring a trigger by its effect
+
+`scripts/run_eval.py` decides "triggered" by scanning the log for a `Skill` call. That is
+unreliable in two ways: it cannot separate *the skill was not chosen* from *it was chosen and then
+not applied*, and if the call is in the log but the scan misses it, the answer looks the same —
+"did not fire".
+
+**The alternative.** Make the call visible in the answer itself. Give the skill a body holding one
+instruction you cannot mistake — replacing certain words with others is enough — and grade with a
+string search. Four sets of runs:
+
+| Set | What is installed | What it tells you |
+| :--- | :--- | :--- |
+| 1 | the description under test | the measurement |
+| 2 | a description written specially for such a request | what a description can achieve at all |
+| 3 | no skill at all | how often the model makes those replacements unaided |
+| 4 | the query names the skill outright | **that the rig works — read nothing until this fires** |
+
+**Three traps.** Give the stand-in skill a name no installed skill already uses, or the real one
+of that name will shadow it and every run will look like an honest zero. Do not copy other skills
+into the test project — the user-level registry already supplies them, and copies double the list
+the model sees. Read the result on the model that will run the skill: a small model picks up
+nothing it is not told to use by name, so every description scores zero there.
+
+A worked rig with its data and its limits: `skills/text-humanizer/evals/trigger/probe/`.
