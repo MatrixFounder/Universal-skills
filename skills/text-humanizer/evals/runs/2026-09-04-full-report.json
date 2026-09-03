@@ -1559,13 +1559,12 @@
        }
       ],
       "invented_numbers": [],
-      "facts_kept": 10,
-      "facts_total": 14,
+      "facts_kept": 13,
+      "facts_total": 16,
       "facts_lost": [
-       "It is the only formal mechanism for deliberation. Core developers do not unilaterally decide; extensive peer review shapes each BIP.",
-       "core developers have a veto right",
-       "absence of a legal entity",
-       "a risk of major economic actors unidirectionally changing Bitcoin"
+       "only formal mechanism",
+       "do not unilaterally decide",
+       "absence of a legal entity"
       ],
       "declared_surfaces_surviving": [],
       "reinjected_surfaces": [],
@@ -1583,7 +1582,7 @@
        {
         "name": "facts_kept",
         "passed": false,
-        "detail": "10/14 kept, lost: ['It is the only formal mechanism for deliberation. Core developers do not unilaterally decide; extensive peer review shapes each BIP.', 'core developers have a veto right', 'absence of a legal entity', 'a risk of major economic actors unidirectionally changing Bitcoin']"
+        "detail": "13/16 kept, lost: ['only formal mechanism', 'do not unilaterally decide', 'absence of a legal entity']"
        },
        {
         "name": "markers_removed",
@@ -1704,7 +1703,7 @@
    "checks_passed": 75,
    "checks_total": 80,
    "markers_after_total": 29,
-   "facts_lost_total": 6,
+   "facts_lost_total": 5,
    "cost_usd": 1.8207
   }
  }

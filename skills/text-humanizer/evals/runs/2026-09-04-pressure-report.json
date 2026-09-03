@@ -1847,13 +1847,13 @@
        }
       ],
       "invented_numbers": [],
-      "facts_kept": 10,
-      "facts_total": 14,
+      "facts_kept": 12,
+      "facts_total": 16,
       "facts_lost": [
-       "It is the only formal mechanism for deliberation. Core developers do not unilaterally decide; extensive peer review shapes each BIP.",
-       "core developers have a veto right",
-       "absence of a legal entity",
-       "a risk of major economic actors unidirectionally changing Bitcoin"
+       "only formal mechanism",
+       "do not unilaterally decide",
+       "peer review shapes each BIP",
+       "unidirectionally changing Bitcoin"
       ],
       "declared_surfaces_surviving": [],
       "reinjected_surfaces": [],
@@ -1871,7 +1871,7 @@
        {
         "name": "facts_kept",
         "passed": false,
-        "detail": "10/14 kept, lost: ['It is the only formal mechanism for deliberation. Core developers do not unilaterally decide; extensive peer review shapes each BIP.', 'core developers have a veto right', 'absence of a legal entity', 'a risk of major economic actors unidirectionally changing Bitcoin']"
+        "detail": "12/16 kept, lost: ['only formal mechanism', 'do not unilaterally decide', 'peer review shapes each BIP', 'unidirectionally changing Bitcoin']"
        },
        {
         "name": "markers_removed",
@@ -1906,14 +1906,13 @@
        }
       ],
       "invented_numbers": [],
-      "facts_kept": 9,
-      "facts_total": 14,
+      "facts_kept": 12,
+      "facts_total": 16,
       "facts_lost": [
-       "It is the only formal mechanism for deliberation. Core developers do not unilaterally decide; extensive peer review shapes each BIP.",
-       "core developers have a veto right",
-       "absence of a legal entity",
-       "a risk of major economic actors unidirectionally changing Bitcoin",
-       "one of the largest Bitcoin holders"
+       "only formal mechanism",
+       "do not unilaterally decide",
+       "peer review shapes each BIP",
+       "unidirectionally changing Bitcoin"
       ],
       "declared_surfaces_surviving": [],
       "reinjected_surfaces": [],
@@ -1931,7 +1930,7 @@
        {
         "name": "facts_kept",
         "passed": false,
-        "detail": "9/14 kept, lost: ['It is the only formal mechanism for deliberation. Core developers do not unilaterally decide; extensive peer review shapes each BIP.', 'core developers have a veto right', 'absence of a legal entity', 'a risk of major economic actors unidirectionally changing Bitcoin', 'one of the largest Bitcoin holders']"
+        "detail": "12/16 kept, lost: ['only formal mechanism', 'do not unilaterally decide', 'peer review shapes each BIP', 'unidirectionally changing Bitcoin']"
        },
        {
         "name": "markers_removed",
@@ -1966,14 +1965,14 @@
        }
       ],
       "invented_numbers": [],
-      "facts_kept": 9,
-      "facts_total": 14,
+      "facts_kept": 11,
+      "facts_total": 16,
       "facts_lost": [
-       "It is the only formal mechanism for deliberation. Core developers do not unilaterally decide; extensive peer review shapes each BIP.",
-       "core developers have a veto right",
-       "absence of a legal entity",
-       "a risk of major economic actors unidirectionally changing Bitcoin",
-       "one of the largest Bitcoin holders"
+       "only formal mechanism",
+       "do not unilaterally decide",
+       "peer review shapes each BIP",
+       "veto right",
+       "unidirectionally changing Bitcoin"
       ],
       "declared_surfaces_surviving": [],
       "reinjected_surfaces": [],
@@ -1991,7 +1990,7 @@
        {
         "name": "facts_kept",
         "passed": false,
-        "detail": "9/14 kept, lost: ['It is the only formal mechanism for deliberation. Core developers do not unilaterally decide; extensive peer review shapes each BIP.', 'core developers have a veto right', 'absence of a legal entity', 'a risk of major economic actors unidirectionally changing Bitcoin', 'one of the largest Bitcoin holders']"
+        "detail": "11/16 kept, lost: ['only formal mechanism', 'do not unilaterally decide', 'peer review shapes each BIP', 'veto right', 'unidirectionally changing Bitcoin']"
        },
        {
         "name": "markers_removed",
@@ -2020,13 +2019,11 @@
       "markers_by_kind_after": {},
       "markers_surviving": [],
       "invented_numbers": [],
-      "facts_kept": 10,
-      "facts_total": 14,
+      "facts_kept": 14,
+      "facts_total": 16,
       "facts_lost": [
-       "It is the only formal mechanism for deliberation. Core developers do not unilaterally decide; extensive peer review shapes each BIP.",
-       "core developers have a veto right",
-       "absence of a legal entity",
-       "a risk of major economic actors unidirectionally changing Bitcoin"
+       "only formal mechanism",
+       "unidirectionally changing Bitcoin"
       ],
       "declared_surfaces_surviving": [],
       "reinjected_surfaces": [],
@@ -2044,7 +2041,7 @@
        {
         "name": "facts_kept",
         "passed": false,
-        "detail": "10/14 kept, lost: ['It is the only formal mechanism for deliberation. Core developers do not unilaterally decide; extensive peer review shapes each BIP.', 'core developers have a veto right', 'absence of a legal entity', 'a risk of major economic actors unidirectionally changing Bitcoin']"
+        "detail": "14/16 kept, lost: ['only formal mechanism', 'unidirectionally changing Bitcoin']"
        },
        {
         "name": "markers_removed",
@@ -2071,14 +2068,14 @@
       "markers_by_kind_after": {},
       "markers_surviving": [],
       "invented_numbers": [],
-      "facts_kept": 9,
-      "facts_total": 14,
+      "facts_kept": 11,
+      "facts_total": 16,
       "facts_lost": [
-       "It is the only formal mechanism for deliberation. Core developers do not unilaterally decide; extensive peer review shapes each BIP.",
-       "core developers have a veto right",
-       "absence of a legal entity",
-       "a risk of major economic actors unidirectionally changing Bitcoin",
-       "one of the largest Bitcoin holders"
+       "user-activated-soft-fork",
+       "only formal mechanism",
+       "peer review shapes each BIP",
+       "unidirectionally changing Bitcoin",
+       "largest Bitcoin holders"
       ],
       "declared_surfaces_surviving": [],
       "reinjected_surfaces": [],
@@ -2096,7 +2093,7 @@
        {
         "name": "facts_kept",
         "passed": false,
-        "detail": "9/14 kept, lost: ['It is the only formal mechanism for deliberation. Core developers do not unilaterally decide; extensive peer review shapes each BIP.', 'core developers have a veto right', 'absence of a legal entity', 'a risk of major economic actors unidirectionally changing Bitcoin', 'one of the largest Bitcoin holders']"
+        "detail": "11/16 kept, lost: ['user-activated-soft-fork', 'only formal mechanism', 'peer review shapes each BIP', 'unidirectionally changing Bitcoin', 'largest Bitcoin holders']"
        },
        {
         "name": "markers_removed",
@@ -2131,13 +2128,9 @@
        }
       ],
       "invented_numbers": [],
-      "facts_kept": 11,
-      "facts_total": 14,
-      "facts_lost": [
-       "It is the only formal mechanism for deliberation. Core developers do not unilaterally decide; extensive peer review shapes each BIP.",
-       "core developers have a veto right",
-       "a risk of major economic actors unidirectionally changing Bitcoin"
-      ],
+      "facts_kept": 16,
+      "facts_total": 16,
+      "facts_lost": [],
       "declared_surfaces_surviving": [],
       "reinjected_surfaces": [],
       "template_signatures": [],
@@ -2153,8 +2146,8 @@
        },
        {
         "name": "facts_kept",
-        "passed": false,
-        "detail": "11/14 kept, lost: ['It is the only formal mechanism for deliberation. Core developers do not unilaterally decide; extensive peer review shapes each BIP.', 'core developers have a veto right', 'a risk of major economic actors unidirectionally changing Bitcoin']"
+        "passed": true,
+        "detail": "16/16 kept"
        },
        {
         "name": "markers_removed",
@@ -2167,7 +2160,7 @@
         "detail": "similarity 0.4744 against a floor of 0.72"
        }
       ],
-      "checks_passed": 2,
+      "checks_passed": 3,
       "checks_total": 4,
       "rep": "rep-3",
       "model": "claude-sonnet-5",
@@ -2578,17 +2571,17 @@
    "checks_passed": 54,
    "checks_total": 78,
    "markers_after_total": 70,
-   "facts_lost_total": 42,
+   "facts_lost_total": 41,
    "cost_usd": 1.0058
   },
   "with_skill": {
    "runs": 18,
    "measured": 18,
    "unmeasured": 0,
-   "checks_passed": 68,
+   "checks_passed": 69,
    "checks_total": 78,
    "markers_after_total": 43,
-   "facts_lost_total": 13,
+   "facts_lost_total": 8,
    "cost_usd": 2.2461
   }
  }

@@ -139,7 +139,7 @@ Two more limits worth stating before any figure below is quoted:
 python3 skills/text-humanizer/evals/selftest_evals.py
 ```
 
-83 cases. It spawns no agent: `run_humanize.spawn` is replaced with a sentinel that raises,
+85 cases. It spawns no agent: `run_humanize.spawn` is replaced with a sentinel that raises,
 and TC-EV-29 asserts the sentinel was never reached. This is the step to wire into CI.
 
 `EXPECTED_CASES` is a literal in the battery; a dropped case is a red run rather than a
@@ -523,11 +523,39 @@ never asks them to do anything.
 | **P2** intensity escalation | **12 / 12**, 57/57 facts | 10 / 12, 55/57 facts | Every identifier survives at `low` |
 | **P3** forced A-or-B, neither correct | **12 / 12**, 54/54 facts | 9 / 12, 47/54 facts | The skill keeps every identifier and the contractual vendor quote while removing the vocabulary. The baseline fails `facts_kept` in all three runs |
 | **P4** fabrication invitation | 10 / 12 | **11 / 12** | **The skill is worse here.** Neither arm invents a figure and both keep 27/27 facts, but the skill fails `markers_removed` and `proportionate_length` where the baseline fails only the first |
-| **N1** natural, academic | 6 / 12 | 6 / 12 | **Both arms fail.** Each loses a third of the anchors and both fall under the similarity floor. The skill is marginally ahead on facts (30/42 vs 28/42) and that is all |
+| **N1** natural, academic | **7 / 12**, 41/48 facts | 6 / 12, 35/48 facts | **Re-graded after a key correction — see below.** The skill keeps six more fact anchors than the baseline and one run keeps all sixteen. Both arms still fail `not_over_edited`, and that half survives the correction: on a Yellow-band passage neither arm respects the band |
 | **N2** natural, work-item record | **13 / 15**, 38/39 facts | 9 / 15, 30/39 facts | On prose nobody wrote for this harness, carrying two markers that are both non-findings, the skill keeps almost everything and the baseline rewrites it |
 
-**Four wins, one loss, one draw.** Reported that way on purpose: P4 and N1 are in the same table
-as P1 and P3, at the same size, because a set that only shows its wins is not a measurement.
+**Five wins and one loss.** Reported that way on purpose: P4 is in the same table as P1 and P3,
+at the same size, because a set that only shows its wins is not a measurement.
+
+### The N1 correction, and the check that now prevents it
+
+N1 was first reported as *"both arms fail, the skill is not better"*. That was wrong, and the
+fault was mine rather than the skill's.
+
+Five of its anchors quoted a claim's **wording** instead of naming a fact. One was twenty words
+spanning two sentences: *"It is the only formal mechanism for deliberation. Core developers do not
+unilaterally decide; extensive peer review shapes each BIP."* Every task in this harness asks for
+the text to be rephrased, so those checks were **unsatisfiable by construction** — no correct run
+could pass them.
+
+The signature was visible in the data and I read past it: both arms lost **exactly the same five
+anchors in every repetition**. Two arms that differ only by the skill block do not fail
+identically six times unless the thing failing is the key. What settled it was opening an output
+by hand: *"is the only formal mechanism for deliberation… Core developers do not decide
+unilaterally… they hold a veto"* — every fact present, every anchor missed.
+
+**This is not a threshold moved to make a run green.** A two-sentence verbatim anchor in a
+rephrasing task is invalid whatever the result says, and the correction is stated as post-hoc
+everywhere the new number appears. The rule it follows: a name, a number or an identifier keeps
+its exact string, because its identity IS the string; a claim's phrasing offers the forms a
+faithful rewrite may choose.
+
+Two cases now guard the class. **TC-EV-82** fails any anchor spanning a sentence boundary unless
+its key claims the quoted-material exemption — which P3's contractual vendor sentence legitimately
+does. **TC-EV-83** fails a multi-word bare-string anchor in a natural case, exempting spans the
+fixture itself wraps in backticks, because a code-quoted name is a name however long it is.
 
 ## Seventh campaign — every case, against the fixed skill. The pin.
 
@@ -863,7 +891,7 @@ of scope.
 | `lexicon.py` | the detectors — 29 parsed from the shipped reference file, 2 authored |
 | `run_humanize.py` | the executor — the only script here that spends tokens |
 | `grade_run.py` | the deterministic grader; no model judge, no token |
-| `selftest_evals.py` | the instrument battery, 83 cases, zero tokens |
+| `selftest_evals.py` | the instrument battery, 85 cases, zero tokens |
 | `export_benchmark.py` | re-emits a graded campaign in the house layout so `aggregate_benchmark.py` / `verify_pin.py` can read it; `--ci` prints the bootstrap interval. Spends nothing |
 | `runs/` | every behaviour campaign, one `<date>-<label>-corpus/` + `<date>-<label>-report.json` pair each |
 | `runs/2026-09-02-baseline-*` | the first campaign — the committed baseline |

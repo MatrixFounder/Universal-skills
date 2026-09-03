@@ -37,7 +37,7 @@ import grade_run                                              # noqa: E402
 import lexicon                                                # noqa: E402
 import run_humanize                                           # noqa: E402
 
-EXPECTED_CASES = 83
+EXPECTED_CASES = 85
 
 # Layout. Every campaign lives under `runs/` (behaviour) or `trigger/runs/`
 # (routing), one directory or file per campaign, because guide section 7.2 says a
@@ -1263,6 +1263,70 @@ def tc81():
     assert prov["stale_vs_today"] == [], (
         f"the pinned corpus is stale: {prov['stale_vs_today']}. Re-draw it, or "
         f"move the pin -- a pinned campaign must describe the current skill")
+
+
+@case("TC-EV-82", "no anchor demands the wording of a claim rather than a fact")
+def tc82():
+    """The rotten assertion in REVERSE: a check no correct run can pass.
+
+    N1 declared five anchors that quoted a claim's WORDING, one of them twenty
+    words spanning two sentences. Every task here asks for the text to be
+    rephrased, so those checks were unsatisfiable by construction. Both arms
+    lost exactly the same five in every repetition -- the signature of a broken
+    key, not of a skill that fails -- and it was read as "the one case the skill
+    does not handle" until the outputs were opened by hand.
+
+    The rule: a name, a number or an identifier keeps its exact string, because
+    its identity IS the string. A claim's phrasing must offer the forms a
+    faithful rewrite may choose.
+
+    A long anchor is legitimate when the text is QUOTED MATERIAL that must
+    survive verbatim -- P3's contractual vendor sentence is the case -- so the
+    test is sentence-spanning, not length, and a key may name the exemption.
+    """
+    import re as _re
+    offenders = []
+    for c in _evals()["cases"]:
+        key = _key(c)
+        notes = (key.get("must_keep_notes") or "") + (key.get("note") or "")
+        for anchor in key["must_keep"]:
+            canonical = anchor[0] if isinstance(anchor, list) else anchor
+            # A full stop followed by a capital is a sentence boundary. An
+            # anchor that spans one is quoting prose, not naming a thing.
+            if _re.search(r"[.!?]\s+[A-ZА-Я]", canonical):
+                if "quoted material" in notes.lower() or "verbatim" in notes.lower():
+                    continue
+                offenders.append(f"{c['id']}: {canonical[:60]!r}")
+    assert not offenders, (
+        "an anchor spans a sentence boundary and its key does not claim the "
+        f"quoted-material exemption: {offenders}")
+
+
+@case("TC-EV-83", "a natural case anchors names, and offers forms for claims")
+def tc83():
+    """Tighter than TC-EV-82 and only where it must be. A `natural` fixture is
+    prose nobody wrote for this harness, so every anchor in it is either
+    something whose identity is its string, or a claim that a rewrite may
+    legitimately word differently."""
+    thin = []
+    for c in _evals()["cases"]:
+        if c["axis"] != "natural":
+            continue
+        for anchor in _key(c)["must_keep"]:
+            if isinstance(anchor, list):
+                continue
+            # A bare string anchor must be a name, a number or an identifier
+            # rather than a clause. Backticks in the fixture settle it: a
+            # code-quoted span is a name however many words it holds, and a
+            # rewrite that changed it would be changing an identifier.
+            if len(anchor.split()) <= 4:
+                continue
+            if f"`{anchor}`" in _fixture(c):
+                continue
+            thin.append(f"{c['id']}: {anchor!r}")
+    assert not thin, (
+        "a natural case declares a multi-word string anchor with no alternative "
+        f"forms; a rewrite that keeps the fact would still fail it: {thin}")
 
 
 def _run_all():
