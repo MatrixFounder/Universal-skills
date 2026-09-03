@@ -1,5 +1,7 @@
 # Style: Academic / Formal
 
+> **Evidence class: heuristic.** Domain editorial practice. Not measured.
+
 **Tone:** Scholarly, objective, logical, structured.
 **Target Audience:** Professors, researchers, committees.
 

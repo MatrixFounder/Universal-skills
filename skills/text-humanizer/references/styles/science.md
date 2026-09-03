@@ -1,5 +1,7 @@
 # Style: Science / Tech
 
+> **Evidence class: heuristic.** Domain editorial practice. Not measured.
+
 **Tone:** Precise, measured, cautiously optimistic.
 **Target Audience:** Researchers, engineers, informed enthusiasts.
 

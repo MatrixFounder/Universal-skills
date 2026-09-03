@@ -61,10 +61,17 @@ carries the merged pattern set, so it keeps working without this skill installed
 
 ## Verifying the result
 
-The rewrite is finished when all three passes hold:
+The rewrite is finished when every pass holds:
 
 1. no leftover [A]/[B] markers for the resolved intensity,
-2. it reads as a stranger wrote it, not as a list of avoided words,
-3. sentence length varies (check the "cardiogram" on texts over 300 words).
+2. it reads as a stranger wrote it, not as a list of avoided words -- **and** nothing was
+   over-corrected: no roughness the genre does not support, no informality absent from the voice
+   passport, no aside invented for the rewrite,
+3. sentence length varies (check the "cardiogram" on texts over 300 words), without exceeding the
+   author's own range,
+4. at `max` and `high` intensity, the first sentences of the paragraphs do not read as a clean
+   summary of the text (the outline test). This pass is absent from the prompt at every lower
+   intensity, so at `--genre technical` there is nothing to check.
 
-A text that passes (1) and fails (3) still reads as generated.
+A text that passes (1) and fails (3) still reads as generated. A text that passes (1) and fails
+the over-correction half of (2) reads as edited, which is a different tell and not a better one.

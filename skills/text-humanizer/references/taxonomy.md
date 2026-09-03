@@ -1,5 +1,9 @@
 # Text Genre & Style Taxonomy
 
+> **Evidence class: inference.** The genre-to-intensity mapping is a design decision of this
+> skill. No measurement produced it, and moving a genre's default changes which priority
+> classes fire on every text of that genre.
+
 This document defines the classification system for the Humanizer.
 
 ## 1. Structural Genres (The Base Layer)

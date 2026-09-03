@@ -1,5 +1,7 @@
 # Style: Crypto / Web3 (Telegram Focus)
 
+> **Evidence class: heuristic.** Domain editorial practice. Not measured.
+
 **Tone:** Fast, skeptical but excited, insider.
 **Target Audience:** Degen traders, investors, builders.
 
