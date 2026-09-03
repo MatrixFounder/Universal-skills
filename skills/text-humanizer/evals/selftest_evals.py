@@ -37,7 +37,7 @@ import grade_run                                              # noqa: E402
 import lexicon                                                # noqa: E402
 import run_humanize                                           # noqa: E402
 
-EXPECTED_CASES = 85
+EXPECTED_CASES = 87
 
 # Layout. Every campaign lives under `runs/` (behaviour) or `trigger/runs/`
 # (routing), one directory or file per campaign, because guide section 7.2 says a
@@ -1327,6 +1327,45 @@ def tc83():
     assert not thin, (
         "a natural case declares a multi-word string anchor with no alternative "
         f"forms; a rewrite that keeps the fact would still fail it: {thin}")
+
+
+@case("TC-EV-84", "the false-positive sweep reads the shipped word list, not a copy")
+def tc84():
+    """`[A]` is the only class reaching `low` and `minimal`, and it is a list of
+    WORDS rather than meanings, so every entry is a standing false-positive
+    risk. The sweep answers "does this word fire on correct usage" from corpora
+    already on disk. It must derive its word list from the reference file: a
+    restated copy would go stale the first time the list is edited."""
+    import false_positive_sweep as fps                          # noqa: PLC0415
+    words = fps.vocabulary()
+    assert len(words) >= 20, f"only {len(words)} words parsed"
+    roster = {d["term"].lower() for d in lexicon.build()
+              if d["kind"] == "ai_vocabulary"}
+    assert set(words) == roster, "the sweep and the grader disagree on the list"
+    # and the list really is parsed, not literal
+    source = _read(os.path.join(HERE, "false_positive_sweep.py"))
+    for w in ("delve", "seamless", "testament"):
+        assert f'"{w}"' not in source, f"{w!r} is hard-coded in the sweep"
+
+
+@case("TC-EV-85", "the sweep scores only cases carrying both arms")
+def tc85():
+    """A survival rate with nothing to compare it against says nothing. A
+    coverage case runs `with_skill` alone, so it belongs in `unpaired`, and
+    counting it as evidence would read the model's own habits as the skill's."""
+    import false_positive_sweep as fps                          # noqa: PLC0415
+    evals = _evals()
+    rows, unpaired = fps.survival(
+        evals, os.path.join(HERE, PINNED_CORPUS), fps.vocabulary())
+    paired_ids = {c["id"] for c in evals["cases"]
+                  if c.get("arms") == ["baseline", "with_skill"]}
+    for r in rows:
+        assert r["case"] in paired_ids, f"{r['case']} scored without a baseline"
+        assert {"baseline", "with_skill"} <= set(r["arms"]), r["case"]
+    for r in unpaired:
+        assert "baseline" not in r["arms"], f"{r['case']} is unpaired yet has one"
+    groups = fps.classify(rows)
+    assert sum(len(v) for v in groups.values()) == len(rows), "a row was lost"
 
 
 def _run_all():

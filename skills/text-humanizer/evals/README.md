@@ -139,7 +139,7 @@ Two more limits worth stating before any figure below is quoted:
 python3 skills/text-humanizer/evals/selftest_evals.py
 ```
 
-85 cases. It spawns no agent: `run_humanize.spawn` is replaced with a sentinel that raises,
+87 cases. It spawns no agent: `run_humanize.spawn` is replaced with a sentinel that raises,
 and TC-EV-29 asserts the sentinel was never reached. This is the step to wire into CI.
 
 `EXPECTED_CASES` is a literal in the battery; a dropped case is a red run rather than a
@@ -782,6 +782,45 @@ E2 already measures this class on a **seeded** technical fixture, and the skill 
 The natural cases show the same class arriving unplanted, in two unrelated documents, which is
 the argument for it being a real rate rather than a fixture artefact.
 
+## Does an `[A]` word fire on correct usage? Measured: no
+
+`[A]` is the only priority class reaching `low` and `minimal` — technical and legal text, where a
+changed word can change what the document commits to — and it is a list of WORDS, not of meanings.
+Every entry is therefore a standing false-positive risk. `references/patterns_universal.md`
+answers this with a whitelist of three evidence-bearing tests, and the question is whether the
+whitelist holds in practice.
+
+The question was raised by `align`: both natural fixtures use it correctly (*"a chain not aligned
+with the larger ecosystem"*, *"the two gates' config keys were aligned"*) and neither use is
+covered by any of the three tests — no voice passport, no pointable identifier, no quotation. It
+is simply the word doing its literal work.
+
+`false_positive_sweep.py` answers it from corpora already on disk, at no token cost. For every
+`[A]` word present in a fixture it compares survival between the arms on the same case, because
+the baseline is an unaided model rewriting the same text under the same brief — the fair
+reference for *would this word have been kept anyway*.
+
+**37 scored pairs (case × word with both arms), 17 of them at `low`:**
+
+| | Pairs | |
+| :--- | ---: | :--- |
+| no difference between the arms | **34** | |
+| the skill **keeps** the word more often than no skill | **2** | E2 `align` 3/4 → 4/4, N1 `align` 0/3 → 1/4 |
+| the skill removes it more often | **1** | N2 `align` 3/3 → 3/4 |
+
+**The hypothesis did not hold.** In the dangerous zone the skill is never worse than the unaided
+model except once, and that once was harmless: *"config keys were aligned"* → *"config keys lined
+up"* keeps the fact exactly. E2 is the case the whitelist was written for, and there the skill
+preserves the term **better** than no skill at all — 3/4 baseline against 4/4.
+
+So neither change is justified: not a fourth whitelist test, and not moving `align` off `[A]`.
+
+**What this does not establish.** 37 pairs at three to four runs each is thin, and the words
+present are the words the fixtures' authors put there. A word absent from every fixture is
+unmeasured, not innocent. The sweep is committed so the next edit to the vocabulary list can be
+checked the same way instead of argued about — TC-EV-84 fails it if it ever stops parsing the
+shipped list, TC-EV-85 if it ever scores a case that has no baseline.
+
 ## Audit against the house eval standard
 
 `docs/Manuals/skill-evals_guide.md` §11.1 is this repository's checklist. This harness was
@@ -891,7 +930,7 @@ of scope.
 | `lexicon.py` | the detectors — 29 parsed from the shipped reference file, 2 authored |
 | `run_humanize.py` | the executor — the only script here that spends tokens |
 | `grade_run.py` | the deterministic grader; no model judge, no token |
-| `selftest_evals.py` | the instrument battery, 85 cases, zero tokens |
+| `selftest_evals.py` | the instrument battery, 87 cases, zero tokens |
 | `export_benchmark.py` | re-emits a graded campaign in the house layout so `aggregate_benchmark.py` / `verify_pin.py` can read it; `--ci` prints the bootstrap interval. Spends nothing |
 | `runs/` | every behaviour campaign, one `<date>-<label>-corpus/` + `<date>-<label>-report.json` pair each |
 | `runs/2026-09-02-baseline-*` | the first campaign — the committed baseline |
