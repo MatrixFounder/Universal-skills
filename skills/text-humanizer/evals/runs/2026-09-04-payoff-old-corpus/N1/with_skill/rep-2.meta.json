@@ -1,0 +1,26 @@
+{
+ "case": "N1",
+ "arm": "with_skill",
+ "rep": 2,
+ "model": "claude-sonnet-5",
+ "genre": "academic",
+ "style": null,
+ "fixture_sha256_16": "b922b7a84bb98a31",
+ "task": "tasks/n1-natural-abstract.md",
+ "task_sha256_16": "2dd682ebb983255c",
+ "skill_prompt_sha256_16": "5b0cca104a55f0ee",
+ "skill_root": "/private/tmp/claude-501/-Users-sergey-dev-projects-Universal-skills/84d947e1-4ab1-460b-a71f-497aaeb1eddc/scratchpad/skill-pre-r2",
+ "skill_applied": true,
+ "unwrapped_fence": false,
+ "is_error": false,
+ "error": null,
+ "permission_denials": [],
+ "models_used": [
+  "claude-haiku-4-5-20251001",
+  "claude-sonnet-5"
+ ],
+ "total_cost_usd": 0.2185226,
+ "duration_ms": 149648,
+ "session_id": "2ce95078-8b55-4994-ad06-77e6322ba402",
+ "output_chars": 1159
+}

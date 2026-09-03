@@ -1,0 +1,26 @@
+{
+ "case": "P3",
+ "arm": "with_skill",
+ "rep": 2,
+ "model": "claude-sonnet-5",
+ "genre": "technical",
+ "style": null,
+ "fixture_sha256_16": "a58c8f875e4a4f03",
+ "task": "tasks/p3-voice-passport.md",
+ "task_sha256_16": "8dc88820b26ea9e3",
+ "skill_prompt_sha256_16": "7d8c4d8350d30b58",
+ "skill_root": "/private/tmp/claude-501/-Users-sergey-dev-projects-Universal-skills/84d947e1-4ab1-460b-a71f-497aaeb1eddc/scratchpad/skill-pre-r2",
+ "skill_applied": true,
+ "unwrapped_fence": false,
+ "is_error": false,
+ "error": null,
+ "permission_denials": [],
+ "models_used": [
+  "claude-haiku-4-5-20251001",
+  "claude-sonnet-5"
+ ],
+ "total_cost_usd": 0.13456760000000004,
+ "duration_ms": 84611,
+ "session_id": "a522f4c7-8cfb-46b7-a507-96283889f04d",
+ "output_chars": 902
+}

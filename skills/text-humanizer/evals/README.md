@@ -821,6 +821,48 @@ unmeasured, not innocent. The sweep is committed so the next edit to the vocabul
 checked the same way instead of argued about — TC-EV-84 fails it if it ever stops parsing the
 shipped list, TC-EV-85 if it ever scores a case that has no baseline.
 
+## Did the 60% prompt growth buy anything? Measured: yes
+
+R2–R7 grew the assembled prompt by **+56%** across these ten cases — 127,639 characters to
+199,207, about **+17,900 tokens per call**. On `low`, where technical and legal text runs, it goes
+from 10,810 to 16,891 characters, much of it rules addressed to creative genres. Every campaign
+here was drawn *after* that growth, so nothing measured what it bought.
+
+`run_humanize.py --skill-root <a copy of the skill>` answers it. The old tree comes from commit
+`c0ecb00`, the state before R2. Only the skill tree differs: same fixtures, same task files, same
+instruction, same model, same grader.
+
+**30 runs of the old skill, 0 failures, `$4.50`.** The current arm was reused from campaigns
+already drawn and cost nothing.
+
+| | before R2 | now |
+| :--- | ---: | ---: |
+| Checks passed | 100 / 126 | **117 / 126** |
+| Facts kept | 317 / 342 | **334 / 342** |
+| Markers left | 198 → 114 | 198 → **55** |
+| Unmeasurable runs | 1 | **0** |
+
+Seeded bootstrap on the per-run check rate, 30 pairs: **delta +0.137, 95% CI [+0.041, +0.229]**.
+
+**Where the gain is.** E2 6/9 → 9/9 with facts 21/24 → 24/24 — precisely R3's subject, domain
+terms at `low`. E3 12/15 → 15/15, the clean control, R5's subject. P1 10/15 → 15/15 with facts
+41/48 → 48/48. P2 10/12 → 12/12, P3 7/12 → 12/12, N1 6/12 → 7/12. Unchanged on E1, E4, N2.
+**Worse on one: P4, 12/12 → 10/12**, consistent with what the pressure campaign already recorded
+for that case.
+
+**One contribution subtracted, because it is not the growth's.** A single old-arm run (P3/rep-3)
+returned a system prompt instead of a rewrite — the mode-deliverable defect, fixed *after* R2–R7
+and nothing to do with prompt length. It alone contributes 74 of the 86 markers in P3's row.
+Excluding it from both arms: **delta +0.115, CI [+0.024, +0.202]**, still clear of zero. About
+0.02 of the measured difference is the mode fix; the rest is R2–R7.
+
+**The limit on this result, and it is the main one.** The old tree has no R3, no R4 and no R7,
+while several keys were written for the new behaviour — E2's `must_keep` demands that domain terms
+survive, which *is* R3's subject. The comparison is therefore favourable to the new version **by
+construction**, and "passes more checks" should be read as "does what its own keys were written to
+ask for" rather than as independent confirmation. Removing that bias would mean re-authoring the
+keys blind, which this run did not do.
+
 ## Audit against the house eval standard
 
 `docs/Manuals/skill-evals_guide.md` §11.1 is this repository's checklist. This harness was

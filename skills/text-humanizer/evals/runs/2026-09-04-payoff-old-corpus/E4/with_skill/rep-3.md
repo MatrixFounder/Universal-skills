@@ -1,0 +1,1 @@
+v0.9 is out today. Feed management just got a real upgrade, built straight from what you've been telling me. Feed refresh: 3x faster. The iOS crash on cold start, issue #218, is dead. Questions? Hit reply, I'm around.

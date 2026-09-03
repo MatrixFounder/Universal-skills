@@ -130,14 +130,24 @@ def isolated_workdir(base=None):
     return path
 
 
-def assemble_skill_prompt(genre, mode="humanize", intensity="auto", style=None):
+def assemble_skill_prompt(genre, mode="humanize", intensity="auto", style=None,
+                          skill_root=None):
     """Return `humanizer.py`'s stdout for *genre*.
 
     The script is CALLED rather than reimplemented, so a genre's intensity, its
     pattern file and the template all reach this eval exactly as a user gets
     them. Its exit codes are documented as 0 on success and 2 on a usage error.
+
+    `skill_root` points the call at a DIFFERENT copy of the skill -- an older
+    checkout, say. That is what makes a version A/B possible: R2-R7 grew the
+    assembled prompt by about 60% at every intensity, and whether that bought
+    anything cannot be read off a campaign drawn entirely after the growth.
     """
-    argv = [sys.executable, HUMANIZER, "--genre", genre,
+    humanizer = (os.path.join(skill_root, "scripts", "humanizer.py")
+                 if skill_root else HUMANIZER)
+    if not os.path.isfile(humanizer):
+        raise HumanizerFailed(f"no humanizer.py at {humanizer}")
+    argv = [sys.executable, humanizer, "--genre", genre,
             "--mode", mode, "--intensity", intensity]
     if style:
         argv += ["--style", style]
@@ -231,10 +241,11 @@ def _write_meta(path, payload):
         json.dump(payload, fh, ensure_ascii=False, indent=1)
 
 
-def run_case(case, arm, rep, model, out_root, dry_run=False):
+def run_case(case, arm, rep, model, out_root, dry_run=False, skill_root=None):
     """Execute one arm of one case and write the corpus entry."""
     fixture_text = _read(os.path.join(HERE, case["fixture"]))
-    skill_prompt = (assemble_skill_prompt(case["genre"], style=case.get("style"))
+    skill_prompt = (assemble_skill_prompt(case["genre"], style=case.get("style"),
+                                          skill_root=skill_root)
                     if arm == "with_skill" else None)
     task_template = load_task(case)
     prompt = build_prompt(fixture_text, arm, skill_prompt, task_template)
@@ -263,6 +274,7 @@ def run_case(case, arm, rep, model, out_root, dry_run=False):
         "task": case.get("task"),
         "task_sha256_16": _sha(task_template),
         "skill_prompt_sha256_16": _sha(skill_prompt) if skill_prompt else None,
+        "skill_root": skill_root,
         "skill_applied": arm == "with_skill",
         "unwrapped_fence": unwrapped,
         "is_error": bool(env.get("is_error")),
@@ -307,6 +319,11 @@ def main(argv=None):
                          "runs/<UTC date>-<label>-corpus: guide 7.2 wants a new\n"
                          "directory per version, not an overwritten one")
     ap.add_argument("--model", default=DEFAULT_MODEL)
+    ap.add_argument("--skill-root", default=None, metavar="DIR",
+                    help="assemble the with_skill prompt from THIS copy of the "
+                         "skill instead of the working tree. A version A/B "
+                         "needs it: a campaign drawn entirely after a change "
+                         "cannot say what the change bought")
     ap.add_argument("--reps", type=int, default=1)
     # `nargs="+"` with `action="extend"` accepts BOTH `--cases E1 E2` and
     # `--cases E1 --cases E2`. With the previous `action="append"` the first
@@ -356,7 +373,7 @@ def main(argv=None):
     def execute(entry):
         label, case, arm, rep = entry
         return label, run_case(case, arm, rep, args.model, args.out_root,
-                               args.dry_run)
+                               args.dry_run, args.skill_root)
 
     def record(label, res):
         nonlocal cost
