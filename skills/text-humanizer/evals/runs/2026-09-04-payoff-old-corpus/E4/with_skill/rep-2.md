@@ -1,0 +1,1 @@
+v0.9 is live today. Nothing fancy, just what you actually asked for. Feeds refresh 3x faster now, and that annoying iOS crash on cold start (#218) is finally dead. Questions? Ping me.

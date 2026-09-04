@@ -1,0 +1,49 @@
+{
+  "summary": {
+    "pass_rate": 1.0,
+    "passed": 4,
+    "failed": 0,
+    "total": 4
+  },
+  "expectations": [
+    {
+      "text": "no_commentary",
+      "passed": true,
+      "evidence": "clean"
+    },
+    {
+      "text": "no_invented_numbers",
+      "passed": true,
+      "evidence": "0 figure(s) absent from the source"
+    },
+    {
+      "text": "facts_kept",
+      "passed": true,
+      "evidence": "8/8 kept"
+    },
+    {
+      "text": "markers_removed",
+      "passed": true,
+      "evidence": "0/1 declared surfaces survived"
+    }
+  ],
+  "execution_metrics": {
+    "output_chars": 484,
+    "total_tool_calls": 0,
+    "errors_encountered": 0
+  },
+  "notes": {
+    "case": "E2",
+    "genre": "technical",
+    "measured": true,
+    "unmeasured_reason": null,
+    "markers_before": 6,
+    "markers_after": 6,
+    "facts_kept": 8,
+    "facts_total": 8,
+    "similarity": 0.2761,
+    "growth": 1.04
+  },
+  "grader": "text-humanizer/evals/grade_run.py — deterministic, no model judge",
+  "pass_rate_means": "fraction of this run's deterministic checks that passed; NOT an LLM judge verdict, and not comparable to one"
+}

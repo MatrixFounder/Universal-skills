@@ -1,5 +1,7 @@
 # Style: Journalistic / News
 
+> **Evidence class: heuristic.** Domain editorial practice. Not measured.
+
 **Tone:** Objective, inverted-pyramid, attributable.
 **Target Audience:** General public, informed citizens.
 

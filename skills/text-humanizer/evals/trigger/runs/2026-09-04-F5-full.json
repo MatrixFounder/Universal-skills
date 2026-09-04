@@ -1,0 +1,331 @@
+{
+  "skill_name": "text-humanizer",
+  "description": "Use when a text should stop reading as machine-written, or when you need a reusable system prompt that writes that way from the start. Humanize a draft, de-slop it, clean up the wording, or audit it for AI phrasing. Covers requests like \"make this sound like a person wrote it\" or \"\u0443\u0431\u0435\u0440\u0438 \u043f\u0440\u0438\u0437\u043d\u0430\u043a\u0438, \u0447\u0442\u043e \u043f\u0438\u0441\u0430\u043b AI\". Not for prose fiction, and non-fiction genres only.",
+  "results": [
+    {
+      "query": "\u0443\u0431\u0435\u0440\u0438 \u0438\u0437 \u044d\u0442\u043e\u0433\u043e \u0442\u0435\u043a\u0441\u0442\u0430 \u043f\u0440\u0438\u0437\u043d\u0430\u043a\u0438, \u0447\u0442\u043e \u0435\u0433\u043e \u043f\u0438\u0441\u0430\u043b AI",
+      "should_trigger": true,
+      "trigger_rate": 1.0,
+      "triggers": 3,
+      "runs": 3,
+      "pass": true,
+      "canonical_matches": 3,
+      "instrument_failures": 0
+    },
+    {
+      "query": "this landing page copy reads like ChatGPT wrote it \u2014 fix it but keep every number",
+      "should_trigger": true,
+      "trigger_rate": 0.3333333333333333,
+      "triggers": 1,
+      "runs": 3,
+      "pass": false,
+      "canonical_matches": 1,
+      "instrument_failures": 0
+    },
+    {
+      "query": "humanize this marketing email, it's full of 'delve' and 'seamless'",
+      "should_trigger": true,
+      "trigger_rate": 1.0,
+      "triggers": 3,
+      "runs": 3,
+      "pass": true,
+      "canonical_matches": 3,
+      "instrument_failures": 0
+    },
+    {
+      "query": "\u0441\u0434\u0435\u043b\u0430\u0439 \u0442\u0435\u043a\u0441\u0442 \u0431\u043e\u043b\u0435\u0435 \u0447\u0435\u043b\u043e\u0432\u0435\u0447\u0435\u0441\u043a\u0438\u043c, \u043d\u043e \u043d\u0435 \u043c\u0435\u043d\u044f\u0439 \u0441\u043c\u044b\u0441\u043b \u0438 \u0446\u0438\u0444\u0440\u044b",
+      "should_trigger": true,
+      "trigger_rate": 0.6666666666666666,
+      "triggers": 2,
+      "runs": 3,
+      "pass": true,
+      "canonical_matches": 2,
+      "instrument_failures": 0
+    },
+    {
+      "query": "audit this article for AI markers \u2014 just tell me what's wrong, don't rewrite it yet",
+      "should_trigger": true,
+      "trigger_rate": 0.3333333333333333,
+      "triggers": 1,
+      "runs": 3,
+      "pass": false,
+      "canonical_matches": 1,
+      "instrument_failures": 0
+    },
+    {
+      "query": "de-slop this blog post before I publish it",
+      "should_trigger": true,
+      "trigger_rate": 0.3333333333333333,
+      "triggers": 1,
+      "runs": 3,
+      "pass": false,
+      "canonical_matches": 1,
+      "instrument_failures": 0
+    },
+    {
+      "query": "make this sound like a person wrote it, not a model",
+      "should_trigger": true,
+      "trigger_rate": 1.0,
+      "triggers": 3,
+      "runs": 3,
+      "pass": true,
+      "canonical_matches": 3,
+      "instrument_failures": 0
+    },
+    {
+      "query": "\u043f\u0440\u043e\u0432\u0435\u0440\u044c \u043c\u043e\u044e \u0441\u0442\u0430\u0442\u044c\u044e \u043d\u0430 AI-\u043e\u0431\u043e\u0440\u043e\u0442\u044b \u0438 \u043a\u0430\u043d\u0446\u0435\u043b\u044f\u0440\u0438\u0442",
+      "should_trigger": true,
+      "trigger_rate": 0.3333333333333333,
+      "triggers": 1,
+      "runs": 3,
+      "pass": false,
+      "canonical_matches": 1,
+      "instrument_failures": 0
+    },
+    {
+      "query": "I need a reusable system prompt for writing food reviews that don't sound generated",
+      "should_trigger": true,
+      "trigger_rate": 1.0,
+      "triggers": 3,
+      "runs": 3,
+      "pass": true,
+      "canonical_matches": 3,
+      "instrument_failures": 0
+    },
+    {
+      "query": "rewrite ~/drafts/announce.md so it doesn't read as machine-written, it's a crypto launch post",
+      "should_trigger": true,
+      "trigger_rate": 0.0,
+      "triggers": 0,
+      "runs": 3,
+      "pass": false,
+      "canonical_matches": 0,
+      "instrument_failures": 0
+    },
+    {
+      "query": "this doc passed the linter but every paragraph is the same length and it's all 'not just X but Y' \u2014 clean it up",
+      "should_trigger": true,
+      "trigger_rate": 0.0,
+      "triggers": 0,
+      "runs": 3,
+      "pass": false,
+      "canonical_matches": 0,
+      "instrument_failures": 0
+    },
+    {
+      "query": "generate an untraceable prompt for writing wiki-style entries",
+      "should_trigger": true,
+      "trigger_rate": 1.0,
+      "triggers": 3,
+      "runs": 3,
+      "pass": true,
+      "canonical_matches": 3,
+      "instrument_failures": 0
+    },
+    {
+      "query": "my editor says this whitepaper sounds like it came out of a model. can you take the AI flavour out of it",
+      "should_trigger": true,
+      "trigger_rate": 0.6666666666666666,
+      "triggers": 2,
+      "runs": 3,
+      "pass": true,
+      "canonical_matches": 2,
+      "instrument_failures": 0
+    },
+    {
+      "query": "strip the em dashes and the 'it's important to note' stuff out of this draft",
+      "should_trigger": true,
+      "trigger_rate": 0.3333333333333333,
+      "triggers": 1,
+      "runs": 3,
+      "pass": false,
+      "canonical_matches": 1,
+      "instrument_failures": 0
+    },
+    {
+      "query": "\u043f\u0435\u0440\u0435\u043f\u0438\u0448\u0438 \u044d\u0442\u043e\u0442 \u043f\u043e\u0441\u0442 \u0442\u0430\u043a, \u0447\u0442\u043e\u0431\u044b \u043d\u0435 \u0431\u044b\u043b\u043e \u0432\u0438\u0434\u043d\u043e, \u0447\u0442\u043e \u043f\u0438\u0441\u0430\u043b\u0430 \u043d\u0435\u0439\u0440\u043e\u0441\u0435\u0442\u044c",
+      "should_trigger": true,
+      "trigger_rate": 0.0,
+      "triggers": 0,
+      "runs": 3,
+      "pass": false,
+      "canonical_matches": 0,
+      "instrument_failures": 0
+    },
+    {
+      "query": "our docs read like marketing brochures now \u2014 too many 'seamless' and 'robust'. clean the tone without touching the API descriptions",
+      "should_trigger": true,
+      "trigger_rate": 0.0,
+      "triggers": 0,
+      "runs": 3,
+      "pass": false,
+      "canonical_matches": 0,
+      "instrument_failures": 0
+    },
+    {
+      "query": "unslop this. it's a 900-word Substack piece and it's unreadable",
+      "should_trigger": true,
+      "trigger_rate": 0.0,
+      "triggers": 0,
+      "runs": 3,
+      "pass": false,
+      "canonical_matches": 0,
+      "instrument_failures": 0
+    },
+    {
+      "query": "before I send this to the client \u2014 does it read as AI-written? give me a per-paragraph verdict",
+      "should_trigger": true,
+      "trigger_rate": 0.0,
+      "triggers": 0,
+      "runs": 3,
+      "pass": false,
+      "canonical_matches": 0,
+      "instrument_failures": 0
+    },
+    {
+      "query": "\u043d\u0443\u0436\u0435\u043d \u043f\u0440\u043e\u043c\u043f\u0442, \u043a\u043e\u0442\u043e\u0440\u044b\u0439 \u0431\u0443\u0434\u0435\u0442 \u043f\u0438\u0441\u0430\u0442\u044c telegram-\u043f\u043e\u0441\u0442\u044b \u043f\u0440\u043e \u043a\u0440\u0438\u043f\u0442\u0443 \u0431\u0435\u0437 AI-\u0448\u0442\u0430\u043c\u043f\u043e\u0432",
+      "should_trigger": true,
+      "trigger_rate": 1.0,
+      "triggers": 3,
+      "runs": 3,
+      "pass": true,
+      "canonical_matches": 3,
+      "instrument_failures": 0
+    },
+    {
+      "query": "here are three samples of how I write. rewrite this draft in my voice and drop the machine phrasing",
+      "should_trigger": true,
+      "trigger_rate": 0.0,
+      "triggers": 0,
+      "runs": 3,
+      "pass": false,
+      "canonical_matches": 0,
+      "instrument_failures": 0
+    },
+    {
+      "query": "\u043d\u0430\u043f\u0438\u0448\u0438 CHANGELOG \u0434\u043b\u044f \u0440\u0435\u043b\u0438\u0437\u0430 2.4 \u0438 \u043f\u0440\u043e\u0432\u0435\u0440\u044c \u0440\u0435\u0433\u0438\u0441\u0442\u0440 \u0444\u043e\u0440\u043c\u0443\u043b\u0438\u0440\u043e\u0432\u043e\u043a",
+      "should_trigger": false,
+      "trigger_rate": 0.0,
+      "triggers": 0,
+      "runs": 3,
+      "pass": true,
+      "canonical_matches": 0,
+      "instrument_failures": 3
+    },
+    {
+      "query": "formalize this task spec \u2014 it reads like an essay, too many evaluative words",
+      "should_trigger": false,
+      "trigger_rate": 0.0,
+      "triggers": 0,
+      "runs": 3,
+      "pass": true,
+      "canonical_matches": 0,
+      "instrument_failures": 2
+    },
+    {
+      "query": "write a LinkedIn post about our new retry logic",
+      "should_trigger": false,
+      "trigger_rate": 0.0,
+      "triggers": 0,
+      "runs": 3,
+      "pass": true,
+      "canonical_matches": 0,
+      "instrument_failures": 0
+    },
+    {
+      "query": "convert this saved html page to clean markdown for Obsidian",
+      "should_trigger": false,
+      "trigger_rate": 0.0,
+      "triggers": 0,
+      "runs": 3,
+      "pass": true,
+      "canonical_matches": 0,
+      "instrument_failures": 0
+    },
+    {
+      "query": "summarize this meeting transcript into a structured note",
+      "should_trigger": false,
+      "trigger_rate": 0.0,
+      "triggers": 0,
+      "runs": 3,
+      "pass": true,
+      "canonical_matches": 0,
+      "instrument_failures": 1
+    },
+    {
+      "query": "make slides out of this outline",
+      "should_trigger": false,
+      "trigger_rate": 0.0,
+      "triggers": 0,
+      "runs": 3,
+      "pass": true,
+      "canonical_matches": 0,
+      "instrument_failures": 0
+    },
+    {
+      "query": "review this branch for correctness bugs",
+      "should_trigger": false,
+      "trigger_rate": 0.0,
+      "triggers": 0,
+      "runs": 3,
+      "pass": true,
+      "canonical_matches": 0,
+      "instrument_failures": 0
+    },
+    {
+      "query": "translate this paragraph into Russian, keep the terminology",
+      "should_trigger": false,
+      "trigger_rate": 0.0,
+      "triggers": 0,
+      "runs": 3,
+      "pass": true,
+      "canonical_matches": 0,
+      "instrument_failures": 0
+    },
+    {
+      "query": "\u0443\u0431\u0435\u0440\u0438 AI \u0438\u0437 \u043c\u043e\u0435\u0433\u043e \u0440\u0430\u0441\u0441\u043a\u0430\u0437\u0430 \u2014 \u044d\u0442\u043e \u0444\u044d\u043d\u0442\u0435\u0437\u0438-\u043d\u043e\u0432\u0435\u043b\u043b\u0430 \u043d\u0430 6000 \u0441\u043b\u043e\u0432, \u0444\u0438\u043d\u0430\u043b \u0437\u0432\u0443\u0447\u0438\u0442 \u043a\u0430\u043a \u043c\u043e\u0440\u0430\u043b\u044c \u0438\u0437 \u0431\u0430\u0441\u043d\u0438",
+      "should_trigger": false,
+      "trigger_rate": 0.6666666666666666,
+      "triggers": 2,
+      "runs": 3,
+      "pass": false,
+      "canonical_matches": 2,
+      "instrument_failures": 1
+    },
+    {
+      "query": "my short story got flagged as AI-generated. the plot is too tidy and every emotion is a tightening chest. fix the narrative",
+      "should_trigger": false,
+      "trigger_rate": 0.0,
+      "triggers": 0,
+      "runs": 3,
+      "pass": true,
+      "canonical_matches": 0,
+      "instrument_failures": 0
+    },
+    {
+      "query": "proofread this chapter for typos and grammar",
+      "should_trigger": false,
+      "trigger_rate": 0.0,
+      "triggers": 0,
+      "runs": 3,
+      "pass": true,
+      "canonical_matches": 0,
+      "instrument_failures": 0
+    },
+    {
+      "query": "shorten this email to three sentences",
+      "should_trigger": false,
+      "trigger_rate": 0.0,
+      "triggers": 0,
+      "runs": 3,
+      "pass": true,
+      "canonical_matches": 0,
+      "instrument_failures": 0
+    }
+  ],
+  "summary": {
+    "total": 32,
+    "passed": 19,
+    "failed": 13
+  }
+}

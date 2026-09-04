@@ -1,0 +1,54 @@
+{
+  "summary": {
+    "pass_rate": 0.6,
+    "passed": 3,
+    "failed": 2,
+    "total": 5
+  },
+  "expectations": [
+    {
+      "text": "no_commentary",
+      "passed": true,
+      "evidence": "clean"
+    },
+    {
+      "text": "no_invented_numbers",
+      "passed": true,
+      "evidence": "0 figure(s) absent from the source"
+    },
+    {
+      "text": "facts_kept",
+      "passed": false,
+      "evidence": "11/16 kept, lost: ['user-activated-soft-fork', 'only formal mechanism', 'peer review shapes each BIP', 'unidirectionally changing Bitcoin', 'largest Bitcoin holders']"
+    },
+    {
+      "text": "markers_removed",
+      "passed": true,
+      "evidence": "0/0 declared surfaces survived"
+    },
+    {
+      "text": "not_over_edited",
+      "passed": false,
+      "evidence": "similarity 0.1902 against a floor of 0.72"
+    }
+  ],
+  "execution_metrics": {
+    "output_chars": 1083,
+    "total_tool_calls": 0,
+    "errors_encountered": 0
+  },
+  "notes": {
+    "case": "N1",
+    "genre": "academic",
+    "measured": true,
+    "unmeasured_reason": null,
+    "markers_before": 1,
+    "markers_after": 0,
+    "facts_kept": 11,
+    "facts_total": 16,
+    "similarity": 0.1902,
+    "growth": 0.971
+  },
+  "grader": "text-humanizer/evals/grade_run.py — deterministic, no model judge",
+  "pass_rate_means": "fraction of this run's deterministic checks that passed; NOT an LLM judge verdict, and not comparable to one"
+}

@@ -1,0 +1,59 @@
+{
+  "summary": {
+    "pass_rate": 0.666667,
+    "passed": 4,
+    "failed": 2,
+    "total": 6
+  },
+  "expectations": [
+    {
+      "text": "no_commentary",
+      "passed": true,
+      "evidence": "clean"
+    },
+    {
+      "text": "no_invented_numbers",
+      "passed": true,
+      "evidence": "0 figure(s) absent from the source"
+    },
+    {
+      "text": "facts_kept",
+      "passed": false,
+      "evidence": "11/13 kept, lost: ['31\\nadvisories across 6 skills', 'config keys were aligned']"
+    },
+    {
+      "text": "markers_removed",
+      "passed": true,
+      "evidence": "0/0 declared surfaces survived"
+    },
+    {
+      "text": "no_reinjection",
+      "passed": true,
+      "evidence": "0/9 guarded surfaces appeared"
+    },
+    {
+      "text": "not_over_edited",
+      "passed": false,
+      "evidence": "similarity 0.258 against a floor of 0.75"
+    }
+  ],
+  "execution_metrics": {
+    "output_chars": 1017,
+    "total_tool_calls": 0,
+    "errors_encountered": 0
+  },
+  "notes": {
+    "case": "N2",
+    "genre": "technical",
+    "measured": true,
+    "unmeasured_reason": null,
+    "markers_before": 2,
+    "markers_after": 5,
+    "facts_kept": 11,
+    "facts_total": 13,
+    "similarity": 0.258,
+    "growth": 1.152
+  },
+  "grader": "text-humanizer/evals/grade_run.py — deterministic, no model judge",
+  "pass_rate_means": "fraction of this run's deterministic checks that passed; NOT an LLM judge verdict, and not comparable to one"
+}

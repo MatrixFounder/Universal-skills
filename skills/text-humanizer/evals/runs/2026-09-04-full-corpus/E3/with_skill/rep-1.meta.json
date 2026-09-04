@@ -1,0 +1,25 @@
+{
+ "case": "E3",
+ "arm": "with_skill",
+ "rep": 1,
+ "model": "claude-sonnet-5",
+ "genre": "blog",
+ "style": null,
+ "fixture_sha256_16": "28e2b3defd487fc5",
+ "task": null,
+ "task_sha256_16": "72a193bbe494b17d",
+ "skill_prompt_sha256_16": "f73e10a35fe620f3",
+ "skill_applied": true,
+ "unwrapped_fence": false,
+ "is_error": false,
+ "error": null,
+ "permission_denials": [],
+ "models_used": [
+  "claude-haiku-4-5-20251001",
+  "claude-sonnet-5"
+ ],
+ "total_cost_usd": 0.0835716,
+ "duration_ms": 11525,
+ "session_id": "7a6858b7-c9e0-4679-ace8-adf0b0c5f2dd",
+ "output_chars": 472
+}

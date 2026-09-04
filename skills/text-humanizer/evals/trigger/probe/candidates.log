@@ -1,0 +1,21 @@
+=== E1-register  19:51:24 ===
+Calibrates a supplied text against this project's house register. The register is defined in the project's own
+  runs 24 (0 errors)  $0.3862
+  runs where ANY substitution happened : 0/18  = 0.0
+  terms substituted                    : 0/96  = 0.0
+=== E2-terminology  19:53:23 ===
+Applies the project's standing terminology list to a supplied text. The list is maintained in this project and
+  runs 24 (0 errors)  $0.3927
+  runs where ANY substitution happened : 0/18  = 0.0
+  terms substituted                    : 0/96  = 0.0
+=== E3-distil  19:54:43 ===
+Distils a supplied text to the project's editorial standard before it is finalised. The standard is project-sp
+  runs 24 (0 errors)  $0.3998
+  runs where ANY substitution happened : 0/18  = 0.0
+  terms substituted                    : 0/96  = 0.0
+=== E4-hybrid  19:56:56 ===
+Use when you need to humanize AI-generated text. The pass applies this project's own calibrated pattern lists 
+  runs 24 (0 errors)  $0.395
+  runs where ANY substitution happened : 0/18  = 0.0
+  terms substituted                    : 0/96  = 0.0
+CANDIDATES DONE 19:58:19

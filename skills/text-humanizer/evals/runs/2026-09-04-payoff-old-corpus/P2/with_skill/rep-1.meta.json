@@ -1,0 +1,26 @@
+{
+ "case": "P2",
+ "arm": "with_skill",
+ "rep": 1,
+ "model": "claude-sonnet-5",
+ "genre": "technical",
+ "style": null,
+ "fixture_sha256_16": "d3f345b201e2d3d8",
+ "task": "tasks/p2-intensity-runbook.md",
+ "task_sha256_16": "6568fbcf7ff70dfa",
+ "skill_prompt_sha256_16": "7d8c4d8350d30b58",
+ "skill_root": "/private/tmp/claude-501/-Users-sergey-dev-projects-Universal-skills/84d947e1-4ab1-460b-a71f-497aaeb1eddc/scratchpad/skill-pre-r2",
+ "skill_applied": true,
+ "unwrapped_fence": false,
+ "is_error": false,
+ "error": null,
+ "permission_denials": [],
+ "models_used": [
+  "claude-haiku-4-5-20251001",
+  "claude-sonnet-5"
+ ],
+ "total_cost_usd": 0.1574646,
+ "duration_ms": 155793,
+ "session_id": "d74a7dc2-e04f-4d9a-abdb-6c18fde93b98",
+ "output_chars": 1378
+}

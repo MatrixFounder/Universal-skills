@@ -1,5 +1,7 @@
 # Style: Corporate / Business
 
+> **Evidence class: heuristic.** Domain editorial practice. Not measured.
+
 **Tone:** Professional, clear, action-oriented, concise.
 **Target Audience:** Colleagues, stakeholders, clients.
 

@@ -1,0 +1,25 @@
+{
+ "case": "G4",
+ "arm": "with_skill",
+ "rep": 1,
+ "model": "claude-sonnet-5",
+ "genre": "science",
+ "style": null,
+ "fixture_sha256_16": "d7fa2aa8c78eec23",
+ "task": null,
+ "task_sha256_16": "72a193bbe494b17d",
+ "skill_prompt_sha256_16": "02b894ab71d05df4",
+ "skill_applied": true,
+ "unwrapped_fence": false,
+ "is_error": false,
+ "error": null,
+ "permission_denials": [],
+ "models_used": [
+  "claude-haiku-4-5-20251001",
+  "claude-sonnet-5"
+ ],
+ "total_cost_usd": 0.10112159999999999,
+ "duration_ms": 34192,
+ "session_id": "36f68acb-9790-4d4d-853c-955dee5b9dad",
+ "output_chars": 313
+}

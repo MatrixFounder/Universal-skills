@@ -1,0 +1,26 @@
+{
+ "case": "E1",
+ "arm": "with_skill",
+ "rep": 2,
+ "model": "claude-sonnet-5",
+ "genre": "marketing",
+ "style": null,
+ "fixture_sha256_16": "88349a72c5d6bbda",
+ "task": null,
+ "task_sha256_16": "72a193bbe494b17d",
+ "skill_prompt_sha256_16": "8eece35e9739faff",
+ "skill_root": "/private/tmp/claude-501/-Users-sergey-dev-projects-Universal-skills/84d947e1-4ab1-460b-a71f-497aaeb1eddc/scratchpad/skill-pre-r2",
+ "skill_applied": true,
+ "unwrapped_fence": false,
+ "is_error": false,
+ "error": null,
+ "permission_denials": [],
+ "models_used": [
+  "claude-haiku-4-5-20251001",
+  "claude-sonnet-5"
+ ],
+ "total_cost_usd": 0.22164899999999998,
+ "duration_ms": 58850,
+ "session_id": "207b6264-bb04-4b0c-be80-54eb05ac8ed6",
+ "output_chars": 377
+}

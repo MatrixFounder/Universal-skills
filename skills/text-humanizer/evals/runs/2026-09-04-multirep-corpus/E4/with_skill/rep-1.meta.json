@@ -1,0 +1,25 @@
+{
+ "case": "E4",
+ "arm": "with_skill",
+ "rep": 1,
+ "model": "claude-sonnet-5",
+ "genre": "social",
+ "style": null,
+ "fixture_sha256_16": "6b2d969201edcbc2",
+ "task": null,
+ "task_sha256_16": "72a193bbe494b17d",
+ "skill_prompt_sha256_16": "df9468408991b964",
+ "skill_applied": true,
+ "unwrapped_fence": false,
+ "is_error": false,
+ "error": null,
+ "permission_denials": [],
+ "models_used": [
+  "claude-haiku-4-5-20251001",
+  "claude-sonnet-5"
+ ],
+ "total_cost_usd": 0.07463360000000001,
+ "duration_ms": 2628,
+ "session_id": "e3b1eb48-4eb4-4187-b3e3-8c26148fdc0a",
+ "output_chars": 174
+}

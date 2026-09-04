@@ -1,0 +1,6 @@
+{
+  "eval_id": "E2",
+  "name": "technical documentation, [A] words used as terms",
+  "genre": "technical",
+  "measures": "false positives \u2014 `dynamic`, `robust` and `align` are on the [A] list and are domain terms here"
+}

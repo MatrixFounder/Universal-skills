@@ -1,0 +1,25 @@
+{
+ "case": "P3",
+ "arm": "baseline",
+ "rep": 2,
+ "model": "claude-sonnet-5",
+ "genre": "technical",
+ "style": null,
+ "fixture_sha256_16": "a58c8f875e4a4f03",
+ "task": "tasks/p3-voice-passport.md",
+ "task_sha256_16": "8dc88820b26ea9e3",
+ "skill_prompt_sha256_16": null,
+ "skill_applied": false,
+ "unwrapped_fence": false,
+ "is_error": false,
+ "error": null,
+ "permission_denials": [],
+ "models_used": [
+  "claude-haiku-4-5-20251001",
+  "claude-sonnet-5"
+ ],
+ "total_cost_usd": 0.0623936,
+ "duration_ms": 24641,
+ "session_id": "b72a4b60-5a90-4cfc-9e71-1bc78cfe76c4",
+ "output_chars": 902
+}

@@ -108,6 +108,69 @@ def filter_patterns_by_priority(text, allowed_priorities):
     return "".join(filtered)
 
 
+#: A template block that belongs to some intensities only. The alternative --
+#: one more bespoke regex per conditional section, like the two that strip
+#: Diagnosis and Verification by mode -- multiplies special cases and hides the
+#: condition inside this file instead of stating it beside the text it governs.
+CONDITIONAL_BLOCK = re.compile(
+    r"<!-- if-intensity: ([a-z, ]+) -->\n(.*?)<!-- end-if -->\n?",
+    re.DOTALL)
+
+#: The same mechanism keyed on mode. It exists because the template used to open
+#: with "You are an expert Prompt Engineer. Your goal is to generate a SYSTEM
+#: PROMPT" and close with "Output the final System Prompt" in EVERY mode --
+#: including `humanize`, whose deliverable is the rewritten text. Measured: in
+#: the 2026-09-03 pressure campaign three of eighteen `with_skill` runs did what
+#: that literally asks and returned a prompt instead of the edit.
+MODE_BLOCK = re.compile(
+    r"<!-- if-mode: ([a-z, \-]+) -->\n(.*?)<!-- end-if -->\n?",
+    re.DOTALL)
+
+MODES = ("prompt-gen", "humanize", "audit")
+
+
+class TemplateError(ValueError):
+    """A conditional block names an intensity or a mode that does not exist."""
+
+
+def strip_conditional_blocks(text, intensity):
+    """Keep a conditional block only when *intensity* is in its list.
+
+    An unknown intensity name raises rather than silently dropping the block.
+    A typo would otherwise remove a whole verification pass from every run and
+    leave nothing behind to notice -- the failure mode a shipped template must
+    not have.
+    """
+    def decide(match):
+        names = {n.strip() for n in match.group(1).split(",") if n.strip()}
+        unknown = names - set(INTENSITY_PRIORITIES)
+        if unknown:
+            raise TemplateError(
+                f"conditional block names unknown intensity {sorted(unknown)}; "
+                f"known: {sorted(INTENSITY_PRIORITIES)}")
+        return match.group(2) if intensity in names else ""
+
+    return CONDITIONAL_BLOCK.sub(decide, text)
+
+
+def strip_mode_blocks(text, mode):
+    """Keep a mode block only when *mode* is in its list.
+
+    An unknown mode name raises for the same reason an unknown intensity does:
+    a typo would silently delete the line that tells the model what to return.
+    """
+    def decide(match):
+        names = {n.strip() for n in match.group(1).split(",") if n.strip()}
+        unknown = names - set(MODES)
+        if unknown:
+            raise TemplateError(
+                f"conditional block names unknown mode {sorted(unknown)}; "
+                f"known: {sorted(MODES)}")
+        return match.group(2) if mode in names else ""
+
+    return MODE_BLOCK.sub(decide, text)
+
+
 def get_available_styles():
     """List available style files."""
     return [f.stem for f in STYLES_DIR.glob("*.md")]
@@ -214,7 +277,11 @@ def main():
             r'### 9\. Verification \(Humanize mode only\).*?(?=---|\Z)',
             '', final_output, flags=re.DOTALL)
 
-    # 5. Output
+    # 5. Strip blocks that belong to other intensities or other modes
+    final_output = strip_conditional_blocks(final_output, resolved_intensity)
+    final_output = strip_mode_blocks(final_output, args.mode)
+
+    # 6. Output
     print(final_output)
 
 

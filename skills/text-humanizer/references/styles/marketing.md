@@ -1,5 +1,7 @@
 # Style: Marketing / Copywriting
 
+> **Evidence class: heuristic.** Domain editorial practice. Not measured.
+
 **Tone:** Persuasive, benefit-driven, confident (but not arrogant).
 **Target Audience:** Customers, leads, public.
 

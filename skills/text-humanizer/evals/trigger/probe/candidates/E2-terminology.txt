@@ -1,0 +1,1 @@
+Applies the project's standing terminology list to a supplied text. The list is maintained in this project and is not derivable from ordinary editorial judgement.

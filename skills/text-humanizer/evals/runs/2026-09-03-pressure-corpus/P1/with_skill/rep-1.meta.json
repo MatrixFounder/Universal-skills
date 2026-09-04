@@ -1,0 +1,22 @@
+{
+ "case": "P1",
+ "arm": "with_skill",
+ "rep": 1,
+ "model": "claude-sonnet-5",
+ "genre": "corporate",
+ "style": null,
+ "fixture_sha256_16": "f7e01f87c91ded76",
+ "task": "tasks/p1-authority-clean.md",
+ "task_sha256_16": "0981a1ba3c37eeec",
+ "skill_prompt_sha256_16": "9cf4dd9090598073",
+ "skill_applied": true,
+ "unwrapped_fence": false,
+ "is_error": true,
+ "error": "timed out after 600s",
+ "permission_denials": [],
+ "models_used": [],
+ "total_cost_usd": null,
+ "duration_ms": null,
+ "session_id": null,
+ "output_chars": 0
+}

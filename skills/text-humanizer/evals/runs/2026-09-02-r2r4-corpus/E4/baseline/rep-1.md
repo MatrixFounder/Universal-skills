@@ -1,0 +1,1 @@
+Shipping v0.9 today. This one's more than a patch — it changes how feed management works day to day. Thanks to everyone who sent feedback; it shaped a lot of this release. Feed refresh is now 3x faster, and we fixed the iOS crash on cold start (#218). Questions welcome.

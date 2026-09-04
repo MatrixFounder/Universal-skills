@@ -1,5 +1,8 @@
 # Rewriting Strategy: Statistical Deviation & Contrastive Subtraction
 
+> **Evidence class: inference.** See *Where this comes from* below. The technique is an
+> editorial heuristic; the two studies cited support its direction, not the rule itself.
+
 This document defines the **active replacement strategy** for humanizing text. The pattern files tell you what to avoid. This file tells you what to do instead.
 
 ## The Core Principle: Statistical Deviation
@@ -16,9 +19,27 @@ Both human versions are less statistically probable, but each carries a distinct
 
 **Hold this principle in mind for every decision: "The AI would choose the most typical option. What would THIS specific author choose?"**
 
-## The Technique: Contrastive Subtraction (CoPA)
+## The Technique: Contrastive Subtraction
 
-> Research (CoPA, EMNLP 2025) found that the most effective way to humanize text is not to remove markers from a checklist, but to find the MOST PREDICTABLE word in each sentence and replace it with a less probable but contextually appropriate alternative.
+**Where this comes from, stated exactly.** The technique below is an editorial heuristic. It is
+*inspired by* CoPA (Contrastive Paraphrase Attack, EMNLP 2025), and CoPA does something else:
+it builds an auxiliary machine-like token distribution and subtracts it from a human-like one
+**during decoding**. That is a generation-time method needing access to logits. It performs no
+per-sentence word replacement, it does not compare itself against checklist-based marker
+removal, and its goal is evading a detector rather than improving prose. Earlier revisions of
+this file attributed the rule below to it. They were wrong.
+
+What supports the heuristic in prompt space is separate, and narrower:
+
+*   professional editors' operations on 1,057 LLM paragraphs skew heavily to **replacement** --
+    74% replace, 18% delete, 8% insert (LAMP, CHI 2025);
+*   instruction-tuned model prose is lexically narrow, over-using a small set of words at many
+    times the human rate (Reinhart et al., PNAS 2025).
+
+Neither study tested this rule. Treat the gain as unmeasured.
+
+> Find the MOST PREDICTABLE word in each sentence and replace it with a less probable but
+> contextually appropriate alternative.
 
 **Predictable does not mean formal.** "Solution" in the context of "found a solution to the problem" is predictable. "Workaround," "hack," "lifeline" are less probable but more characteristic. One such choice per sentence produces more impact than three stylistic edits.
 
@@ -28,6 +49,21 @@ Both human versions are less statistically probable, but each carries a distinct
 2. **Then**, pass through the text sentence by sentence. In each sentence, identify the single most predictable content word (noun, verb, or adjective -- skip function words like "the," "is," "and").
 3. **Replace** that word with a less expected but fitting alternative. Consider: What would THIS author say here? What word carries voice, opinion, or specificity?
 4. **Do not over-apply.** Not every sentence needs a replacement. If a sentence already contains a distinctive word or phrase, skip it. Aim for roughly 60-70% of sentences, not 100%.
+
+### Which Operation to Reach For
+
+Prefer **replacing** a word and **deleting** a phrase over **inserting** a new one. Where two
+edits would both fix a sentence, take the one that does not make the text longer. The single
+exception is **adding specificity** -- a name, a number, an object, an action somebody took;
+that edit is allowed to grow the text. Anything else that grows it is injected personality the
+source did not have, and injected personality is the editor's fingerprint, not the author's.
+
+This is a skew, not a ban. Where the diagnosis is **Red** -- three or more markers, the paragraph
+rewritten whole -- the additive genre rules apply normally, because little of the original
+survives to be preserved. Under **Yellow**, spot-fix the marker and leave the length alone.
+
+*Basis:* the LAMP figures cited above -- 74% replace, 18% delete, 8% insert -- describe
+professional editors, not an instructed model. Direction, not a target ratio.
 
 ### Examples
 

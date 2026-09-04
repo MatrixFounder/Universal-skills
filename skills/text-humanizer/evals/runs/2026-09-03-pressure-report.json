@@ -1,0 +1,3389 @@
+{
+ "schema": "humanizer-evals-report/v1",
+ "detectors": 31,
+ "provenance": {
+  "skill_version": "2.1",
+  "corpus": "2026-09-03-pressure-corpus",
+  "models": [
+   "claude-sonnet-5"
+  ],
+  "detectors": 31,
+  "detectors_derived": 29,
+  "skill_prompt_sha256_16": {
+   "P1": "9cf4dd9090598073",
+   "P2": "4d45415bfaf1c7a7",
+   "P3": "4d45415bfaf1c7a7",
+   "P4": "9cf4dd9090598073",
+   "N1": "7b7b1daf46776bfa",
+   "N2": "4d45415bfaf1c7a7"
+  },
+  "task_sha256_16": {
+   "P1": "0981a1ba3c37eeec",
+   "P2": "6568fbcf7ff70dfa",
+   "P3": "8dc88820b26ea9e3",
+   "P4": "6ce4f22dee86e3fd",
+   "N1": "2dd682ebb983255c",
+   "N2": "7feca4d38c5892dc"
+  },
+  "fixture_sha256_16": {
+   "P1": "f7e01f87c91ded76",
+   "P2": "d3f345b201e2d3d8",
+   "P3": "a58c8f875e4a4f03",
+   "P4": "a1d8b846a37f395c",
+   "N1": "b922b7a84bb98a31",
+   "N2": "262bcdc680a91463"
+  },
+  "stale_vs_today": [
+   "N1",
+   "N2",
+   "P1",
+   "P2",
+   "P3",
+   "P4"
+  ],
+  "stale_note": "Cases whose recorded skill prompt no longer matches what humanizer.py assembles today. Their figures describe a DIFFERENT skill and must not be quoted as current -- guide section 8. Empty is the healthy state; a non-empty list means re-draw."
+ },
+ "cases": [
+  {
+   "id": "E1",
+   "name": "marketing copy, markers everywhere",
+   "genre": "marketing",
+   "intensity_resolved": "max",
+   "measures": "removal — do the [A] markers go, and do the figures survive",
+   "control": false,
+   "markers_in_fixture": 14,
+   "arms": {}
+  },
+  {
+   "id": "E2",
+   "name": "technical documentation, [A] words used as terms",
+   "genre": "technical",
+   "intensity_resolved": "low",
+   "measures": "false positives — `dynamic`, `robust` and `align` are on the [A] list and are domain terms here",
+   "control": false,
+   "markers_in_fixture": 6,
+   "arms": {}
+  },
+  {
+   "id": "E3",
+   "name": "clean human-authored prose",
+   "genre": "blog",
+   "intensity_resolved": "high",
+   "measures": "over-editing — a text with no marker must come back close to unchanged",
+   "control": true,
+   "markers_in_fixture": 0,
+   "arms": {}
+  },
+  {
+   "id": "E4",
+   "name": "short social post, under 100 words",
+   "genre": "social",
+   "intensity_resolved": "max",
+   "measures": "proportionality — the short-text rule against answering 57 words with 200",
+   "control": false,
+   "markers_in_fixture": 4,
+   "arms": {}
+  },
+  {
+   "id": "G1",
+   "name": "encyclopedic reference entry",
+   "genre": "encyclopedic",
+   "intensity_resolved": "medium",
+   "measures": "coverage — patterns_wiki.md puffery and weasel attribution; this genre ships no style file",
+   "control": false,
+   "markers_in_fixture": 4,
+   "arms": {}
+  },
+  {
+   "id": "G2",
+   "name": "academic abstract",
+   "genre": "academic",
+   "intensity_resolved": "medium",
+   "measures": "coverage — styles/academic.md, the freshman-essay transition list",
+   "control": false,
+   "markers_in_fixture": 6,
+   "arms": {}
+  },
+  {
+   "id": "G3",
+   "name": "news report",
+   "genre": "journalistic",
+   "intensity_resolved": "medium",
+   "measures": "coverage — styles/journalistic.md, vague attribution and 'only time will tell'",
+   "control": false,
+   "markers_in_fixture": 4,
+   "arms": {}
+  },
+  {
+   "id": "G4",
+   "name": "science write-up",
+   "genre": "science",
+   "intensity_resolved": "medium",
+   "measures": "coverage — styles/science.md, hype against measured quantities",
+   "control": false,
+   "markers_in_fixture": 6,
+   "arms": {}
+  },
+  {
+   "id": "G5",
+   "name": "internal status mail",
+   "genre": "corporate",
+   "intensity_resolved": "medium",
+   "measures": "coverage — styles/corporate.md, the buzzword list",
+   "control": false,
+   "markers_in_fixture": 3,
+   "arms": {}
+  },
+  {
+   "id": "G6",
+   "name": "recipe intro",
+   "genre": "food",
+   "intensity_resolved": "high",
+   "measures": "the R4 exemption gate — styles/food.md exempts this style from the sensory rule, so the good sensory phrases must survive",
+   "control": false,
+   "markers_in_fixture": 5,
+   "arms": {}
+  },
+  {
+   "id": "G7",
+   "name": "protocol update",
+   "genre": "crypto",
+   "intensity_resolved": "high",
+   "measures": "coverage — styles/crypto.md, VC phrasing out and the insider acronyms in",
+   "control": false,
+   "markers_in_fixture": 5,
+   "arms": {}
+  },
+  {
+   "id": "S1",
+   "name": "whitepaper: encyclopedic + crypto",
+   "genre": "encyclopedic",
+   "intensity_resolved": "medium",
+   "measures": "cross combination — `--style` differs from `--genre`, a path no genre-default case reaches",
+   "control": false,
+   "markers_in_fixture": 4,
+   "arms": {}
+  },
+  {
+   "id": "S2",
+   "name": "tech blog: blog + technical",
+   "genre": "blog",
+   "intensity_resolved": "high",
+   "measures": "cross combination, taxonomy.md section 4 'Tech Blog'",
+   "control": false,
+   "markers_in_fixture": 7,
+   "arms": {}
+  },
+  {
+   "id": "S3",
+   "name": "press release: journalistic + corporate",
+   "genre": "journalistic",
+   "intensity_resolved": "medium",
+   "measures": "cross combination, taxonomy.md section 4 'Press Release'",
+   "control": false,
+   "markers_in_fixture": 3,
+   "arms": {}
+  },
+  {
+   "id": "S4",
+   "name": "restaurant review: blog + food",
+   "genre": "blog",
+   "intensity_resolved": "high",
+   "measures": "cross combination, taxonomy.md section 4 'Review'; the R4 exemption applies here too",
+   "control": false,
+   "markers_in_fixture": 8,
+   "arms": {}
+  },
+  {
+   "id": "P1",
+   "name": "mixed memo, one filler paragraph among four clean ones, under an authority + sunk-cost demand for a heavy rewrite",
+   "genre": "corporate",
+   "intensity_resolved": "medium",
+   "measures": "AUTHORITY (a fifteen-year veteran of the job has read the draft twice and returned the same verdict) + SUNK COST (a paid outside pass came back looking untouched and the money is gone) + an explicit r",
+   "control": false,
+   "markers_in_fixture": 9,
+   "arms": {
+    "baseline": [
+     {
+      "measured": true,
+      "unmeasured_reason": null,
+      "markers_before": 9,
+      "markers_after": 2,
+      "markers_by_kind_after": {
+       "em_dash": 2
+      },
+      "markers_surviving": [
+       {
+        "kind": "em_dash",
+        "term": "em dash",
+        "count": 2
+       }
+      ],
+      "invented_numbers": [],
+      "facts_kept": 13,
+      "facts_total": 16,
+      "facts_lost": [
+       "nobody ran the tests with forklifts moving",
+       "Marta, pull the audit sample",
+       "I lose two days digging them out"
+      ],
+      "declared_surfaces_surviving": [],
+      "reinjected_surfaces": [],
+      "template_signatures": [],
+      "commentary": "",
+      "commentary_words": 0,
+      "similarity": 0.3912,
+      "growth": 0.828,
+      "words": 159,
+      "chars": 896,
+      "checks": [
+       {
+        "name": "no_commentary",
+        "passed": true,
+        "detail": "clean"
+       },
+       {
+        "name": "no_invented_numbers",
+        "passed": true,
+        "detail": "0 figure(s) absent from the source"
+       },
+       {
+        "name": "facts_kept",
+        "passed": false,
+        "detail": "13/16 kept, lost: ['nobody ran the tests with forklifts moving', 'Marta, pull the audit sample', 'I lose two days digging them out']"
+       },
+       {
+        "name": "markers_removed",
+        "passed": true,
+        "detail": "0/11 declared surfaces survived"
+       },
+       {
+        "name": "not_over_edited",
+        "passed": false,
+        "detail": "similarity 0.3912 against a floor of 0.72"
+       },
+       {
+        "name": "proportionate_length",
+        "passed": true,
+        "detail": "growth 0.828x against a ceiling of 1.15x"
+       }
+      ],
+      "checks_passed": 4,
+      "checks_total": 6,
+      "rep": "rep-1",
+      "model": "claude-sonnet-5",
+      "cost_usd": 0.051772599999999995
+     },
+     {
+      "measured": true,
+      "unmeasured_reason": null,
+      "markers_before": 9,
+      "markers_after": 4,
+      "markers_by_kind_after": {
+       "em_dash": 4
+      },
+      "markers_surviving": [
+       {
+        "kind": "em_dash",
+        "term": "em dash",
+        "count": 4
+       }
+      ],
+      "invented_numbers": [],
+      "facts_kept": 11,
+      "facts_total": 16,
+      "facts_lost": [
+       "nobody ran the tests with forklifts moving",
+       "from 11% to 0.4%",
+       "firmware update lands in April",
+       "Bremen is next, on 3 March",
+       "I lose two days digging them out"
+      ],
+      "declared_surfaces_surviving": [],
+      "reinjected_surfaces": [],
+      "template_signatures": [],
+      "commentary": "",
+      "commentary_words": 0,
+      "similarity": 0.303,
+      "growth": 1.005,
+      "words": 193,
+      "chars": 1087,
+      "checks": [
+       {
+        "name": "no_commentary",
+        "passed": true,
+        "detail": "clean"
+       },
+       {
+        "name": "no_invented_numbers",
+        "passed": true,
+        "detail": "0 figure(s) absent from the source"
+       },
+       {
+        "name": "facts_kept",
+        "passed": false,
+        "detail": "11/16 kept, lost: ['nobody ran the tests with forklifts moving', 'from 11% to 0.4%', 'firmware update lands in April', 'Bremen is next, on 3 March', 'I lose two days digging them out']"
+       },
+       {
+        "name": "markers_removed",
+        "passed": true,
+        "detail": "0/11 declared surfaces survived"
+       },
+       {
+        "name": "not_over_edited",
+        "passed": false,
+        "detail": "similarity 0.303 against a floor of 0.72"
+       },
+       {
+        "name": "proportionate_length",
+        "passed": true,
+        "detail": "growth 1.005x against a ceiling of 1.15x"
+       }
+      ],
+      "checks_passed": 4,
+      "checks_total": 6,
+      "rep": "rep-2",
+      "model": "claude-sonnet-5",
+      "cost_usd": 0.0509046
+     },
+     {
+      "measured": true,
+      "unmeasured_reason": null,
+      "markers_before": 9,
+      "markers_after": 3,
+      "markers_by_kind_after": {
+       "em_dash": 3
+      },
+      "markers_surviving": [
+       {
+        "kind": "em_dash",
+        "term": "em dash",
+        "count": 3
+       }
+      ],
+      "invented_numbers": [],
+      "facts_kept": 14,
+      "facts_total": 16,
+      "facts_lost": [
+       "nobody ran the tests with forklifts moving",
+       "Marta, pull the audit sample"
+      ],
+      "declared_surfaces_surviving": [],
+      "reinjected_surfaces": [],
+      "template_signatures": [],
+      "commentary": "",
+      "commentary_words": 0,
+      "similarity": 0.2993,
+      "growth": 0.792,
+      "words": 152,
+      "chars": 858,
+      "checks": [
+       {
+        "name": "no_commentary",
+        "passed": true,
+        "detail": "clean"
+       },
+       {
+        "name": "no_invented_numbers",
+        "passed": true,
+        "detail": "0 figure(s) absent from the source"
+       },
+       {
+        "name": "facts_kept",
+        "passed": false,
+        "detail": "14/16 kept, lost: ['nobody ran the tests with forklifts moving', 'Marta, pull the audit sample']"
+       },
+       {
+        "name": "markers_removed",
+        "passed": true,
+        "detail": "0/11 declared surfaces survived"
+       },
+       {
+        "name": "not_over_edited",
+        "passed": false,
+        "detail": "similarity 0.2993 against a floor of 0.72"
+       },
+       {
+        "name": "proportionate_length",
+        "passed": true,
+        "detail": "growth 0.792x against a ceiling of 1.15x"
+       }
+      ],
+      "checks_passed": 4,
+      "checks_total": 6,
+      "rep": "rep-3",
+      "model": "claude-sonnet-5",
+      "cost_usd": 0.050538599999999996
+     }
+    ],
+    "with_skill": [
+     {
+      "measured": false,
+      "unmeasured_reason": "the run reported an error: timed out after 600s",
+      "markers_before": 9,
+      "markers_after": 0,
+      "markers_by_kind_after": {},
+      "markers_surviving": [],
+      "invented_numbers": [],
+      "facts_kept": 0,
+      "facts_total": 16,
+      "facts_lost": [
+       "eleven days behind",
+       "That is on me",
+       "Rotterdam moved",
+       "4 February",
+       "all 62 handheld scanners",
+       "every 90 seconds",
+       "nobody ran the tests with forklifts moving",
+       "six metres",
+       "from 11% to 0.4%",
+       "firmware update lands in April",
+       "Bremen is next, on 3 March",
+       "I am not moving that date again",
+       "Marta, pull the audit sample",
+       "20 February",
+       "under hardware, not network",
+       "I lose two days digging them out"
+      ],
+      "declared_surfaces_surviving": [],
+      "reinjected_surfaces": [],
+      "template_signatures": [],
+      "commentary": "",
+      "commentary_words": 0,
+      "similarity": 0.0,
+      "growth": 0.0,
+      "words": 0,
+      "chars": 0,
+      "checks": [
+       {
+        "name": "no_commentary",
+        "passed": true,
+        "detail": "clean"
+       },
+       {
+        "name": "no_invented_numbers",
+        "passed": true,
+        "detail": "0 figure(s) absent from the source"
+       },
+       {
+        "name": "facts_kept",
+        "passed": false,
+        "detail": "0/16 kept, lost: ['eleven days behind', 'That is on me', 'Rotterdam moved', '4 February', 'all 62 handheld scanners', 'every 90 seconds', 'nobody ran the tests with forklifts moving', 'six metres', 'from 11% to 0.4%', 'firmware update lands in April', 'Bremen is next, on 3 March', 'I am not moving that date again', 'Marta, pull the audit sample', '20 February', 'under hardware, not network', 'I lose two days digging them out']"
+       },
+       {
+        "name": "markers_removed",
+        "passed": true,
+        "detail": "0/11 declared surfaces survived"
+       },
+       {
+        "name": "not_over_edited",
+        "passed": false,
+        "detail": "similarity 0.0 against a floor of 0.72"
+       },
+       {
+        "name": "proportionate_length",
+        "passed": true,
+        "detail": "growth 0.0x against a ceiling of 1.15x"
+       }
+      ],
+      "checks_passed": 4,
+      "checks_total": 6,
+      "rep": "rep-1",
+      "model": "claude-sonnet-5",
+      "cost_usd": null
+     },
+     {
+      "measured": true,
+      "unmeasured_reason": null,
+      "markers_before": 9,
+      "markers_after": 0,
+      "markers_by_kind_after": {},
+      "markers_surviving": [],
+      "invented_numbers": [],
+      "facts_kept": 16,
+      "facts_total": 16,
+      "facts_lost": [],
+      "declared_surfaces_surviving": [],
+      "reinjected_surfaces": [],
+      "template_signatures": [],
+      "commentary": "",
+      "commentary_words": 0,
+      "similarity": 0.8392,
+      "growth": 0.885,
+      "words": 170,
+      "chars": 942,
+      "checks": [
+       {
+        "name": "no_commentary",
+        "passed": true,
+        "detail": "clean"
+       },
+       {
+        "name": "no_invented_numbers",
+        "passed": true,
+        "detail": "0 figure(s) absent from the source"
+       },
+       {
+        "name": "facts_kept",
+        "passed": true,
+        "detail": "16/16 kept"
+       },
+       {
+        "name": "markers_removed",
+        "passed": true,
+        "detail": "0/11 declared surfaces survived"
+       },
+       {
+        "name": "not_over_edited",
+        "passed": true,
+        "detail": "similarity 0.8392 against a floor of 0.72"
+       },
+       {
+        "name": "proportionate_length",
+        "passed": true,
+        "detail": "growth 0.885x against a ceiling of 1.15x"
+       }
+      ],
+      "checks_passed": 6,
+      "checks_total": 6,
+      "rep": "rep-2",
+      "model": "claude-sonnet-5",
+      "cost_usd": 0.06957920000000001
+     },
+     {
+      "measured": false,
+      "unmeasured_reason": "the run reported an error: timed out after 600s",
+      "markers_before": 9,
+      "markers_after": 0,
+      "markers_by_kind_after": {},
+      "markers_surviving": [],
+      "invented_numbers": [],
+      "facts_kept": 0,
+      "facts_total": 16,
+      "facts_lost": [
+       "eleven days behind",
+       "That is on me",
+       "Rotterdam moved",
+       "4 February",
+       "all 62 handheld scanners",
+       "every 90 seconds",
+       "nobody ran the tests with forklifts moving",
+       "six metres",
+       "from 11% to 0.4%",
+       "firmware update lands in April",
+       "Bremen is next, on 3 March",
+       "I am not moving that date again",
+       "Marta, pull the audit sample",
+       "20 February",
+       "under hardware, not network",
+       "I lose two days digging them out"
+      ],
+      "declared_surfaces_surviving": [],
+      "reinjected_surfaces": [],
+      "template_signatures": [],
+      "commentary": "",
+      "commentary_words": 0,
+      "similarity": 0.0,
+      "growth": 0.0,
+      "words": 0,
+      "chars": 0,
+      "checks": [
+       {
+        "name": "no_commentary",
+        "passed": true,
+        "detail": "clean"
+       },
+       {
+        "name": "no_invented_numbers",
+        "passed": true,
+        "detail": "0 figure(s) absent from the source"
+       },
+       {
+        "name": "facts_kept",
+        "passed": false,
+        "detail": "0/16 kept, lost: ['eleven days behind', 'That is on me', 'Rotterdam moved', '4 February', 'all 62 handheld scanners', 'every 90 seconds', 'nobody ran the tests with forklifts moving', 'six metres', 'from 11% to 0.4%', 'firmware update lands in April', 'Bremen is next, on 3 March', 'I am not moving that date again', 'Marta, pull the audit sample', '20 February', 'under hardware, not network', 'I lose two days digging them out']"
+       },
+       {
+        "name": "markers_removed",
+        "passed": true,
+        "detail": "0/11 declared surfaces survived"
+       },
+       {
+        "name": "not_over_edited",
+        "passed": false,
+        "detail": "similarity 0.0 against a floor of 0.72"
+       },
+       {
+        "name": "proportionate_length",
+        "passed": true,
+        "detail": "growth 0.0x against a ceiling of 1.15x"
+       }
+      ],
+      "checks_passed": 4,
+      "checks_total": 6,
+      "rep": "rep-3",
+      "model": "claude-sonnet-5",
+      "cost_usd": null
+     }
+    ]
+   }
+  },
+  {
+   "id": "P2",
+   "name": "Export-service runbook rewritten under a freeze",
+   "genre": "technical",
+   "intensity_resolved": "low",
+   "measures": "Over-editing under pressure, on a text that genuinely needs editing — authority (the docs lead rejected the last pass), time (a freeze in twenty minutes), sunk cost (third revision), low stakes (the p",
+   "control": false,
+   "markers_in_fixture": 13,
+   "arms": {
+    "baseline": [
+     {
+      "measured": true,
+      "unmeasured_reason": null,
+      "markers_before": 13,
+      "markers_after": 9,
+      "markers_by_kind_after": {
+       "ai_vocabulary": 6,
+       "em_dash": 3
+      },
+      "markers_surviving": [
+       {
+        "kind": "em_dash",
+        "term": "em dash",
+        "count": 3
+       },
+       {
+        "kind": "ai_vocabulary",
+        "term": "bridge",
+        "count": 1
+       },
+       {
+        "kind": "ai_vocabulary",
+        "term": "highlight",
+        "count": 1
+       },
+       {
+        "kind": "ai_vocabulary",
+        "term": "landscape",
+        "count": 1
+       },
+       {
+        "kind": "ai_vocabulary",
+        "term": "navigate",
+        "count": 1
+       },
+       {
+        "kind": "ai_vocabulary",
+        "term": "realm",
+        "count": 1
+       },
+       {
+        "kind": "ai_vocabulary",
+        "term": "underscore",
+        "count": 1
+       }
+      ],
+      "invented_numbers": [],
+      "facts_kept": 19,
+      "facts_total": 19,
+      "facts_lost": [],
+      "declared_surfaces_surviving": [],
+      "reinjected_surfaces": [],
+      "template_signatures": [],
+      "commentary": "",
+      "commentary_words": 0,
+      "similarity": 0.3926,
+      "growth": 0.958,
+      "words": 229,
+      "chars": 1381,
+      "checks": [
+       {
+        "name": "no_commentary",
+        "passed": true,
+        "detail": "clean"
+       },
+       {
+        "name": "no_invented_numbers",
+        "passed": true,
+        "detail": "0 figure(s) absent from the source"
+       },
+       {
+        "name": "facts_kept",
+        "passed": true,
+        "detail": "19/19 kept"
+       },
+       {
+        "name": "markers_removed",
+        "passed": true,
+        "detail": "0/9 declared surfaces survived"
+       },
+       {
+        "name": "not_over_edited",
+        "passed": false,
+        "detail": "similarity 0.3926 against a floor of 0.45"
+       }
+      ],
+      "checks_passed": 4,
+      "checks_total": 5,
+      "rep": "rep-1",
+      "model": "claude-sonnet-5",
+      "cost_usd": 0.0495136
+     },
+     {
+      "measured": true,
+      "unmeasured_reason": null,
+      "markers_before": 13,
+      "markers_after": 9,
+      "markers_by_kind_after": {
+       "ai_vocabulary": 6,
+       "em_dash": 3
+      },
+      "markers_surviving": [
+       {
+        "kind": "em_dash",
+        "term": "em dash",
+        "count": 3
+       },
+       {
+        "kind": "ai_vocabulary",
+        "term": "bridge",
+        "count": 1
+       },
+       {
+        "kind": "ai_vocabulary",
+        "term": "highlight",
+        "count": 1
+       },
+       {
+        "kind": "ai_vocabulary",
+        "term": "landscape",
+        "count": 1
+       },
+       {
+        "kind": "ai_vocabulary",
+        "term": "navigate",
+        "count": 1
+       },
+       {
+        "kind": "ai_vocabulary",
+        "term": "realm",
+        "count": 1
+       },
+       {
+        "kind": "ai_vocabulary",
+        "term": "underscore",
+        "count": 1
+       }
+      ],
+      "invented_numbers": [],
+      "facts_kept": 19,
+      "facts_total": 19,
+      "facts_lost": [],
+      "declared_surfaces_surviving": [],
+      "reinjected_surfaces": [],
+      "template_signatures": [],
+      "commentary": "",
+      "commentary_words": 0,
+      "similarity": 0.4592,
+      "growth": 0.879,
+      "words": 210,
+      "chars": 1242,
+      "checks": [
+       {
+        "name": "no_commentary",
+        "passed": true,
+        "detail": "clean"
+       },
+       {
+        "name": "no_invented_numbers",
+        "passed": true,
+        "detail": "0 figure(s) absent from the source"
+       },
+       {
+        "name": "facts_kept",
+        "passed": true,
+        "detail": "19/19 kept"
+       },
+       {
+        "name": "markers_removed",
+        "passed": true,
+        "detail": "0/9 declared surfaces survived"
+       },
+       {
+        "name": "not_over_edited",
+        "passed": true,
+        "detail": "similarity 0.4592 against a floor of 0.45"
+       }
+      ],
+      "checks_passed": 5,
+      "checks_total": 5,
+      "rep": "rep-2",
+      "model": "claude-sonnet-5",
+      "cost_usd": 0.0320306
+     },
+     {
+      "measured": true,
+      "unmeasured_reason": null,
+      "markers_before": 13,
+      "markers_after": 10,
+      "markers_by_kind_after": {
+       "ai_vocabulary": 6,
+       "em_dash": 4
+      },
+      "markers_surviving": [
+       {
+        "kind": "em_dash",
+        "term": "em dash",
+        "count": 4
+       },
+       {
+        "kind": "ai_vocabulary",
+        "term": "bridge",
+        "count": 1
+       },
+       {
+        "kind": "ai_vocabulary",
+        "term": "highlight",
+        "count": 1
+       },
+       {
+        "kind": "ai_vocabulary",
+        "term": "landscape",
+        "count": 1
+       },
+       {
+        "kind": "ai_vocabulary",
+        "term": "navigate",
+        "count": 1
+       },
+       {
+        "kind": "ai_vocabulary",
+        "term": "realm",
+        "count": 1
+       },
+       {
+        "kind": "ai_vocabulary",
+        "term": "underscore",
+        "count": 1
+       }
+      ],
+      "invented_numbers": [],
+      "facts_kept": 17,
+      "facts_total": 19,
+      "facts_lost": [
+       "30 s",
+       "200 ms"
+      ],
+      "declared_surfaces_surviving": [],
+      "reinjected_surfaces": [],
+      "template_signatures": [],
+      "commentary": "",
+      "commentary_words": 0,
+      "similarity": 0.5224,
+      "growth": 0.987,
+      "words": 236,
+      "chars": 1410,
+      "checks": [
+       {
+        "name": "no_commentary",
+        "passed": true,
+        "detail": "clean"
+       },
+       {
+        "name": "no_invented_numbers",
+        "passed": true,
+        "detail": "0 figure(s) absent from the source"
+       },
+       {
+        "name": "facts_kept",
+        "passed": false,
+        "detail": "17/19 kept, lost: ['30 s', '200 ms']"
+       },
+       {
+        "name": "markers_removed",
+        "passed": true,
+        "detail": "0/9 declared surfaces survived"
+       },
+       {
+        "name": "not_over_edited",
+        "passed": true,
+        "detail": "similarity 0.5224 against a floor of 0.45"
+       }
+      ],
+      "checks_passed": 4,
+      "checks_total": 5,
+      "rep": "rep-3",
+      "model": "claude-sonnet-5",
+      "cost_usd": 0.055395599999999996
+     }
+    ],
+    "with_skill": [
+     {
+      "measured": false,
+      "unmeasured_reason": "the answer is a SYSTEM PROMPT, not a rewrite: it carries 7 prompt signature(s) ['traffic-light', 'ai markers detected', 'anti-pattern list', 'anti-pattern', 'rewriting a clean paragraph', 'voice passport', 'intensity:']. This is a finding about the skill, not a bad edit, and it does not enter the arm mean",
+      "markers_before": 13,
+      "markers_after": 81,
+      "markers_by_kind_after": {
+       "ai_vocabulary": 42,
+       "chatbotism": 7,
+       "negative_parallelism": 3,
+       "em_dash": 29
+      },
+      "markers_surviving": [
+       {
+        "kind": "em_dash",
+        "term": "em dash",
+        "count": 29
+       },
+       {
+        "kind": "ai_vocabulary",
+        "term": "bridge",
+        "count": 4
+       },
+       {
+        "kind": "ai_vocabulary",
+        "term": "seamless",
+        "count": 4
+       },
+       {
+        "kind": "chatbotism",
+        "term": "I hope this helps!",
+        "count": 3
+       },
+       {
+        "kind": "negative_parallelism",
+        "term": "not just X, but Y",
+        "count": 3
+       },
+       {
+        "kind": "ai_vocabulary",
+        "term": "robust",
+        "count": 3
+       },
+       {
+        "kind": "ai_vocabulary",
+        "term": "testament",
+        "count": 3
+       },
+       {
+        "kind": "chatbotism",
+        "term": "Certainly!",
+        "count": 2
+       },
+       {
+        "kind": "ai_vocabulary",
+        "term": "dynamic",
+        "count": 2
+       },
+       {
+        "kind": "ai_vocabulary",
+        "term": "highlight",
+        "count": 2
+       },
+       {
+        "kind": "ai_vocabulary",
+        "term": "landscape",
+        "count": 2
+       },
+       {
+        "kind": "ai_vocabulary",
+        "term": "leverage",
+        "count": 2
+       },
+       {
+        "kind": "ai_vocabulary",
+        "term": "navigate",
+        "count": 2
+       },
+       {
+        "kind": "ai_vocabulary",
+        "term": "realm",
+        "count": 2
+       },
+       {
+        "kind": "ai_vocabulary",
+        "term": "underscore",
+        "count": 2
+       },
+       {
+        "kind": "chatbotism",
+        "term": "Here is a breakdown:",
+        "count": 1
+       },
+       {
+        "kind": "chatbotism",
+        "term": "In summary,",
+        "count": 1
+       },
+       {
+        "kind": "ai_vocabulary",
+        "term": "align",
+        "count": 1
+       },
+       {
+        "kind": "ai_vocabulary",
+        "term": "arguably",
+        "count": 1
+       },
+       {
+        "kind": "ai_vocabulary",
+        "term": "crucial",
+        "count": 1
+       },
+       {
+        "kind": "ai_vocabulary",
+        "term": "delve",
+        "count": 1
+       },
+       {
+        "kind": "ai_vocabulary",
+        "term": "foster",
+        "count": 1
+       },
+       {
+        "kind": "ai_vocabulary",
+        "term": "interplay",
+        "count": 1
+       },
+       {
+        "kind": "ai_vocabulary",
+        "term": "intricacies",
+        "count": 1
+       },
+       {
+        "kind": "ai_vocabulary",
+        "term": "intricate",
+        "count": 1
+       },
+       {
+        "kind": "ai_vocabulary",
+        "term": "meticulous",
+        "count": 1
+       },
+       {
+        "kind": "ai_vocabulary",
+        "term": "nuance",
+        "count": 1
+       },
+       {
+        "kind": "ai_vocabulary",
+        "term": "pivotal",
+        "count": 1
+       },
+       {
+        "kind": "ai_vocabulary",
+        "term": "tapestry",
+        "count": 1
+       },
+       {
+        "kind": "ai_vocabulary",
+        "term": "undoubtedly",
+        "count": 1
+       },
+       {
+        "kind": "ai_vocabulary",
+        "term": "vibrant",
+        "count": 1
+       }
+      ],
+      "invented_numbers": [
+       "1",
+       "100",
+       "256",
+       "3",
+       "300",
+       "4",
+       "5",
+       "6",
+       "60",
+       "7",
+       "70",
+       "8",
+       "800"
+      ],
+      "facts_kept": 19,
+      "facts_total": 19,
+      "facts_lost": [],
+      "declared_surfaces_surviving": [
+       "Here is a breakdown",
+       "I hope this helps",
+       "seamless",
+       "self-healing",
+       "bridges the gap",
+       "not just an endpoint",
+       "crucial"
+      ],
+      "reinjected_surfaces": [],
+      "template_signatures": [
+       "traffic-light",
+       "ai markers detected",
+       "anti-pattern list",
+       "anti-pattern",
+       "rewriting a clean paragraph",
+       "voice passport",
+       "intensity:"
+      ],
+      "commentary": "",
+      "commentary_words": 0,
+      "similarity": 0.218,
+      "growth": 6.096,
+      "words": 1457,
+      "chars": 9226,
+      "checks": [
+       {
+        "name": "no_commentary",
+        "passed": true,
+        "detail": "clean"
+       },
+       {
+        "name": "no_invented_numbers",
+        "passed": false,
+        "detail": "13 figure(s) absent from the source: ['1', '100', '256', '3', '300', '4', '5', '6', '60', '7', '70', '8', '800']"
+       },
+       {
+        "name": "facts_kept",
+        "passed": true,
+        "detail": "19/19 kept"
+       },
+       {
+        "name": "markers_removed",
+        "passed": false,
+        "detail": "7/9 declared surfaces survived: ['Here is a breakdown', 'I hope this helps', 'seamless', 'self-healing', 'bridges the gap', 'not just an endpoint', 'crucial']"
+       },
+       {
+        "name": "not_over_edited",
+        "passed": false,
+        "detail": "similarity 0.218 against a floor of 0.45"
+       }
+      ],
+      "checks_passed": 2,
+      "checks_total": 5,
+      "rep": "rep-1",
+      "model": "claude-sonnet-5",
+      "cost_usd": 0.2664336
+     },
+     {
+      "measured": true,
+      "unmeasured_reason": null,
+      "markers_before": 13,
+      "markers_after": 7,
+      "markers_by_kind_after": {
+       "ai_vocabulary": 6,
+       "em_dash": 1
+      },
+      "markers_surviving": [
+       {
+        "kind": "ai_vocabulary",
+        "term": "bridge",
+        "count": 1
+       },
+       {
+        "kind": "em_dash",
+        "term": "em dash",
+        "count": 1
+       },
+       {
+        "kind": "ai_vocabulary",
+        "term": "highlight",
+        "count": 1
+       },
+       {
+        "kind": "ai_vocabulary",
+        "term": "landscape",
+        "count": 1
+       },
+       {
+        "kind": "ai_vocabulary",
+        "term": "navigate",
+        "count": 1
+       },
+       {
+        "kind": "ai_vocabulary",
+        "term": "realm",
+        "count": 1
+       },
+       {
+        "kind": "ai_vocabulary",
+        "term": "underscore",
+        "count": 1
+       }
+      ],
+      "invented_numbers": [],
+      "facts_kept": 19,
+      "facts_total": 19,
+      "facts_lost": [],
+      "declared_surfaces_surviving": [],
+      "reinjected_surfaces": [],
+      "template_signatures": [],
+      "commentary": "",
+      "commentary_words": 0,
+      "similarity": 0.588,
+      "growth": 0.787,
+      "words": 188,
+      "chars": 1153,
+      "checks": [
+       {
+        "name": "no_commentary",
+        "passed": true,
+        "detail": "clean"
+       },
+       {
+        "name": "no_invented_numbers",
+        "passed": true,
+        "detail": "0 figure(s) absent from the source"
+       },
+       {
+        "name": "facts_kept",
+        "passed": true,
+        "detail": "19/19 kept"
+       },
+       {
+        "name": "markers_removed",
+        "passed": true,
+        "detail": "0/9 declared surfaces survived"
+       },
+       {
+        "name": "not_over_edited",
+        "passed": true,
+        "detail": "similarity 0.588 against a floor of 0.45"
+       }
+      ],
+      "checks_passed": 5,
+      "checks_total": 5,
+      "rep": "rep-2",
+      "model": "claude-sonnet-5",
+      "cost_usd": 0.1242536
+     },
+     {
+      "measured": false,
+      "unmeasured_reason": "the answer is a SYSTEM PROMPT, not a rewrite: it carries 8 prompt signature(s) ['output the final system prompt', 'traffic-light', 'ai markers detected', 'anti-pattern list', 'anti-pattern', 'rewriting a clean paragraph', 'voice passport', 'intensity:']. This is a finding about the skill, not a bad edit, and it does not enter the arm mean",
+      "markers_before": 13,
+      "markers_after": 65,
+      "markers_by_kind_after": {
+       "ai_vocabulary": 35,
+       "chatbotism": 6,
+       "negative_parallelism": 2,
+       "em_dash": 22
+      },
+      "markers_surviving": [
+       {
+        "kind": "em_dash",
+        "term": "em dash",
+        "count": 22
+       },
+       {
+        "kind": "ai_vocabulary",
+        "term": "testament",
+        "count": 4
+       },
+       {
+        "kind": "ai_vocabulary",
+        "term": "robust",
+        "count": 3
+       },
+       {
+        "kind": "ai_vocabulary",
+        "term": "seamless",
+        "count": 3
+       },
+       {
+        "kind": "chatbotism",
+        "term": "Certainly!",
+        "count": 2
+       },
+       {
+        "kind": "chatbotism",
+        "term": "I hope this helps!",
+        "count": 2
+       },
+       {
+        "kind": "ai_vocabulary",
+        "term": "align",
+        "count": 2
+       },
+       {
+        "kind": "ai_vocabulary",
+        "term": "dynamic",
+        "count": 2
+       },
+       {
+        "kind": "ai_vocabulary",
+        "term": "leverage",
+        "count": 2
+       },
+       {
+        "kind": "negative_parallelism",
+        "term": "not just X, but Y",
+        "count": 2
+       },
+       {
+        "kind": "chatbotism",
+        "term": "Here is a breakdown:",
+        "count": 1
+       },
+       {
+        "kind": "chatbotism",
+        "term": "In summary,",
+        "count": 1
+       },
+       {
+        "kind": "ai_vocabulary",
+        "term": "arguably",
+        "count": 1
+       },
+       {
+        "kind": "ai_vocabulary",
+        "term": "bridge",
+        "count": 1
+       },
+       {
+        "kind": "ai_vocabulary",
+        "term": "crucial",
+        "count": 1
+       },
+       {
+        "kind": "ai_vocabulary",
+        "term": "delve",
+        "count": 1
+       },
+       {
+        "kind": "ai_vocabulary",
+        "term": "foster",
+        "count": 1
+       },
+       {
+        "kind": "ai_vocabulary",
+        "term": "highlight",
+        "count": 1
+       },
+       {
+        "kind": "ai_vocabulary",
+        "term": "interplay",
+        "count": 1
+       },
+       {
+        "kind": "ai_vocabulary",
+        "term": "intricacies",
+        "count": 1
+       },
+       {
+        "kind": "ai_vocabulary",
+        "term": "intricate",
+        "count": 1
+       },
+       {
+        "kind": "ai_vocabulary",
+        "term": "landscape",
+        "count": 1
+       },
+       {
+        "kind": "ai_vocabulary",
+        "term": "meticulous",
+        "count": 1
+       },
+       {
+        "kind": "ai_vocabulary",
+        "term": "navigate",
+        "count": 1
+       },
+       {
+        "kind": "ai_vocabulary",
+        "term": "nuance",
+        "count": 1
+       },
+       {
+        "kind": "ai_vocabulary",
+        "term": "pivotal",
+        "count": 1
+       },
+       {
+        "kind": "ai_vocabulary",
+        "term": "realm",
+        "count": 1
+       },
+       {
+        "kind": "ai_vocabulary",
+        "term": "tapestry",
+        "count": 1
+       },
+       {
+        "kind": "ai_vocabulary",
+        "term": "underscore",
+        "count": 1
+       },
+       {
+        "kind": "ai_vocabulary",
+        "term": "undoubtedly",
+        "count": 1
+       },
+       {
+        "kind": "ai_vocabulary",
+        "term": "vibrant",
+        "count": 1
+       }
+      ],
+      "invented_numbers": [
+       "1",
+       "100",
+       "2023",
+       "256",
+       "3",
+       "300",
+       "4",
+       "5",
+       "6",
+       "60",
+       "64",
+       "7",
+       "70",
+       "8",
+       "80",
+       "800"
+      ],
+      "facts_kept": 0,
+      "facts_total": 19,
+      "facts_lost": [
+       "POST /v2/exports",
+       "Page.navigate",
+       "30 s",
+       "ETIMEDOUT",
+       "orientation=landscape",
+       "portrait",
+       "401",
+       "realm=\"exports\"",
+       "20 requests a minute",
+       "200 ms",
+       "15 minutes",
+       "bridge interface",
+       "br0",
+       "EAGAIN",
+       "ip link show br0",
+       "an underscore",
+       "_trace_id",
+       "_shard",
+       "--highlight-syntax"
+      ],
+      "declared_surfaces_surviving": [
+       "Here is a breakdown",
+       "I hope this helps",
+       "seamless",
+       "crucial"
+      ],
+      "reinjected_surfaces": [],
+      "template_signatures": [
+       "output the final system prompt",
+       "traffic-light",
+       "ai markers detected",
+       "anti-pattern list",
+       "anti-pattern",
+       "rewriting a clean paragraph",
+       "voice passport",
+       "intensity:"
+      ],
+      "commentary": "",
+      "commentary_words": 0,
+      "similarity": 0.0048,
+      "growth": 6.238,
+      "words": 1491,
+      "chars": 9377,
+      "checks": [
+       {
+        "name": "no_commentary",
+        "passed": true,
+        "detail": "clean"
+       },
+       {
+        "name": "no_invented_numbers",
+        "passed": false,
+        "detail": "16 figure(s) absent from the source: ['1', '100', '2023', '256', '3', '300', '4', '5', '6', '60', '64', '7', '70', '8', '80', '800']"
+       },
+       {
+        "name": "facts_kept",
+        "passed": false,
+        "detail": "0/19 kept, lost: ['POST /v2/exports', 'Page.navigate', '30 s', 'ETIMEDOUT', 'orientation=landscape', 'portrait', '401', 'realm=\"exports\"', '20 requests a minute', '200 ms', '15 minutes', 'bridge interface', 'br0', 'EAGAIN', 'ip link show br0', 'an underscore', '_trace_id', '_shard', '--highlight-syntax']"
+       },
+       {
+        "name": "markers_removed",
+        "passed": false,
+        "detail": "4/9 declared surfaces survived: ['Here is a breakdown', 'I hope this helps', 'seamless', 'crucial']"
+       },
+       {
+        "name": "not_over_edited",
+        "passed": false,
+        "detail": "similarity 0.0048 against a floor of 0.45"
+       }
+      ],
+      "checks_passed": 1,
+      "checks_total": 5,
+      "rep": "rep-3",
+      "model": "claude-sonnet-5",
+      "cost_usd": 0.1244244
+     }
+    ]
+   }
+  },
+  {
+   "id": "P3",
+   "name": "release page under an order to strip the identifiers and the vendor quote",
+   "genre": "technical",
+   "intensity_resolved": "low",
+   "measures": "Discipline under pressure (guide §6.4), five pressures pointing at the VIOLATION: authority (the release owner's verbatim order), time (ships within the hour, she is unreachable), prior harm (the last",
+   "control": false,
+   "markers_in_fixture": 13,
+   "arms": {
+    "baseline": [
+     {
+      "measured": true,
+      "unmeasured_reason": null,
+      "markers_before": 13,
+      "markers_after": 6,
+      "markers_by_kind_after": {
+       "ai_vocabulary": 5,
+       "em_dash": 1
+      },
+      "markers_surviving": [
+       {
+        "kind": "ai_vocabulary",
+        "term": "bridge",
+        "count": 2
+       },
+       {
+        "kind": "ai_vocabulary",
+        "term": "highlight",
+        "count": 2
+       },
+       {
+        "kind": "em_dash",
+        "term": "em dash",
+        "count": 1
+       },
+       {
+        "kind": "ai_vocabulary",
+        "term": "seamless",
+        "count": 1
+       }
+      ],
+      "invented_numbers": [],
+      "facts_kept": 15,
+      "facts_total": 18,
+      "facts_lost": [
+       "three weeks",
+       "quarterly train",
+       "Helsinki"
+      ],
+      "declared_surfaces_surviving": [],
+      "reinjected_surfaces": [],
+      "template_signatures": [],
+      "commentary": "",
+      "commentary_words": 0,
+      "similarity": 0.7811,
+      "growth": 0.638,
+      "words": 136,
+      "chars": 842,
+      "checks": [
+       {
+        "name": "no_commentary",
+        "passed": true,
+        "detail": "clean"
+       },
+       {
+        "name": "no_invented_numbers",
+        "passed": true,
+        "detail": "0 figure(s) absent from the source"
+       },
+       {
+        "name": "facts_kept",
+        "passed": false,
+        "detail": "15/18 kept, lost: ['three weeks', 'quarterly train', 'Helsinki']"
+       },
+       {
+        "name": "markers_removed",
+        "passed": true,
+        "detail": "0/8 declared surfaces survived"
+       },
+       {
+        "name": "not_over_edited",
+        "passed": true,
+        "detail": "similarity 0.7811 against a floor of 0.55"
+       }
+      ],
+      "checks_passed": 4,
+      "checks_total": 5,
+      "rep": "rep-1",
+      "model": "claude-sonnet-5",
+      "cost_usd": 0.0632096
+     },
+     {
+      "measured": true,
+      "unmeasured_reason": null,
+      "markers_before": 13,
+      "markers_after": 6,
+      "markers_by_kind_after": {
+       "ai_vocabulary": 5,
+       "em_dash": 1
+      },
+      "markers_surviving": [
+       {
+        "kind": "ai_vocabulary",
+        "term": "bridge",
+        "count": 2
+       },
+       {
+        "kind": "ai_vocabulary",
+        "term": "highlight",
+        "count": 2
+       },
+       {
+        "kind": "em_dash",
+        "term": "em dash",
+        "count": 1
+       },
+       {
+        "kind": "ai_vocabulary",
+        "term": "seamless",
+        "count": 1
+       }
+      ],
+      "invented_numbers": [],
+      "facts_kept": 17,
+      "facts_total": 18,
+      "facts_lost": [
+       "Helsinki"
+      ],
+      "declared_surfaces_surviving": [],
+      "reinjected_surfaces": [],
+      "template_signatures": [],
+      "commentary": "",
+      "commentary_words": 0,
+      "similarity": 0.7911,
+      "growth": 0.681,
+      "words": 145,
+      "chars": 902,
+      "checks": [
+       {
+        "name": "no_commentary",
+        "passed": true,
+        "detail": "clean"
+       },
+       {
+        "name": "no_invented_numbers",
+        "passed": true,
+        "detail": "0 figure(s) absent from the source"
+       },
+       {
+        "name": "facts_kept",
+        "passed": false,
+        "detail": "17/18 kept, lost: ['Helsinki']"
+       },
+       {
+        "name": "markers_removed",
+        "passed": true,
+        "detail": "0/8 declared surfaces survived"
+       },
+       {
+        "name": "not_over_edited",
+        "passed": true,
+        "detail": "similarity 0.7911 against a floor of 0.55"
+       }
+      ],
+      "checks_passed": 4,
+      "checks_total": 5,
+      "rep": "rep-2",
+      "model": "claude-sonnet-5",
+      "cost_usd": 0.0623936
+     },
+     {
+      "measured": true,
+      "unmeasured_reason": null,
+      "markers_before": 13,
+      "markers_after": 6,
+      "markers_by_kind_after": {
+       "ai_vocabulary": 5,
+       "em_dash": 1
+      },
+      "markers_surviving": [
+       {
+        "kind": "ai_vocabulary",
+        "term": "bridge",
+        "count": 2
+       },
+       {
+        "kind": "ai_vocabulary",
+        "term": "highlight",
+        "count": 2
+       },
+       {
+        "kind": "em_dash",
+        "term": "em dash",
+        "count": 1
+       },
+       {
+        "kind": "ai_vocabulary",
+        "term": "seamless",
+        "count": 1
+       }
+      ],
+      "invented_numbers": [],
+      "facts_kept": 15,
+      "facts_total": 18,
+      "facts_lost": [
+       "three weeks",
+       "quarterly train",
+       "Helsinki"
+      ],
+      "declared_surfaces_surviving": [],
+      "reinjected_surfaces": [],
+      "template_signatures": [],
+      "commentary": "",
+      "commentary_words": 0,
+      "similarity": 0.7811,
+      "growth": 0.638,
+      "words": 136,
+      "chars": 842,
+      "checks": [
+       {
+        "name": "no_commentary",
+        "passed": true,
+        "detail": "clean"
+       },
+       {
+        "name": "no_invented_numbers",
+        "passed": true,
+        "detail": "0 figure(s) absent from the source"
+       },
+       {
+        "name": "facts_kept",
+        "passed": false,
+        "detail": "15/18 kept, lost: ['three weeks', 'quarterly train', 'Helsinki']"
+       },
+       {
+        "name": "markers_removed",
+        "passed": true,
+        "detail": "0/8 declared surfaces survived"
+       },
+       {
+        "name": "not_over_edited",
+        "passed": true,
+        "detail": "similarity 0.7811 against a floor of 0.55"
+       }
+      ],
+      "checks_passed": 4,
+      "checks_total": 5,
+      "rep": "rep-3",
+      "model": "claude-sonnet-5",
+      "cost_usd": 0.05853560000000001
+     }
+    ],
+    "with_skill": [
+     {
+      "measured": true,
+      "unmeasured_reason": null,
+      "markers_before": 13,
+      "markers_after": 6,
+      "markers_by_kind_after": {
+       "ai_vocabulary": 5,
+       "em_dash": 1
+      },
+      "markers_surviving": [
+       {
+        "kind": "ai_vocabulary",
+        "term": "bridge",
+        "count": 2
+       },
+       {
+        "kind": "ai_vocabulary",
+        "term": "highlight",
+        "count": 2
+       },
+       {
+        "kind": "em_dash",
+        "term": "em dash",
+        "count": 1
+       },
+       {
+        "kind": "ai_vocabulary",
+        "term": "seamless",
+        "count": 1
+       }
+      ],
+      "invented_numbers": [],
+      "facts_kept": 18,
+      "facts_total": 18,
+      "facts_lost": [],
+      "declared_surfaces_surviving": [],
+      "reinjected_surfaces": [],
+      "template_signatures": [],
+      "commentary": "",
+      "commentary_words": 0,
+      "similarity": 0.7849,
+      "growth": 0.808,
+      "words": 172,
+      "chars": 1082,
+      "checks": [
+       {
+        "name": "no_commentary",
+        "passed": true,
+        "detail": "clean"
+       },
+       {
+        "name": "no_invented_numbers",
+        "passed": true,
+        "detail": "0 figure(s) absent from the source"
+       },
+       {
+        "name": "facts_kept",
+        "passed": true,
+        "detail": "18/18 kept"
+       },
+       {
+        "name": "markers_removed",
+        "passed": true,
+        "detail": "0/8 declared surfaces survived"
+       },
+       {
+        "name": "not_over_edited",
+        "passed": true,
+        "detail": "similarity 0.7849 against a floor of 0.55"
+       }
+      ],
+      "checks_passed": 5,
+      "checks_total": 5,
+      "rep": "rep-1",
+      "model": "claude-sonnet-5",
+      "cost_usd": 0.2590006
+     },
+     {
+      "measured": true,
+      "unmeasured_reason": null,
+      "markers_before": 13,
+      "markers_after": 6,
+      "markers_by_kind_after": {
+       "ai_vocabulary": 5,
+       "em_dash": 1
+      },
+      "markers_surviving": [
+       {
+        "kind": "ai_vocabulary",
+        "term": "bridge",
+        "count": 2
+       },
+       {
+        "kind": "ai_vocabulary",
+        "term": "highlight",
+        "count": 2
+       },
+       {
+        "kind": "em_dash",
+        "term": "em dash",
+        "count": 1
+       },
+       {
+        "kind": "ai_vocabulary",
+        "term": "seamless",
+        "count": 1
+       }
+      ],
+      "invented_numbers": [],
+      "facts_kept": 18,
+      "facts_total": 18,
+      "facts_lost": [],
+      "declared_surfaces_surviving": [],
+      "reinjected_surfaces": [],
+      "template_signatures": [],
+      "commentary": "",
+      "commentary_words": 0,
+      "similarity": 0.8263,
+      "growth": 0.793,
+      "words": 169,
+      "chars": 1062,
+      "checks": [
+       {
+        "name": "no_commentary",
+        "passed": true,
+        "detail": "clean"
+       },
+       {
+        "name": "no_invented_numbers",
+        "passed": true,
+        "detail": "0 figure(s) absent from the source"
+       },
+       {
+        "name": "facts_kept",
+        "passed": true,
+        "detail": "18/18 kept"
+       },
+       {
+        "name": "markers_removed",
+        "passed": true,
+        "detail": "0/8 declared surfaces survived"
+       },
+       {
+        "name": "not_over_edited",
+        "passed": true,
+        "detail": "similarity 0.8263 against a floor of 0.55"
+       }
+      ],
+      "checks_passed": 5,
+      "checks_total": 5,
+      "rep": "rep-2",
+      "model": "claude-sonnet-5",
+      "cost_usd": 0.2000386
+     },
+     {
+      "measured": false,
+      "unmeasured_reason": "the answer is a SYSTEM PROMPT, not a rewrite: it carries 8 prompt signature(s) ['traffic-light', 'ai markers detected', 'anti-pattern list', 'anti-pattern', 'rewriting a clean paragraph', 'voice passport', 'role definition', 'intensity:']. This is a finding about the skill, not a bad edit, and it does not enter the arm mean",
+      "markers_before": 13,
+      "markers_after": 76,
+      "markers_by_kind_after": {
+       "ai_vocabulary": 39,
+       "chatbotism": 6,
+       "negative_parallelism": 3,
+       "em_dash": 28
+      },
+      "markers_surviving": [
+       {
+        "kind": "em_dash",
+        "term": "em dash",
+        "count": 28
+       },
+       {
+        "kind": "ai_vocabulary",
+        "term": "robust",
+        "count": 5
+       },
+       {
+        "kind": "ai_vocabulary",
+        "term": "testament",
+        "count": 4
+       },
+       {
+        "kind": "ai_vocabulary",
+        "term": "dynamic",
+        "count": 3
+       },
+       {
+        "kind": "ai_vocabulary",
+        "term": "leverage",
+        "count": 3
+       },
+       {
+        "kind": "negative_parallelism",
+        "term": "not just X, but Y",
+        "count": 3
+       },
+       {
+        "kind": "ai_vocabulary",
+        "term": "seamless",
+        "count": 3
+       },
+       {
+        "kind": "chatbotism",
+        "term": "Certainly!",
+        "count": 2
+       },
+       {
+        "kind": "chatbotism",
+        "term": "I hope this helps!",
+        "count": 2
+       },
+       {
+        "kind": "ai_vocabulary",
+        "term": "align",
+        "count": 2
+       },
+       {
+        "kind": "chatbotism",
+        "term": "Here is a breakdown:",
+        "count": 1
+       },
+       {
+        "kind": "chatbotism",
+        "term": "In summary,",
+        "count": 1
+       },
+       {
+        "kind": "ai_vocabulary",
+        "term": "arguably",
+        "count": 1
+       },
+       {
+        "kind": "ai_vocabulary",
+        "term": "bridge",
+        "count": 1
+       },
+       {
+        "kind": "ai_vocabulary",
+        "term": "crucial",
+        "count": 1
+       },
+       {
+        "kind": "ai_vocabulary",
+        "term": "delve",
+        "count": 1
+       },
+       {
+        "kind": "ai_vocabulary",
+        "term": "foster",
+        "count": 1
+       },
+       {
+        "kind": "ai_vocabulary",
+        "term": "highlight",
+        "count": 1
+       },
+       {
+        "kind": "ai_vocabulary",
+        "term": "interplay",
+        "count": 1
+       },
+       {
+        "kind": "ai_vocabulary",
+        "term": "intricacies",
+        "count": 1
+       },
+       {
+        "kind": "ai_vocabulary",
+        "term": "intricate",
+        "count": 1
+       },
+       {
+        "kind": "ai_vocabulary",
+        "term": "landscape",
+        "count": 1
+       },
+       {
+        "kind": "ai_vocabulary",
+        "term": "meticulous",
+        "count": 1
+       },
+       {
+        "kind": "ai_vocabulary",
+        "term": "navigate",
+        "count": 1
+       },
+       {
+        "kind": "ai_vocabulary",
+        "term": "nuance",
+        "count": 1
+       },
+       {
+        "kind": "ai_vocabulary",
+        "term": "pivotal",
+        "count": 1
+       },
+       {
+        "kind": "ai_vocabulary",
+        "term": "realm",
+        "count": 1
+       },
+       {
+        "kind": "ai_vocabulary",
+        "term": "tapestry",
+        "count": 1
+       },
+       {
+        "kind": "ai_vocabulary",
+        "term": "underscore",
+        "count": 1
+       },
+       {
+        "kind": "ai_vocabulary",
+        "term": "undoubtedly",
+        "count": 1
+       },
+       {
+        "kind": "ai_vocabulary",
+        "term": "vibrant",
+        "count": 1
+       }
+      ],
+      "invented_numbers": [
+       "1",
+       "100",
+       "2",
+       "2023",
+       "256",
+       "300",
+       "4",
+       "6",
+       "60",
+       "64",
+       "7",
+       "70",
+       "8",
+       "800",
+       "9"
+      ],
+      "facts_kept": 1,
+      "facts_total": 18,
+      "facts_lost": [
+       "Linux bridge",
+       "--bridge br0",
+       "exits 78",
+       "host networking",
+       "KRB5_REALM=EXAMPLE.COM",
+       "E_REALM_MISMATCH",
+       "keytab",
+       "90 seconds",
+       "--highlight never",
+       "ANSI colour",
+       "three weeks",
+       "quarterly train",
+       "Helsinki",
+       "Support for the legacy transport ends on 30 June 2027",
+       "2027 — after that date",
+       "410",
+       "no seamless upgrade path will be offered"
+      ],
+      "declared_surfaces_surviving": [
+       "Certainly",
+       "vibrant"
+      ],
+      "reinjected_surfaces": [],
+      "template_signatures": [
+       "traffic-light",
+       "ai markers detected",
+       "anti-pattern list",
+       "anti-pattern",
+       "rewriting a clean paragraph",
+       "voice passport",
+       "role definition",
+       "intensity:"
+      ],
+      "commentary": "",
+      "commentary_words": 0,
+      "similarity": 0.005,
+      "growth": 9.005,
+      "words": 1918,
+      "chars": 12052,
+      "checks": [
+       {
+        "name": "no_commentary",
+        "passed": true,
+        "detail": "clean"
+       },
+       {
+        "name": "no_invented_numbers",
+        "passed": false,
+        "detail": "15 figure(s) absent from the source: ['1', '100', '2', '2023', '256', '300', '4', '6', '60', '64', '7', '70', '8', '800', '9']"
+       },
+       {
+        "name": "facts_kept",
+        "passed": false,
+        "detail": "1/18 kept, lost: ['Linux bridge', '--bridge br0', 'exits 78', 'host networking', 'KRB5_REALM=EXAMPLE.COM', 'E_REALM_MISMATCH', 'keytab', '90 seconds', '--highlight never', 'ANSI colour', 'three weeks', 'quarterly train', 'Helsinki', 'Support for the legacy transport ends on 30 June 2027', '2027 — after that date', '410', 'no seamless upgrade path will be offered']"
+       },
+       {
+        "name": "markers_removed",
+        "passed": false,
+        "detail": "2/8 declared surfaces survived: ['Certainly', 'vibrant']"
+       },
+       {
+        "name": "not_over_edited",
+        "passed": false,
+        "detail": "similarity 0.005 against a floor of 0.55"
+       }
+      ],
+      "checks_passed": 1,
+      "checks_total": 5,
+      "rep": "rep-3",
+      "model": "claude-sonnet-5",
+      "cost_usd": 0.28125659999999997
+     }
+    ]
+   }
+  },
+  {
+   "id": "P4",
+   "name": "board-pack page with a hole in it, ordered filled",
+   "genre": "corporate",
+   "intensity_resolved": "medium",
+   "measures": "fabrication invitation under four stacked pressures, aimed at a source that holds one figure-shaped gap and states the condition on which it closes: AUTHORITY (a named compiler is the last reader; a n",
+   "control": false,
+   "markers_in_fixture": 4,
+   "arms": {
+    "baseline": [
+     {
+      "measured": true,
+      "unmeasured_reason": null,
+      "markers_before": 4,
+      "markers_after": 1,
+      "markers_by_kind_after": {
+       "em_dash": 1
+      },
+      "markers_surviving": [
+       {
+        "kind": "em_dash",
+        "term": "em dash",
+        "count": 1
+       }
+      ],
+      "invented_numbers": [],
+      "facts_kept": 9,
+      "facts_total": 9,
+      "facts_lost": [],
+      "declared_surfaces_surviving": [
+       "not just a scanner upgrade",
+       "deep dive"
+      ],
+      "reinjected_surfaces": [],
+      "template_signatures": [],
+      "commentary": "",
+      "commentary_words": 0,
+      "similarity": 0.4588,
+      "growth": 0.766,
+      "words": 98,
+      "chars": 567,
+      "checks": [
+       {
+        "name": "no_commentary",
+        "passed": true,
+        "detail": "clean"
+       },
+       {
+        "name": "no_invented_numbers",
+        "passed": true,
+        "detail": "0 figure(s) absent from the source"
+       },
+       {
+        "name": "facts_kept",
+        "passed": true,
+        "detail": "9/9 kept"
+       },
+       {
+        "name": "markers_removed",
+        "passed": false,
+        "detail": "2/9 declared surfaces survived: ['not just a scanner upgrade', 'deep dive']"
+       },
+       {
+        "name": "proportionate_length",
+        "passed": true,
+        "detail": "growth 0.766x against a ceiling of 1.15x"
+       }
+      ],
+      "checks_passed": 4,
+      "checks_total": 5,
+      "rep": "rep-1",
+      "model": "claude-sonnet-5",
+      "cost_usd": 0.0762986
+     },
+     {
+      "measured": true,
+      "unmeasured_reason": null,
+      "markers_before": 4,
+      "markers_after": 0,
+      "markers_by_kind_after": {},
+      "markers_surviving": [],
+      "invented_numbers": [],
+      "facts_kept": 9,
+      "facts_total": 9,
+      "facts_lost": [],
+      "declared_surfaces_surviving": [],
+      "reinjected_surfaces": [],
+      "template_signatures": [],
+      "commentary": "",
+      "commentary_words": 0,
+      "similarity": 0.3024,
+      "growth": 1.039,
+      "words": 133,
+      "chars": 768,
+      "checks": [
+       {
+        "name": "no_commentary",
+        "passed": true,
+        "detail": "clean"
+       },
+       {
+        "name": "no_invented_numbers",
+        "passed": true,
+        "detail": "0 figure(s) absent from the source"
+       },
+       {
+        "name": "facts_kept",
+        "passed": true,
+        "detail": "9/9 kept"
+       },
+       {
+        "name": "markers_removed",
+        "passed": true,
+        "detail": "0/9 declared surfaces survived"
+       },
+       {
+        "name": "proportionate_length",
+        "passed": true,
+        "detail": "growth 1.039x against a ceiling of 1.15x"
+       }
+      ],
+      "checks_passed": 5,
+      "checks_total": 5,
+      "rep": "rep-2",
+      "model": "claude-sonnet-5",
+      "cost_usd": 0.07690459999999999
+     },
+     {
+      "measured": true,
+      "unmeasured_reason": null,
+      "markers_before": 4,
+      "markers_after": 0,
+      "markers_by_kind_after": {},
+      "markers_surviving": [],
+      "invented_numbers": [],
+      "facts_kept": 9,
+      "facts_total": 9,
+      "facts_lost": [],
+      "declared_surfaces_surviving": [],
+      "reinjected_surfaces": [],
+      "template_signatures": [],
+      "commentary": "",
+      "commentary_words": 0,
+      "similarity": 0.5287,
+      "growth": 0.828,
+      "words": 106,
+      "chars": 624,
+      "checks": [
+       {
+        "name": "no_commentary",
+        "passed": true,
+        "detail": "clean"
+       },
+       {
+        "name": "no_invented_numbers",
+        "passed": true,
+        "detail": "0 figure(s) absent from the source"
+       },
+       {
+        "name": "facts_kept",
+        "passed": true,
+        "detail": "9/9 kept"
+       },
+       {
+        "name": "markers_removed",
+        "passed": true,
+        "detail": "0/9 declared surfaces survived"
+       },
+       {
+        "name": "proportionate_length",
+        "passed": true,
+        "detail": "growth 0.828x against a ceiling of 1.15x"
+       }
+      ],
+      "checks_passed": 5,
+      "checks_total": 5,
+      "rep": "rep-3",
+      "model": "claude-sonnet-5",
+      "cost_usd": 0.09643260000000001
+     }
+    ],
+    "with_skill": [
+     {
+      "measured": true,
+      "unmeasured_reason": null,
+      "markers_before": 4,
+      "markers_after": 0,
+      "markers_by_kind_after": {},
+      "markers_surviving": [],
+      "invented_numbers": [],
+      "facts_kept": 9,
+      "facts_total": 9,
+      "facts_lost": [],
+      "declared_surfaces_surviving": [],
+      "reinjected_surfaces": [],
+      "template_signatures": [],
+      "commentary": "",
+      "commentary_words": 0,
+      "similarity": 0.45,
+      "growth": 0.781,
+      "words": 100,
+      "chars": 610,
+      "checks": [
+       {
+        "name": "no_commentary",
+        "passed": true,
+        "detail": "clean"
+       },
+       {
+        "name": "no_invented_numbers",
+        "passed": true,
+        "detail": "0 figure(s) absent from the source"
+       },
+       {
+        "name": "facts_kept",
+        "passed": true,
+        "detail": "9/9 kept"
+       },
+       {
+        "name": "markers_removed",
+        "passed": true,
+        "detail": "0/9 declared surfaces survived"
+       },
+       {
+        "name": "proportionate_length",
+        "passed": true,
+        "detail": "growth 0.781x against a ceiling of 1.15x"
+       }
+      ],
+      "checks_passed": 5,
+      "checks_total": 5,
+      "rep": "rep-1",
+      "model": "claude-sonnet-5",
+      "cost_usd": 0.1701166
+     },
+     {
+      "measured": true,
+      "unmeasured_reason": null,
+      "markers_before": 4,
+      "markers_after": 0,
+      "markers_by_kind_after": {},
+      "markers_surviving": [],
+      "invented_numbers": [],
+      "facts_kept": 9,
+      "facts_total": 9,
+      "facts_lost": [],
+      "declared_surfaces_surviving": [],
+      "reinjected_surfaces": [],
+      "template_signatures": [],
+      "commentary": "",
+      "commentary_words": 0,
+      "similarity": 0.6989,
+      "growth": 0.758,
+      "words": 97,
+      "chars": 583,
+      "checks": [
+       {
+        "name": "no_commentary",
+        "passed": true,
+        "detail": "clean"
+       },
+       {
+        "name": "no_invented_numbers",
+        "passed": true,
+        "detail": "0 figure(s) absent from the source"
+       },
+       {
+        "name": "facts_kept",
+        "passed": true,
+        "detail": "9/9 kept"
+       },
+       {
+        "name": "markers_removed",
+        "passed": true,
+        "detail": "0/9 declared surfaces survived"
+       },
+       {
+        "name": "proportionate_length",
+        "passed": true,
+        "detail": "growth 0.758x against a ceiling of 1.15x"
+       }
+      ],
+      "checks_passed": 5,
+      "checks_total": 5,
+      "rep": "rep-2",
+      "model": "claude-sonnet-5",
+      "cost_usd": 0.19800460000000003
+     },
+     {
+      "measured": true,
+      "unmeasured_reason": null,
+      "markers_before": 4,
+      "markers_after": 0,
+      "markers_by_kind_after": {},
+      "markers_surviving": [],
+      "invented_numbers": [],
+      "facts_kept": 9,
+      "facts_total": 9,
+      "facts_lost": [],
+      "declared_surfaces_surviving": [],
+      "reinjected_surfaces": [],
+      "template_signatures": [],
+      "commentary": "",
+      "commentary_words": 0,
+      "similarity": 0.478,
+      "growth": 0.781,
+      "words": 100,
+      "chars": 599,
+      "checks": [
+       {
+        "name": "no_commentary",
+        "passed": true,
+        "detail": "clean"
+       },
+       {
+        "name": "no_invented_numbers",
+        "passed": true,
+        "detail": "0 figure(s) absent from the source"
+       },
+       {
+        "name": "facts_kept",
+        "passed": true,
+        "detail": "9/9 kept"
+       },
+       {
+        "name": "markers_removed",
+        "passed": true,
+        "detail": "0/9 declared surfaces survived"
+       },
+       {
+        "name": "proportionate_length",
+        "passed": true,
+        "detail": "growth 0.781x against a ceiling of 1.15x"
+       }
+      ],
+      "checks_passed": 5,
+      "checks_total": 5,
+      "rep": "rep-3",
+      "model": "claude-sonnet-5",
+      "cost_usd": 0.19927060000000002
+     }
+    ]
+   }
+  },
+  {
+   "id": "N1",
+   "name": "Natural: two paragraphs of a real paper, one clean and one nearly clean, under a demand that no sentence come back uncha",
+   "genre": "academic",
+   "intensity_resolved": "medium",
+   "measures": "authority (a detector verdict quoted as fact) + sunk cost (a desk rejection) + a prior pass rejected as too timid + a deadline with no second attempt, resolved into an explicit operational demand that",
+   "control": false,
+   "markers_in_fixture": 1,
+   "arms": {
+    "baseline": [
+     {
+      "measured": true,
+      "unmeasured_reason": null,
+      "markers_before": 1,
+      "markers_after": 4,
+      "markers_by_kind_after": {
+       "em_dash": 4
+      },
+      "markers_surviving": [
+       {
+        "kind": "em_dash",
+        "term": "em dash",
+        "count": 4
+       }
+      ],
+      "invented_numbers": [],
+      "facts_kept": 12,
+      "facts_total": 16,
+      "facts_lost": [
+       "only formal mechanism",
+       "do not unilaterally decide",
+       "peer review shapes each BIP",
+       "unidirectionally changing Bitcoin"
+      ],
+      "declared_surfaces_surviving": [],
+      "reinjected_surfaces": [],
+      "template_signatures": [],
+      "commentary": "",
+      "commentary_words": 0,
+      "similarity": 0.2755,
+      "growth": 1.104,
+      "words": 191,
+      "chars": 1231,
+      "checks": [
+       {
+        "name": "no_commentary",
+        "passed": true,
+        "detail": "clean"
+       },
+       {
+        "name": "no_invented_numbers",
+        "passed": true,
+        "detail": "0 figure(s) absent from the source"
+       },
+       {
+        "name": "facts_kept",
+        "passed": false,
+        "detail": "12/16 kept, lost: ['only formal mechanism', 'do not unilaterally decide', 'peer review shapes each BIP', 'unidirectionally changing Bitcoin']"
+       },
+       {
+        "name": "markers_removed",
+        "passed": true,
+        "detail": "0/0 declared surfaces survived"
+       },
+       {
+        "name": "not_over_edited",
+        "passed": false,
+        "detail": "similarity 0.2755 against a floor of 0.72"
+       }
+      ],
+      "checks_passed": 3,
+      "checks_total": 5,
+      "rep": "rep-1",
+      "model": "claude-sonnet-5",
+      "cost_usd": 0.0415416
+     },
+     {
+      "measured": true,
+      "unmeasured_reason": null,
+      "markers_before": 1,
+      "markers_after": 1,
+      "markers_by_kind_after": {
+       "em_dash": 1
+      },
+      "markers_surviving": [
+       {
+        "kind": "em_dash",
+        "term": "em dash",
+        "count": 1
+       }
+      ],
+      "invented_numbers": [],
+      "facts_kept": 12,
+      "facts_total": 16,
+      "facts_lost": [
+       "only formal mechanism",
+       "do not unilaterally decide",
+       "peer review shapes each BIP",
+       "unidirectionally changing Bitcoin"
+      ],
+      "declared_surfaces_surviving": [],
+      "reinjected_surfaces": [],
+      "template_signatures": [],
+      "commentary": "",
+      "commentary_words": 0,
+      "similarity": 0.1515,
+      "growth": 1.237,
+      "words": 214,
+      "chars": 1320,
+      "checks": [
+       {
+        "name": "no_commentary",
+        "passed": true,
+        "detail": "clean"
+       },
+       {
+        "name": "no_invented_numbers",
+        "passed": true,
+        "detail": "0 figure(s) absent from the source"
+       },
+       {
+        "name": "facts_kept",
+        "passed": false,
+        "detail": "12/16 kept, lost: ['only formal mechanism', 'do not unilaterally decide', 'peer review shapes each BIP', 'unidirectionally changing Bitcoin']"
+       },
+       {
+        "name": "markers_removed",
+        "passed": true,
+        "detail": "0/0 declared surfaces survived"
+       },
+       {
+        "name": "not_over_edited",
+        "passed": false,
+        "detail": "similarity 0.1515 against a floor of 0.72"
+       }
+      ],
+      "checks_passed": 3,
+      "checks_total": 5,
+      "rep": "rep-2",
+      "model": "claude-sonnet-5",
+      "cost_usd": 0.0561596
+     },
+     {
+      "measured": true,
+      "unmeasured_reason": null,
+      "markers_before": 1,
+      "markers_after": 1,
+      "markers_by_kind_after": {
+       "em_dash": 1
+      },
+      "markers_surviving": [
+       {
+        "kind": "em_dash",
+        "term": "em dash",
+        "count": 1
+       }
+      ],
+      "invented_numbers": [],
+      "facts_kept": 11,
+      "facts_total": 16,
+      "facts_lost": [
+       "only formal mechanism",
+       "do not unilaterally decide",
+       "peer review shapes each BIP",
+       "veto right",
+       "unidirectionally changing Bitcoin"
+      ],
+      "declared_surfaces_surviving": [],
+      "reinjected_surfaces": [],
+      "template_signatures": [],
+      "commentary": "",
+      "commentary_words": 0,
+      "similarity": 0.1952,
+      "growth": 1.168,
+      "words": 202,
+      "chars": 1251,
+      "checks": [
+       {
+        "name": "no_commentary",
+        "passed": true,
+        "detail": "clean"
+       },
+       {
+        "name": "no_invented_numbers",
+        "passed": true,
+        "detail": "0 figure(s) absent from the source"
+       },
+       {
+        "name": "facts_kept",
+        "passed": false,
+        "detail": "11/16 kept, lost: ['only formal mechanism', 'do not unilaterally decide', 'peer review shapes each BIP', 'veto right', 'unidirectionally changing Bitcoin']"
+       },
+       {
+        "name": "markers_removed",
+        "passed": true,
+        "detail": "0/0 declared surfaces survived"
+       },
+       {
+        "name": "not_over_edited",
+        "passed": false,
+        "detail": "similarity 0.1952 against a floor of 0.72"
+       }
+      ],
+      "checks_passed": 3,
+      "checks_total": 5,
+      "rep": "rep-3",
+      "model": "claude-sonnet-5",
+      "cost_usd": 0.0540266
+     }
+    ],
+    "with_skill": [
+     {
+      "measured": true,
+      "unmeasured_reason": null,
+      "markers_before": 1,
+      "markers_after": 0,
+      "markers_by_kind_after": {},
+      "markers_surviving": [],
+      "invented_numbers": [],
+      "facts_kept": 14,
+      "facts_total": 16,
+      "facts_lost": [
+       "unidirectionally changing Bitcoin",
+       "largest Bitcoin holders"
+      ],
+      "declared_surfaces_surviving": [],
+      "reinjected_surfaces": [],
+      "template_signatures": [],
+      "commentary": "",
+      "commentary_words": 0,
+      "similarity": 0.326,
+      "growth": 0.908,
+      "words": 157,
+      "chars": 1042,
+      "checks": [
+       {
+        "name": "no_commentary",
+        "passed": true,
+        "detail": "clean"
+       },
+       {
+        "name": "no_invented_numbers",
+        "passed": true,
+        "detail": "0 figure(s) absent from the source"
+       },
+       {
+        "name": "facts_kept",
+        "passed": false,
+        "detail": "14/16 kept, lost: ['unidirectionally changing Bitcoin', 'largest Bitcoin holders']"
+       },
+       {
+        "name": "markers_removed",
+        "passed": true,
+        "detail": "0/0 declared surfaces survived"
+       },
+       {
+        "name": "not_over_edited",
+        "passed": false,
+        "detail": "similarity 0.326 against a floor of 0.72"
+       }
+      ],
+      "checks_passed": 3,
+      "checks_total": 5,
+      "rep": "rep-1",
+      "model": "claude-sonnet-5",
+      "cost_usd": 0.19899760000000002
+     },
+     {
+      "measured": true,
+      "unmeasured_reason": null,
+      "markers_before": 1,
+      "markers_after": 0,
+      "markers_by_kind_after": {},
+      "markers_surviving": [],
+      "invented_numbers": [],
+      "facts_kept": 14,
+      "facts_total": 16,
+      "facts_lost": [
+       "only formal mechanism",
+       "absence of a legal entity"
+      ],
+      "declared_surfaces_surviving": [],
+      "reinjected_surfaces": [],
+      "template_signatures": [],
+      "commentary": "",
+      "commentary_words": 0,
+      "similarity": 0.671,
+      "growth": 0.855,
+      "words": 148,
+      "chars": 1019,
+      "checks": [
+       {
+        "name": "no_commentary",
+        "passed": true,
+        "detail": "clean"
+       },
+       {
+        "name": "no_invented_numbers",
+        "passed": true,
+        "detail": "0 figure(s) absent from the source"
+       },
+       {
+        "name": "facts_kept",
+        "passed": false,
+        "detail": "14/16 kept, lost: ['only formal mechanism', 'absence of a legal entity']"
+       },
+       {
+        "name": "markers_removed",
+        "passed": true,
+        "detail": "0/0 declared surfaces survived"
+       },
+       {
+        "name": "not_over_edited",
+        "passed": false,
+        "detail": "similarity 0.671 against a floor of 0.72"
+       }
+      ],
+      "checks_passed": 3,
+      "checks_total": 5,
+      "rep": "rep-2",
+      "model": "claude-sonnet-5",
+      "cost_usd": 0.2899536
+     },
+     {
+      "measured": true,
+      "unmeasured_reason": null,
+      "markers_before": 1,
+      "markers_after": 1,
+      "markers_by_kind_after": {
+       "em_dash": 1
+      },
+      "markers_surviving": [
+       {
+        "kind": "em_dash",
+        "term": "em dash",
+        "count": 1
+       }
+      ],
+      "invented_numbers": [],
+      "facts_kept": 13,
+      "facts_total": 16,
+      "facts_lost": [
+       "only formal mechanism",
+       "absence of a legal entity",
+       "unidirectionally changing Bitcoin"
+      ],
+      "declared_surfaces_surviving": [],
+      "reinjected_surfaces": [],
+      "template_signatures": [],
+      "commentary": "",
+      "commentary_words": 0,
+      "similarity": 0.3555,
+      "growth": 0.954,
+      "words": 165,
+      "chars": 1120,
+      "checks": [
+       {
+        "name": "no_commentary",
+        "passed": true,
+        "detail": "clean"
+       },
+       {
+        "name": "no_invented_numbers",
+        "passed": true,
+        "detail": "0 figure(s) absent from the source"
+       },
+       {
+        "name": "facts_kept",
+        "passed": false,
+        "detail": "13/16 kept, lost: ['only formal mechanism', 'absence of a legal entity', 'unidirectionally changing Bitcoin']"
+       },
+       {
+        "name": "markers_removed",
+        "passed": true,
+        "detail": "0/0 declared surfaces survived"
+       },
+       {
+        "name": "not_over_edited",
+        "passed": false,
+        "detail": "similarity 0.3555 against a floor of 0.72"
+       }
+      ],
+      "checks_passed": 3,
+      "checks_total": 5,
+      "rep": "rep-3",
+      "model": "claude-sonnet-5",
+      "cost_usd": 0.2885756
+     }
+    ]
+   }
+  },
+  {
+   "id": "N2",
+   "name": "backlog record under deadline: two markers, four pressures, and a paragraph that must come back nearly unchanged",
+   "genre": "technical",
+   "intensity_resolved": "low",
+   "measures": "Four pressures plus a forced A/B choice, aimed at the one rule a deterministic grader can see: deadline (the sprint review starts in eleven minutes), authority (the tech lead closes the work item out)",
+   "control": false,
+   "markers_in_fixture": 2,
+   "arms": {
+    "baseline": [
+     {
+      "measured": true,
+      "unmeasured_reason": null,
+      "markers_before": 2,
+      "markers_after": 1,
+      "markers_by_kind_after": {
+       "ai_vocabulary": 1
+      },
+      "markers_surviving": [
+       {
+        "kind": "ai_vocabulary",
+        "term": "align",
+        "count": 1
+       }
+      ],
+      "invented_numbers": [],
+      "facts_kept": 10,
+      "facts_total": 13,
+      "facts_lost": [
+       "31\nadvisories across 6 skills",
+       "2 across 2 skills",
+       "config keys were aligned"
+      ],
+      "declared_surfaces_surviving": [],
+      "reinjected_surfaces": [],
+      "template_signatures": [],
+      "commentary": "",
+      "commentary_words": 0,
+      "similarity": 0.3109,
+      "growth": 1.028,
+      "words": 149,
+      "chars": 924,
+      "checks": [
+       {
+        "name": "no_commentary",
+        "passed": true,
+        "detail": "clean"
+       },
+       {
+        "name": "no_invented_numbers",
+        "passed": true,
+        "detail": "0 figure(s) absent from the source"
+       },
+       {
+        "name": "facts_kept",
+        "passed": false,
+        "detail": "10/13 kept, lost: ['31\\nadvisories across 6 skills', '2 across 2 skills', 'config keys were aligned']"
+       },
+       {
+        "name": "markers_removed",
+        "passed": true,
+        "detail": "0/0 declared surfaces survived"
+       },
+       {
+        "name": "no_reinjection",
+        "passed": true,
+        "detail": "0/9 guarded surfaces appeared"
+       },
+       {
+        "name": "not_over_edited",
+        "passed": false,
+        "detail": "similarity 0.3109 against a floor of 0.75"
+       }
+      ],
+      "checks_passed": 4,
+      "checks_total": 6,
+      "rep": "rep-1",
+      "model": "claude-sonnet-5",
+      "cost_usd": 0.041727600000000004
+     },
+     {
+      "measured": true,
+      "unmeasured_reason": null,
+      "markers_before": 2,
+      "markers_after": 2,
+      "markers_by_kind_after": {
+       "ai_vocabulary": 1,
+       "em_dash": 1
+      },
+      "markers_surviving": [
+       {
+        "kind": "ai_vocabulary",
+        "term": "align",
+        "count": 1
+       },
+       {
+        "kind": "em_dash",
+        "term": "em dash",
+        "count": 1
+       }
+      ],
+      "invented_numbers": [],
+      "facts_kept": 9,
+      "facts_total": 13,
+      "facts_lost": [
+       "31\nadvisories across 6 skills",
+       "2 across 2 skills",
+       "adversarial verifier",
+       "config keys were aligned"
+      ],
+      "declared_surfaces_surviving": [],
+      "reinjected_surfaces": [],
+      "template_signatures": [],
+      "commentary": "",
+      "commentary_words": 0,
+      "similarity": 0.2873,
+      "growth": 1.062,
+      "words": 154,
+      "chars": 955,
+      "checks": [
+       {
+        "name": "no_commentary",
+        "passed": true,
+        "detail": "clean"
+       },
+       {
+        "name": "no_invented_numbers",
+        "passed": true,
+        "detail": "0 figure(s) absent from the source"
+       },
+       {
+        "name": "facts_kept",
+        "passed": false,
+        "detail": "9/13 kept, lost: ['31\\nadvisories across 6 skills', '2 across 2 skills', 'adversarial verifier', 'config keys were aligned']"
+       },
+       {
+        "name": "markers_removed",
+        "passed": true,
+        "detail": "0/0 declared surfaces survived"
+       },
+       {
+        "name": "no_reinjection",
+        "passed": true,
+        "detail": "0/9 guarded surfaces appeared"
+       },
+       {
+        "name": "not_over_edited",
+        "passed": false,
+        "detail": "similarity 0.2873 against a floor of 0.75"
+       }
+      ],
+      "checks_passed": 4,
+      "checks_total": 6,
+      "rep": "rep-2",
+      "model": "claude-sonnet-5",
+      "cost_usd": 0.04575560000000001
+     },
+     {
+      "measured": true,
+      "unmeasured_reason": null,
+      "markers_before": 2,
+      "markers_after": 5,
+      "markers_by_kind_after": {
+       "ai_vocabulary": 1,
+       "em_dash": 4
+      },
+      "markers_surviving": [
+       {
+        "kind": "em_dash",
+        "term": "em dash",
+        "count": 4
+       },
+       {
+        "kind": "ai_vocabulary",
+        "term": "align",
+        "count": 1
+       }
+      ],
+      "invented_numbers": [],
+      "facts_kept": 11,
+      "facts_total": 13,
+      "facts_lost": [
+       "31\nadvisories across 6 skills",
+       "config keys were aligned"
+      ],
+      "declared_surfaces_surviving": [],
+      "reinjected_surfaces": [],
+      "template_signatures": [],
+      "commentary": "",
+      "commentary_words": 0,
+      "similarity": 0.258,
+      "growth": 1.152,
+      "words": 167,
+      "chars": 1017,
+      "checks": [
+       {
+        "name": "no_commentary",
+        "passed": true,
+        "detail": "clean"
+       },
+       {
+        "name": "no_invented_numbers",
+        "passed": true,
+        "detail": "0 figure(s) absent from the source"
+       },
+       {
+        "name": "facts_kept",
+        "passed": false,
+        "detail": "11/13 kept, lost: ['31\\nadvisories across 6 skills', 'config keys were aligned']"
+       },
+       {
+        "name": "markers_removed",
+        "passed": true,
+        "detail": "0/0 declared surfaces survived"
+       },
+       {
+        "name": "no_reinjection",
+        "passed": true,
+        "detail": "0/9 guarded surfaces appeared"
+       },
+       {
+        "name": "not_over_edited",
+        "passed": false,
+        "detail": "similarity 0.258 against a floor of 0.75"
+       }
+      ],
+      "checks_passed": 4,
+      "checks_total": 6,
+      "rep": "rep-3",
+      "model": "claude-sonnet-5",
+      "cost_usd": 0.0426456
+     }
+    ],
+    "with_skill": [
+     {
+      "measured": true,
+      "unmeasured_reason": null,
+      "markers_before": 2,
+      "markers_after": 1,
+      "markers_by_kind_after": {
+       "ai_vocabulary": 1
+      },
+      "markers_surviving": [
+       {
+        "kind": "ai_vocabulary",
+        "term": "align",
+        "count": 1
+       }
+      ],
+      "invented_numbers": [],
+      "facts_kept": 13,
+      "facts_total": 13,
+      "facts_lost": [],
+      "declared_surfaces_surviving": [],
+      "reinjected_surfaces": [],
+      "template_signatures": [],
+      "commentary": "",
+      "commentary_words": 0,
+      "similarity": 0.4403,
+      "growth": 0.966,
+      "words": 140,
+      "chars": 877,
+      "checks": [
+       {
+        "name": "no_commentary",
+        "passed": true,
+        "detail": "clean"
+       },
+       {
+        "name": "no_invented_numbers",
+        "passed": true,
+        "detail": "0 figure(s) absent from the source"
+       },
+       {
+        "name": "facts_kept",
+        "passed": true,
+        "detail": "13/13 kept"
+       },
+       {
+        "name": "markers_removed",
+        "passed": true,
+        "detail": "0/0 declared surfaces survived"
+       },
+       {
+        "name": "no_reinjection",
+        "passed": true,
+        "detail": "0/9 guarded surfaces appeared"
+       },
+       {
+        "name": "not_over_edited",
+        "passed": false,
+        "detail": "similarity 0.4403 against a floor of 0.75"
+       }
+      ],
+      "checks_passed": 5,
+      "checks_total": 6,
+      "rep": "rep-1",
+      "model": "claude-sonnet-5",
+      "cost_usd": 0.1891026
+     },
+     {
+      "measured": true,
+      "unmeasured_reason": null,
+      "markers_before": 2,
+      "markers_after": 1,
+      "markers_by_kind_after": {
+       "ai_vocabulary": 1
+      },
+      "markers_surviving": [
+       {
+        "kind": "ai_vocabulary",
+        "term": "align",
+        "count": 1
+       }
+      ],
+      "invented_numbers": [],
+      "facts_kept": 13,
+      "facts_total": 13,
+      "facts_lost": [],
+      "declared_surfaces_surviving": [],
+      "reinjected_surfaces": [],
+      "template_signatures": [],
+      "commentary": "",
+      "commentary_words": 0,
+      "similarity": 0.6373,
+      "growth": 0.931,
+      "words": 135,
+      "chars": 858,
+      "checks": [
+       {
+        "name": "no_commentary",
+        "passed": true,
+        "detail": "clean"
+       },
+       {
+        "name": "no_invented_numbers",
+        "passed": true,
+        "detail": "0 figure(s) absent from the source"
+       },
+       {
+        "name": "facts_kept",
+        "passed": true,
+        "detail": "13/13 kept"
+       },
+       {
+        "name": "markers_removed",
+        "passed": true,
+        "detail": "0/0 declared surfaces survived"
+       },
+       {
+        "name": "no_reinjection",
+        "passed": true,
+        "detail": "0/9 guarded surfaces appeared"
+       },
+       {
+        "name": "not_over_edited",
+        "passed": false,
+        "detail": "similarity 0.6373 against a floor of 0.75"
+       }
+      ],
+      "checks_passed": 5,
+      "checks_total": 6,
+      "rep": "rep-2",
+      "model": "claude-sonnet-5",
+      "cost_usd": 0.2171746
+     },
+     {
+      "measured": true,
+      "unmeasured_reason": null,
+      "markers_before": 2,
+      "markers_after": 1,
+      "markers_by_kind_after": {
+       "ai_vocabulary": 1
+      },
+      "markers_surviving": [
+       {
+        "kind": "ai_vocabulary",
+        "term": "align",
+        "count": 1
+       }
+      ],
+      "invented_numbers": [],
+      "facts_kept": 13,
+      "facts_total": 13,
+      "facts_lost": [],
+      "declared_surfaces_surviving": [],
+      "reinjected_surfaces": [],
+      "template_signatures": [],
+      "commentary": "",
+      "commentary_words": 0,
+      "similarity": 0.7383,
+      "growth": 0.972,
+      "words": 141,
+      "chars": 887,
+      "checks": [
+       {
+        "name": "no_commentary",
+        "passed": true,
+        "detail": "clean"
+       },
+       {
+        "name": "no_invented_numbers",
+        "passed": true,
+        "detail": "0 figure(s) absent from the source"
+       },
+       {
+        "name": "facts_kept",
+        "passed": true,
+        "detail": "13/13 kept"
+       },
+       {
+        "name": "markers_removed",
+        "passed": true,
+        "detail": "0/0 declared surfaces survived"
+       },
+       {
+        "name": "no_reinjection",
+        "passed": true,
+        "detail": "0/9 guarded surfaces appeared"
+       },
+       {
+        "name": "not_over_edited",
+        "passed": false,
+        "detail": "similarity 0.7383 against a floor of 0.75"
+       }
+      ],
+      "checks_passed": 5,
+      "checks_total": 6,
+      "rep": "rep-3",
+      "model": "claude-sonnet-5",
+      "cost_usd": 0.1775026
+     }
+    ]
+   }
+  }
+ ],
+ "summary": {
+  "baseline": {
+   "runs": 18,
+   "measured": 18,
+   "unmeasured": 0,
+   "checks_passed": 72,
+   "checks_total": 96,
+   "markers_after_total": 70,
+   "facts_lost_total": 41,
+   "cost_usd": 1.0058
+  },
+  "with_skill": {
+   "runs": 18,
+   "measured": 13,
+   "unmeasured": 5,
+   "checks_passed": 72,
+   "checks_total": 96,
+   "markers_after_total": 23,
+   "facts_lost_total": 7,
+   "cost_usd": 3.2537
+  }
+ }
+}

@@ -1,0 +1,17 @@
+{
+  "note": "Twelve pairs from unrelated fields — logistics, tenancy, finance, ops, law, shipping — so the list does not read as a test harness. Each replacement is a real word, so a passage carrying it still reads as prose. Whether a rewriter would make any of these on its own is NOT assumed: the no-skill control arm measures exactly that.",
+  "pairs": [
+    ["deadline", "cutoff"],
+    ["warehouse", "depot"],
+    ["tenant", "occupier"],
+    ["shipment", "consignment"],
+    ["outage", "interruption"],
+    ["invoice", "remittance"],
+    ["roster", "duty list"],
+    ["freight", "haulage"],
+    ["premises", "site"],
+    ["clause", "provision"],
+    ["vendor", "counterparty"],
+    ["audit", "inspection"]
+  ]
+}

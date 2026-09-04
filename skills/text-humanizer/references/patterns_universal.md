@@ -1,5 +1,9 @@
 # Universal AI Writing Patterns ("The Deadly Sins")
 
+> **Evidence class: heuristic**, except where an entry cites its own measurement. The list
+> derives from *Wikipedia: Signs of AI writing* and from editorial practice. No entry was
+> validated against a corpus of this project's own texts.
+
 These patterns betray AI generation in ANY genre. They must be removed or rewritten regardless of whether the text is a tweet or an encyclopedia entry.
 
 Each pattern is tagged with a priority level:
@@ -7,6 +11,27 @@ Each pattern is tagged with a priority level:
 *   **[B] High** -- Fix in all modes except legal/regulatory text.
 *   **[C] Medium** -- Fix in full editing and expert content.
 *   **[D] Stylistic** -- Fix by context; not always necessary.
+
+### What is NOT a finding
+
+Read this before the patterns. A hit satisfying one of the three tests below is not a finding,
+and removing it is a defect of the edit rather than of the text. This section is not filtered by
+intensity: it applies at `max` and at `minimal` alike.
+
+1.  **The author's own habit, on evidence.** A word or a punctuation habit that appears in the
+    writing samples the user supplied and is recorded in the voice passport. An impression about
+    the author's style with no sample behind it is not evidence; the passport is.
+2.  **A domain term, on evidence.** The word names a thing in this text's field and you can point
+    at where: the project's own documentation, a public API, a cited standard, or an identifier in
+    the text itself. `robust_mode`, `dynamic backoff`, `align to a 64-byte boundary`,
+    `dynamic linking`, `leveraged buyout`. The [A] vocabulary list holds words, not meanings, and
+    it is the only class that fires at `low` and `minimal` intensity -- where a changed word
+    changes what the document promises.
+3.  **Quoted material.** Anything inside a direct quotation, a code span, a fenced block or an
+    in-world document keeps its wording.
+
+Each test names something you can point at -- a sample, a document, an API, an identifier.
+"It reads like a term to me" is not one of them.
 
 ---
 
@@ -53,9 +78,16 @@ Tacking on a present participle phrase to the end of a sentence to fake depth.
 *   *Fix:* Cut it. "The dam was built in 1950." (The reader can figure out the implication).
 
 ## 9. Em Dash Abuse `[A]`
-Replacing commas with em dashes to sound "punchy" or sales-y. Detectors count em dash frequency as a statistical marker.
+The finding is **density**, not the character. One em dash is punctuation and is not reported. A
+text reaching for them in place of commas -- several to a paragraph, two inside one sentence -- is.
 *   *AI:* "The solution is simple — efficient — and robust."
 *   *Fix:* Use commas, colons, periods, or restructure. "The solution is simple, efficient, and robust."
+*   *Not a finding:* a single em dash; a dash habit recorded in the voice passport; a dash inside
+    quoted material.
+*   **On the old justification.** Earlier revisions of this file justified the rule by what AI
+    detectors count. That reason does not hold: em-dash density in current model output is falling,
+    not rising, so a rule resting on it expires with the next release. The rule stays because
+    dashes used for punch read as sales copy, which is a fact about the prose.
 
 ## 10. Chatbotisms (The "Helpful Assistant") `[A]`
 Leftover conversational artifacts.

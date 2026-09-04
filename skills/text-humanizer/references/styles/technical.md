@@ -1,5 +1,7 @@
 # Style: Technical / Documentation
 
+> **Evidence class: heuristic.** Domain editorial practice. Not measured.
+
 **Tone:** Instructional, precise, dry, user-centric.
 **Target Audience:** Developers, end-users.
 

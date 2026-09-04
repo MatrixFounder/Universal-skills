@@ -1,5 +1,8 @@
 # Encyclopedic & Academic Patterns (Wiki-Style)
 
+> **Evidence class: heuristic.** Derived from Wikipedia's neutral-point-of-view guidance and
+> its *Signs of AI writing* page. Not measured.
+
 These patterns specifically violate the neutral point of view (NPOV) and encyclopedic tone.
 
 Each pattern is tagged with a priority level:

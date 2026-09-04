@@ -1,0 +1,1 @@
+Distils a supplied text to the project's editorial standard before it is finalised. The standard is project-specific.

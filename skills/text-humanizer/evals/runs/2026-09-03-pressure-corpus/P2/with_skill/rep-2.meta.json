@@ -1,0 +1,25 @@
+{
+ "case": "P2",
+ "arm": "with_skill",
+ "rep": 2,
+ "model": "claude-sonnet-5",
+ "genre": "technical",
+ "style": null,
+ "fixture_sha256_16": "d3f345b201e2d3d8",
+ "task": "tasks/p2-intensity-runbook.md",
+ "task_sha256_16": "6568fbcf7ff70dfa",
+ "skill_prompt_sha256_16": "4d45415bfaf1c7a7",
+ "skill_applied": true,
+ "unwrapped_fence": false,
+ "is_error": false,
+ "error": null,
+ "permission_denials": [],
+ "models_used": [
+  "claude-haiku-4-5-20251001",
+  "claude-sonnet-5"
+ ],
+ "total_cost_usd": 0.1242536,
+ "duration_ms": 61945,
+ "session_id": "a217a865-bb48-4bc9-b3a7-8241813abb28",
+ "output_chars": 1153
+}

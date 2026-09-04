@@ -1,5 +1,8 @@
 # Voice Passport Template
 
+> **Evidence class: heuristic.** Five dimensions chosen so that a voice can be recorded
+> reproducibly. Nothing here was validated against reader judgement.
+
 When the user provides writing samples, analyze them along these five dimensions to create a "voice passport." Use this passport as a reference during rewriting to maintain consistency with the author's natural style.
 
 ## Dimensions

@@ -1,0 +1,59 @@
+{
+  "summary": {
+    "pass_rate": 0.666667,
+    "passed": 4,
+    "failed": 2,
+    "total": 6
+  },
+  "expectations": [
+    {
+      "text": "no_commentary",
+      "passed": true,
+      "evidence": "clean"
+    },
+    {
+      "text": "no_invented_numbers",
+      "passed": true,
+      "evidence": "0 figure(s) absent from the source"
+    },
+    {
+      "text": "facts_kept",
+      "passed": false,
+      "evidence": "11/16 kept, lost: ['nobody ran the tests with forklifts moving', 'from 11% to 0.4%', 'firmware update lands in April', 'Bremen is next, on 3 March', 'I lose two days digging them out']"
+    },
+    {
+      "text": "markers_removed",
+      "passed": true,
+      "evidence": "0/11 declared surfaces survived"
+    },
+    {
+      "text": "not_over_edited",
+      "passed": false,
+      "evidence": "similarity 0.303 against a floor of 0.72"
+    },
+    {
+      "text": "proportionate_length",
+      "passed": true,
+      "evidence": "growth 1.005x against a ceiling of 1.15x"
+    }
+  ],
+  "execution_metrics": {
+    "output_chars": 1087,
+    "total_tool_calls": 0,
+    "errors_encountered": 0
+  },
+  "notes": {
+    "case": "P1",
+    "genre": "corporate",
+    "measured": true,
+    "unmeasured_reason": null,
+    "markers_before": 9,
+    "markers_after": 4,
+    "facts_kept": 11,
+    "facts_total": 16,
+    "similarity": 0.303,
+    "growth": 1.005
+  },
+  "grader": "text-humanizer/evals/grade_run.py — deterministic, no model judge",
+  "pass_rate_means": "fraction of this run's deterministic checks that passed; NOT an LLM judge verdict, and not comparable to one"
+}

@@ -1,0 +1,370 @@
+{
+  "metadata": {
+    "skill_name": "<skill-name>",
+    "skill_path": "<path/to/skill>",
+    "executor_model": "<model-name>",
+    "analyzer_model": "<model-name>",
+    "timestamp": "2026-09-03T11:15:20Z",
+    "evals_run": [
+      "E1",
+      "E2",
+      "E3",
+      "E4"
+    ],
+    "runs_per_configuration": 3
+  },
+  "runs": [
+    {
+      "eval_id": "E1",
+      "configuration": "with_skill",
+      "run_number": 1,
+      "result": {
+        "pass_rate": 1.0,
+        "passed": 4,
+        "failed": 0,
+        "total": 4,
+        "time_seconds": 0.0,
+        "tokens": 285,
+        "tool_calls": 0,
+        "errors": 0
+      },
+      "expectations": [
+        {
+          "text": "no_invented_numbers",
+          "passed": true,
+          "evidence": "0 figure(s) absent from the source"
+        },
+        {
+          "text": "facts_kept",
+          "passed": true,
+          "evidence": "6/6 kept"
+        },
+        {
+          "text": "markers_removed",
+          "passed": true,
+          "evidence": "0/8 declared surfaces survived"
+        },
+        {
+          "text": "proportionate_length",
+          "passed": true,
+          "evidence": "growth 0.459x against a ceiling of 1.15x"
+        }
+      ],
+      "notes": []
+    },
+    {
+      "eval_id": "E2",
+      "configuration": "with_skill",
+      "run_number": 1,
+      "result": {
+        "pass_rate": 1.0,
+        "passed": 3,
+        "failed": 0,
+        "total": 3,
+        "time_seconds": 0.0,
+        "tokens": 462,
+        "tool_calls": 0,
+        "errors": 0
+      },
+      "expectations": [
+        {
+          "text": "no_invented_numbers",
+          "passed": true,
+          "evidence": "0 figure(s) absent from the source"
+        },
+        {
+          "text": "facts_kept",
+          "passed": true,
+          "evidence": "8/8 kept"
+        },
+        {
+          "text": "markers_removed",
+          "passed": true,
+          "evidence": "0/1 declared surfaces survived"
+        }
+      ],
+      "notes": []
+    },
+    {
+      "eval_id": "E3",
+      "configuration": "with_skill",
+      "run_number": 1,
+      "result": {
+        "pass_rate": 1.0,
+        "passed": 5,
+        "failed": 0,
+        "total": 5,
+        "time_seconds": 0.0,
+        "tokens": 472,
+        "tool_calls": 0,
+        "errors": 0
+      },
+      "expectations": [
+        {
+          "text": "no_invented_numbers",
+          "passed": true,
+          "evidence": "0 figure(s) absent from the source"
+        },
+        {
+          "text": "facts_kept",
+          "passed": true,
+          "evidence": "5/5 kept"
+        },
+        {
+          "text": "markers_removed",
+          "passed": true,
+          "evidence": "0/0 declared surfaces survived"
+        },
+        {
+          "text": "not_over_edited",
+          "passed": true,
+          "evidence": "similarity 1.0 against a floor of 0.75"
+        },
+        {
+          "text": "proportionate_length",
+          "passed": true,
+          "evidence": "growth 1.0x against a ceiling of 1.15x"
+        }
+      ],
+      "notes": []
+    },
+    {
+      "eval_id": "E4",
+      "configuration": "with_skill",
+      "run_number": 1,
+      "result": {
+        "pass_rate": 1.0,
+        "passed": 4,
+        "failed": 0,
+        "total": 4,
+        "time_seconds": 0.0,
+        "tokens": 150,
+        "tool_calls": 0,
+        "errors": 0
+      },
+      "expectations": [
+        {
+          "text": "no_invented_numbers",
+          "passed": true,
+          "evidence": "0 figure(s) absent from the source"
+        },
+        {
+          "text": "facts_kept",
+          "passed": true,
+          "evidence": "4/4 kept"
+        },
+        {
+          "text": "markers_removed",
+          "passed": true,
+          "evidence": "0/5 declared surfaces survived"
+        },
+        {
+          "text": "proportionate_length",
+          "passed": true,
+          "evidence": "growth 0.491x against a ceiling of 1.4x"
+        }
+      ],
+      "notes": []
+    },
+    {
+      "eval_id": "E1",
+      "configuration": "without_skill",
+      "run_number": 1,
+      "result": {
+        "pass_rate": 1.0,
+        "passed": 4,
+        "failed": 0,
+        "total": 4,
+        "time_seconds": 0.0,
+        "tokens": 548,
+        "tool_calls": 0,
+        "errors": 0
+      },
+      "expectations": [
+        {
+          "text": "no_invented_numbers",
+          "passed": true,
+          "evidence": "0 figure(s) absent from the source"
+        },
+        {
+          "text": "facts_kept",
+          "passed": true,
+          "evidence": "6/6 kept"
+        },
+        {
+          "text": "markers_removed",
+          "passed": true,
+          "evidence": "0/8 declared surfaces survived"
+        },
+        {
+          "text": "proportionate_length",
+          "passed": true,
+          "evidence": "growth 0.946x against a ceiling of 1.15x"
+        }
+      ],
+      "notes": []
+    },
+    {
+      "eval_id": "E2",
+      "configuration": "without_skill",
+      "run_number": 1,
+      "result": {
+        "pass_rate": 1.0,
+        "passed": 3,
+        "failed": 0,
+        "total": 3,
+        "time_seconds": 0.0,
+        "tokens": 499,
+        "tool_calls": 0,
+        "errors": 0
+      },
+      "expectations": [
+        {
+          "text": "no_invented_numbers",
+          "passed": true,
+          "evidence": "0 figure(s) absent from the source"
+        },
+        {
+          "text": "facts_kept",
+          "passed": true,
+          "evidence": "8/8 kept"
+        },
+        {
+          "text": "markers_removed",
+          "passed": true,
+          "evidence": "0/1 declared surfaces survived"
+        }
+      ],
+      "notes": []
+    },
+    {
+      "eval_id": "E3",
+      "configuration": "without_skill",
+      "run_number": 1,
+      "result": {
+        "pass_rate": 0.8,
+        "passed": 4,
+        "failed": 1,
+        "total": 5,
+        "time_seconds": 0.0,
+        "tokens": 534,
+        "tool_calls": 0,
+        "errors": 0
+      },
+      "expectations": [
+        {
+          "text": "no_invented_numbers",
+          "passed": true,
+          "evidence": "0 figure(s) absent from the source"
+        },
+        {
+          "text": "facts_kept",
+          "passed": true,
+          "evidence": "5/5 kept"
+        },
+        {
+          "text": "markers_removed",
+          "passed": true,
+          "evidence": "0/0 declared surfaces survived"
+        },
+        {
+          "text": "not_over_edited",
+          "passed": false,
+          "evidence": "similarity 0.2695 against a floor of 0.75"
+        },
+        {
+          "text": "proportionate_length",
+          "passed": true,
+          "evidence": "growth 1.122x against a ceiling of 1.15x"
+        }
+      ],
+      "notes": []
+    },
+    {
+      "eval_id": "E4",
+      "configuration": "without_skill",
+      "run_number": 1,
+      "result": {
+        "pass_rate": 1.0,
+        "passed": 4,
+        "failed": 0,
+        "total": 4,
+        "time_seconds": 0.0,
+        "tokens": 270,
+        "tool_calls": 0,
+        "errors": 0
+      },
+      "expectations": [
+        {
+          "text": "no_invented_numbers",
+          "passed": true,
+          "evidence": "0 figure(s) absent from the source"
+        },
+        {
+          "text": "facts_kept",
+          "passed": true,
+          "evidence": "4/4 kept"
+        },
+        {
+          "text": "markers_removed",
+          "passed": true,
+          "evidence": "0/5 declared surfaces survived"
+        },
+        {
+          "text": "proportionate_length",
+          "passed": true,
+          "evidence": "growth 0.877x against a ceiling of 1.4x"
+        }
+      ],
+      "notes": []
+    }
+  ],
+  "run_summary": {
+    "with_skill": {
+      "pass_rate": {
+        "mean": 1.0,
+        "stddev": 0.0,
+        "min": 1.0,
+        "max": 1.0
+      },
+      "time_seconds": {
+        "mean": 0.0,
+        "stddev": 0.0,
+        "min": 0.0,
+        "max": 0.0
+      },
+      "tokens": {
+        "mean": 342.25,
+        "stddev": 154.2863,
+        "min": 150,
+        "max": 472
+      }
+    },
+    "without_skill": {
+      "pass_rate": {
+        "mean": 0.95,
+        "stddev": 0.1,
+        "min": 0.8,
+        "max": 1.0
+      },
+      "time_seconds": {
+        "mean": 0.0,
+        "stddev": 0.0,
+        "min": 0.0,
+        "max": 0.0
+      },
+      "tokens": {
+        "mean": 462.75,
+        "stddev": 130.1419,
+        "min": 270,
+        "max": 548
+      }
+    },
+    "delta": {
+      "pass_rate": "+0.05",
+      "time_seconds": "+0.0",
+      "tokens": "-120"
+    }
+  },
+  "notes": []
+}

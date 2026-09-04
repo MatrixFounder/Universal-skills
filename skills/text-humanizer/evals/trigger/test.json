@@ -1,0 +1,38 @@
+[
+ {
+  "query": "here are three samples of how I write. rewrite this draft in my voice and drop the machine phrasing",
+  "should_trigger": true
+ },
+ {
+  "query": "de-slop this blog post before I publish it",
+  "should_trigger": true
+ },
+ {
+  "query": "перепиши этот пост так, чтобы не было видно, что писала нейросеть",
+  "should_trigger": true
+ },
+ {
+  "query": "audit this article for AI markers — just tell me what's wrong, don't rewrite it yet",
+  "should_trigger": true
+ },
+ {
+  "query": "rewrite ~/drafts/announce.md so it doesn't read as machine-written, it's a crypto launch post",
+  "should_trigger": true
+ },
+ {
+  "query": "strip the em dashes and the 'it's important to note' stuff out of this draft",
+  "should_trigger": true
+ },
+ {
+  "query": "make slides out of this outline",
+  "should_trigger": false
+ },
+ {
+  "query": "formalize this task spec — it reads like an essay, too many evaluative words",
+  "should_trigger": false
+ },
+ {
+  "query": "my short story got flagged as AI-generated. the plot is too tidy and every emotion is a tightening chest. fix the narrative",
+  "should_trigger": false
+ }
+]
