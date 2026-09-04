@@ -151,7 +151,8 @@ def assemble_skill_prompt(genre, mode="humanize", intensity="auto", style=None,
             "--mode", mode, "--intensity", intensity]
     if style:
         argv += ["--style", style]
-    proc = subprocess.run(argv, capture_output=True, text=True)
+    proc = subprocess.run(argv, capture_output=True, text=True,
+                          encoding="utf-8", errors="replace")
     if proc.returncode != 0 or not proc.stdout.strip():
         raise HumanizerFailed(
             f"exit {proc.returncode}: {proc.stderr.strip()[:400]}")
@@ -208,6 +209,7 @@ def spawn(prompt, model, workdir, timeout=DEFAULT_TIMEOUT):
     try:
         proc = subprocess.run(build_command(prompt, model), cwd=workdir,
                               env=env, capture_output=True, text=True,
+                              encoding="utf-8", errors="replace",
                               timeout=timeout)
     except subprocess.TimeoutExpired:
         # Recorded as a failed run rather than raised. One stalled case must

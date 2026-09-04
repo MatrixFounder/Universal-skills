@@ -43,7 +43,8 @@ def run(job):
     try:
         p = subprocess.run(["claude", "-p", query, "--output-format", "json",
                             "--model", model],
-                           capture_output=True, text=True, cwd=PROJECT,
+                           capture_output=True, text=True,
+                           encoding="utf-8", errors="replace", cwd=PROJECT,
                            timeout=180)
     except subprocess.TimeoutExpired:
         return rung, None, 0.0

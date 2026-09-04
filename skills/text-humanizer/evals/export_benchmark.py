@@ -162,7 +162,8 @@ def bootstrap_ci(out_root, metric="pass_rate"):
 
 def house(script, *args):
     return subprocess.run([sys.executable, os.path.join(HOUSE, script), *args],
-                          capture_output=True, text=True)
+                          capture_output=True, text=True,
+                          encoding="utf-8", errors="replace")
 
 
 def main():

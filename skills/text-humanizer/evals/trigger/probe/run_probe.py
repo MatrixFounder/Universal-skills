@@ -144,7 +144,8 @@ def one_run(args):
     try:
         proc = subprocess.run(
             ["claude", "-p", query, "--output-format", "json", "--model", model],
-            capture_output=True, text=True, cwd=PROJECT, timeout=timeout)
+            capture_output=True, text=True, encoding="utf-8", errors="replace",
+            cwd=PROJECT, timeout=timeout)
     except subprocess.TimeoutExpired:
         return {"error": f"timed out after {timeout}s", "answer": ""}
     try:

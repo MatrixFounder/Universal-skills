@@ -501,7 +501,7 @@ def tc37():
 def tc38():
     base = tempfile.mkdtemp(prefix="humanizer-leak-")
     try:
-        open(os.path.join(base, "CLAUDE.md"), "w").close()
+        open(os.path.join(base, "CLAUDE.md"), "w", encoding="utf-8").close()
         inner = os.path.join(base, "inner")
         os.makedirs(inner)
         found = run_humanize.leaks_above(inner)
@@ -514,7 +514,7 @@ def tc38():
 def tc39():
     base = tempfile.mkdtemp(prefix="humanizer-leak-")
     try:
-        open(os.path.join(base, "AGENTS.md"), "w").close()
+        open(os.path.join(base, "AGENTS.md"), "w", encoding="utf-8").close()
         try:
             run_humanize.isolated_workdir(base=base)
         except run_humanize.NotIsolated:
@@ -863,13 +863,13 @@ def tc63():
     try:
         full = subprocess.run(
             [sys.executable, script, "--out", os.path.join(root, "all")],
-            capture_output=True, text=True)
+            capture_output=True, text=True, encoding="utf-8", errors="replace")
         assert full.returncode == 0, full.stderr[-300:]
         assert "WARNING" in full.stderr and "compares populations" in full.stderr,             "an unbalanced export printed no warning"
         paired = subprocess.run(
             [sys.executable, script, "--paired-only",
              "--out", os.path.join(root, "paired")],
-            capture_output=True, text=True)
+            capture_output=True, text=True, encoding="utf-8", errors="replace")
         assert paired.returncode == 0, paired.stderr[-300:]
         assert "WARNING" not in paired.stderr,             f"a balanced export warned anyway: {paired.stderr[:200]}"
     finally:
