@@ -257,6 +257,71 @@ the relevant `tests/` directory before declaring the work done. Tests
 are the contract; passing tests is the verification that the change
 behaves as advertised.
 
+### CLI I/O encoding — name the codec, never inherit it from the locale
+
+Closed repo-wide 2026-08-31 … 2026-09-02 as four issue records
+(~210 call sites). New CLIs must be born compliant. The root is always the
+same — CPython takes the codec from the **caller's locale** instead of from
+the contract — but the four channels want four different answers:
+
+| Channel | Contract | Spelling |
+|---|---|---|
+| Human `stdout`/`stderr` — reports, `--help` | **Obey** the locale; degrade per character; never crash | one `install_human_channel()` at the top of `main()` |
+| Machine `stdout` — JSON payload | **Ignore** the locale; always UTF-8 bytes (RFC 8259 §8.1) | `write_json_stdout(...)` (office `_errors.py`) / the skill's own `emit_json` |
+| `--json-errors` envelope on `stderr` | Must stay parseable under any locale | `ensure_ascii=True` — ASCII-only, no exceptions |
+| Child output — `subprocess` | The codec belongs to the **child** (node, soffice, tesseract, git, yt-dlp), not to us | `subprocess.run(..., text=True, encoding="utf-8", errors="replace")` |
+| Files we read/write | Name the codec the file **is** | `read_text(encoding="utf-8")`, `open(p, "w", encoding="utf-8")` — no `errors=`, it would hide our own corruption |
+
+**argparse specifically:**
+
+- `--help` is printed by **argparse**, not by your code.
+  `ArgumentParser._print_message` catches `AttributeError` and `OSError` but
+  **not** `UnicodeEncodeError`, so one em dash in one `help=` string returns
+  rc 1 and **0 bytes**. 31 of 102 measured findings were `--help`; no audit of
+  `print()` sites finds them. Therefore every new CLI entry point calls
+  `install_human_channel()` as the **first statement of `main()`**, before
+  `parse_args()`.
+- **Never call it at import time** — `reconfigure()` mutates a global stream
+  and would impose the behaviour on anyone who merely imports the module.
+- **ASCII-only source does not make a CLI safe:** 44 of 102 findings came from
+  *data* (a Cyrillic filename in an f-string), not from literals.
+
+**Gates — green before the change is done:**
+
+```bash
+python3 tests/test_subprocess_decode.py   # CI harness → "subprocess-decode guard"
+python3 tests/test_file_codec.py          # CI harness → "file-codec guard"
+```
+
+plus the per-skill test that runs every script's `--help` under a restricted
+locale. Both AST gates exempt `tests/` **by design** and print the size of the
+carve-out; do not widen it to production code. Repro for the output side needs
+the PEP 538/540 safeties off (`env PYTHONIOENCODING=ascii PYTHONUTF8=0
+LC_ALL=C <cmd>`); the subprocess side does not — `LC_ALL=ja_JP.SJIS` alone is
+enough.
+
+**Do NOT:**
+
+- ❌ `sys.stdout.reconfigure(encoding="utf-8")` to "fix" the human channel — it
+  overrides the caller's explicit choice process-wide. `errors=` is a different
+  keyword and is exactly the fix; `encoding=` is banned here.
+- ❌ Re-introduce wrapper layers (`say()`, `HumanArgumentParser`) — deliberately
+  removed: they duplicated a stdlib mechanism and failed *silently* when
+  someone added a plain `print`.
+- ❌ Escape via `exc.encoding` — charmap codecs report the literal `"charmap"`
+  and hand back a raw byte. Escape against **ASCII**.
+- ❌ `errors="strict"` on a subprocess read, or `errors=` on files we write.
+- ❌ Drop `encoding=` while refactoring a `subprocess` call — the gate will
+  fail, and that is its job, not a nuisance.
+- ❌ Import the proprietary `_errors.py` from an Apache-2.0 skill — each such
+  skill carries its own stdlib-only copy (see License hygiene below).
+  `_errors.py` is docx-master: change it there and replicate per §2.
+
+Records: [`human-cli-output-locale-class`](docs/issues/human-cli-output-locale-class.md),
+[`pdf-cli-stdout-json-locale-class`](docs/issues/pdf-cli-stdout-json-locale-class.md),
+[`subprocess-text-decode-locale-class`](docs/issues/subprocess-text-decode-locale-class.md),
+[`file-text-codec-locale-class`](docs/issues/file-text-codec-locale-class.md).
+
 ### Honest scope, not aspirational
 
 If a feature has a known limitation (e.g. the AF_UNIX shim does NOT
