@@ -4,7 +4,7 @@
     "skill_path": "<path/to/skill>",
     "executor_model": "<model-name>",
     "analyzer_model": "<model-name>",
-    "timestamp": "2026-09-03T10:51:53Z",
+    "timestamp": "2026-09-04T05:53:22Z",
     "evals_run": [
       "E1",
       "E2",
@@ -20,15 +20,20 @@
       "run_number": 1,
       "result": {
         "pass_rate": 1.0,
-        "passed": 4,
+        "passed": 5,
         "failed": 0,
-        "total": 4,
+        "total": 5,
         "time_seconds": 0.0,
         "tokens": 377,
         "tool_calls": 0,
         "errors": 0
       },
       "expectations": [
+        {
+          "text": "no_commentary",
+          "passed": true,
+          "evidence": "clean"
+        },
         {
           "text": "no_invented_numbers",
           "passed": true,
@@ -58,15 +63,20 @@
       "run_number": 2,
       "result": {
         "pass_rate": 1.0,
-        "passed": 4,
+        "passed": 5,
         "failed": 0,
-        "total": 4,
+        "total": 5,
         "time_seconds": 0.0,
         "tokens": 239,
         "tool_calls": 0,
         "errors": 0
       },
       "expectations": [
+        {
+          "text": "no_commentary",
+          "passed": true,
+          "evidence": "clean"
+        },
         {
           "text": "no_invented_numbers",
           "passed": true,
@@ -96,15 +106,20 @@
       "run_number": 3,
       "result": {
         "pass_rate": 1.0,
-        "passed": 4,
+        "passed": 5,
         "failed": 0,
-        "total": 4,
+        "total": 5,
         "time_seconds": 0.0,
         "tokens": 420,
         "tool_calls": 0,
         "errors": 0
       },
       "expectations": [
+        {
+          "text": "no_commentary",
+          "passed": true,
+          "evidence": "clean"
+        },
         {
           "text": "no_invented_numbers",
           "passed": true,
@@ -134,15 +149,20 @@
       "run_number": 1,
       "result": {
         "pass_rate": 1.0,
-        "passed": 3,
+        "passed": 4,
         "failed": 0,
-        "total": 3,
+        "total": 4,
         "time_seconds": 0.0,
         "tokens": 436,
         "tool_calls": 0,
         "errors": 0
       },
       "expectations": [
+        {
+          "text": "no_commentary",
+          "passed": true,
+          "evidence": "clean"
+        },
         {
           "text": "no_invented_numbers",
           "passed": true,
@@ -167,15 +187,20 @@
       "run_number": 2,
       "result": {
         "pass_rate": 1.0,
-        "passed": 3,
+        "passed": 4,
         "failed": 0,
-        "total": 3,
+        "total": 4,
         "time_seconds": 0.0,
         "tokens": 445,
         "tool_calls": 0,
         "errors": 0
       },
       "expectations": [
+        {
+          "text": "no_commentary",
+          "passed": true,
+          "evidence": "clean"
+        },
         {
           "text": "no_invented_numbers",
           "passed": true,
@@ -200,15 +225,20 @@
       "run_number": 3,
       "result": {
         "pass_rate": 1.0,
-        "passed": 3,
+        "passed": 4,
         "failed": 0,
-        "total": 3,
+        "total": 4,
         "time_seconds": 0.0,
         "tokens": 445,
         "tool_calls": 0,
         "errors": 0
       },
       "expectations": [
+        {
+          "text": "no_commentary",
+          "passed": true,
+          "evidence": "clean"
+        },
         {
           "text": "no_invented_numbers",
           "passed": true,
@@ -233,15 +263,20 @@
       "run_number": 1,
       "result": {
         "pass_rate": 1.0,
-        "passed": 5,
+        "passed": 6,
         "failed": 0,
-        "total": 5,
+        "total": 6,
         "time_seconds": 0.0,
         "tokens": 472,
         "tool_calls": 0,
         "errors": 0
       },
       "expectations": [
+        {
+          "text": "no_commentary",
+          "passed": true,
+          "evidence": "clean"
+        },
         {
           "text": "no_invented_numbers",
           "passed": true,
@@ -276,15 +311,20 @@
       "run_number": 2,
       "result": {
         "pass_rate": 1.0,
-        "passed": 5,
+        "passed": 6,
         "failed": 0,
-        "total": 5,
+        "total": 6,
         "time_seconds": 0.0,
         "tokens": 472,
         "tool_calls": 0,
         "errors": 0
       },
       "expectations": [
+        {
+          "text": "no_commentary",
+          "passed": true,
+          "evidence": "clean"
+        },
         {
           "text": "no_invented_numbers",
           "passed": true,
@@ -319,15 +359,20 @@
       "run_number": 3,
       "result": {
         "pass_rate": 1.0,
-        "passed": 5,
+        "passed": 6,
         "failed": 0,
-        "total": 5,
+        "total": 6,
         "time_seconds": 0.0,
         "tokens": 472,
         "tool_calls": 0,
         "errors": 0
       },
       "expectations": [
+        {
+          "text": "no_commentary",
+          "passed": true,
+          "evidence": "clean"
+        },
         {
           "text": "no_invented_numbers",
           "passed": true,
@@ -362,15 +407,20 @@
       "run_number": 1,
       "result": {
         "pass_rate": 1.0,
-        "passed": 4,
+        "passed": 5,
         "failed": 0,
-        "total": 4,
+        "total": 5,
         "time_seconds": 0.0,
         "tokens": 174,
         "tool_calls": 0,
         "errors": 0
       },
       "expectations": [
+        {
+          "text": "no_commentary",
+          "passed": true,
+          "evidence": "clean"
+        },
         {
           "text": "no_invented_numbers",
           "passed": true,
@@ -400,15 +450,20 @@
       "run_number": 2,
       "result": {
         "pass_rate": 1.0,
-        "passed": 4,
+        "passed": 5,
         "failed": 0,
-        "total": 4,
+        "total": 5,
         "time_seconds": 0.0,
         "tokens": 124,
         "tool_calls": 0,
         "errors": 0
       },
       "expectations": [
+        {
+          "text": "no_commentary",
+          "passed": true,
+          "evidence": "clean"
+        },
         {
           "text": "no_invented_numbers",
           "passed": true,
@@ -438,15 +493,20 @@
       "run_number": 3,
       "result": {
         "pass_rate": 1.0,
-        "passed": 4,
+        "passed": 5,
         "failed": 0,
-        "total": 4,
+        "total": 5,
         "time_seconds": 0.0,
         "tokens": 166,
         "tool_calls": 0,
         "errors": 0
       },
       "expectations": [
+        {
+          "text": "no_commentary",
+          "passed": true,
+          "evidence": "clean"
+        },
         {
           "text": "no_invented_numbers",
           "passed": true,
@@ -476,15 +536,20 @@
       "run_number": 1,
       "result": {
         "pass_rate": 1.0,
-        "passed": 4,
+        "passed": 5,
         "failed": 0,
-        "total": 4,
+        "total": 5,
         "time_seconds": 0.0,
         "tokens": 376,
         "tool_calls": 0,
         "errors": 0
       },
       "expectations": [
+        {
+          "text": "no_commentary",
+          "passed": true,
+          "evidence": "clean"
+        },
         {
           "text": "no_invented_numbers",
           "passed": true,
@@ -514,15 +579,20 @@
       "run_number": 2,
       "result": {
         "pass_rate": 1.0,
-        "passed": 4,
+        "passed": 5,
         "failed": 0,
-        "total": 4,
+        "total": 5,
         "time_seconds": 0.0,
         "tokens": 399,
         "tool_calls": 0,
         "errors": 0
       },
       "expectations": [
+        {
+          "text": "no_commentary",
+          "passed": true,
+          "evidence": "clean"
+        },
         {
           "text": "no_invented_numbers",
           "passed": true,
@@ -552,15 +622,20 @@
       "run_number": 3,
       "result": {
         "pass_rate": 1.0,
-        "passed": 4,
+        "passed": 5,
         "failed": 0,
-        "total": 4,
+        "total": 5,
         "time_seconds": 0.0,
         "tokens": 385,
         "tool_calls": 0,
         "errors": 0
       },
       "expectations": [
+        {
+          "text": "no_commentary",
+          "passed": true,
+          "evidence": "clean"
+        },
         {
           "text": "no_invented_numbers",
           "passed": true,
@@ -589,16 +664,21 @@
       "configuration": "without_skill",
       "run_number": 1,
       "result": {
-        "pass_rate": 0.666667,
-        "passed": 2,
+        "pass_rate": 0.75,
+        "passed": 3,
         "failed": 1,
-        "total": 3,
+        "total": 4,
         "time_seconds": 0.0,
         "tokens": 509,
         "tool_calls": 0,
         "errors": 0
       },
       "expectations": [
+        {
+          "text": "no_commentary",
+          "passed": true,
+          "evidence": "clean"
+        },
         {
           "text": "no_invented_numbers",
           "passed": true,
@@ -623,15 +703,20 @@
       "run_number": 2,
       "result": {
         "pass_rate": 1.0,
-        "passed": 3,
+        "passed": 4,
         "failed": 0,
-        "total": 3,
+        "total": 4,
         "time_seconds": 0.0,
         "tokens": 484,
         "tool_calls": 0,
         "errors": 0
       },
       "expectations": [
+        {
+          "text": "no_commentary",
+          "passed": true,
+          "evidence": "clean"
+        },
         {
           "text": "no_invented_numbers",
           "passed": true,
@@ -655,16 +740,21 @@
       "configuration": "without_skill",
       "run_number": 3,
       "result": {
-        "pass_rate": 0.666667,
-        "passed": 2,
+        "pass_rate": 0.75,
+        "passed": 3,
         "failed": 1,
-        "total": 3,
+        "total": 4,
         "time_seconds": 0.0,
         "tokens": 490,
         "tool_calls": 0,
         "errors": 0
       },
       "expectations": [
+        {
+          "text": "no_commentary",
+          "passed": true,
+          "evidence": "clean"
+        },
         {
           "text": "no_invented_numbers",
           "passed": true,
@@ -689,15 +779,20 @@
       "run_number": 1,
       "result": {
         "pass_rate": 1.0,
-        "passed": 5,
+        "passed": 6,
         "failed": 0,
-        "total": 5,
+        "total": 6,
         "time_seconds": 0.0,
         "tokens": 464,
         "tool_calls": 0,
         "errors": 0
       },
       "expectations": [
+        {
+          "text": "no_commentary",
+          "passed": true,
+          "evidence": "clean"
+        },
         {
           "text": "no_invented_numbers",
           "passed": true,
@@ -731,16 +826,21 @@
       "configuration": "without_skill",
       "run_number": 2,
       "result": {
-        "pass_rate": 0.6,
-        "passed": 3,
+        "pass_rate": 0.666667,
+        "passed": 4,
         "failed": 2,
-        "total": 5,
+        "total": 6,
         "time_seconds": 0.0,
         "tokens": 529,
         "tool_calls": 0,
         "errors": 0
       },
       "expectations": [
+        {
+          "text": "no_commentary",
+          "passed": true,
+          "evidence": "clean"
+        },
         {
           "text": "no_invented_numbers",
           "passed": true,
@@ -774,16 +874,21 @@
       "configuration": "without_skill",
       "run_number": 3,
       "result": {
-        "pass_rate": 0.8,
-        "passed": 4,
+        "pass_rate": 0.833333,
+        "passed": 5,
         "failed": 1,
-        "total": 5,
+        "total": 6,
         "time_seconds": 0.0,
         "tokens": 461,
         "tool_calls": 0,
         "errors": 0
       },
       "expectations": [
+        {
+          "text": "no_commentary",
+          "passed": true,
+          "evidence": "clean"
+        },
         {
           "text": "no_invented_numbers",
           "passed": true,
@@ -818,15 +923,20 @@
       "run_number": 1,
       "result": {
         "pass_rate": 1.0,
-        "passed": 4,
+        "passed": 5,
         "failed": 0,
-        "total": 4,
+        "total": 5,
         "time_seconds": 0.0,
         "tokens": 242,
         "tool_calls": 0,
         "errors": 0
       },
       "expectations": [
+        {
+          "text": "no_commentary",
+          "passed": true,
+          "evidence": "clean"
+        },
         {
           "text": "no_invented_numbers",
           "passed": true,
@@ -856,15 +966,20 @@
       "run_number": 2,
       "result": {
         "pass_rate": 1.0,
-        "passed": 4,
+        "passed": 5,
         "failed": 0,
-        "total": 4,
+        "total": 5,
         "time_seconds": 0.0,
         "tokens": 172,
         "tool_calls": 0,
         "errors": 0
       },
       "expectations": [
+        {
+          "text": "no_commentary",
+          "passed": true,
+          "evidence": "clean"
+        },
         {
           "text": "no_invented_numbers",
           "passed": true,
@@ -894,15 +1009,20 @@
       "run_number": 3,
       "result": {
         "pass_rate": 1.0,
-        "passed": 4,
+        "passed": 5,
         "failed": 0,
-        "total": 4,
+        "total": 5,
         "time_seconds": 0.0,
         "tokens": 203,
         "tool_calls": 0,
         "errors": 0
       },
       "expectations": [
+        {
+          "text": "no_commentary",
+          "passed": true,
+          "evidence": "clean"
+        },
         {
           "text": "no_invented_numbers",
           "passed": true,
@@ -950,9 +1070,9 @@
     },
     "without_skill": {
       "pass_rate": {
-        "mean": 0.8944,
-        "stddev": 0.162,
-        "min": 0.6,
+        "mean": 0.9167,
+        "stddev": 0.1281,
+        "min": 0.6667,
         "max": 1.0
       },
       "time_seconds": {
@@ -969,7 +1089,7 @@
       }
     },
     "delta": {
-      "pass_rate": "+0.11",
+      "pass_rate": "+0.08",
       "time_seconds": "+0.0",
       "tokens": "-39"
     }

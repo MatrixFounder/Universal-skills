@@ -1,11 +1,16 @@
 {
   "summary": {
-    "pass_rate": 0.5,
-    "passed": 2,
+    "pass_rate": 0.6,
+    "passed": 3,
     "failed": 2,
-    "total": 4
+    "total": 5
   },
   "expectations": [
+    {
+      "text": "no_commentary",
+      "passed": true,
+      "evidence": "clean"
+    },
     {
       "text": "no_invented_numbers",
       "passed": true,
@@ -14,7 +19,7 @@
     {
       "text": "facts_kept",
       "passed": false,
-      "evidence": "9/14 kept, lost: ['It is the only formal mechanism for deliberation. Core developers do not unilaterally decide; extensive peer review shapes each BIP.', 'core developers have a veto right', 'absence of a legal entity', 'a risk of major economic actors unidirectionally changing Bitcoin', 'one of the largest Bitcoin holders']"
+      "evidence": "11/16 kept, lost: ['user-activated-soft-fork', 'only formal mechanism', 'peer review shapes each BIP', 'unidirectionally changing Bitcoin', 'largest Bitcoin holders']"
     },
     {
       "text": "markers_removed",
@@ -39,8 +44,8 @@
     "unmeasured_reason": null,
     "markers_before": 1,
     "markers_after": 0,
-    "facts_kept": 9,
-    "facts_total": 14,
+    "facts_kept": 11,
+    "facts_total": 16,
     "similarity": 0.1902,
     "growth": 0.971
   },

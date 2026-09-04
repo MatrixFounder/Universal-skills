@@ -218,15 +218,59 @@ def _label(needle):
     return needle[0] if isinstance(needle, list) else needle
 
 
+#: A trailing block that TALKS ABOUT the edit instead of being it. The shared
+#: task says "Return ONLY the rewritten text. No preamble, no commentary", so
+#: such a block is a contract violation in its own right -- and it also
+#: corrupts every other check, because `must_drop` and the marker count match a
+#: substring ANYWHERE in the answer.
+#:
+#: Measured: P4/with_skill/rep-3 rewrote the page correctly, then appended a
+#: note to the compiler quoting the `[TBD]` it had just removed. The grader
+#: scored that as "the placeholder survived" and as 34% length growth -- two
+#: failures for one violation, and neither of them the one that happened. It is
+#: 1 run in 221, so this guard exists to score correctly, not because the skill
+#: has a commentary habit.
+_FIRST_PERSON = re.compile(
+    r"\b(I|I'm|I've|my|we|note|flag|caveat|heads[- ]up)\b", re.I)
+_ABOUT_THE_EDIT = re.compile(
+    r"\b(draft|rewrite|rewritten|edit|edited|version|source|original|"
+    r"placeholder|invent|if you|let me know|send it)\b", re.I)
+#: Longer than this and it is not a note, it is the answer.
+COMMENTARY_MAX_WORDS = 140
+
+
+def split_commentary(result_text):
+    """Return (the copy, the trailing note or "").
+
+    A note is the last block, set off by a blank line or a horizontal rule,
+    which speaks in the first person ABOUT the edit. Both conditions are
+    required: prose legitimately says "I" (P1's memo does), and prose
+    legitimately says "draft" -- only the pair marks a note about the work.
+    """
+    text = (result_text or "").rstrip()
+    parts = re.split(r"\n\s*(?:---+|\*\*\*+|___+)\s*\n|\n\n", text)
+    if len(parts) < 2:
+        return text, ""
+    tail = parts[-1].strip()
+    if (tail and len(tail.split()) <= COMMENTARY_MAX_WORDS
+            and _FIRST_PERSON.search(tail) and _ABOUT_THE_EDIT.search(tail)):
+        return text[: text.rfind(tail)].rstrip().rstrip("-*_ \n"), tail
+    return text, ""
+
+
 def score_run(fixture_text, result_text, key, roster, meta=None):
     """Return every value and check for one arm of one case."""
     meta = meta or {}
+    # The COPY is what the other checks grade. A trailing note about the edit is
+    # a violation of its own, scored once below, and it must not also make the
+    # removal checks and the length ratio read as failures of the rewrite.
+    copy_text, commentary = split_commentary(result_text)
     before = lexicon.count(fixture_text, roster)
-    after = lexicon.count(result_text, roster)
+    after = lexicon.count(copy_text, roster)
 
     kept = [s for s in key["must_keep"] if _present(s, result_text)]
     lost = [_label(s) for s in key["must_keep"] if s not in kept]
-    survived = [s for s in key["must_drop"] if _present(s, result_text)]
+    survived = [s for s in key["must_drop"] if _present(s, copy_text)]
 
     # `must_drop` and `must_not_appear` are opposite intents and the difference
     # is load-bearing. A `must_drop` surface IS in the fixture and the run has
@@ -238,7 +282,7 @@ def score_run(fixture_text, result_text, key, roster, meta=None):
     # the pass exists to remove. Conflating them would make one of the two
     # unexpressible.
     reinjected = [s for s in key.get("must_not_appear", [])
-                  if _present(s, result_text)]
+                  if _present(s, copy_text)]
 
     anchors = len(key["must_keep"])
     anchor_share = (len(kept) / anchors) if anchors else 1.0
@@ -247,8 +291,8 @@ def score_run(fixture_text, result_text, key, roster, meta=None):
     echoed = returned_the_prompt(result_text)
     # Computed BEFORE the validity chain, which reads them. They used to be
     # derived after it, which is fine until a guard needs them.
-    ratio = similarity(fixture_text, result_text)
-    growth = round(_words(result_text) / _words(fixture_text), 3) if _words(fixture_text) else None
+    ratio = similarity(fixture_text, copy_text)
+    growth = round(_words(copy_text) / _words(fixture_text), 3) if _words(fixture_text) else None
 
     if meta.get("is_error"):
         reason = f"the run reported an error: {meta.get('error')}"
@@ -272,9 +316,13 @@ def score_run(fixture_text, result_text, key, roster, meta=None):
     else:
         reason = None
 
-    invented = invented_numbers(fixture_text, result_text)
+    invented = invented_numbers(fixture_text, copy_text)
 
     checks = [
+        {"name": "no_commentary", "passed": not commentary,
+         "detail": ("clean" if not commentary else
+                    f"{len(commentary.split())} words of note about the edit "
+                    f"follow the copy: {commentary[:60]!r}...")},
         {"name": "no_invented_numbers", "passed": not invented,
          "detail": f"{len(invented)} figure(s) absent from the source"
                    + (f": {invented}" if invented else "")},
@@ -315,6 +363,8 @@ def score_run(fixture_text, result_text, key, roster, meta=None):
         "declared_surfaces_surviving": survived,
         "reinjected_surfaces": reinjected,
         "template_signatures": echoed,
+        "commentary": commentary,
+        "commentary_words": len(commentary.split()) if commentary else 0,
         "similarity": ratio,
         "growth": growth,
         "words": _words(result_text),

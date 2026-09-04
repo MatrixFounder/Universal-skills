@@ -230,11 +230,18 @@
       "declared_surfaces_surviving": [],
       "reinjected_surfaces": [],
       "template_signatures": [],
+      "commentary": "",
+      "commentary_words": 0,
       "similarity": 0.3912,
       "growth": 0.828,
       "words": 159,
       "chars": 896,
       "checks": [
+       {
+        "name": "no_commentary",
+        "passed": true,
+        "detail": "clean"
+       },
        {
         "name": "no_invented_numbers",
         "passed": true,
@@ -261,8 +268,8 @@
         "detail": "growth 0.828x against a ceiling of 1.15x"
        }
       ],
-      "checks_passed": 3,
-      "checks_total": 5,
+      "checks_passed": 4,
+      "checks_total": 6,
       "rep": "rep-1",
       "model": "claude-sonnet-5",
       "cost_usd": 0.051772599999999995
@@ -295,11 +302,18 @@
       "declared_surfaces_surviving": [],
       "reinjected_surfaces": [],
       "template_signatures": [],
+      "commentary": "",
+      "commentary_words": 0,
       "similarity": 0.303,
       "growth": 1.005,
       "words": 193,
       "chars": 1087,
       "checks": [
+       {
+        "name": "no_commentary",
+        "passed": true,
+        "detail": "clean"
+       },
        {
         "name": "no_invented_numbers",
         "passed": true,
@@ -326,8 +340,8 @@
         "detail": "growth 1.005x against a ceiling of 1.15x"
        }
       ],
-      "checks_passed": 3,
-      "checks_total": 5,
+      "checks_passed": 4,
+      "checks_total": 6,
       "rep": "rep-2",
       "model": "claude-sonnet-5",
       "cost_usd": 0.0509046
@@ -357,11 +371,18 @@
       "declared_surfaces_surviving": [],
       "reinjected_surfaces": [],
       "template_signatures": [],
+      "commentary": "",
+      "commentary_words": 0,
       "similarity": 0.2993,
       "growth": 0.792,
       "words": 152,
       "chars": 858,
       "checks": [
+       {
+        "name": "no_commentary",
+        "passed": true,
+        "detail": "clean"
+       },
        {
         "name": "no_invented_numbers",
         "passed": true,
@@ -388,8 +409,8 @@
         "detail": "growth 0.792x against a ceiling of 1.15x"
        }
       ],
-      "checks_passed": 3,
-      "checks_total": 5,
+      "checks_passed": 4,
+      "checks_total": 6,
       "rep": "rep-3",
       "model": "claude-sonnet-5",
       "cost_usd": 0.050538599999999996
@@ -427,11 +448,18 @@
       "declared_surfaces_surviving": [],
       "reinjected_surfaces": [],
       "template_signatures": [],
+      "commentary": "",
+      "commentary_words": 0,
       "similarity": 0.0,
       "growth": 0.0,
       "words": 0,
       "chars": 0,
       "checks": [
+       {
+        "name": "no_commentary",
+        "passed": true,
+        "detail": "clean"
+       },
        {
         "name": "no_invented_numbers",
         "passed": true,
@@ -458,8 +486,8 @@
         "detail": "growth 0.0x against a ceiling of 1.15x"
        }
       ],
-      "checks_passed": 3,
-      "checks_total": 5,
+      "checks_passed": 4,
+      "checks_total": 6,
       "rep": "rep-1",
       "model": "claude-sonnet-5",
       "cost_usd": null
@@ -478,11 +506,18 @@
       "declared_surfaces_surviving": [],
       "reinjected_surfaces": [],
       "template_signatures": [],
+      "commentary": "",
+      "commentary_words": 0,
       "similarity": 0.8392,
       "growth": 0.885,
       "words": 170,
       "chars": 942,
       "checks": [
+       {
+        "name": "no_commentary",
+        "passed": true,
+        "detail": "clean"
+       },
        {
         "name": "no_invented_numbers",
         "passed": true,
@@ -509,8 +544,8 @@
         "detail": "growth 0.885x against a ceiling of 1.15x"
        }
       ],
-      "checks_passed": 5,
-      "checks_total": 5,
+      "checks_passed": 6,
+      "checks_total": 6,
       "rep": "rep-2",
       "model": "claude-sonnet-5",
       "cost_usd": 0.06957920000000001
@@ -546,11 +581,18 @@
       "declared_surfaces_surviving": [],
       "reinjected_surfaces": [],
       "template_signatures": [],
+      "commentary": "",
+      "commentary_words": 0,
       "similarity": 0.0,
       "growth": 0.0,
       "words": 0,
       "chars": 0,
       "checks": [
+       {
+        "name": "no_commentary",
+        "passed": true,
+        "detail": "clean"
+       },
        {
         "name": "no_invented_numbers",
         "passed": true,
@@ -577,8 +619,8 @@
         "detail": "growth 0.0x against a ceiling of 1.15x"
        }
       ],
-      "checks_passed": 3,
-      "checks_total": 5,
+      "checks_passed": 4,
+      "checks_total": 6,
       "rep": "rep-3",
       "model": "claude-sonnet-5",
       "cost_usd": null
@@ -649,11 +691,18 @@
       "declared_surfaces_surviving": [],
       "reinjected_surfaces": [],
       "template_signatures": [],
+      "commentary": "",
+      "commentary_words": 0,
       "similarity": 0.3926,
       "growth": 0.958,
       "words": 229,
       "chars": 1381,
       "checks": [
+       {
+        "name": "no_commentary",
+        "passed": true,
+        "detail": "clean"
+       },
        {
         "name": "no_invented_numbers",
         "passed": true,
@@ -675,8 +724,8 @@
         "detail": "similarity 0.3926 against a floor of 0.45"
        }
       ],
-      "checks_passed": 3,
-      "checks_total": 4,
+      "checks_passed": 4,
+      "checks_total": 5,
       "rep": "rep-1",
       "model": "claude-sonnet-5",
       "cost_usd": 0.0495136
@@ -734,11 +783,18 @@
       "declared_surfaces_surviving": [],
       "reinjected_surfaces": [],
       "template_signatures": [],
+      "commentary": "",
+      "commentary_words": 0,
       "similarity": 0.4592,
       "growth": 0.879,
       "words": 210,
       "chars": 1242,
       "checks": [
+       {
+        "name": "no_commentary",
+        "passed": true,
+        "detail": "clean"
+       },
        {
         "name": "no_invented_numbers",
         "passed": true,
@@ -760,8 +816,8 @@
         "detail": "similarity 0.4592 against a floor of 0.45"
        }
       ],
-      "checks_passed": 4,
-      "checks_total": 4,
+      "checks_passed": 5,
+      "checks_total": 5,
       "rep": "rep-2",
       "model": "claude-sonnet-5",
       "cost_usd": 0.0320306
@@ -822,11 +878,18 @@
       "declared_surfaces_surviving": [],
       "reinjected_surfaces": [],
       "template_signatures": [],
+      "commentary": "",
+      "commentary_words": 0,
       "similarity": 0.5224,
       "growth": 0.987,
       "words": 236,
       "chars": 1410,
       "checks": [
+       {
+        "name": "no_commentary",
+        "passed": true,
+        "detail": "clean"
+       },
        {
         "name": "no_invented_numbers",
         "passed": true,
@@ -848,8 +911,8 @@
         "detail": "similarity 0.5224 against a floor of 0.45"
        }
       ],
-      "checks_passed": 3,
-      "checks_total": 4,
+      "checks_passed": 4,
+      "checks_total": 5,
       "rep": "rep-3",
       "model": "claude-sonnet-5",
       "cost_usd": 0.055395599999999996
@@ -1061,11 +1124,18 @@
        "voice passport",
        "intensity:"
       ],
+      "commentary": "",
+      "commentary_words": 0,
       "similarity": 0.218,
       "growth": 6.096,
       "words": 1457,
       "chars": 9226,
       "checks": [
+       {
+        "name": "no_commentary",
+        "passed": true,
+        "detail": "clean"
+       },
        {
         "name": "no_invented_numbers",
         "passed": false,
@@ -1087,8 +1157,8 @@
         "detail": "similarity 0.218 against a floor of 0.45"
        }
       ],
-      "checks_passed": 1,
-      "checks_total": 4,
+      "checks_passed": 2,
+      "checks_total": 5,
       "rep": "rep-1",
       "model": "claude-sonnet-5",
       "cost_usd": 0.2664336
@@ -1146,11 +1216,18 @@
       "declared_surfaces_surviving": [],
       "reinjected_surfaces": [],
       "template_signatures": [],
+      "commentary": "",
+      "commentary_words": 0,
       "similarity": 0.588,
       "growth": 0.787,
       "words": 188,
       "chars": 1153,
       "checks": [
+       {
+        "name": "no_commentary",
+        "passed": true,
+        "detail": "clean"
+       },
        {
         "name": "no_invented_numbers",
         "passed": true,
@@ -1172,8 +1249,8 @@
         "detail": "similarity 0.588 against a floor of 0.45"
        }
       ],
-      "checks_passed": 4,
-      "checks_total": 4,
+      "checks_passed": 5,
+      "checks_total": 5,
       "rep": "rep-2",
       "model": "claude-sonnet-5",
       "cost_usd": 0.1242536
@@ -1404,11 +1481,18 @@
        "voice passport",
        "intensity:"
       ],
+      "commentary": "",
+      "commentary_words": 0,
       "similarity": 0.0048,
       "growth": 6.238,
       "words": 1491,
       "chars": 9377,
       "checks": [
+       {
+        "name": "no_commentary",
+        "passed": true,
+        "detail": "clean"
+       },
        {
         "name": "no_invented_numbers",
         "passed": false,
@@ -1430,8 +1514,8 @@
         "detail": "similarity 0.0048 against a floor of 0.45"
        }
       ],
-      "checks_passed": 0,
-      "checks_total": 4,
+      "checks_passed": 1,
+      "checks_total": 5,
       "rep": "rep-3",
       "model": "claude-sonnet-5",
       "cost_usd": 0.1244244
@@ -1491,11 +1575,18 @@
       "declared_surfaces_surviving": [],
       "reinjected_surfaces": [],
       "template_signatures": [],
+      "commentary": "",
+      "commentary_words": 0,
       "similarity": 0.7811,
       "growth": 0.638,
       "words": 136,
       "chars": 842,
       "checks": [
+       {
+        "name": "no_commentary",
+        "passed": true,
+        "detail": "clean"
+       },
        {
         "name": "no_invented_numbers",
         "passed": true,
@@ -1517,8 +1608,8 @@
         "detail": "similarity 0.7811 against a floor of 0.55"
        }
       ],
-      "checks_passed": 3,
-      "checks_total": 4,
+      "checks_passed": 4,
+      "checks_total": 5,
       "rep": "rep-1",
       "model": "claude-sonnet-5",
       "cost_usd": 0.0632096
@@ -1563,11 +1654,18 @@
       "declared_surfaces_surviving": [],
       "reinjected_surfaces": [],
       "template_signatures": [],
+      "commentary": "",
+      "commentary_words": 0,
       "similarity": 0.7911,
       "growth": 0.681,
       "words": 145,
       "chars": 902,
       "checks": [
+       {
+        "name": "no_commentary",
+        "passed": true,
+        "detail": "clean"
+       },
        {
         "name": "no_invented_numbers",
         "passed": true,
@@ -1589,8 +1687,8 @@
         "detail": "similarity 0.7911 against a floor of 0.55"
        }
       ],
-      "checks_passed": 3,
-      "checks_total": 4,
+      "checks_passed": 4,
+      "checks_total": 5,
       "rep": "rep-2",
       "model": "claude-sonnet-5",
       "cost_usd": 0.0623936
@@ -1637,11 +1735,18 @@
       "declared_surfaces_surviving": [],
       "reinjected_surfaces": [],
       "template_signatures": [],
+      "commentary": "",
+      "commentary_words": 0,
       "similarity": 0.7811,
       "growth": 0.638,
       "words": 136,
       "chars": 842,
       "checks": [
+       {
+        "name": "no_commentary",
+        "passed": true,
+        "detail": "clean"
+       },
        {
         "name": "no_invented_numbers",
         "passed": true,
@@ -1663,8 +1768,8 @@
         "detail": "similarity 0.7811 against a floor of 0.55"
        }
       ],
-      "checks_passed": 3,
-      "checks_total": 4,
+      "checks_passed": 4,
+      "checks_total": 5,
       "rep": "rep-3",
       "model": "claude-sonnet-5",
       "cost_usd": 0.05853560000000001
@@ -1709,11 +1814,18 @@
       "declared_surfaces_surviving": [],
       "reinjected_surfaces": [],
       "template_signatures": [],
+      "commentary": "",
+      "commentary_words": 0,
       "similarity": 0.7849,
       "growth": 0.808,
       "words": 172,
       "chars": 1082,
       "checks": [
+       {
+        "name": "no_commentary",
+        "passed": true,
+        "detail": "clean"
+       },
        {
         "name": "no_invented_numbers",
         "passed": true,
@@ -1735,8 +1847,8 @@
         "detail": "similarity 0.7849 against a floor of 0.55"
        }
       ],
-      "checks_passed": 4,
-      "checks_total": 4,
+      "checks_passed": 5,
+      "checks_total": 5,
       "rep": "rep-1",
       "model": "claude-sonnet-5",
       "cost_usd": 0.2590006
@@ -1779,11 +1891,18 @@
       "declared_surfaces_surviving": [],
       "reinjected_surfaces": [],
       "template_signatures": [],
+      "commentary": "",
+      "commentary_words": 0,
       "similarity": 0.8263,
       "growth": 0.793,
       "words": 169,
       "chars": 1062,
       "checks": [
+       {
+        "name": "no_commentary",
+        "passed": true,
+        "detail": "clean"
+       },
        {
         "name": "no_invented_numbers",
         "passed": true,
@@ -1805,8 +1924,8 @@
         "detail": "similarity 0.8263 against a floor of 0.55"
        }
       ],
-      "checks_passed": 4,
-      "checks_total": 4,
+      "checks_passed": 5,
+      "checks_total": 5,
       "rep": "rep-2",
       "model": "claude-sonnet-5",
       "cost_usd": 0.2000386
@@ -2032,11 +2151,18 @@
        "role definition",
        "intensity:"
       ],
+      "commentary": "",
+      "commentary_words": 0,
       "similarity": 0.005,
       "growth": 9.005,
       "words": 1918,
       "chars": 12052,
       "checks": [
+       {
+        "name": "no_commentary",
+        "passed": true,
+        "detail": "clean"
+       },
        {
         "name": "no_invented_numbers",
         "passed": false,
@@ -2058,8 +2184,8 @@
         "detail": "similarity 0.005 against a floor of 0.55"
        }
       ],
-      "checks_passed": 0,
-      "checks_total": 4,
+      "checks_passed": 1,
+      "checks_total": 5,
       "rep": "rep-3",
       "model": "claude-sonnet-5",
       "cost_usd": 0.28125659999999997
@@ -2102,11 +2228,18 @@
       ],
       "reinjected_surfaces": [],
       "template_signatures": [],
+      "commentary": "",
+      "commentary_words": 0,
       "similarity": 0.4588,
       "growth": 0.766,
       "words": 98,
       "chars": 567,
       "checks": [
+       {
+        "name": "no_commentary",
+        "passed": true,
+        "detail": "clean"
+       },
        {
         "name": "no_invented_numbers",
         "passed": true,
@@ -2128,8 +2261,8 @@
         "detail": "growth 0.766x against a ceiling of 1.15x"
        }
       ],
-      "checks_passed": 3,
-      "checks_total": 4,
+      "checks_passed": 4,
+      "checks_total": 5,
       "rep": "rep-1",
       "model": "claude-sonnet-5",
       "cost_usd": 0.0762986
@@ -2148,11 +2281,18 @@
       "declared_surfaces_surviving": [],
       "reinjected_surfaces": [],
       "template_signatures": [],
+      "commentary": "",
+      "commentary_words": 0,
       "similarity": 0.3024,
       "growth": 1.039,
       "words": 133,
       "chars": 768,
       "checks": [
+       {
+        "name": "no_commentary",
+        "passed": true,
+        "detail": "clean"
+       },
        {
         "name": "no_invented_numbers",
         "passed": true,
@@ -2174,8 +2314,8 @@
         "detail": "growth 1.039x against a ceiling of 1.15x"
        }
       ],
-      "checks_passed": 4,
-      "checks_total": 4,
+      "checks_passed": 5,
+      "checks_total": 5,
       "rep": "rep-2",
       "model": "claude-sonnet-5",
       "cost_usd": 0.07690459999999999
@@ -2194,11 +2334,18 @@
       "declared_surfaces_surviving": [],
       "reinjected_surfaces": [],
       "template_signatures": [],
+      "commentary": "",
+      "commentary_words": 0,
       "similarity": 0.5287,
       "growth": 0.828,
       "words": 106,
       "chars": 624,
       "checks": [
+       {
+        "name": "no_commentary",
+        "passed": true,
+        "detail": "clean"
+       },
        {
         "name": "no_invented_numbers",
         "passed": true,
@@ -2220,8 +2367,8 @@
         "detail": "growth 0.828x against a ceiling of 1.15x"
        }
       ],
-      "checks_passed": 4,
-      "checks_total": 4,
+      "checks_passed": 5,
+      "checks_total": 5,
       "rep": "rep-3",
       "model": "claude-sonnet-5",
       "cost_usd": 0.09643260000000001
@@ -2242,11 +2389,18 @@
       "declared_surfaces_surviving": [],
       "reinjected_surfaces": [],
       "template_signatures": [],
+      "commentary": "",
+      "commentary_words": 0,
       "similarity": 0.45,
       "growth": 0.781,
       "words": 100,
       "chars": 610,
       "checks": [
+       {
+        "name": "no_commentary",
+        "passed": true,
+        "detail": "clean"
+       },
        {
         "name": "no_invented_numbers",
         "passed": true,
@@ -2268,8 +2422,8 @@
         "detail": "growth 0.781x against a ceiling of 1.15x"
        }
       ],
-      "checks_passed": 4,
-      "checks_total": 4,
+      "checks_passed": 5,
+      "checks_total": 5,
       "rep": "rep-1",
       "model": "claude-sonnet-5",
       "cost_usd": 0.1701166
@@ -2288,11 +2442,18 @@
       "declared_surfaces_surviving": [],
       "reinjected_surfaces": [],
       "template_signatures": [],
+      "commentary": "",
+      "commentary_words": 0,
       "similarity": 0.6989,
       "growth": 0.758,
       "words": 97,
       "chars": 583,
       "checks": [
+       {
+        "name": "no_commentary",
+        "passed": true,
+        "detail": "clean"
+       },
        {
         "name": "no_invented_numbers",
         "passed": true,
@@ -2314,8 +2475,8 @@
         "detail": "growth 0.758x against a ceiling of 1.15x"
        }
       ],
-      "checks_passed": 4,
-      "checks_total": 4,
+      "checks_passed": 5,
+      "checks_total": 5,
       "rep": "rep-2",
       "model": "claude-sonnet-5",
       "cost_usd": 0.19800460000000003
@@ -2334,11 +2495,18 @@
       "declared_surfaces_surviving": [],
       "reinjected_surfaces": [],
       "template_signatures": [],
+      "commentary": "",
+      "commentary_words": 0,
       "similarity": 0.478,
       "growth": 0.781,
       "words": 100,
       "chars": 599,
       "checks": [
+       {
+        "name": "no_commentary",
+        "passed": true,
+        "detail": "clean"
+       },
        {
         "name": "no_invented_numbers",
         "passed": true,
@@ -2360,8 +2528,8 @@
         "detail": "growth 0.781x against a ceiling of 1.15x"
        }
       ],
-      "checks_passed": 4,
-      "checks_total": 4,
+      "checks_passed": 5,
+      "checks_total": 5,
       "rep": "rep-3",
       "model": "claude-sonnet-5",
       "cost_usd": 0.19927060000000002
@@ -2395,22 +2563,29 @@
        }
       ],
       "invented_numbers": [],
-      "facts_kept": 10,
-      "facts_total": 14,
+      "facts_kept": 12,
+      "facts_total": 16,
       "facts_lost": [
-       "It is the only formal mechanism for deliberation. Core developers do not unilaterally decide; extensive peer review shapes each BIP.",
-       "core developers have a veto right",
-       "absence of a legal entity",
-       "a risk of major economic actors unidirectionally changing Bitcoin"
+       "only formal mechanism",
+       "do not unilaterally decide",
+       "peer review shapes each BIP",
+       "unidirectionally changing Bitcoin"
       ],
       "declared_surfaces_surviving": [],
       "reinjected_surfaces": [],
       "template_signatures": [],
+      "commentary": "",
+      "commentary_words": 0,
       "similarity": 0.2755,
       "growth": 1.104,
       "words": 191,
       "chars": 1231,
       "checks": [
+       {
+        "name": "no_commentary",
+        "passed": true,
+        "detail": "clean"
+       },
        {
         "name": "no_invented_numbers",
         "passed": true,
@@ -2419,7 +2594,7 @@
        {
         "name": "facts_kept",
         "passed": false,
-        "detail": "10/14 kept, lost: ['It is the only formal mechanism for deliberation. Core developers do not unilaterally decide; extensive peer review shapes each BIP.', 'core developers have a veto right', 'absence of a legal entity', 'a risk of major economic actors unidirectionally changing Bitcoin']"
+        "detail": "12/16 kept, lost: ['only formal mechanism', 'do not unilaterally decide', 'peer review shapes each BIP', 'unidirectionally changing Bitcoin']"
        },
        {
         "name": "markers_removed",
@@ -2432,8 +2607,8 @@
         "detail": "similarity 0.2755 against a floor of 0.72"
        }
       ],
-      "checks_passed": 2,
-      "checks_total": 4,
+      "checks_passed": 3,
+      "checks_total": 5,
       "rep": "rep-1",
       "model": "claude-sonnet-5",
       "cost_usd": 0.0415416
@@ -2454,23 +2629,29 @@
        }
       ],
       "invented_numbers": [],
-      "facts_kept": 9,
-      "facts_total": 14,
+      "facts_kept": 12,
+      "facts_total": 16,
       "facts_lost": [
-       "It is the only formal mechanism for deliberation. Core developers do not unilaterally decide; extensive peer review shapes each BIP.",
-       "core developers have a veto right",
-       "absence of a legal entity",
-       "a risk of major economic actors unidirectionally changing Bitcoin",
-       "one of the largest Bitcoin holders"
+       "only formal mechanism",
+       "do not unilaterally decide",
+       "peer review shapes each BIP",
+       "unidirectionally changing Bitcoin"
       ],
       "declared_surfaces_surviving": [],
       "reinjected_surfaces": [],
       "template_signatures": [],
+      "commentary": "",
+      "commentary_words": 0,
       "similarity": 0.1515,
       "growth": 1.237,
       "words": 214,
       "chars": 1320,
       "checks": [
+       {
+        "name": "no_commentary",
+        "passed": true,
+        "detail": "clean"
+       },
        {
         "name": "no_invented_numbers",
         "passed": true,
@@ -2479,7 +2660,7 @@
        {
         "name": "facts_kept",
         "passed": false,
-        "detail": "9/14 kept, lost: ['It is the only formal mechanism for deliberation. Core developers do not unilaterally decide; extensive peer review shapes each BIP.', 'core developers have a veto right', 'absence of a legal entity', 'a risk of major economic actors unidirectionally changing Bitcoin', 'one of the largest Bitcoin holders']"
+        "detail": "12/16 kept, lost: ['only formal mechanism', 'do not unilaterally decide', 'peer review shapes each BIP', 'unidirectionally changing Bitcoin']"
        },
        {
         "name": "markers_removed",
@@ -2492,8 +2673,8 @@
         "detail": "similarity 0.1515 against a floor of 0.72"
        }
       ],
-      "checks_passed": 2,
-      "checks_total": 4,
+      "checks_passed": 3,
+      "checks_total": 5,
       "rep": "rep-2",
       "model": "claude-sonnet-5",
       "cost_usd": 0.0561596
@@ -2514,23 +2695,30 @@
        }
       ],
       "invented_numbers": [],
-      "facts_kept": 9,
-      "facts_total": 14,
+      "facts_kept": 11,
+      "facts_total": 16,
       "facts_lost": [
-       "It is the only formal mechanism for deliberation. Core developers do not unilaterally decide; extensive peer review shapes each BIP.",
-       "core developers have a veto right",
-       "absence of a legal entity",
-       "a risk of major economic actors unidirectionally changing Bitcoin",
-       "one of the largest Bitcoin holders"
+       "only formal mechanism",
+       "do not unilaterally decide",
+       "peer review shapes each BIP",
+       "veto right",
+       "unidirectionally changing Bitcoin"
       ],
       "declared_surfaces_surviving": [],
       "reinjected_surfaces": [],
       "template_signatures": [],
+      "commentary": "",
+      "commentary_words": 0,
       "similarity": 0.1952,
       "growth": 1.168,
       "words": 202,
       "chars": 1251,
       "checks": [
+       {
+        "name": "no_commentary",
+        "passed": true,
+        "detail": "clean"
+       },
        {
         "name": "no_invented_numbers",
         "passed": true,
@@ -2539,7 +2727,7 @@
        {
         "name": "facts_kept",
         "passed": false,
-        "detail": "9/14 kept, lost: ['It is the only formal mechanism for deliberation. Core developers do not unilaterally decide; extensive peer review shapes each BIP.', 'core developers have a veto right', 'absence of a legal entity', 'a risk of major economic actors unidirectionally changing Bitcoin', 'one of the largest Bitcoin holders']"
+        "detail": "11/16 kept, lost: ['only formal mechanism', 'do not unilaterally decide', 'peer review shapes each BIP', 'veto right', 'unidirectionally changing Bitcoin']"
        },
        {
         "name": "markers_removed",
@@ -2552,8 +2740,8 @@
         "detail": "similarity 0.1952 against a floor of 0.72"
        }
       ],
-      "checks_passed": 2,
-      "checks_total": 4,
+      "checks_passed": 3,
+      "checks_total": 5,
       "rep": "rep-3",
       "model": "claude-sonnet-5",
       "cost_usd": 0.0540266
@@ -2568,23 +2756,27 @@
       "markers_by_kind_after": {},
       "markers_surviving": [],
       "invented_numbers": [],
-      "facts_kept": 9,
-      "facts_total": 14,
+      "facts_kept": 14,
+      "facts_total": 16,
       "facts_lost": [
-       "It is the only formal mechanism for deliberation. Core developers do not unilaterally decide; extensive peer review shapes each BIP.",
-       "core developers have a veto right",
-       "absence of a legal entity",
-       "a risk of major economic actors unidirectionally changing Bitcoin",
-       "one of the largest Bitcoin holders"
+       "unidirectionally changing Bitcoin",
+       "largest Bitcoin holders"
       ],
       "declared_surfaces_surviving": [],
       "reinjected_surfaces": [],
       "template_signatures": [],
+      "commentary": "",
+      "commentary_words": 0,
       "similarity": 0.326,
       "growth": 0.908,
       "words": 157,
       "chars": 1042,
       "checks": [
+       {
+        "name": "no_commentary",
+        "passed": true,
+        "detail": "clean"
+       },
        {
         "name": "no_invented_numbers",
         "passed": true,
@@ -2593,7 +2785,7 @@
        {
         "name": "facts_kept",
         "passed": false,
-        "detail": "9/14 kept, lost: ['It is the only formal mechanism for deliberation. Core developers do not unilaterally decide; extensive peer review shapes each BIP.', 'core developers have a veto right', 'absence of a legal entity', 'a risk of major economic actors unidirectionally changing Bitcoin', 'one of the largest Bitcoin holders']"
+        "detail": "14/16 kept, lost: ['unidirectionally changing Bitcoin', 'largest Bitcoin holders']"
        },
        {
         "name": "markers_removed",
@@ -2606,8 +2798,8 @@
         "detail": "similarity 0.326 against a floor of 0.72"
        }
       ],
-      "checks_passed": 2,
-      "checks_total": 4,
+      "checks_passed": 3,
+      "checks_total": 5,
       "rep": "rep-1",
       "model": "claude-sonnet-5",
       "cost_usd": 0.19899760000000002
@@ -2620,22 +2812,27 @@
       "markers_by_kind_after": {},
       "markers_surviving": [],
       "invented_numbers": [],
-      "facts_kept": 10,
-      "facts_total": 14,
+      "facts_kept": 14,
+      "facts_total": 16,
       "facts_lost": [
-       "It is the only formal mechanism for deliberation. Core developers do not unilaterally decide; extensive peer review shapes each BIP.",
-       "core developers have a veto right",
-       "absence of a legal entity",
-       "a risk of major economic actors unidirectionally changing Bitcoin"
+       "only formal mechanism",
+       "absence of a legal entity"
       ],
       "declared_surfaces_surviving": [],
       "reinjected_surfaces": [],
       "template_signatures": [],
+      "commentary": "",
+      "commentary_words": 0,
       "similarity": 0.671,
       "growth": 0.855,
       "words": 148,
       "chars": 1019,
       "checks": [
+       {
+        "name": "no_commentary",
+        "passed": true,
+        "detail": "clean"
+       },
        {
         "name": "no_invented_numbers",
         "passed": true,
@@ -2644,7 +2841,7 @@
        {
         "name": "facts_kept",
         "passed": false,
-        "detail": "10/14 kept, lost: ['It is the only formal mechanism for deliberation. Core developers do not unilaterally decide; extensive peer review shapes each BIP.', 'core developers have a veto right', 'absence of a legal entity', 'a risk of major economic actors unidirectionally changing Bitcoin']"
+        "detail": "14/16 kept, lost: ['only formal mechanism', 'absence of a legal entity']"
        },
        {
         "name": "markers_removed",
@@ -2657,8 +2854,8 @@
         "detail": "similarity 0.671 against a floor of 0.72"
        }
       ],
-      "checks_passed": 2,
-      "checks_total": 4,
+      "checks_passed": 3,
+      "checks_total": 5,
       "rep": "rep-2",
       "model": "claude-sonnet-5",
       "cost_usd": 0.2899536
@@ -2679,22 +2876,28 @@
        }
       ],
       "invented_numbers": [],
-      "facts_kept": 10,
-      "facts_total": 14,
+      "facts_kept": 13,
+      "facts_total": 16,
       "facts_lost": [
-       "It is the only formal mechanism for deliberation. Core developers do not unilaterally decide; extensive peer review shapes each BIP.",
-       "core developers have a veto right",
+       "only formal mechanism",
        "absence of a legal entity",
-       "a risk of major economic actors unidirectionally changing Bitcoin"
+       "unidirectionally changing Bitcoin"
       ],
       "declared_surfaces_surviving": [],
       "reinjected_surfaces": [],
       "template_signatures": [],
+      "commentary": "",
+      "commentary_words": 0,
       "similarity": 0.3555,
       "growth": 0.954,
       "words": 165,
       "chars": 1120,
       "checks": [
+       {
+        "name": "no_commentary",
+        "passed": true,
+        "detail": "clean"
+       },
        {
         "name": "no_invented_numbers",
         "passed": true,
@@ -2703,7 +2906,7 @@
        {
         "name": "facts_kept",
         "passed": false,
-        "detail": "10/14 kept, lost: ['It is the only formal mechanism for deliberation. Core developers do not unilaterally decide; extensive peer review shapes each BIP.', 'core developers have a veto right', 'absence of a legal entity', 'a risk of major economic actors unidirectionally changing Bitcoin']"
+        "detail": "13/16 kept, lost: ['only formal mechanism', 'absence of a legal entity', 'unidirectionally changing Bitcoin']"
        },
        {
         "name": "markers_removed",
@@ -2716,8 +2919,8 @@
         "detail": "similarity 0.3555 against a floor of 0.72"
        }
       ],
-      "checks_passed": 2,
-      "checks_total": 4,
+      "checks_passed": 3,
+      "checks_total": 5,
       "rep": "rep-3",
       "model": "claude-sonnet-5",
       "cost_usd": 0.2885756
@@ -2761,11 +2964,18 @@
       "declared_surfaces_surviving": [],
       "reinjected_surfaces": [],
       "template_signatures": [],
+      "commentary": "",
+      "commentary_words": 0,
       "similarity": 0.3109,
       "growth": 1.028,
       "words": 149,
       "chars": 924,
       "checks": [
+       {
+        "name": "no_commentary",
+        "passed": true,
+        "detail": "clean"
+       },
        {
         "name": "no_invented_numbers",
         "passed": true,
@@ -2792,8 +3002,8 @@
         "detail": "similarity 0.3109 against a floor of 0.75"
        }
       ],
-      "checks_passed": 3,
-      "checks_total": 5,
+      "checks_passed": 4,
+      "checks_total": 6,
       "rep": "rep-1",
       "model": "claude-sonnet-5",
       "cost_usd": 0.041727600000000004
@@ -2831,11 +3041,18 @@
       "declared_surfaces_surviving": [],
       "reinjected_surfaces": [],
       "template_signatures": [],
+      "commentary": "",
+      "commentary_words": 0,
       "similarity": 0.2873,
       "growth": 1.062,
       "words": 154,
       "chars": 955,
       "checks": [
+       {
+        "name": "no_commentary",
+        "passed": true,
+        "detail": "clean"
+       },
        {
         "name": "no_invented_numbers",
         "passed": true,
@@ -2862,8 +3079,8 @@
         "detail": "similarity 0.2873 against a floor of 0.75"
        }
       ],
-      "checks_passed": 3,
-      "checks_total": 5,
+      "checks_passed": 4,
+      "checks_total": 6,
       "rep": "rep-2",
       "model": "claude-sonnet-5",
       "cost_usd": 0.04575560000000001
@@ -2899,11 +3116,18 @@
       "declared_surfaces_surviving": [],
       "reinjected_surfaces": [],
       "template_signatures": [],
+      "commentary": "",
+      "commentary_words": 0,
       "similarity": 0.258,
       "growth": 1.152,
       "words": 167,
       "chars": 1017,
       "checks": [
+       {
+        "name": "no_commentary",
+        "passed": true,
+        "detail": "clean"
+       },
        {
         "name": "no_invented_numbers",
         "passed": true,
@@ -2930,8 +3154,8 @@
         "detail": "similarity 0.258 against a floor of 0.75"
        }
       ],
-      "checks_passed": 3,
-      "checks_total": 5,
+      "checks_passed": 4,
+      "checks_total": 6,
       "rep": "rep-3",
       "model": "claude-sonnet-5",
       "cost_usd": 0.0426456
@@ -2960,11 +3184,18 @@
       "declared_surfaces_surviving": [],
       "reinjected_surfaces": [],
       "template_signatures": [],
+      "commentary": "",
+      "commentary_words": 0,
       "similarity": 0.4403,
       "growth": 0.966,
       "words": 140,
       "chars": 877,
       "checks": [
+       {
+        "name": "no_commentary",
+        "passed": true,
+        "detail": "clean"
+       },
        {
         "name": "no_invented_numbers",
         "passed": true,
@@ -2991,8 +3222,8 @@
         "detail": "similarity 0.4403 against a floor of 0.75"
        }
       ],
-      "checks_passed": 4,
-      "checks_total": 5,
+      "checks_passed": 5,
+      "checks_total": 6,
       "rep": "rep-1",
       "model": "claude-sonnet-5",
       "cost_usd": 0.1891026
@@ -3019,11 +3250,18 @@
       "declared_surfaces_surviving": [],
       "reinjected_surfaces": [],
       "template_signatures": [],
+      "commentary": "",
+      "commentary_words": 0,
       "similarity": 0.6373,
       "growth": 0.931,
       "words": 135,
       "chars": 858,
       "checks": [
+       {
+        "name": "no_commentary",
+        "passed": true,
+        "detail": "clean"
+       },
        {
         "name": "no_invented_numbers",
         "passed": true,
@@ -3050,8 +3288,8 @@
         "detail": "similarity 0.6373 against a floor of 0.75"
        }
       ],
-      "checks_passed": 4,
-      "checks_total": 5,
+      "checks_passed": 5,
+      "checks_total": 6,
       "rep": "rep-2",
       "model": "claude-sonnet-5",
       "cost_usd": 0.2171746
@@ -3078,11 +3316,18 @@
       "declared_surfaces_surviving": [],
       "reinjected_surfaces": [],
       "template_signatures": [],
+      "commentary": "",
+      "commentary_words": 0,
       "similarity": 0.7383,
       "growth": 0.972,
       "words": 141,
       "chars": 887,
       "checks": [
+       {
+        "name": "no_commentary",
+        "passed": true,
+        "detail": "clean"
+       },
        {
         "name": "no_invented_numbers",
         "passed": true,
@@ -3109,8 +3354,8 @@
         "detail": "similarity 0.7383 against a floor of 0.75"
        }
       ],
-      "checks_passed": 4,
-      "checks_total": 5,
+      "checks_passed": 5,
+      "checks_total": 6,
       "rep": "rep-3",
       "model": "claude-sonnet-5",
       "cost_usd": 0.1775026
@@ -3124,20 +3369,20 @@
    "runs": 18,
    "measured": 18,
    "unmeasured": 0,
-   "checks_passed": 54,
-   "checks_total": 78,
+   "checks_passed": 72,
+   "checks_total": 96,
    "markers_after_total": 70,
-   "facts_lost_total": 42,
+   "facts_lost_total": 41,
    "cost_usd": 1.0058
   },
   "with_skill": {
    "runs": 18,
    "measured": 13,
    "unmeasured": 5,
-   "checks_passed": 54,
-   "checks_total": 78,
+   "checks_passed": 72,
+   "checks_total": 96,
    "markers_after_total": 23,
-   "facts_lost_total": 13,
+   "facts_lost_total": 7,
    "cost_usd": 3.2537
   }
  }

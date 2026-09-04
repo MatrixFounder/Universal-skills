@@ -1,11 +1,16 @@
 {
   "summary": {
-    "pass_rate": 0.5,
-    "passed": 2,
-    "failed": 2,
-    "total": 4
+    "pass_rate": 0.8,
+    "passed": 4,
+    "failed": 1,
+    "total": 5
   },
   "expectations": [
+    {
+      "text": "no_commentary",
+      "passed": true,
+      "evidence": "clean"
+    },
     {
       "text": "no_invented_numbers",
       "passed": true,
@@ -13,8 +18,8 @@
     },
     {
       "text": "facts_kept",
-      "passed": false,
-      "evidence": "11/14 kept, lost: ['It is the only formal mechanism for deliberation. Core developers do not unilaterally decide; extensive peer review shapes each BIP.', 'core developers have a veto right', 'a risk of major economic actors unidirectionally changing Bitcoin']"
+      "passed": true,
+      "evidence": "16/16 kept"
     },
     {
       "text": "markers_removed",
@@ -39,8 +44,8 @@
     "unmeasured_reason": null,
     "markers_before": 1,
     "markers_after": 1,
-    "facts_kept": 11,
-    "facts_total": 14,
+    "facts_kept": 16,
+    "facts_total": 16,
     "similarity": 0.4744,
     "growth": 0.931
   },

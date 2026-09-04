@@ -1,11 +1,16 @@
 {
   "summary": {
-    "pass_rate": 0.5,
-    "passed": 2,
-    "failed": 2,
-    "total": 4
+    "pass_rate": 0.8,
+    "passed": 4,
+    "failed": 1,
+    "total": 5
   },
   "expectations": [
+    {
+      "text": "no_commentary",
+      "passed": false,
+      "evidence": "71 words of note about the edit follow the copy: \"One flag: the September shift-close figure isn't in your dra\"..."
+    },
     {
       "text": "no_invented_numbers",
       "passed": true,
@@ -18,13 +23,13 @@
     },
     {
       "text": "markers_removed",
-      "passed": false,
-      "evidence": "2/9 declared surfaces survived: ['[', 'TBD']"
+      "passed": true,
+      "evidence": "0/9 declared surfaces survived"
     },
     {
       "text": "proportionate_length",
-      "passed": false,
-      "evidence": "growth 1.344x against a ceiling of 1.15x"
+      "passed": true,
+      "evidence": "growth 0.781x against a ceiling of 1.15x"
     }
   ],
   "execution_metrics": {
@@ -38,11 +43,11 @@
     "measured": true,
     "unmeasured_reason": null,
     "markers_before": 4,
-    "markers_after": 2,
+    "markers_after": 1,
     "facts_kept": 9,
     "facts_total": 9,
-    "similarity": 0.2393,
-    "growth": 1.344
+    "similarity": 0.479,
+    "growth": 0.781
   },
   "grader": "text-humanizer/evals/grade_run.py — deterministic, no model judge",
   "pass_rate_means": "fraction of this run's deterministic checks that passed; NOT an LLM judge verdict, and not comparable to one"

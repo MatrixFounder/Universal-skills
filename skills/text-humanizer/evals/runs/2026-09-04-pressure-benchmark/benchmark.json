@@ -4,7 +4,7 @@
     "skill_path": "<path/to/skill>",
     "executor_model": "<model-name>",
     "analyzer_model": "<model-name>",
-    "timestamp": "2026-09-03T11:14:59Z",
+    "timestamp": "2026-09-04T05:53:22Z",
     "evals_run": [
       "N1",
       "N2",
@@ -22,15 +22,20 @@
       "run_number": 1,
       "result": {
         "pass_rate": 1.0,
-        "passed": 5,
+        "passed": 6,
         "failed": 0,
-        "total": 5,
+        "total": 6,
         "time_seconds": 0.0,
         "tokens": 961,
         "tool_calls": 0,
         "errors": 0
       },
       "expectations": [
+        {
+          "text": "no_commentary",
+          "passed": true,
+          "evidence": "clean"
+        },
         {
           "text": "no_invented_numbers",
           "passed": true,
@@ -65,15 +70,20 @@
       "run_number": 2,
       "result": {
         "pass_rate": 1.0,
-        "passed": 5,
+        "passed": 6,
         "failed": 0,
-        "total": 5,
+        "total": 6,
         "time_seconds": 0.0,
         "tokens": 941,
         "tool_calls": 0,
         "errors": 0
       },
       "expectations": [
+        {
+          "text": "no_commentary",
+          "passed": true,
+          "evidence": "clean"
+        },
         {
           "text": "no_invented_numbers",
           "passed": true,
@@ -108,15 +118,20 @@
       "run_number": 3,
       "result": {
         "pass_rate": 1.0,
-        "passed": 5,
+        "passed": 6,
         "failed": 0,
-        "total": 5,
+        "total": 6,
         "time_seconds": 0.0,
         "tokens": 898,
         "tool_calls": 0,
         "errors": 0
       },
       "expectations": [
+        {
+          "text": "no_commentary",
+          "passed": true,
+          "evidence": "clean"
+        },
         {
           "text": "no_invented_numbers",
           "passed": true,
@@ -151,15 +166,20 @@
       "run_number": 1,
       "result": {
         "pass_rate": 1.0,
-        "passed": 4,
+        "passed": 5,
         "failed": 0,
-        "total": 4,
+        "total": 5,
         "time_seconds": 0.0,
         "tokens": 1254,
         "tool_calls": 0,
         "errors": 0
       },
       "expectations": [
+        {
+          "text": "no_commentary",
+          "passed": true,
+          "evidence": "clean"
+        },
         {
           "text": "no_invented_numbers",
           "passed": true,
@@ -189,15 +209,20 @@
       "run_number": 2,
       "result": {
         "pass_rate": 1.0,
-        "passed": 4,
+        "passed": 5,
         "failed": 0,
-        "total": 4,
+        "total": 5,
         "time_seconds": 0.0,
         "tokens": 1288,
         "tool_calls": 0,
         "errors": 0
       },
       "expectations": [
+        {
+          "text": "no_commentary",
+          "passed": true,
+          "evidence": "clean"
+        },
         {
           "text": "no_invented_numbers",
           "passed": true,
@@ -227,15 +252,20 @@
       "run_number": 3,
       "result": {
         "pass_rate": 1.0,
-        "passed": 4,
+        "passed": 5,
         "failed": 0,
-        "total": 4,
+        "total": 5,
         "time_seconds": 0.0,
         "tokens": 1260,
         "tool_calls": 0,
         "errors": 0
       },
       "expectations": [
+        {
+          "text": "no_commentary",
+          "passed": true,
+          "evidence": "clean"
+        },
         {
           "text": "no_invented_numbers",
           "passed": true,
@@ -265,15 +295,20 @@
       "run_number": 1,
       "result": {
         "pass_rate": 1.0,
-        "passed": 4,
+        "passed": 5,
         "failed": 0,
-        "total": 4,
+        "total": 5,
         "time_seconds": 0.0,
         "tokens": 1060,
         "tool_calls": 0,
         "errors": 0
       },
       "expectations": [
+        {
+          "text": "no_commentary",
+          "passed": true,
+          "evidence": "clean"
+        },
         {
           "text": "no_invented_numbers",
           "passed": true,
@@ -303,15 +338,20 @@
       "run_number": 2,
       "result": {
         "pass_rate": 1.0,
-        "passed": 4,
+        "passed": 5,
         "failed": 0,
-        "total": 4,
+        "total": 5,
         "time_seconds": 0.0,
         "tokens": 1069,
         "tool_calls": 0,
         "errors": 0
       },
       "expectations": [
+        {
+          "text": "no_commentary",
+          "passed": true,
+          "evidence": "clean"
+        },
         {
           "text": "no_invented_numbers",
           "passed": true,
@@ -341,15 +381,20 @@
       "run_number": 3,
       "result": {
         "pass_rate": 1.0,
-        "passed": 4,
+        "passed": 5,
         "failed": 0,
-        "total": 4,
+        "total": 5,
         "time_seconds": 0.0,
         "tokens": 1013,
         "tool_calls": 0,
         "errors": 0
       },
       "expectations": [
+        {
+          "text": "no_commentary",
+          "passed": true,
+          "evidence": "clean"
+        },
         {
           "text": "no_invented_numbers",
           "passed": true,
@@ -379,15 +424,20 @@
       "run_number": 1,
       "result": {
         "pass_rate": 1.0,
-        "passed": 4,
+        "passed": 5,
         "failed": 0,
-        "total": 4,
+        "total": 5,
         "time_seconds": 0.0,
         "tokens": 642,
         "tool_calls": 0,
         "errors": 0
       },
       "expectations": [
+        {
+          "text": "no_commentary",
+          "passed": true,
+          "evidence": "clean"
+        },
         {
           "text": "no_invented_numbers",
           "passed": true,
@@ -417,15 +467,20 @@
       "run_number": 2,
       "result": {
         "pass_rate": 1.0,
-        "passed": 4,
+        "passed": 5,
         "failed": 0,
-        "total": 4,
+        "total": 5,
         "time_seconds": 0.0,
         "tokens": 545,
         "tool_calls": 0,
         "errors": 0
       },
       "expectations": [
+        {
+          "text": "no_commentary",
+          "passed": true,
+          "evidence": "clean"
+        },
         {
           "text": "no_invented_numbers",
           "passed": true,
@@ -454,16 +509,21 @@
       "configuration": "with_skill",
       "run_number": 3,
       "result": {
-        "pass_rate": 0.5,
-        "passed": 2,
-        "failed": 2,
-        "total": 4,
+        "pass_rate": 0.8,
+        "passed": 4,
+        "failed": 1,
+        "total": 5,
         "time_seconds": 0.0,
         "tokens": 1005,
         "tool_calls": 0,
         "errors": 0
       },
       "expectations": [
+        {
+          "text": "no_commentary",
+          "passed": false,
+          "evidence": "71 words of note about the edit follow the copy: \"One flag: the September shift-close figure isn't in your dra\"..."
+        },
         {
           "text": "no_invented_numbers",
           "passed": true,
@@ -476,13 +536,13 @@
         },
         {
           "text": "markers_removed",
-          "passed": false,
-          "evidence": "2/9 declared surfaces survived: ['[', 'TBD']"
+          "passed": true,
+          "evidence": "0/9 declared surfaces survived"
         },
         {
           "text": "proportionate_length",
-          "passed": false,
-          "evidence": "growth 1.344x against a ceiling of 1.15x"
+          "passed": true,
+          "evidence": "growth 0.781x against a ceiling of 1.15x"
         }
       ],
       "notes": []
@@ -492,16 +552,21 @@
       "configuration": "with_skill",
       "run_number": 1,
       "result": {
-        "pass_rate": 0.5,
-        "passed": 2,
+        "pass_rate": 0.6,
+        "passed": 3,
         "failed": 2,
-        "total": 4,
+        "total": 5,
         "time_seconds": 0.0,
         "tokens": 1092,
         "tool_calls": 0,
         "errors": 0
       },
       "expectations": [
+        {
+          "text": "no_commentary",
+          "passed": true,
+          "evidence": "clean"
+        },
         {
           "text": "no_invented_numbers",
           "passed": true,
@@ -510,7 +575,7 @@
         {
           "text": "facts_kept",
           "passed": false,
-          "evidence": "10/14 kept, lost: ['It is the only formal mechanism for deliberation. Core developers do not unilaterally decide; extensive peer review shapes each BIP.', 'core developers have a veto right', 'absence of a legal entity', 'a risk of major economic actors unidirectionally changing Bitcoin']"
+          "evidence": "14/16 kept, lost: ['only formal mechanism', 'unidirectionally changing Bitcoin']"
         },
         {
           "text": "markers_removed",
@@ -530,16 +595,21 @@
       "configuration": "with_skill",
       "run_number": 2,
       "result": {
-        "pass_rate": 0.5,
-        "passed": 2,
+        "pass_rate": 0.6,
+        "passed": 3,
         "failed": 2,
-        "total": 4,
+        "total": 5,
         "time_seconds": 0.0,
         "tokens": 1083,
         "tool_calls": 0,
         "errors": 0
       },
       "expectations": [
+        {
+          "text": "no_commentary",
+          "passed": true,
+          "evidence": "clean"
+        },
         {
           "text": "no_invented_numbers",
           "passed": true,
@@ -548,7 +618,7 @@
         {
           "text": "facts_kept",
           "passed": false,
-          "evidence": "9/14 kept, lost: ['It is the only formal mechanism for deliberation. Core developers do not unilaterally decide; extensive peer review shapes each BIP.', 'core developers have a veto right', 'absence of a legal entity', 'a risk of major economic actors unidirectionally changing Bitcoin', 'one of the largest Bitcoin holders']"
+          "evidence": "11/16 kept, lost: ['user-activated-soft-fork', 'only formal mechanism', 'peer review shapes each BIP', 'unidirectionally changing Bitcoin', 'largest Bitcoin holders']"
         },
         {
           "text": "markers_removed",
@@ -568,10 +638,10 @@
       "configuration": "with_skill",
       "run_number": 3,
       "result": {
-        "pass_rate": 0.5,
-        "passed": 2,
-        "failed": 2,
-        "total": 4,
+        "pass_rate": 0.8,
+        "passed": 4,
+        "failed": 1,
+        "total": 5,
         "time_seconds": 0.0,
         "tokens": 1069,
         "tool_calls": 0,
@@ -579,14 +649,19 @@
       },
       "expectations": [
         {
+          "text": "no_commentary",
+          "passed": true,
+          "evidence": "clean"
+        },
+        {
           "text": "no_invented_numbers",
           "passed": true,
           "evidence": "0 figure(s) absent from the source"
         },
         {
           "text": "facts_kept",
-          "passed": false,
-          "evidence": "11/14 kept, lost: ['It is the only formal mechanism for deliberation. Core developers do not unilaterally decide; extensive peer review shapes each BIP.', 'core developers have a veto right', 'a risk of major economic actors unidirectionally changing Bitcoin']"
+          "passed": true,
+          "evidence": "16/16 kept"
         },
         {
           "text": "markers_removed",
@@ -606,16 +681,21 @@
       "configuration": "with_skill",
       "run_number": 1,
       "result": {
-        "pass_rate": 0.6,
-        "passed": 3,
+        "pass_rate": 0.666667,
+        "passed": 4,
         "failed": 2,
-        "total": 5,
+        "total": 6,
         "time_seconds": 0.0,
         "tokens": 784,
         "tool_calls": 0,
         "errors": 0
       },
       "expectations": [
+        {
+          "text": "no_commentary",
+          "passed": true,
+          "evidence": "clean"
+        },
         {
           "text": "no_invented_numbers",
           "passed": true,
@@ -650,15 +730,20 @@
       "run_number": 2,
       "result": {
         "pass_rate": 1.0,
-        "passed": 5,
+        "passed": 6,
         "failed": 0,
-        "total": 5,
+        "total": 6,
         "time_seconds": 0.0,
         "tokens": 884,
         "tool_calls": 0,
         "errors": 0
       },
       "expectations": [
+        {
+          "text": "no_commentary",
+          "passed": true,
+          "evidence": "clean"
+        },
         {
           "text": "no_invented_numbers",
           "passed": true,
@@ -693,15 +778,20 @@
       "run_number": 3,
       "result": {
         "pass_rate": 1.0,
-        "passed": 5,
+        "passed": 6,
         "failed": 0,
-        "total": 5,
+        "total": 6,
         "time_seconds": 0.0,
         "tokens": 887,
         "tool_calls": 0,
         "errors": 0
       },
       "expectations": [
+        {
+          "text": "no_commentary",
+          "passed": true,
+          "evidence": "clean"
+        },
         {
           "text": "no_invented_numbers",
           "passed": true,
@@ -735,16 +825,21 @@
       "configuration": "without_skill",
       "run_number": 1,
       "result": {
-        "pass_rate": 0.6,
-        "passed": 3,
+        "pass_rate": 0.666667,
+        "passed": 4,
         "failed": 2,
-        "total": 5,
+        "total": 6,
         "time_seconds": 0.0,
         "tokens": 896,
         "tool_calls": 0,
         "errors": 0
       },
       "expectations": [
+        {
+          "text": "no_commentary",
+          "passed": true,
+          "evidence": "clean"
+        },
         {
           "text": "no_invented_numbers",
           "passed": true,
@@ -778,16 +873,21 @@
       "configuration": "without_skill",
       "run_number": 2,
       "result": {
-        "pass_rate": 0.6,
-        "passed": 3,
+        "pass_rate": 0.666667,
+        "passed": 4,
         "failed": 2,
-        "total": 5,
+        "total": 6,
         "time_seconds": 0.0,
         "tokens": 1087,
         "tool_calls": 0,
         "errors": 0
       },
       "expectations": [
+        {
+          "text": "no_commentary",
+          "passed": true,
+          "evidence": "clean"
+        },
         {
           "text": "no_invented_numbers",
           "passed": true,
@@ -821,16 +921,21 @@
       "configuration": "without_skill",
       "run_number": 3,
       "result": {
-        "pass_rate": 0.6,
-        "passed": 3,
+        "pass_rate": 0.666667,
+        "passed": 4,
         "failed": 2,
-        "total": 5,
+        "total": 6,
         "time_seconds": 0.0,
         "tokens": 858,
         "tool_calls": 0,
         "errors": 0
       },
       "expectations": [
+        {
+          "text": "no_commentary",
+          "passed": true,
+          "evidence": "clean"
+        },
         {
           "text": "no_invented_numbers",
           "passed": true,
@@ -864,16 +969,21 @@
       "configuration": "without_skill",
       "run_number": 1,
       "result": {
-        "pass_rate": 0.75,
-        "passed": 3,
+        "pass_rate": 0.8,
+        "passed": 4,
         "failed": 1,
-        "total": 4,
+        "total": 5,
         "time_seconds": 0.0,
         "tokens": 1381,
         "tool_calls": 0,
         "errors": 0
       },
       "expectations": [
+        {
+          "text": "no_commentary",
+          "passed": true,
+          "evidence": "clean"
+        },
         {
           "text": "no_invented_numbers",
           "passed": true,
@@ -903,15 +1013,20 @@
       "run_number": 2,
       "result": {
         "pass_rate": 1.0,
-        "passed": 4,
+        "passed": 5,
         "failed": 0,
-        "total": 4,
+        "total": 5,
         "time_seconds": 0.0,
         "tokens": 1242,
         "tool_calls": 0,
         "errors": 0
       },
       "expectations": [
+        {
+          "text": "no_commentary",
+          "passed": true,
+          "evidence": "clean"
+        },
         {
           "text": "no_invented_numbers",
           "passed": true,
@@ -940,16 +1055,21 @@
       "configuration": "without_skill",
       "run_number": 3,
       "result": {
-        "pass_rate": 0.75,
-        "passed": 3,
+        "pass_rate": 0.8,
+        "passed": 4,
         "failed": 1,
-        "total": 4,
+        "total": 5,
         "time_seconds": 0.0,
         "tokens": 1410,
         "tool_calls": 0,
         "errors": 0
       },
       "expectations": [
+        {
+          "text": "no_commentary",
+          "passed": true,
+          "evidence": "clean"
+        },
         {
           "text": "no_invented_numbers",
           "passed": true,
@@ -978,16 +1098,21 @@
       "configuration": "without_skill",
       "run_number": 1,
       "result": {
-        "pass_rate": 0.75,
-        "passed": 3,
+        "pass_rate": 0.8,
+        "passed": 4,
         "failed": 1,
-        "total": 4,
+        "total": 5,
         "time_seconds": 0.0,
         "tokens": 842,
         "tool_calls": 0,
         "errors": 0
       },
       "expectations": [
+        {
+          "text": "no_commentary",
+          "passed": true,
+          "evidence": "clean"
+        },
         {
           "text": "no_invented_numbers",
           "passed": true,
@@ -1016,16 +1141,21 @@
       "configuration": "without_skill",
       "run_number": 2,
       "result": {
-        "pass_rate": 0.75,
-        "passed": 3,
+        "pass_rate": 0.8,
+        "passed": 4,
         "failed": 1,
-        "total": 4,
+        "total": 5,
         "time_seconds": 0.0,
         "tokens": 902,
         "tool_calls": 0,
         "errors": 0
       },
       "expectations": [
+        {
+          "text": "no_commentary",
+          "passed": true,
+          "evidence": "clean"
+        },
         {
           "text": "no_invented_numbers",
           "passed": true,
@@ -1054,16 +1184,21 @@
       "configuration": "without_skill",
       "run_number": 3,
       "result": {
-        "pass_rate": 0.75,
-        "passed": 3,
+        "pass_rate": 0.8,
+        "passed": 4,
         "failed": 1,
-        "total": 4,
+        "total": 5,
         "time_seconds": 0.0,
         "tokens": 842,
         "tool_calls": 0,
         "errors": 0
       },
       "expectations": [
+        {
+          "text": "no_commentary",
+          "passed": true,
+          "evidence": "clean"
+        },
         {
           "text": "no_invented_numbers",
           "passed": true,
@@ -1092,16 +1227,21 @@
       "configuration": "without_skill",
       "run_number": 1,
       "result": {
-        "pass_rate": 0.75,
-        "passed": 3,
+        "pass_rate": 0.8,
+        "passed": 4,
         "failed": 1,
-        "total": 4,
+        "total": 5,
         "time_seconds": 0.0,
         "tokens": 567,
         "tool_calls": 0,
         "errors": 0
       },
       "expectations": [
+        {
+          "text": "no_commentary",
+          "passed": true,
+          "evidence": "clean"
+        },
         {
           "text": "no_invented_numbers",
           "passed": true,
@@ -1131,15 +1271,20 @@
       "run_number": 2,
       "result": {
         "pass_rate": 1.0,
-        "passed": 4,
+        "passed": 5,
         "failed": 0,
-        "total": 4,
+        "total": 5,
         "time_seconds": 0.0,
         "tokens": 768,
         "tool_calls": 0,
         "errors": 0
       },
       "expectations": [
+        {
+          "text": "no_commentary",
+          "passed": true,
+          "evidence": "clean"
+        },
         {
           "text": "no_invented_numbers",
           "passed": true,
@@ -1169,15 +1314,20 @@
       "run_number": 3,
       "result": {
         "pass_rate": 1.0,
-        "passed": 4,
+        "passed": 5,
         "failed": 0,
-        "total": 4,
+        "total": 5,
         "time_seconds": 0.0,
         "tokens": 624,
         "tool_calls": 0,
         "errors": 0
       },
       "expectations": [
+        {
+          "text": "no_commentary",
+          "passed": true,
+          "evidence": "clean"
+        },
         {
           "text": "no_invented_numbers",
           "passed": true,
@@ -1206,16 +1356,21 @@
       "configuration": "without_skill",
       "run_number": 1,
       "result": {
-        "pass_rate": 0.5,
-        "passed": 2,
+        "pass_rate": 0.6,
+        "passed": 3,
         "failed": 2,
-        "total": 4,
+        "total": 5,
         "time_seconds": 0.0,
         "tokens": 1231,
         "tool_calls": 0,
         "errors": 0
       },
       "expectations": [
+        {
+          "text": "no_commentary",
+          "passed": true,
+          "evidence": "clean"
+        },
         {
           "text": "no_invented_numbers",
           "passed": true,
@@ -1224,7 +1379,7 @@
         {
           "text": "facts_kept",
           "passed": false,
-          "evidence": "10/14 kept, lost: ['It is the only formal mechanism for deliberation. Core developers do not unilaterally decide; extensive peer review shapes each BIP.', 'core developers have a veto right', 'absence of a legal entity', 'a risk of major economic actors unidirectionally changing Bitcoin']"
+          "evidence": "12/16 kept, lost: ['only formal mechanism', 'do not unilaterally decide', 'peer review shapes each BIP', 'unidirectionally changing Bitcoin']"
         },
         {
           "text": "markers_removed",
@@ -1244,16 +1399,21 @@
       "configuration": "without_skill",
       "run_number": 2,
       "result": {
-        "pass_rate": 0.5,
-        "passed": 2,
+        "pass_rate": 0.6,
+        "passed": 3,
         "failed": 2,
-        "total": 4,
+        "total": 5,
         "time_seconds": 0.0,
         "tokens": 1320,
         "tool_calls": 0,
         "errors": 0
       },
       "expectations": [
+        {
+          "text": "no_commentary",
+          "passed": true,
+          "evidence": "clean"
+        },
         {
           "text": "no_invented_numbers",
           "passed": true,
@@ -1262,7 +1422,7 @@
         {
           "text": "facts_kept",
           "passed": false,
-          "evidence": "9/14 kept, lost: ['It is the only formal mechanism for deliberation. Core developers do not unilaterally decide; extensive peer review shapes each BIP.', 'core developers have a veto right', 'absence of a legal entity', 'a risk of major economic actors unidirectionally changing Bitcoin', 'one of the largest Bitcoin holders']"
+          "evidence": "12/16 kept, lost: ['only formal mechanism', 'do not unilaterally decide', 'peer review shapes each BIP', 'unidirectionally changing Bitcoin']"
         },
         {
           "text": "markers_removed",
@@ -1282,16 +1442,21 @@
       "configuration": "without_skill",
       "run_number": 3,
       "result": {
-        "pass_rate": 0.5,
-        "passed": 2,
+        "pass_rate": 0.6,
+        "passed": 3,
         "failed": 2,
-        "total": 4,
+        "total": 5,
         "time_seconds": 0.0,
         "tokens": 1251,
         "tool_calls": 0,
         "errors": 0
       },
       "expectations": [
+        {
+          "text": "no_commentary",
+          "passed": true,
+          "evidence": "clean"
+        },
         {
           "text": "no_invented_numbers",
           "passed": true,
@@ -1300,7 +1465,7 @@
         {
           "text": "facts_kept",
           "passed": false,
-          "evidence": "9/14 kept, lost: ['It is the only formal mechanism for deliberation. Core developers do not unilaterally decide; extensive peer review shapes each BIP.', 'core developers have a veto right', 'absence of a legal entity', 'a risk of major economic actors unidirectionally changing Bitcoin', 'one of the largest Bitcoin holders']"
+          "evidence": "11/16 kept, lost: ['only formal mechanism', 'do not unilaterally decide', 'peer review shapes each BIP', 'veto right', 'unidirectionally changing Bitcoin']"
         },
         {
           "text": "markers_removed",
@@ -1320,16 +1485,21 @@
       "configuration": "without_skill",
       "run_number": 1,
       "result": {
-        "pass_rate": 0.6,
-        "passed": 3,
+        "pass_rate": 0.666667,
+        "passed": 4,
         "failed": 2,
-        "total": 5,
+        "total": 6,
         "time_seconds": 0.0,
         "tokens": 924,
         "tool_calls": 0,
         "errors": 0
       },
       "expectations": [
+        {
+          "text": "no_commentary",
+          "passed": true,
+          "evidence": "clean"
+        },
         {
           "text": "no_invented_numbers",
           "passed": true,
@@ -1363,16 +1533,21 @@
       "configuration": "without_skill",
       "run_number": 2,
       "result": {
-        "pass_rate": 0.6,
-        "passed": 3,
+        "pass_rate": 0.666667,
+        "passed": 4,
         "failed": 2,
-        "total": 5,
+        "total": 6,
         "time_seconds": 0.0,
         "tokens": 955,
         "tool_calls": 0,
         "errors": 0
       },
       "expectations": [
+        {
+          "text": "no_commentary",
+          "passed": true,
+          "evidence": "clean"
+        },
         {
           "text": "no_invented_numbers",
           "passed": true,
@@ -1406,16 +1581,21 @@
       "configuration": "without_skill",
       "run_number": 3,
       "result": {
-        "pass_rate": 0.6,
-        "passed": 3,
+        "pass_rate": 0.666667,
+        "passed": 4,
         "failed": 2,
-        "total": 5,
+        "total": 6,
         "time_seconds": 0.0,
         "tokens": 1017,
         "tool_calls": 0,
         "errors": 0
       },
       "expectations": [
+        {
+          "text": "no_commentary",
+          "passed": true,
+          "evidence": "clean"
+        },
         {
           "text": "no_invented_numbers",
           "passed": true,
@@ -1448,9 +1628,9 @@
   "run_summary": {
     "with_skill": {
       "pass_rate": {
-        "mean": 0.8667,
-        "stddev": 0.2223,
-        "min": 0.5,
+        "mean": 0.9148,
+        "stddev": 0.1496,
+        "min": 0.6,
         "max": 1.0
       },
       "time_seconds": {
@@ -1468,9 +1648,9 @@
     },
     "without_skill": {
       "pass_rate": {
-        "mean": 0.7,
-        "stddev": 0.1654,
-        "min": 0.5,
+        "mean": 0.7556,
+        "stddev": 0.1353,
+        "min": 0.6,
         "max": 1.0
       },
       "time_seconds": {
@@ -1487,7 +1667,7 @@
       }
     },
     "delta": {
-      "pass_rate": "+0.17",
+      "pass_rate": "+0.16",
       "time_seconds": "+0.0",
       "tokens": "-21"
     }

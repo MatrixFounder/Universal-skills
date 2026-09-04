@@ -63,11 +63,18 @@
       "declared_surfaces_surviving": [],
       "reinjected_surfaces": [],
       "template_signatures": [],
+      "commentary": "",
+      "commentary_words": 0,
       "similarity": 0.3012,
       "growth": 0.946,
       "words": 105,
       "chars": 548,
       "checks": [
+       {
+        "name": "no_commentary",
+        "passed": true,
+        "detail": "clean"
+       },
        {
         "name": "no_invented_numbers",
         "passed": true,
@@ -89,8 +96,8 @@
         "detail": "growth 0.946x against a ceiling of 1.15x"
        }
       ],
-      "checks_passed": 4,
-      "checks_total": 4,
+      "checks_passed": 5,
+      "checks_total": 5,
       "rep": "rep-1",
       "model": "claude-sonnet-5",
       "cost_usd": 0.141877
@@ -113,11 +120,18 @@
       "declared_surfaces_surviving": [],
       "reinjected_surfaces": [],
       "template_signatures": [],
+      "commentary": "",
+      "commentary_words": 0,
       "similarity": 0.339,
       "growth": 0.622,
       "words": 69,
       "chars": 383,
       "checks": [
+       {
+        "name": "no_commentary",
+        "passed": true,
+        "detail": "clean"
+       },
        {
         "name": "no_invented_numbers",
         "passed": true,
@@ -139,8 +153,8 @@
         "detail": "growth 0.622x against a ceiling of 1.15x"
        }
       ],
-      "checks_passed": 3,
-      "checks_total": 4,
+      "checks_passed": 4,
+      "checks_total": 5,
       "rep": "rep-1",
       "model": "claude-sonnet-5",
       "cost_usd": 0.15302280000000001
@@ -196,11 +210,18 @@
       "declared_surfaces_surviving": [],
       "reinjected_surfaces": [],
       "template_signatures": [],
+      "commentary": "",
+      "commentary_words": 0,
       "similarity": 0.2863,
       "growth": 1.107,
       "words": 83,
       "chars": 499,
       "checks": [
+       {
+        "name": "no_commentary",
+        "passed": true,
+        "detail": "clean"
+       },
        {
         "name": "no_invented_numbers",
         "passed": true,
@@ -217,8 +238,8 @@
         "detail": "0/1 declared surfaces survived"
        }
       ],
-      "checks_passed": 3,
-      "checks_total": 3,
+      "checks_passed": 4,
+      "checks_total": 4,
       "rep": "rep-1",
       "model": "claude-sonnet-5",
       "cost_usd": 0.141593
@@ -257,11 +278,18 @@
       "declared_surfaces_surviving": [],
       "reinjected_surfaces": [],
       "template_signatures": [],
+      "commentary": "",
+      "commentary_words": 0,
       "similarity": 0.9708,
       "growth": 0.973,
       "words": 73,
       "chars": 460,
       "checks": [
+       {
+        "name": "no_commentary",
+        "passed": true,
+        "detail": "clean"
+       },
        {
         "name": "no_invented_numbers",
         "passed": true,
@@ -278,8 +306,8 @@
         "detail": "0/1 declared surfaces survived"
        }
       ],
-      "checks_passed": 3,
-      "checks_total": 3,
+      "checks_passed": 4,
+      "checks_total": 4,
       "rep": "rep-1",
       "model": "claude-sonnet-5",
       "cost_usd": 0.25433
@@ -311,11 +339,18 @@
       "declared_surfaces_surviving": [],
       "reinjected_surfaces": [],
       "template_signatures": [],
+      "commentary": "",
+      "commentary_words": 0,
       "similarity": 0.2695,
       "growth": 1.122,
       "words": 101,
       "chars": 534,
       "checks": [
+       {
+        "name": "no_commentary",
+        "passed": true,
+        "detail": "clean"
+       },
        {
         "name": "no_invented_numbers",
         "passed": true,
@@ -342,8 +377,8 @@
         "detail": "growth 1.122x against a ceiling of 1.15x"
        }
       ],
-      "checks_passed": 4,
-      "checks_total": 5,
+      "checks_passed": 5,
+      "checks_total": 6,
       "rep": "rep-1",
       "model": "claude-sonnet-5",
       "cost_usd": 0.0350436
@@ -364,11 +399,18 @@
       "declared_surfaces_surviving": [],
       "reinjected_surfaces": [],
       "template_signatures": [],
+      "commentary": "",
+      "commentary_words": 0,
       "similarity": 0.9915,
       "growth": 1.0,
       "words": 90,
       "chars": 470,
       "checks": [
+       {
+        "name": "no_commentary",
+        "passed": true,
+        "detail": "clean"
+       },
        {
         "name": "no_invented_numbers",
         "passed": true,
@@ -395,8 +437,8 @@
         "detail": "growth 1.0x against a ceiling of 1.15x"
        }
       ],
-      "checks_passed": 5,
-      "checks_total": 5,
+      "checks_passed": 6,
+      "checks_total": 6,
       "rep": "rep-1",
       "model": "claude-sonnet-5",
       "cost_usd": 0.223146
@@ -436,11 +478,18 @@
       "declared_surfaces_surviving": [],
       "reinjected_surfaces": [],
       "template_signatures": [],
+      "commentary": "",
+      "commentary_words": 0,
       "similarity": 0.4198,
       "growth": 0.877,
       "words": 50,
       "chars": 270,
       "checks": [
+       {
+        "name": "no_commentary",
+        "passed": true,
+        "detail": "clean"
+       },
        {
         "name": "no_invented_numbers",
         "passed": true,
@@ -462,8 +511,8 @@
         "detail": "growth 0.877x against a ceiling of 1.4x"
        }
       ],
-      "checks_passed": 4,
-      "checks_total": 4,
+      "checks_passed": 5,
+      "checks_total": 5,
       "rep": "rep-1",
       "model": "claude-sonnet-5",
       "cost_usd": 0.0340436
@@ -492,11 +541,18 @@
       "declared_surfaces_surviving": [],
       "reinjected_surfaces": [],
       "template_signatures": [],
+      "commentary": "",
+      "commentary_words": 0,
       "similarity": 0.4336,
       "growth": 0.544,
       "words": 31,
       "chars": 155,
       "checks": [
+       {
+        "name": "no_commentary",
+        "passed": true,
+        "detail": "clean"
+       },
        {
         "name": "no_invented_numbers",
         "passed": true,
@@ -518,8 +574,8 @@
         "detail": "growth 0.544x against a ceiling of 1.4x"
        }
       ],
-      "checks_passed": 4,
-      "checks_total": 4,
+      "checks_passed": 5,
+      "checks_total": 5,
       "rep": "rep-1",
       "model": "claude-sonnet-5",
       "cost_usd": 0.1066708
@@ -703,8 +759,8 @@
    "runs": 4,
    "measured": 4,
    "unmeasured": 0,
-   "checks_passed": 15,
-   "checks_total": 16,
+   "checks_passed": 19,
+   "checks_total": 20,
    "markers_after_total": 8,
    "facts_lost_total": 0,
    "cost_usd": 0.3526
@@ -713,8 +769,8 @@
    "runs": 4,
    "measured": 4,
    "unmeasured": 0,
-   "checks_passed": 15,
-   "checks_total": 16,
+   "checks_passed": 19,
+   "checks_total": 20,
    "markers_after_total": 7,
    "facts_lost_total": 1,
    "cost_usd": 0.7372

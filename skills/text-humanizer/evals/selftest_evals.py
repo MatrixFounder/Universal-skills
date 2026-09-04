@@ -37,7 +37,7 @@ import grade_run                                              # noqa: E402
 import lexicon                                                # noqa: E402
 import run_humanize                                           # noqa: E402
 
-EXPECTED_CASES = 87
+EXPECTED_CASES = 89
 
 # Layout. Every campaign lives under `runs/` (behaviour) or `trigger/runs/`
 # (routing), one directory or file per campaign, because guide section 7.2 says a
@@ -1375,6 +1375,68 @@ def tc85():
         assert "baseline" not in r["arms"], f"{r['case']} is unpaired yet has one"
     groups = fps.classify(rows)
     assert sum(len(v) for v in groups.values()) == len(rows), "a row was lost"
+
+
+@case("TC-EV-86", "a note about the edit is one finding, not three")
+def tc86():
+    """P4/with_skill/rep-3 rewrote the page correctly and then appended a note
+    to the compiler quoting the `[TBD]` it had just removed.
+
+    The grader read that note as part of the copy and failed the run three
+    times over: `markers_removed` (the placeholder "survived"), and
+    `proportionate_length` (34% growth), while the growth ratio itself was
+    computed on copy-plus-note. One violation, three penalties, and none of them
+    naming what happened. P4 then read as "the skill is worse than no skill",
+    which it was not: with the note scored once, both arms sit at 14/15.
+    """
+    roster = lexicon.build()
+    key = {"must_keep": ["Meridian"], "must_drop": ["TBD"],
+           "min_similarity": None, "max_growth": None}
+    fixture = ("Meridian is the programme. The September figure is [TBD] until "
+               "the audit logs are reconciled. " * 3)
+    copy = "Meridian is the programme. September lands once the logs reconcile. " * 3
+    note = ("One flag: the September figure is only marked `[TBD]` in your "
+            "draft, so I could not put a real number on the page.")
+
+    clean = grade_run.score_run(fixture, copy, key, roster)
+    assert clean["commentary"] == "", clean["commentary"]
+    assert all(c["passed"] for c in clean["checks"] if c["name"] == "no_commentary")
+
+    withnote = grade_run.score_run(fixture, f"{copy}\n\n---\n\n{note}", key, roster)
+    failed = [c["name"] for c in withnote["checks"] if not c["passed"]]
+    assert failed == ["no_commentary"], (
+        f"a trailing note should fail exactly one check, it failed {failed}")
+    assert withnote["commentary_words"] > 0
+    # and the note must not enter the removal check or the length ratio
+    assert withnote["declared_surfaces_surviving"] == [], \
+        "the placeholder was counted as surviving because a NOTE mentions it"
+    assert withnote["growth"] == clean["growth"], \
+        "the note was counted into the length of the rewrite"
+
+
+@case("TC-EV-87", "the commentary guard does not fire on ordinary prose")
+def tc87():
+    """It needs BOTH first person AND talk about the edit. Prose legitimately
+    says "I" -- P1's memo does -- and prose legitimately says "draft". Only the
+    pair marks a note about the work, and a guard that fires on a first-person
+    fixture would make every personal-register case unmeasurable."""
+    roster = lexicon.build()
+    key = {"must_keep": ["x"], "must_drop": [], "min_similarity": None,
+           "max_growth": None}
+    for text in (
+        "I read the draft on Tuesday and it was fine. x\n\nI still think so.",
+        "We shipped it. x\n\nThe next version lands in March.",
+        "x\n\nThe original plan was different, and the team changed it.",
+    ):
+        graded = grade_run.score_run("x " * 40, text, key, roster)
+        assert graded["commentary"] == "", \
+            f"fired on ordinary prose: {graded['commentary'][:60]!r}"
+    # every committed run except the one is clean
+    fired = 0
+    for c in json.loads(_read(os.path.join(HERE, PINNED_REPORT)))["cases"]:
+        for runs in c["arms"].values():
+            fired += sum(1 for r in runs if r.get("commentary"))
+    assert fired == 0, f"{fired} runs in the pinned corpus carry a note"
 
 
 def _run_all():

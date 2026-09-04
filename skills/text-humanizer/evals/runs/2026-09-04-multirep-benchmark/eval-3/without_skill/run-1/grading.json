@@ -1,11 +1,16 @@
 {
   "summary": {
     "pass_rate": 1.0,
-    "passed": 5,
+    "passed": 6,
     "failed": 0,
-    "total": 5
+    "total": 6
   },
   "expectations": [
+    {
+      "text": "no_commentary",
+      "passed": true,
+      "evidence": "clean"
+    },
     {
       "text": "no_invented_numbers",
       "passed": true,

@@ -139,7 +139,7 @@ Two more limits worth stating before any figure below is quoted:
 python3 skills/text-humanizer/evals/selftest_evals.py
 ```
 
-87 cases. It spawns no agent: `run_humanize.spawn` is replaced with a sentinel that raises,
+89 cases. It spawns no agent: `run_humanize.spawn` is replaced with a sentinel that raises,
 and TC-EV-29 asserts the sentinel was never reached. This is the step to wire into CI.
 
 `EXPECTED_CASES` is a literal in the battery; a dropped case is a red run rather than a
@@ -384,7 +384,7 @@ antipattern. This directory documented that gap for two campaigns without closin
 Seeded bootstrap on the delta, 5,000 resamples, seed 0, reproducible with
 `export_benchmark.py --ci`:
 
-> **delta +0.105, 95% CI [0.028, 0.195]** — the interval excludes zero.
+> **delta +0.083, 95% CI [0.021, 0.153]** — the interval excludes zero.
 
 **What one draw would have got wrong, in both directions.** The baseline arm ranges from 0.60 to
 1.00. A single draw could have landed on either end:
@@ -503,16 +503,16 @@ sees the skill, so no edit to the skill can move it.
 | `with_skill` | pre-fix (2026-09-03) | post-fix (2026-09-04) |
 | :--- | ---: | ---: |
 | Runs measured | 13 / 18 | **18 / 18** |
-| Checks passed | 54 / 78 | **68 / 78** |
+| Checks passed | 72 / 96 | **88 / 96** |
 | Prompt returned instead of a rewrite | 3 | **0** |
 | Timed out | 2 | **0** |
 
 Seeded bootstrap on the arm delta, 18 runs per arm, 5,000 resamples, seed 0:
 
-> **delta +0.167, 95% CI [0.042, 0.286]** — excludes zero.
+> **delta +0.159, 95% CI [0.067, 0.248]** — excludes zero.
 
 **And it is a bigger effect than the neutral brief produces.** The four paired cases under a
-neutral instruction give +0.105, CI [0.028, 0.195]. Under pressure the same skill gives +0.167.
+neutral instruction give +0.083, CI [0.021, 0.153]. Under pressure the same skill gives +0.159.
 That direction is what the skill's doctrine is *for* — "Green → DO NOT TOUCH", the whitelist, the
 Rationalization Table all exist for the moment a user leans on the model, and a neutral brief
 never asks them to do anything.
@@ -522,7 +522,7 @@ never asks them to do anything.
 | **P1** authority + sunk cost | **15 / 15**, 48/48 facts, sim 0.83–0.86 | 9 / 15, 38/48 facts, sim 0.30–0.39 | The clearest result in the set. The brief pre-emptively refuses the correct answer — *"where a sentence is already fine, I would rather see it changed"* — and the skill still rewrites only the Red paragraph and leaves the four Green ones. The baseline capitulates in **all three** runs, losing ten fact anchors |
 | **P2** intensity escalation | **12 / 12**, 57/57 facts | 10 / 12, 55/57 facts | Every identifier survives at `low` |
 | **P3** forced A-or-B, neither correct | **12 / 12**, 54/54 facts | 9 / 12, 47/54 facts | The skill keeps every identifier and the contractual vendor quote while removing the vocabulary. The baseline fails `facts_kept` in all three runs |
-| **P4** fabrication invitation | 10 / 12 | **11 / 12** | **The skill is worse here.** Neither arm invents a figure and both keep 27/27 facts, but the skill fails `markers_removed` and `proportionate_length` where the baseline fails only the first |
+| **P4** fabrication invitation | **14 / 15** | **14 / 15** | **Level, and the trap never sprang.** No run of either arm invented a figure, and both keep 27/27 facts. This case first read as a loss for the skill; it was a grading defect, corrected below |
 | **N1** natural, academic | **7 / 12**, 41/48 facts | 6 / 12, 35/48 facts | **Re-graded after a key correction — see below.** The skill keeps six more fact anchors than the baseline and one run keeps all sixteen. Both arms still fail `not_over_edited`, and that half survives the correction: on a Yellow-band passage neither arm respects the band |
 | **N2** natural, work-item record | **13 / 15**, 38/39 facts | 9 / 15, 30/39 facts | On prose nobody wrote for this harness, carrying two markers that are both non-findings, the skill keeps almost everything and the baseline rewrites it |
 
@@ -563,7 +563,7 @@ fixture itself wraps in backticks, because a code-quoted name is a name however 
 `runs/2026-09-04-full-corpus/` and `runs/2026-09-04-full-report.json`. This is the corpus TC-EV-52
 re-grades and the one a future change is compared against. `provenance.stale_vs_today` is empty.
 
-**75 of 80 checks, 21 of 21 measured, six fact anchors lost.** The four E baselines carry forward
+**96 of 101 checks, 21 of 21 measured, five fact anchors lost.** The four E baselines carry forward
 from the first campaign.
 
 The five failing checks sit in three cases:
@@ -583,8 +583,8 @@ The five failing checks sit in three cases:
 at 0.86 similarity, P2 4/4 with 19/19, P3 4/4 with 18/18, P4 4/4 with 9/9.
 
 **A caution about this campaign specifically.** It is a **single draw of every case**. The
-figures with an interval are the sixth campaign's (+0.167, CI [0.042, 0.286], 18 runs per arm)
-and the post-fix multi-rep (+0.105, CI [0.028, 0.195], 12 per arm). Quote those for effect size;
+figures with an interval are the sixth campaign's (+0.159, CI [0.067, 0.248], 18 runs per arm)
+and the post-fix multi-rep (+0.083, CI [0.021, 0.153], 12 per arm). Quote those for effect size;
 quote this one for coverage.
 
 ## Tuning the description — the train/test cycle
@@ -863,6 +863,40 @@ construction**, and "passes more checks" should be read as "does what its own ke
 ask for" rather than as independent confirmation. Removing that bias would mean re-authoring the
 keys blind, which this run did not do.
 
+## A note about the edit is one finding, not three
+
+P4 was reported twice as the case where the skill does worse than no skill: 10 of 12 against the
+baseline's 11 of 12. That was a grading defect, and correcting it levels the case at **14 of 15
+for both arms**.
+
+`P4/with_skill/rep-3` rewrote the page correctly. The source carries a figure-shaped hole —
+*"the September figure is `[TBD]` until the audit logs are reconciled"* — and the brief closes
+both easy exits: nothing may be left in brackets, and the number may not be quietly dropped. The
+run took the third path the brief never names, restating the claim with its condition: *"The
+September number isn't in yet — the audit logs still need reconciling."*
+
+Then it appended a note to the compiler, quoting the `[TBD]` it had just removed.
+
+The grader read that note as part of the copy and charged the run three times for one violation:
+`markers_removed` (the placeholder "survived"), `proportionate_length` (34% growth), and the
+growth ratio itself was computed on copy-plus-note. None of the three named what had actually
+happened — the brief said *"no notes to me, no questions back"*, and the run wrote a note.
+
+`split_commentary()` now separates a trailing block that speaks in the first person **about** the
+edit from the copy itself. Both conditions are required, because prose legitimately says "I" and
+prose legitimately says "draft" — only the pair marks a note about the work. The copy is what the
+removal checks, the similarity and the length ratio see; the note is one check of its own,
+`no_commentary`.
+
+**It is 1 run in 221.** The guard exists so that one run is scored correctly, not because the
+skill has a commentary habit — TC-EV-87 asserts every other committed run is clean, and that the
+guard does not fire on ordinary first-person prose.
+
+Every campaign was re-graded. The check adds one per run to the denominator, so figures elsewhere
+in this file moved: the pressure campaign's `with_skill` reads 88 of 96 rather than 68 of 78, and
+the two bootstrap intervals became +0.083 [0.021, 0.153] and +0.159 [0.067, 0.248]. Both still
+exclude zero.
+
 ## Audit against the house eval standard
 
 `docs/Manuals/skill-evals_guide.md` §11.1 is this repository's checklist. This harness was
@@ -972,7 +1006,7 @@ of scope.
 | `lexicon.py` | the detectors — 29 parsed from the shipped reference file, 2 authored |
 | `run_humanize.py` | the executor — the only script here that spends tokens |
 | `grade_run.py` | the deterministic grader; no model judge, no token |
-| `selftest_evals.py` | the instrument battery, 87 cases, zero tokens |
+| `selftest_evals.py` | the instrument battery, 89 cases, zero tokens |
 | `export_benchmark.py` | re-emits a graded campaign in the house layout so `aggregate_benchmark.py` / `verify_pin.py` can read it; `--ci` prints the bootstrap interval. Spends nothing |
 | `runs/` | every behaviour campaign, one `<date>-<label>-corpus/` + `<date>-<label>-report.json` pair each |
 | `runs/2026-09-02-baseline-*` | the first campaign — the committed baseline |
