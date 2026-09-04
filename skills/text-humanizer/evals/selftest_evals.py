@@ -783,7 +783,16 @@ def tc60():
     `trigger_evals.json` are what this claim is measured against."""
     skill = _read(os.path.join(os.path.dirname(HERE), "SKILL.md"))
     description = re.search(r"^description: (.+)$", skill, re.M).group(1)
-    assert "non-fiction" in description and "Not for prose fiction" in description
+    low = description.lower()
+    # The PROPERTY, not one wording. R8 measured that naming the FORMS is what
+    # stopped the novella routing here (1.00 -> 0.00); a later description kept
+    # the sentence "not for prose fiction", dropped the forms, and the misroute
+    # came back at 0.67 while this case stayed green on the sentence alone.
+    assert "non-fiction" in low, "the description does not say it is non-fiction"
+    forms = [f for f in ("short story", "novel", "screenplay", "chapter") if f in low]
+    assert len(forms) >= 2, (
+        f"the description names {forms}; naming the forms is what the R8 "
+        f"measurement showed to be load-bearing")
     assert len(description.split()) <= 70, len(description.split())
     fiction = [q for q in json.loads(_read(os.path.join(HERE, TRIGGER_SET)))
                if not q["should_trigger"]

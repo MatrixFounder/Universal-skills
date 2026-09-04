@@ -422,10 +422,26 @@ class TestScopeBoundaryIsDeclaredInBoth(unittest.TestCase):
         self.assertIn("Long-form fiction is out of scope", text)
 
     def test_the_description_excludes_fiction(self):
+        """R8, pinned as a PROPERTY rather than as a sentence.
+
+        The first version of this case asserted the literal string "Not for
+        prose fiction". That pins one wording, and the wording is not what does
+        the work: the measurement behind R8 showed the novella's misroute fell
+        from 1.00 to 0.00 when the description NAMED THE FORMS. A later
+        description kept the sentence, dropped the forms, and the misroute came
+        back at 0.67 with the case still green.
+        """
         text = (SKILL / "SKILL.md").read_text(encoding="utf-8")
         description = re.search(r"^description: (.+)$", text, re.M).group(1)
-        self.assertIn("non-fiction", description)
-        self.assertIn("Not for prose fiction", description)
+        low = description.lower()
+        self.assertIn("non-fiction", low, "the description must say it is non-fiction")
+        forms = [f for f in ("short story", "novel", "screenplay", "chapter")
+                 if f in low]
+        self.assertGreaterEqual(
+            len(forms), 2,
+            f"the description names {forms}; R8 measured that naming the FORMS "
+            f"is what stops a novella routing here, not the phrase 'not for "
+            f"prose fiction'")
         self.assertNotIn("Creative", description)
 
     def test_the_frontmatter_survives_a_strict_yaml_parser(self):

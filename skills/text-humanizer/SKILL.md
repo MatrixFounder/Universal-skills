@@ -1,6 +1,6 @@
 ---
 name: text-humanizer
-description: Use when you need to humanize AI-generated text or generate untraceable system prompts. Supports multiple non-fiction genres (Wiki, Blog, Crypto, etc.). Not for prose fiction (a short story, a novel chapter, a screenplay).
+description: Use when a text needs to stop reading as machine-written, or when you need a reusable system prompt that writes that way. Humanize a draft, de-slop it, clean up the wording, or audit it for AI phrasing. Covers requests like "make this sound like a person wrote it" or "убери признаки, что писал AI". Non-fiction only, never a short story, a novel chapter or a screenplay.
 tier: 2
 version: 2.1
 ---
