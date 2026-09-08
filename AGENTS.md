@@ -345,6 +345,57 @@ exited 0. Homebrew stayed silently broken for a week; every
 `brew install` on the machine reported success and installed nothing.
 Restored with `git -C /opt/homebrew checkout -- bin/brew`.
 
+### Project-local toolchains — never install into the machine
+
+Everything a project needs beyond the language runtime lives inside the
+project tree, pinned, and is reproducible from the project's own setup
+target:
+
+- Python: a venv under the project (`.venv/`); never `pip install` into
+  the system, Homebrew or pyenv interpreter.
+- Node: the project's `node_modules/` from the lockfile (`npm ci`);
+  never `npm install -g` a project tool.
+- Go and other single-binary tools (linters, formatters, generators,
+  protoc plugins): install into a project-local bin directory
+  (`GOBIN=$PROJECT/.bin go install …@vX.Y.Z`, `cargo install --root`)
+  and invoke them by that path.
+- Runtimes themselves (interpreter, compiler, `node`) belong to a
+  version manager (`pyenv`, `nvm`, `goenv`) or the OS package manager,
+  and are installed only on the user's explicit say-so.
+
+The `tools`/`check` target looks for tools at the project-local path,
+not on `PATH`. A tool found only on `PATH` is a setup defect, not a
+fallback.
+
+**Why this rule exists (2026-09-08).** One machine hosts many projects.
+A global install changes what every other project sees: a different
+linter or formatter version, a package that shadows one a neighbour
+pinned. One broken global tool (the `brew` stub above) silently
+affected every project for a week. Local means a project can break
+only itself.
+
+### Design against current versions, not remembered ones
+
+When an architecture, a stack table or a dependency pin names a
+version, it names the **current stable** line verified on the day of
+writing — registry or release page (`pip index versions`, `npm view`,
+`go list -m -versions`, the project's releases page) — with the date
+of the check recorded next to the pin. Model memory is not a source
+for a version number: training data lags, so "the version I remember"
+is old by construction.
+
+- Verify before writing; record the date of the check.
+- If the newest line breaks a requirement (no wheels for a dependency,
+  an unsupported platform, a licence change), say so, pin the newest
+  line that does not, and ask the user when the trade-off is theirs.
+- Never silently fall back to an older line because it is familiar.
+
+**Why this rule exists (2026-09-08).** An architecture pinned
+PostgreSQL 16 and Redis 7 from memory while 18 and 8 were current, and
+the implementation then reached for Python 3.12 while 3.14 was
+current. The user caught it in a dialogue and had to be re-asked. The
+check costs one registry query; the miss costs a re-plan.
+
 ### Honest scope, not aspirational
 
 If a feature has a known limitation (e.g. the AF_UNIX shim does NOT
