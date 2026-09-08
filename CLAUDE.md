@@ -326,6 +326,29 @@ Records: [`human-cli-output-locale-class`](docs/issues/human-cli-output-locale-c
 [`subprocess-text-decode-locale-class`](docs/issues/subprocess-text-decode-locale-class.md),
 [`file-text-codec-locale-class`](docs/issues/file-text-codec-locale-class.md).
 
+### Fake binaries and PATH shims — copy, never symlink
+
+When a test or review needs a stand-in for a system tool (`brew`, `pip`,
+`ffmpeg`, …) in a private `fakebin/` on `PATH`:
+
+- **Create the stand-in with `cp` or a fresh heredoc. Never `ln -s` a
+  system binary into `fakebin/`.** A later `cat > fakebin/<tool>` or
+  `chmod`/`sed -i` follows the symlink and rewrites the real file.
+- Before writing to any path under a scratch directory, check it is
+  not a symlink (`test -L path && exit 1`); the write must land in the
+  scratch tree, not in `/opt/homebrew`, `/usr/local` or `$HOME/.pyenv`.
+- Never point `>`/`>>`/`tee` at anything outside the repository or
+  the scratchpad. System files are read-only for every agent role.
+
+**Why this rule exists (2026-09-01).** A review agent ran
+`ln -sf /opt/homebrew/bin/brew $SCRATCH/fakebin/brew`, then six minutes
+later `cat > $SCRATCH/fakebin/brew <<'EOF' … EOF`. The redirection
+followed the symlink and replaced the real `/opt/homebrew/bin/brew`
+with a three-line stub that printed "whisper-cpp — уже установлен" and
+exited 0. Homebrew stayed silently broken for a week; every
+`brew install` on the machine reported success and installed nothing.
+Restored with `git -C /opt/homebrew checkout -- bin/brew`.
+
 ### Honest scope, not aspirational
 
 If a feature has a known limitation (e.g. the AF_UNIX shim does NOT
