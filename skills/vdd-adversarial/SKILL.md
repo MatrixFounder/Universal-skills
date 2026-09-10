@@ -2,7 +2,7 @@
 name: vdd-adversarial
 description: "Use when performing Verification-Driven Development with adversarial approach. Actively challenge assumptions and find weak spots."
 tier: 2
-version: 1.6
+version: 1.8
 ---
 # VDD Adversarial
 
@@ -32,7 +32,7 @@ The review cycle STOPS only when an **objective bar** is met: (1) the full test 
 
 ## 2.5. Execution Mode
 - **Mode**: `prompt-first`
-- **Why this mode**: the work is judgement — which assumption to attack, whether a finding is real, what severity it carries. There is no deterministic rule set to encode (`docs/SKILL_EXECUTION_POLICY.md` §6), and the skill mutates nothing.
+- **Why this mode**: the work is judgement — which assumption to attack, whether a finding is real, what severity it carries. There is no deterministic rule set to encode, and the skill mutates nothing.
 - **Script Contract**: not applicable — this skill ships no `scripts/`. Its bundled files are `assets/template_critique.md`, `references/vdd-methodology.md` and `examples/usage_example.md`, all read-only inputs to the review. The test run the exit bar in §2 requires belongs to the code under review, not to this skill.
 
 ## 2.6. Safety Boundaries
@@ -51,6 +51,7 @@ The review cycle STOPS only when an **objective bar** is met: (1) the full test 
 2. **Is it safe?** -> If not, REJECT.
 3. **Does it break anything?** -> Check regression.
 4. **Is it tested?** -> If not, REJECT.
+5. **Does the gate itself fail when it should?** -> A guard nobody has watched go red is not a gate. If the change adds or edits one that can skip (a "no tests" guard, a `--passWithNoTests`, a conditional stage), plant a failing test under **every** discovery mask the runner honours, plus an empty selection. Green on a planted failure, or success on an empty selection, is **CRITICAL** — the guard's own mask was narrower than the runner's, or "nothing collected" was mapped to exit 0; either way the suite never ran and the gate reported success. A numeric tolerance ("A and B differ by less than X") is a gate too, and protects nothing while X is chosen from comfort rather than from a measurement: plant a deviation at half of X on one side; if the assertion stays green, the bound was never calibrated against the noise floor of the stand the test runs on.
 
 ## 5. Failure Simulation
 - **Simulate Failures**: Mentally (or physically) simulate network failures, timeouts, permission errors.
