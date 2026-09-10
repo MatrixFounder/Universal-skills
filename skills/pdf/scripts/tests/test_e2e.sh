@@ -825,6 +825,24 @@ else
     nok "pdf_extract suite" "$(_parse_unittest_failure "$out")"
 fi
 
+# --- PDF -> Markdown composition toolchain ---------------------------------
+# Enumerated by name like the suites around it: this file lists its unittest
+# modules explicitly, so a suite nobody names never runs. Covers the three
+# traps that corrupt a conversion silently (ligature duplicates, positional
+# word spacing, furniture detected by size instead of position), the
+# byte-identical-by-default guarantee of --lines, and the coverage verifier.
+echo "pdf compose toolchain (profile / --lines / verify):"
+set +e
+out=$("$PY" -m unittest tests.test_pdf_compose_tools 2>&1)
+rc=$?
+set -e
+if [ "$rc" -eq 0 ]; then
+    n=$(echo "$out" | awk '/^Ran [0-9]+ tests/ {print $2}')
+    ok "pdf_profile + pdf_extract --lines + pdf_verify_md (${n} cases)"
+else
+    nok "pdf compose toolchain" "$(_parse_unittest_failure "$out")"
+fi
+
 # --- pdf_fill_form: stdout-channel unit suite ------------------------------
 # Enumerated by name for the same reason tests.test_pdf_extract is: this file
 # lists its unittest modules explicitly, so a suite nobody names never runs.

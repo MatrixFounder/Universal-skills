@@ -144,15 +144,30 @@ the caller had to hand-write ``pypdf`` for that, choosing a library the skill ha
 already standardised for text and tables. ``--extract-images DIR`` closes it, and
 there are **two classes of artwork, the second of which cannot be ignored**:
 
-* **raster** — an embedded image XObject. The bytes exist in the file and are
-  copied out as stored. Placements come from ``pdfplumber`` (which knows *where*
-  each image is painted) and the bytes from ``pypdf`` (which knows how to decode
-  the filter chain and fold an ``/SMask`` alpha plane into the pixels); the join
-  key is the PDF object number. Enumerating pypdf's per-page images *instead*
-  would report an image on every page whose resource dictionary mentions it —
-  painted or not — and would emit each ``/SMask`` plane as a separate greyscale
-  image. Both were measured on the dogfood corpus; the committed fixtures
-  `nested.pdf` and `shadowed.pdf` cover the nesting and shadow-key cases.
+* **raster** — an embedded image XObject. The pixels exist in the file, and what
+  is written out is what ``pypdf`` returns from ``ImageFile.data``: those pixels
+  DECODED and re-encoded into a container able to hold them — PNG for most,
+  JPEG for a pure ``DCTDecode`` stream, TIFF for CMYK, JPEG 2000 for a JPEG
+  carrying an ``/SMask``. Two consequences, both measured and neither cosmetic:
+  the file extension names **pypdf's output format, not the filter the bytes
+  were stored under**, and the file is NOT the stored stream — over both dogfood
+  documents and the committed raster fixtures, ZERO placements came out
+  byte-identical to their stream (pypdf 6.12.2). It can be many times larger (a
+  70,403-byte Flate QR → 1,373,726 bytes of uncompressed TIFF, x19.5) or smaller
+  and lossily re-encoded on top of an already-lossy source (a 69,953-byte
+  ``DCTDecode`` stream whose ``/DeviceN(/Black)`` colourspace forces a
+  conversion → a 32,275-byte JPEG). What IS guaranteed — and is the reason the
+  raster branch exists rather than rendering every figure — is that these are
+  the ORIGINAL pixels at their native resolution: nothing is resampled,
+  downscaled or re-rendered. Placements come from ``pdfplumber`` (which knows
+  *where* each image is painted) and the bytes from ``pypdf`` (which knows how
+  to decode the filter chain and fold an ``/SMask`` alpha plane into the
+  pixels); the join key is the PDF object number. Enumerating pypdf's per-page
+  images *instead* would report an image on every page whose resource dictionary
+  mentions it — painted or not — and would emit each ``/SMask`` plane as a
+  separate greyscale image. Both were measured on the dogfood corpus; the
+  committed fixtures `nested.pdf` and `shadowed.pdf` cover the nesting and
+  shadow-key cases.
 * **vector** — a diagram or chart drawn with content-stream path operators.
   There is no image object to extract, so the only honest route is to rasterise
   the region: cluster the page's paths (the same ``_vector_clusters`` pass that
@@ -331,6 +346,7 @@ from pathlib import Path
 import pdfplumber  # type: ignore
 from pdfminer.pdftypes import resolve1  # type: ignore
 
+import _textlines as _tl
 from _errors import add_json_errors_argument, install_human_channel, report_error, write_json_stdout
 
 # A CLI owns its stderr: with --json-errors a wrapper parses stderr as JSON.
@@ -380,8 +396,9 @@ _VECTOR_BACKDROP_RATIO = 0.9
 # --- image extraction (--extract-images) ------------------------------------
 # Rasterisation resolution for a *vector* figure crop. 150 dpi keeps a
 # letter-width figure near 1000 px wide — legible when a model reads it back and
-# small enough to sit in a Markdown tree. Rasters are never re-rendered (their
-# bytes are copied out as stored), so this knob only affects the vector branch.
+# small enough to sit in a Markdown tree. A raster is never re-rendered at a
+# chosen resolution — pypdf re-encodes its decoded pixels at whatever resolution
+# the file stores — so this knob only affects the vector branch.
 _DEFAULT_IMAGE_DPI = 150
 # A raster whose placement covers this much of the sheet is a background wash or
 # a whole-page scan, not a figure. The measured case: one document repeated a
@@ -669,10 +686,29 @@ def _build_parser() -> argparse.ArgumentParser:
              "shading, but note it drops tables drawn purely with fills.",
     )
     parser.add_argument(
+        "--lines", dest="lines", action="store_true",
+        help="Also emit, per page, the LINE-level view composition needs: "
+             "`lines` (text with ligatures deduped and positional word gaps "
+             "restored, plus bbox, modal point size, modal font family, the "
+             "styles present, and per-run font/size/style/uri wherever a line "
+             "is not uniform), `rects` (filled boxes -- callouts and code "
+             "samples) and `rules` (horizontal rules grouped by y with their "
+             "segment x boundaries, i.e. the column signature of a ruled "
+             "table). Point size, x position and font family are what heading "
+             "level, list nesting and inline emphasis are inferred from, and "
+             "none of them survives in the flat page `text`. Off by default: "
+             "a dump taken without it is byte-for-byte unchanged.",
+    )
+    parser.add_argument(
         "--extract-images", type=_named_dir, default=None, metavar="DIR",
         help="Also write the document's artwork into DIR (created if needed) "
              "and list it per page in the dump as `images`. Two classes come "
-             "out: embedded rasters, copied byte-for-byte as stored, and "
+             "out: embedded rasters, written as their ORIGINAL pixels at the "
+             "resolution the file stores (never resampled) but re-encoded by "
+             "pypdf into PNG/JPEG/TIFF/JPEG 2000 — so the extension names "
+             "pypdf's output format, not the PDF's stored filter, and the file "
+             "is not the stored bytes and may be far larger, or smaller and "
+             "lossily re-encoded — and "
              "vector figures (diagrams and charts drawn with path operators, "
              "for which no image object exists), cropped from the page at "
              "--image-dpi. Identical images are written once and shared by "
@@ -683,7 +719,8 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--image-dpi", type=int, default=_DEFAULT_IMAGE_DPI, metavar="N",
         help="Resolution for VECTOR figure crops (default %(default)s). "
-             "Rasters are copied as stored and are unaffected.",
+             "Rasters are written at the resolution the file stores them at "
+             "and are unaffected.",
     )
     parser.add_argument(
         "--no-vector-images", dest="vector_images", action="store_false",
@@ -1873,6 +1910,7 @@ def _extract_page(
     y_tolerance: float | None = None,
     table_strategy: str = _DEFAULT_TABLE_STRATEGY,
     images: dict | None = None,
+    lines: bool = False,
 ) -> dict:
     """Build one PageRecord (ARCH §4.2) from a pdfplumber page.
 
@@ -1937,6 +1975,29 @@ def _extract_page(
         "figure_dominant": _classify_figure_page(
             char_count, image_coverage, vector_coverage, scanned),
     }
+    if lines:
+        # Additive exactly like `images`: absent unless asked for, so no
+        # existing caller sees a shape change. Failure is contained for the
+        # same reason -- the text and tables are the contract.
+        try:
+            page_links = [{"uri": l["uri"], "bbox": l["bbox"]}
+                          for l in record["links"]]
+            record["lines"] = _tl.page_lines(
+                page, ratio=x_tolerance_ratio or _tl.DEFAULT_SPACE_RATIO,
+                y_tolerance=y_tolerance, links=page_links)
+            record["rects"] = _tl.fill_boxes(page)
+            record["rules"] = _tl.rule_rows(page)
+        except Exception:
+            record["lines"] = []
+            record["rects"] = []
+            record["rules"] = []
+            # Counted for the same reason the `images` branch below counts its
+            # own failure: `lines: []` on a page that HAS characters is
+            # indistinguishable from a page that has none, and `--lines` is
+            # what the composition step reads — a silently empty page there is
+            # a silently dropped page. The key is absent on the happy path, so
+            # the dump shape is unchanged when nothing failed.
+            record["lines_failed"] = True
     if images is not None:
         try:
             record["images"] = _extract_page_images(page, clusters, images)
@@ -1958,7 +2019,9 @@ def _extract_page(
 
 def _extract_page_images(page, clusters: list, images: dict) -> list[dict]:
     """Both extraction branches for one page, in page order: rasters first
-    (they are copied out as stored), then vector figures (they are rendered).
+    (pypdf re-encodes their decoded pixels — original pixels, native
+    resolution, a container of its choosing), then vector figures (they are
+    rendered at `--image-dpi`).
 
     The vector branch is skipped entirely when Poppler is absent or
     `--no-vector-images` was passed; the count of figures that were *detected
@@ -1992,6 +2055,7 @@ def extract_pdf(
     images_dir: Path | None = None,
     image_dpi: int = _DEFAULT_IMAGE_DPI,
     vector_images: bool = True,
+    lines: bool = False,
 ) -> dict:
     """Open the PDF, extract every page, classify, return the dump dict
     (ARCH §4.1 `DumpDocument`).
@@ -2065,7 +2129,7 @@ def extract_pdf(
             record = _extract_page(
                 page, layout=layout, x_tolerance_ratio=ratio,
                 y_tolerance=y_tol, table_strategy=table_strategy,
-                images=images)
+                images=images, lines=lines)
             record["n"] = index
             pages.append(record)
             # A page with an extracted table is not examined for columns: a
@@ -2091,7 +2155,7 @@ def extract_pdf(
             pdf, pages, hints, layout=layout, x_tolerance_ratio=ratio,
             y_tolerance=y_tol, table_strategy=table_strategy))
         hints.update(_probe_columns(
-            pdf, pages, gutter_pages, layout=layout,
+            pdf, gutter_pages, layout=layout,
             x_tolerance_ratio=ratio, y_tolerance=y_tol))
     doc_scanned, scanned_pages = _classify_document(pages)
     fonts = [font_acc[key] for key in sorted(font_acc)]
@@ -2124,6 +2188,17 @@ def extract_pdf(
         "fonts": fonts,
         "pages": pages,
     }
+    # Only when something actually failed, and that asymmetry with
+    # `images_summary` is deliberate: `--lines` already puts a `lines` key on
+    # every page, so "we looked" is visible without a second empty list, and a
+    # dump that differs from the flagless one by nothing but an empty counter
+    # would break the shape contract `--lines` keeps. Without the key a page
+    # whose line reconstruction RAISED is indistinguishable from a page with
+    # no text — and `--lines` is what the composition step reads, so that page
+    # leaves the pipeline unnoticed.
+    failed = [p["n"] for p in pages if p.get("lines_failed")] if lines else []
+    if failed:
+        dump["lines_failed_pages"] = failed
     if sink is not None:
         dump["images_dir"] = str(images_dir)
         dump["image_dpi"] = image_dpi
@@ -2204,8 +2279,30 @@ def _page_gutters(page) -> list[float]:
     * a page with any extracted table is not examined at all (the caller's
       job): a table's column gaps are gutters by this definition, and telling
       the caller to crop a table into columns would be worse than silence.
+
+    Only UPRIGHT characters are examined — the same `_textlines.upright` filter
+    `page_lines`, `_fonts_and_sizes` and `_furniture` already apply. A rotated
+    glyph shares a line's y range without belonging to it, and a column of them
+    printed down the sheet's edge drags `left_edge` out past the text block, so
+    the geometry every threshold below is measured against is no longer the
+    geometry of the prose. Measured on a 30-page magazine with a rotated spine
+    (`min(x0)` -26.3 with the spine, 61.8 without it): reading `page.chars` raw
+    fired on 5 of 30 pages — x = 145.7 on four of them, 147.7 on the fifth — a
+    coordinate that bisects those pages' byline `by Nina Beguš, Metahaven &
+    Gašper Beguš` (bbox x 61.8-168.5; 25 of its 33 characters fall left of the
+    cut and 7 right of it) instead of landing in the document's real 169.8-183.8
+    band, whose right edge is where the body text starts. With the filter it
+    fires on 0 of 30.
+
+    Be exact about what that buys, because it is easy to oversell: on that
+    document the filter takes the detector from "right for the wrong reason, at
+    the wrong coordinate" to SILENT. It removes a false signal and adds no
+    recall — a wrong x is worse than no x, but this is not a recall
+    improvement, and the document's real gutter is still not found. Across the
+    23 readable committed fixtures the filter changes nothing at all: the
+    gutters are identical raw and upright on every one of them.
     """
-    chars = page.chars
+    chars = _tl.upright(page.chars)
     if len(chars) < _COLUMN_MIN_CHARS:
         return []
     left_edge = min(c["x0"] for c in chars)
@@ -2469,50 +2566,124 @@ def _probe_remedy(pdf, pages: list[dict], hints: dict, *, layout: bool,
     return result
 
 
-def _probe_columns(pdf, pages: list[dict],
-                   gutter_pages: list[tuple[int, list[float]]], *,
+def _straddling_lines(page, cuts: list[float], word_kwargs: dict) -> int:
+    """How many of `page`'s extracted lines glue two columns together.
+
+    A line straddles a cut when it carries characters on BOTH sides of it AND
+    no character of its own crosses it. Both halves are load-bearing:
+
+    * "characters on both sides" IS the damage — one `extract_text_lines()`
+      line holding the left column's words and the right column's, which is
+      what makes the flat page `text` read as nonsense;
+    * "nothing crosses" is what keeps a full-width heading, a running header or
+      a caption spanning both columns from registering as damage. Such a line
+      has text on both sides too, but it is ONE piece of text: cropping at the
+      cut would sever it, not repair it. Without this qualifier the probe would
+      advise a crop on the strength of the very lines the crop breaks.
+
+    A line is counted once however many cuts it straddles. Rotated glyphs are
+    dropped (`_textlines.upright`) so the count is taken over the same
+    character population `_page_gutters` derived the cut from.
+    """
+    count = 0
+    for line in page.extract_text_lines(**word_kwargs):
+        chars = _tl.upright(line.get("chars") or [])
+        for cut in cuts:
+            if (any(c["x1"] <= cut for c in chars)
+                    and any(c["x0"] >= cut for c in chars)
+                    and not any(c["x0"] < cut < c["x1"] for c in chars)):
+                count += 1
+                break
+    return count
+
+
+def _probe_columns(pdf, gutter_pages: list[tuple[int, list[float]]], *,
                    layout: bool, x_tolerance_ratio: float | None,
                    y_tolerance: float | None) -> dict:
     """Crop the affected pages at their gutters and report what that changed.
 
     Same contract as `_probe_remedy`: the advice is measured on THIS document
-    before it is given. Here the measurement is the line count — a page whose
-    columns interleave yields one line per baseline, and cropping at the gutter
-    yields one per baseline PER COLUMN, so the number roughly doubles. If it
-    does not move, the columns were already coming out separately (a producer
-    that offsets the baselines) and the hint says so rather than sending the
-    caller to re-extract for nothing.
+    before it is given. What is measured is the DAMAGE — the number of lines
+    that glue two columns together (`_straddling_lines`) — before the crop and
+    after it.
 
-    `before` comes from the record the caller already has, not from a re-read:
-    that is the extraction they are actually holding."""
+    The obvious metric, a raw line count, was measured and is blind to exactly
+    the thing the probe exists to see. On a 30-page magazine, cropping took the
+    count over the three probed pages from 169 lines to 155 — a DROP, because a
+    crop both splits lines the other column contributes nothing to and re-joins
+    short fragments — so the hint printed "the columns are already coming out
+    separately, so the gutter is layout, not damage" about a cut that 54 lines
+    of that document straddle (49 straddle its real gutter band). A number that
+    can fall when the repair works cannot be read in either direction. The
+    straddle count over the same three pages moves 4 to 0, which reads in one
+    direction only.
+
+    `straddling_after` counts a different set of cuts from `straddling_before`.
+    `page.crop()` clips every character to the region's bbox, so re-counting
+    the ORIGINAL cuts inside a region returns 0 whatever the crop achieved
+    (measured: 0 on the `columns.pdf` fixture, where the crop finishes the job,
+    and 0 on a synthetic where it demonstrably does not). What is counted
+    instead is the damage the crop did NOT repair: `_page_gutters` is re-run
+    INSIDE each cropped region and the lines gluing two columns across THOSE
+    gutters are counted.
+
+    That fires when the full-page detector found only some of the page's
+    gutters. Measured on a three-column synthetic whose first column is narrow:
+    its left gutter (x = 93.5) sits at offset 0.13 of the page's text span,
+    below `_COLUMN_EDGE_MARGIN`, so the full page yields the single cut
+    x = 291.5 — but inside the left crop the same gutter sits at offset 0.28
+    and is found, so the region still holds two interleaved columns: before 40,
+    after 40, and the caller is told the crop is not the whole repair instead
+    of being told it is sufficient. The re-derivation inherits every threshold
+    `_page_gutters` was calibrated on a full page with (`_COLUMN_MIN_CHARS`,
+    `_COLUMN_MIN_LINES`, `_COLUMN_SIDE_RATIO`), which on a narrower region can
+    only make it harder to fire — the probe under-reports residual damage
+    rather than inventing it.
+
+    A page is counted only when its `before` and ALL of its crops were measured
+    successfully. Dropping a failed crop while keeping its `before` would lower
+    `straddling_after` on its own and read as a repair; dropping the whole page
+    keeps the pair honest and can only make the hint more cautious."""
     if not gutter_pages:
         return {}
     probed = gutter_pages[:_HINT_COLUMN_PAGES]
+    # `extract_text_lines` takes the word-splitting knobs but not `layout`,
+    # which is a rendering choice for the flat text and has no meaning for a
+    # per-line character walk.
+    word_kwargs = {k: v for k, v
+                   in _text_kwargs(layout, x_tolerance_ratio, y_tolerance).items()
+                   if k != "layout"}
     before = after = 0
     for number, gutters in probed:
-        record = pages[number - 1]
-        before += sum(1 for line in (record["text"] or "").split("\n")
-                      if line.strip())
         page = pdf.pages[number - 1]
+        cuts = sorted(gutters)
         left, top, right, bottom = (float(v) for v in page.bbox)
-        edges = [left, *sorted(gutters), right]
-        for start, end in zip(edges, edges[1:]):
-            if end - start <= 0:
-                continue
-            try:
+        edges = [left, *cuts, right]
+        try:
+            page_before = _straddling_lines(page, cuts, word_kwargs)
+            page_after = 0
+            for start, end in zip(edges, edges[1:]):
+                if end - start <= 0:
+                    continue
                 column = page.crop((start, top, end, bottom), strict=False)
-                text = column.extract_text(
-                    **_text_kwargs(layout, x_tolerance_ratio, y_tolerance))
-            except Exception:
-                # A crop that pdfplumber refuses costs the probe's precision,
-                # never the dump. `after` simply stays where it was, which can
-                # only make the hint more cautious.
-                continue
-            after += sum(1 for line in (text or "").split("\n") if line.strip())
+                # The region's OWN gutters, not the cut it was made at: the
+                # crop clipped every character to this bbox, so the cut can no
+                # longer be straddled by construction. A gutter the detector
+                # missed can be, and that is the residual damage.
+                residual = _page_gutters(column)
+                if residual:
+                    page_after += _straddling_lines(
+                        column, sorted(residual), word_kwargs)
+        except Exception:
+            # A page pdfplumber refuses costs the probe's precision, never the
+            # dump. Neither counter moves, so the page simply does not vote.
+            continue
+        before += page_before
+        after += page_after
     return {"column_probe": {
         "pages": [number for number, _ in probed],
         "gutters": [gutters for _, gutters in probed],
-        "lines_before": before, "lines_after": after,
+        "straddling_before": before, "straddling_after": after,
     }}
 
 
@@ -2632,7 +2803,6 @@ def _emit(dump: dict, out_path: Path | None) -> None:
 
 
 def main(argv: list[str] | None = None) -> int:
-    install_human_channel()
     """CLI entry point: parse → extract → emit → return the exit code.
 
     Exit codes: 0 success; 1 failure (`InputNotFound` / `EncryptedPDF` /
@@ -2654,6 +2824,7 @@ def main(argv: list[str] | None = None) -> int:
       whole-document scan the omission counters are in `images_summary` only —
       that is deliberate, since `--json-errors` promises a single JSON line on
       stderr and a warning printed beside the envelope would break it."""
+    install_human_channel()
     parser = _build_parser()
     args = parser.parse_args(argv)
     je = args.json_errors
@@ -2717,7 +2888,8 @@ def main(argv: list[str] | None = None) -> int:
             table_strategy=args.table_strategy,
             images_dir=args.extract_images,
             image_dpi=args.image_dpi,
-            vector_images=args.vector_images)
+            vector_images=args.vector_images,
+            lines=args.lines)
     except _ExtractError as exc:
         return report_error(
             exc.message, code=_EXIT_FAIL, error_type=exc.error_type,
@@ -2837,6 +3009,19 @@ def main(argv: list[str] | None = None) -> int:
         sys.stderr.write(
             "warning: --image-dpi / --no-vector-images do nothing without "
             "--extract-images; no artwork was written.\n"
+        )
+    failed_lines = dump.get("lines_failed_pages")
+    if failed_lines:
+        # Loud for the same reason as the artwork omissions: the composition
+        # step reads `lines`, and an empty list it was never warned about is a
+        # page that leaves the pipeline without anyone noticing.
+        sys.stderr.write(
+            f"warning: line reconstruction failed on "
+            f"{len(failed_lines)} page(s) "
+            f"({', '.join(str(n) for n in failed_lines)}); their `lines`, "
+            f"`rects` and `rules` are empty and are NOT a statement that the "
+            f"page(s) hold no text — see each page's `char_count`. The flat "
+            f"`text` and `tables` for those pages are unaffected.\n"
         )
     summary = dump.get("images_summary")
     if summary is not None:
@@ -3051,25 +3236,38 @@ def main(argv: list[str] | None = None) -> int:
         gutters = ", ".join(
             "/".join(f"{x:g}" for x in page_gutters)
             for page_gutters in probe["gutters"])
-        if probe["lines_after"] > probe["lines_before"]:
+        if probe["straddling_after"] < probe["straddling_before"]:
             sys.stderr.write(
                 f"hint: {hints['multi_column_pages']} page(s) have a "
                 f"full-height column gutter, so pdfplumber — which groups "
                 f"characters into lines by their Y position — returns the "
-                f"columns interleaved, one line of each in turn. Cropping at "
-                f"the gutter took {probe['lines_before']} line(s) to "
-                f"{probe['lines_after']} on page(s) {pages}; crop at x = "
-                f"{gutters} and extract each column separately. --layout does "
-                f"NOT separate them: it preserves the visual arrangement, "
-                f"which is the same interleaving with spaces in it.\n"
+                f"columns interleaved, one line of each in turn. Measured on "
+                f"page(s) {pages}: {probe['straddling_before']} line(s) glue "
+                f"two columns together and "
+                f"{probe['straddling_after']} still do after the crop; crop "
+                f"at x = {gutters} and extract each region separately. "
+                f"--layout does NOT separate them: it preserves the visual "
+                f"arrangement, which is the same interleaving with spaces in "
+                f"it.\n"
+            )
+        elif probe["straddling_before"] == 0:
+            sys.stderr.write(
+                f"hint: {hints['multi_column_pages']} page(s) have a "
+                f"full-height column gutter (x = {gutters}), but on page(s) "
+                f"{pages} no extracted line carries text on both sides of it "
+                f"— measured, not assumed. The columns are already coming out "
+                f"separately, so the gutter is layout, not damage.\n"
             )
         else:
             sys.stderr.write(
                 f"hint: {hints['multi_column_pages']} page(s) have a "
-                f"full-height column gutter (x = {gutters}), but cropping at "
-                f"it does not change the line count on page(s) {pages} — "
-                f"measured, not assumed. The columns are already coming out "
-                f"separately, so the gutter is layout, not damage.\n"
+                f"full-height column gutter (x = {gutters}), and "
+                f"{probe['straddling_before']} line(s) on page(s) {pages} glue "
+                f"two columns together — but each cropped region was measured "
+                f"again and {probe['straddling_after']} line(s) are still "
+                f"glued by a FURTHER gutter inside one of them, so the crop is "
+                f"not the whole repair on this document. Read those pages "
+                f"before re-extracting: measured, not assumed.\n"
             )
     return _EXIT_OK
 

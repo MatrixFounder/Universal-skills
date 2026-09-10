@@ -569,11 +569,11 @@ def _report(exc: _OcrError, *, json_mode: bool) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
-    install_human_channel()
     """CLI entry point: parse → resolve/guard → engine → validate langs → OCR.
 
     Returns the exit code (see the module docstring's matrix). Domain failures
     flow through `_OcrError` → `_report` (the `--json-errors` envelope)."""
+    install_human_channel()
     parser = _build_parser()
     args = parser.parse_args(argv)
     je = args.json_errors

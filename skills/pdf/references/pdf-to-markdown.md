@@ -8,6 +8,14 @@ not stored. That inference is LLM judgement. This reference standardises the
 common silent failure (scanned PDFs). **Assembling the final Markdown is your
 job, not a script's.**
 
+**Provenance of the numbers on this page, stated once:** every one of them was
+measured, and none of the corpora is shipped with the skill — the 1206-page
+SAP/Antenna House guide, the 20-document dogfood corpus and the two editorial
+magazines quoted throughout live outside the repository, so read them as
+recorded observations rather than as something you can re-run here. What you
+*can* re-run is every tool that produced them, on your own file, and the
+committed fixtures under `scripts/tests/fixtures/`.
+
 ---
 
 ## 1. Decision tree — which path to take
@@ -23,8 +31,12 @@ Is the PDF born-digital (has a real text layer)?
 │       Then compose the Markdown yourself from dump.json.
 │
 ├─ YES, but complex layout (multi-column, rotated text, dense forms)
-│     → still pdfplumber, but expect to tune (see §3) — drop to inline
-│       pdfplumber code with custom table_settings / extract_text(layout=True).
+│     → pdf_extract.py --lines, then crop per column (§3.1).
+│       NOT extract_text(layout=True): it preserves the interleaving
+│       with spaces in it rather than undoing it — §3.1 measures this.
+│       Rotated text: the two sides disagree about it — the line
+│       builder drops it, the verifier's reference keeps it. See §8
+│       before you chase the difference.
 │
 └─ NO — scanned / image-only (no text layer)
       → pdfplumber returns empty text. DO NOT ship that empty result.
@@ -37,11 +49,42 @@ Is the PDF born-digital (has a real text layer)?
 How do you know which branch you are on? Run `pdf_extract.py` — its
 `doc_scanned` flag and exit code tell you (§5). You do not have to guess.
 
+### 1.1 Profile the template before you convert it
+
+A typeset document is a *template* applied to content: one point size for body
+text, two or three for headings, a fill colour for callouts, one ruling style
+for tables. Discovering that template is mechanical, and doing it by hand with
+one-off `pdfplumber` probes is where roughly a quarter of a measured
+1206-page conversion went. Run the profiler instead:
+
+```bash
+python3 scripts/pdf_profile.py INPUT.pdf            # report
+python3 scripts/pdf_profile.py INPUT.pdf --json     # machine-readable
+```
+
+It samples the document (evenly, always including the first and last pages —
+back matter is where the furniture trap below lives) and reports: the point
+size histogram with a body-text hypothesis and a sample line per size, the
+font inventory with a conservative bold/italic/mono guess, the **measured**
+word-gap threshold, the ligature-duplicate count, the running header/footer
+band, the fill-box colours, the ruled-table diagnostic, list markers and the
+indent step, icon-font glyphs, and a figure-vs-icon image census. Each finding
+ends in a `Recommendations` block that names the flag or the repair.
+
+It changes nothing and exits `0` even when the findings are alarming — the
+findings *are* the output. Skip it only for a one-page invoice: the cost is
+about five seconds on a document of that size (measured 5.5 s on the 20-page
+magazine, 4.4 s on the 30-page one).
+
 ---
 
 ## 2. Extraction recipe (the digital-PDF branch)
 
-Three steps. Keep them separate — the value is in step 3 being *yours*.
+Five steps. Keep them separate — the value is in step 3 being *yours*, and in
+step 4 being a measurement rather than an impression.
+
+0. **Profile** — `pdf_profile.py` (§1.1). Everything below is easier once you
+   know the body size, the heading sizes and how the tables are ruled.
 
 1. **Dump** — extract per page, mechanically:
    - text: `page.extract_text()` (add `layout=True` for column-bearing pages);
@@ -58,6 +101,29 @@ Three steps. Keep them separate — the value is in step 3 being *yours*.
    reading order, render tables (GFM by default — see §3), stitch a table that
    spans pages, describe an image/diagram in prose. This step is judgement and
    is never scripted.
+
+4. **Verify** — `pdf_verify_md.py` (§8). Composition is the step that loses
+   content silently; this is the only part of the workflow that can tell you
+   it happened.
+
+**Use `--lines` for anything with structure.** The flat page `text` is enough
+to *read* a page and not enough to *convert* one: heading level comes from
+point size, list nesting from the x coordinate, and inline emphasis from the
+font family — none of which survives flattening. §3.5 asks you to infer
+heading level "from font size / weight / position"; `--lines` is where those
+three actually arrive:
+
+```bash
+python3 scripts/pdf_extract.py report.pdf --lines -o dump.json
+```
+
+Each page then also carries `lines` (per line: `text` with ligatures deduped
+and positional word gaps restored, `bbox`, modal `size`, modal `font`, the
+`styles` present, `marker_only`, and per-run `font`/`size`/`style`/`uri`
+wherever the line is not uniform), `rects` (filled boxes — callouts and code
+samples) and `rules` (horizontal rules grouped by y, with the x boundaries of
+their segments: the column signature of a ruled table, see §3.2b). Without the
+flag the dump is byte-for-byte what it always was.
 
 Run the dump:
 
@@ -131,6 +197,52 @@ is a real recall hole: a two-column page that also carries a table is missed,
 and on such a document you are back to reading the page. Measured over the
 20-document corpus: 3 pages across the 2 genuinely multi-column documents, 0
 false positives on the other 18.
+
+**There is a fourth limit, it is not in that list, and it fires first.**
+`_COLUMN_EDGE_MARGIN = 0.25` requires the gutter's centre to lie in the middle
+half of the text span. On an asymmetric editorial page it rejects the gutter
+*before* any of the three limits above is consulted. Measured on a
+three-column magazine (6 pt margin apparatus | 8 pt body | 6 pt endnotes):
+the side|body band at 142.0–160.0 has centre 151.0, offset 0.232,
+`edge_ok=False`; the body|notes band at 454.0–461.0 has centre 457.5, offset
+0.754, `edge_ok=False`. Their side-coverage ratios (0.28/0.80 and 0.88/0.22)
+would have failed the 60 % rule too, but the edge test decided first — so
+`multi_column_pages` reports **0** on a genuinely three-column document.
+Tuning the 60 % rule would not have rescued *those two* bands. It is not inert
+on this document either: 2 of its 20 pages carry a side|body band that
+**passes** the edge test (offset 0.315 and 0.257) and is rejected by coverage
+alone, at 0.51/0.61 and 0.48/0.64 — so a 0.50 rule would fire on one of them,
+at x = 152.9, the same gutter. A margin apparatus is sparse *by design*: this
+is a structural blind spot, not a constant that wants nudging.
+
+**Verify a cut by character preservation — and know what it cannot see.**
+Re-extract the page from the crops and compare the multiset of non-space
+characters against the flat page — counting them the same way on both sides, or
+the comparison means nothing. The deltas in this paragraph count upright
+`page.chars` (`char['upright']`, non-space), which is the census a crop and a
+flat page agree on. Measured that way, correct cuts are character-break-even:
+delta 0 over 101 968 characters on that magazine, and +2 over 76 047 on a
+second document. A wrong cut is loud: +62 at x=145.7, **+1136** at a naive
+mid-page x=300.0. The blind spot is exact — **preservation says nothing about
+structural damage.** Cropping the `ruling.pdf` fixture at x=294.5 severs its
+single 20-row table into two 20-row tables, and the character delta is
+precisely **0**. Check separately whether a cut falls inside the bbox of an
+extracted table; that is a different question with a different answer.
+
+**Use `page.crop()`, never `page.within_bbox()`.** They differ exactly on the
+characters that straddle the cut: `crop()` keeps a straddler in *both*
+regions (+65 characters measured), `within_bbox()` drops it from *both*
+(−65). Same page, same cut at x=300, counting every char dict this time: 7048
+characters through `crop`, 6983 on the flat page, 6918 through `within_bbox`.
+Duplicating a handful of straddlers is visible and recoverable by reading;
+deleting them is silent loss. Every crop recipe in this skill uses `crop()`
+for that reason.
+
+A flag that performs the crop for you — explicit cuts or named ranges, with
+both self-checks built in — is backlog `pdf-16`. It is deferred, not refused:
+until it lands, the hint's x coordinate is the argument you pass to `crop()`
+by hand, and the document-level cut does not hold on every page, so record
+which pages were single-column.
 
 **The orphaned list marker.** A second reading-order artefact, independent of
 columns: pdfplumber groups characters into lines with an *absolute*
@@ -250,6 +362,54 @@ comparing.
 
 Beyond these two knobs `pdf_extract.py` uses default settings — it is a dump,
 not a tuning console. Borderless-table tuning is inline-agent work.
+
+### 3.2b Tables ruled only horizontally — the rules *are* the column boundaries
+
+The case §3.2 does not cover, and the most common one in technical manuals:
+the producer rules the **rows** and not the columns. There are no intersecting
+edges, so `lines` and `lines_strict` both return **zero** tables on a page
+that is unmistakably a table, and `text` returns a mess. Measured across three
+SAP guides (1206 pages, Antenna House): `extract_tables()` found **0** tables
+in the entire corpus; 3696 table rows were recovered by the method below.
+
+The insight is that these producers draw each row rule as **one segment per
+column**, so the segment endpoints hand you the exact column boundaries —
+better information than any strategy heuristic can infer:
+
+```python
+import collections
+rows = collections.defaultdict(list)
+for line in page.lines:                       # horizontal segments only
+    if abs(line["top"] - line["bottom"]) < 0.8 and line["x1"] - line["x0"] > 3:
+        rows[round(line["top"], 1)].append(line)
+
+ys = sorted(rows)
+xs = sorted({round(v, 1) for s in rows[ys[0]] for v in (s["x0"], s["x1"])})
+table = page.extract_table({
+    "vertical_strategy": "explicit", "horizontal_strategy": "explicit",
+    "explicit_vertical_lines": xs, "explicit_horizontal_lines": ys,
+})
+```
+
+`pdf_extract.py --lines` gives you `rows` ready-made in each page's `rules`,
+and `pdf_profile.py` tells you whether this is the case you are in (it prints
+`N ruled region(s) ... but extract_tables() finds 0`).
+
+Three details decide whether the result is right:
+
+* **Merge coordinates that differ by a hairline.** Adjacent segments share a
+  boundary reported as `184.2` on one and `184.3` on the next. Unmerged, the
+  pair looks like a one-point-wide column and every signature comparison
+  against the rest of the table fails — which silently splits one table into
+  a dozen.
+* **A vertically merged cell rules only the columns it divides**, so a
+  continuation row's signature is a *subset* of the table's, not a match.
+  Compare with "every x in the row is within tolerance of some x in the table,
+  and the right edges agree", never with equality.
+* **The header row usually sits above the top rule and is not ruled at all.**
+  The top rule is often drawn thicker (1.5 pt against 0.5 pt) — that weight
+  change is the marker for "table starts here". Find the header text between
+  it and the caption, and prepend its top as one more explicit horizontal line.
 
 ### 3.3 A table split across a page boundary
 A long table continues on the next page — `extract_tables()` returns it as two
@@ -374,6 +534,59 @@ lower R splits more aggressively, higher R glues more; `--x-tolerance-ratio 0`
 disables it entirely (restores pdfplumber's absolute tolerance). Empirically
 `0.10–0.20` is the safe band for academic layouts; `≥0.25` starts re-gluing.
 
+**A per-file recommendation carries its own provenance — read it.**
+`pdf_profile.py` reports the ratio with a `source`. `labelled` means it was
+scored against the word boundaries the file itself marks with space glyphs,
+and the report names how many words the chosen ratio would glue and split
+plus the `safe_band` it sits in; a band one bin wide is the profiler saying
+there is no margin either way. `peaks` means the file labels too few
+boundaries to score against, so the ratio is the midpoint between the two gap
+modes — and **that midpoint fails at the boundary** on justified text, whose
+inter-word population runs down into its own left tail, putting the half-mode
+inside that tail. Either way, self-check by counting tokens of 22+
+consecutive letters in the rebuilt text. Measured on a 13 pt Times justified
+body where the two welded lines' own inter-word gaps run 1.57–1.60 pt against
+a `0.125 × 13 = 1.625` pt threshold: the peak midpoint said `0.125` and welded
+those two prose lines into single 59- and 60-character tokens; the labelled
+pass says `0.09`, welds none, and reports `would glue 0, would split 15` —
+and every one of those 15 sits inside a **bold heading**, which is what the
+next paragraph is about. (1.57 pt is not the document's tightest gap: its
+tightest labelled inter-word gap is 1.24 pt, ratio 0.095, and 59 labelled
+boundaries sit at or below the 0.125 threshold.) Any 22+ hit that is prose
+rather than a URL means go lower.
+
+**Check the other direction too, and treat a one-bin `safe_band` as the low
+end of a sweep.** The score behind the labelled ratio is asymmetric — a glue
+costs three times a split — and it is dominated by whichever face sets the
+body, so a second, more loosely tracked face can be over-split at a value
+that is correct for the body. Bold headings are the usual second face, and
+the damage reads as a space *inside* a word: `Territor y`, `Ack nowledgments`,
+`GA Ns`, `Imagitat ion`. The 22+-letter check cannot see it — it only looks
+for glue. Measured on that same magazine, sweeping the four candidate bins.
+Both columns come out of shipped code: `22+ glue` counts `[^\W\d_]{22,}`
+tokens in the `--lines` rebuild at that ratio, and `false splits` is the
+profiler's own `would split` count — labelled word interiors wider than the
+ratio. Where those splits land comes from diffing the rebuilds against each
+other.
+
+| `x_tolerance_ratio` | 22+ glue | false splits |
+|---|---|---|
+| `0.09` (the labelled recommendation) | 0 | 15, on 12 lines of 10 bold headings |
+| **`0.10`** | 0 | 2, both inside the section number `4.3` |
+| `0.11` | 0 | 0 |
+| `0.125` (the peak midpoint) | 3 | 0 |
+
+Tokens lost is deliberately *not* a column: re-composing the Markdown at each
+ratio is agent work rather than a script, so the figure would not be
+reproducible. What is reproducible is the conversion that shipped — composed
+at `0.10`, verified at 29 missing tokens of 10 678 (0.27 %). Stepping up also
+costs something the table does not show: at `0.10` the second, sans face welds
+`& Riccardo` into `&Riccardo` on 15 of the 31 lines carrying the standing
+byline — the same "one ratio, two faces" problem, pointing the other way.
+
+One ratio cannot serve two faces. Take the recommendation, rebuild, look at
+the headings, and step up a bin while the body stays clean.
+
 ```bash
 python3 scripts/pdf_extract.py paper.pdf -o dump.json            # fix on (0.15)
 python3 scripts/pdf_extract.py paper.pdf --x-tolerance-ratio 0.1 # split harder
@@ -464,8 +677,27 @@ Every page record gains an `images` list you can reference verbatim:
 
 | Class | What it is | How it comes out |
 |---|---|---|
-| `raster` | an embedded image XObject — screenshot, photo, exported PNG/JPEG | bytes copied out **as stored**, no re-encoding |
+| `raster` | an embedded image XObject — screenshot, photo, exported PNG/JPEG | pypdf's **decoded pixels**, re-encoded into a container that can hold them — original pixels at native resolution, never resampled, but never the stored bytes |
 | `vector` | a diagram or chart drawn with path operators; **no image object exists** | the page region is cropped and rasterised at `--image-dpi` (default 150) |
+
+**The raster branch does not copy bytes, and the extension is pypdf's answer,
+not the PDF's.** Measured across every raster placement in two magazines plus
+this skill's own raster fixtures: **not one is pass-through.** What comes out
+is `ImageFile.data` — the decoded pixels re-encoded into whatever container
+holds them: PNG for most, JPEG for a clean DCTDecode stream, TIFF for CMYK,
+JPEG 2000 for a JPEG carrying an `/SMask`. Two consequences you have to
+budget for. The file is routinely **much bigger** than the stream it came
+from — a QR code stored as 70 403 bytes of Flate is written as 1 373 726
+bytes of TIFF (×19.5); a 410 325-byte stream came out at 2 398 510 (×5.8).
+And a lossy source can be re-encoded **lossily**: one page's DCTDecode stream
+was written as a 32 275-byte `.jpg` from 69 953 bytes, because a
+`/DeviceN(/Black)` colour space forced the conversion. What survives intact
+is the pixel grid, at native resolution. `.jp2` and `.tif` in the directory
+mean pypdf chose that output format, not that the PDF stored one — and
+neither is drawn by GitHub, Obsidian, Chrome or Firefox (Safari draws both),
+so a figure written as either is a figure your Markdown does not display.
+Re-saving those two as PNG is backlog `pdf-18`; today you convert them by
+hand and say so in the run log.
 
 **Do not classify by appearance.** The most common mistake here is reasoning
 "this page has a block diagram, so I need the vector path". Measured
@@ -489,7 +721,20 @@ What the script guarantees, and what it does not:
   you filter them: `width`/`height` (source pixels) and `bbox` (placement, in
   points) are in every record. A practical rule when composing Markdown: ignore
   anything under ~100 pt on its long side unless the surrounding text refers to
-  it. The exception is an **inline glyph**: an emoji drawn from a colour font
+  it. That rule is a **floor, not a filter** — it removes icons, and on a
+  designed document it leaves most of the rubbish standing. Measured on two
+  magazines: 94 written files of which **16** were wanted, and **62 of the 94
+  were vector crops of a card of running text** — a masthead, a callout, a
+  pull-quote, a margin note. Their words are already in the text layer, so
+  there is nothing to recover from the picture; a page-region crop is not a
+  repair for them. They are recognisable by what the box holds: count a
+  character as enclosed when its centre lies inside the record's `bbox`, and
+  these hold **54–161** of them against **0 for every raster placement (20 of
+  them) and every hairline frame (15) in the same two dumps**. The
+  zero-versus-nonzero split is the discriminator; the range is only its shape.
+  Rejecting them in the script is backlog `pdf-18`. Until then, judge by that
+  measurement rather than by an x range against the body column, and record
+  every rejection. The exception is an **inline glyph**: an emoji drawn from a colour font
   (Apple Color Emoji and friends) is a raster XObject, so one file per ⚠/✅ in
   the prose is what a naive extraction writes — measured at 10 of 15 files on
   one dogfood document and 24 placements on another, burying the document's
@@ -523,6 +768,26 @@ What the script guarantees, and what it does not:
   check it: a full-page diagram carrying more than 200 characters of labels is
   refused too, and `figure_dominant` will not flag that page either — render
   the sheet with `preview.py`, which is what a page-wide crop was anyway.
+- **A raster and a vector crop of the same area are two records of one
+  figure.** The class table says nothing about this, and it is the ordinary
+  case on a designed page: a hairline rule drawn around a placed photograph
+  becomes a one-member vector cluster, and the crop of that cluster is a
+  picture of the raster that is already coming out beside it. Measured
+  from the dump's own `images[].bbox` values: 13 of 16 rasters on one 30-page
+  document sit **fully inside** a vector crop of the same page — raster→vector
+  overlap 1.0000 on all 13 — while the reverse direction reads 0.8937–0.9515,
+  the shortfall being the 4 pt the vector box adds on each side. 15 such
+  clusters across two documents have exactly one member, one stroked path,
+  linewidth 0.1–0.249 pt and zero enclosed characters. Every other
+  raster/vector combination in both documents intersects at 0.0000 in both
+  directions — the distribution is bimodal with nothing between. So test both
+  directions, never one: a circle drawn *on* a photo also covers it one way
+  round, and dropping that would delete the only rendered copy of an
+  annotation. Rendering both crops is not free either — one document spent
+  5.22 s of an 8.13 s run on 43 vector crops, and none of the 43 was kept.
+  When `pdf-18` lands the dump names the pair itself (`covers` /
+  `covered_by` / `coverage`); today you pair them by comparing bboxes and
+  keep one.
 - **`DIR` is mandatory** and nothing is written to the current directory by
   default; a `DIR` that resolves to the input PDF is refused (exit `6`).
 - **A fill-only vector figure is not extracted, and the omission is silent.**
@@ -553,10 +818,260 @@ What the script guarantees, and what it does not:
 - **Without the flag the dump is exactly what it always was** — no `images` key
   at all. With the flag, `"images": []` means "looked, found nothing".
 
+**Whatever composition threw away is listed in the run log — file, kind,
+bbox, and the rule that named it.** This is not bookkeeping: on a designed
+document you discard four files out of five, and a rule you applied silently
+is a rule nobody can check and nobody can reuse on page 2. Write each of these
+as a test you applied and recorded, never as a threshold a script applied for
+you — the script's own rejections (`inline_glyphs`, `blank`, `text_enclosing`,
+`oversized`, `undecodable`, `render_failed`) are already in `images_summary`
+and belong in the same log next to yours.
+
 Vector crops need Poppler's `pdftocairo` (already required by `preview.py`).
 Without it, rasters still come out, the vector figures are counted in
 `vector_unrendered`, and the run stays at exit 0 — degraded loudly, never
 silently.
+
+### 3.11 A ligature glyph arrives as *two* characters
+
+`fi` is one glyph whose `/ToUnicode` maps to two code points, and pdfplumber
+emits **one char dict per code point** — both carrying `"fi"`, both with the
+same bbox. `extract_text()` handles it; anything that concatenates
+`char["text"]` does not, and the corruption is silent and everywhere:
+
+```
+Profiles  -> Profifiles        Offers -> Offffers        affected -> affffected
+```
+
+Measured at 41 duplicate chars in a 40-page sample of one guide. Position is
+the discriminator — two real characters can repeat a letter but cannot share
+a box:
+
+```python
+from _textlines import dedupe          # or --lines, which applies it for you
+chars = dedupe(page.chars)
+```
+
+### 3.12 Rebuilding text from `page.chars`: the spacing is not there
+
+Producers routinely advance the text matrix instead of emitting a space
+glyph, so text built from characters alone reads `Formoreinformation,see`.
+The threshold has to be font-relative, and it should be **measured, not
+assumed** — the two gap populations are usually, though not reliably, bimodal
+(§3.8 is the file where they overlap), and where the split belongs is a
+property of the file. Both dogfood documents measure:
+
+```
+intra-word (kerning)   peak at 0.00 x point size
+inter-word             peak at 0.25 x point size      -> split at ~0.125
+```
+
+`pdf_profile.py` reports both peaks and the recommended ratio;
+`_textlines.line_runs()` and `--lines` apply it. Note that
+`extract_text_lines()` *consumes* space glyphs, so counting spaces on a line's
+`chars` always returns zero — count them on `page.chars` if you want to know
+whether a document spaces or positions its words.
+
+### 3.13 Running headers and footers: detect by position, never by point size
+
+The tempting filter — "drop everything below 7 pt" — deleted an entire
+chapter in a measured conversion: the guide set its *Important Disclaimers
+and Legal Information* section in the same 6 pt as its page footer, so a size
+filter took the footers and the legal text together, and the loss was
+invisible in the output. Nothing in the text says a 6 pt line is furniture.
+
+Detect it the way it is actually defined — the same thing, in the same place,
+on many pages:
+
+* restrict the search to the top and bottom bands of the page;
+* mask digits (`6 PUBLIC Introduction` -> `# PUBLIC Introduction`) so page
+  numbers do not make every footer unique;
+* require repetition across a large share of pages.
+
+A footer that names the current chapter differs on every chapter, so
+whole-line matching alone under-detects; the second signal is vocabulary — a
+word appearing in an edge line on most pages belongs to the furniture whatever
+the rest of the line says. `pdf_profile.py` reports the y cut-off, and warns
+explicitly when the furniture's point sizes are *also* used by real body text.
+
+### 3.14 Stitching across a page break is mechanical — do it
+
+§3.3 is right that the dump must not stitch, but composition must: a page
+break is a fact about the paper, not about the document. Four cases, each with
+a reliable test, all four measured on one corpus:
+
+| Broken by the page break | Rejoin when |
+|---|---|
+| Table | the next page opens with a table whose column signature matches and whose header row is identical — drop the repeated header |
+| Code sample | the previous page ended inside a code box and the next opens with one |
+| Paragraph | the previous page's last block does not end in terminal punctuation and the next page's first block starts lower-case |
+| Callout / shaded box | the next page's box has the same x range and starts at the top of the text area |
+
+Measured: one table's header repeated on 62 pages and stitched into a single
+248-row Markdown table. Beware the reverse error — a *repeated header* you
+correctly emit once will show up in `pdf_verify_md.py` as missing tokens (§8).
+
+### 3.15 Code samples: rebuild on a character grid, then unwrap
+
+Two problems, both invisible in a text dump. First, monospaced code has the
+same positional-spacing problem as prose but a clean fix: every glyph sits on
+a grid, so place each character at `round((x0 - left) / advance)` and the
+indentation comes back exactly. Second, a long source line is **word-wrapped
+to the box margin**, and the wrapped remainder looks exactly like a new
+statement at indent zero.
+
+The test that separates them is greedy-fill: the previous line wrapped only if
+the next line's first token would not have fitted after it.
+
+```python
+first = stripped.split(" ")[0]
+if prev_x1 + advance + len(first) * advance > box_right:
+    ...                      # continuation: append to the previous line
+```
+
+Do not use "starts at indent 0" alone — genuinely unindented code
+(`//////////`, a closing brace, a top-level declaration) follows an indented
+line all the time and would be swallowed.
+
+### 3.16 A line break inside a table cell is not always a word wrap
+
+The mirror image of §3.15, and it shipped a real defect before the verifier in
+§8 caught it. Joining a cell's visual lines needs a rule, and the obvious
+rules over-fire:
+
+* joining with a space breaks a wrapped identifier —
+  `CO_CUAN_PRX_CPG_REP` + `LICATION` must become one token;
+* joining *without* a space because "both fragments look like identifiers"
+  destroyed a cell that held a **list** of them, one per line:
+  `COMM_PRODUCT` + `COMM_PRPRDCATR` + ... became
+  `COMM_PRODUCTCOMM_PRPRDCATR...`, and 48 of that page's 72 tokens
+  disappeared as distinct words.
+
+Geometry decides, not the shape of the text: a fragment was wrapped only if it
+*reached the cell's right edge*. A line that ends well short of it ended
+because the content ended.
+
+```python
+wrapped = prev_x1 + advance >= cell_x1 - 1     # then join tight / de-hyphenate
+```
+
+Hyphenation is the easy half: a line ending in `-` is a typesetter break
+(`Ac-` / `count` -> `Account`) unless the fragment before the hyphen already
+contains `.`, `/` or `:`, which makes it a real hyphen inside an identifier or
+URL (`sap.hana-` / `app`).
+
+That rule is code, not prose — `scripts/_textlines.py` exports
+`hyphen_verdict(head_line, next_line, *, hyphenating=True)` returning
+`'drop' | 'keep' | 'space' | 'report'`, `dehyphenate(text, *,
+hyphenating=True)`, `hyphen_sites(text)` (only the sites whose verdict is
+`'report'` or `'space'`, i.e. the ones a human must look at) and
+`hyphenation_rate(texts)`. Two things it exists to stop you assuming. **The
+hyphen is not always U+002D:** one measured document ended 12 lines on U+2011
+NON-BREAKING HYPHEN and exactly one on U+002D, so an `endswith("-")` test saw
+1 of 13 and shipped `o‑ end`, `h‑ order`, `m‑ mechanical`. **And not every
+document hyphenates:** pass `hyphenating=(hyphenation_rate(texts) >= 0.02)` —
+measured 0.1322 on a hyphenating document against 0.0073 on one that does not
+— more than an order of magnitude, and two orders against the ASCII-only
+reading (0.0006) that an `endswith("-")` test would see.
+
+### 3.17 Two small traps that cost a run each
+
+**Escaping.** Over-escaping is not free: `MKT\_AGENCY\_MKT\_AREA` is unreadable
+in the source, and it also breaks your own tooling — every escaped identifier
+reads as a different token to a coverage check. CommonMark does not treat
+intra-word `_` as emphasis and does not treat a mid-line `>` as a quote, so
+neither needs escaping in technical prose. `<` does (`<Property>` is parsed as
+raw HTML and vanishes), and so does a `>` or `-` at the *start* of a line.
+
+**`page.hyperlinks` can raise.** A malformed UTF-16 string in an annotation
+makes pdfplumber's annotation parser throw `UnicodeDecodeError`, which killed
+an 866-page run at the last page. `pdf_extract.py` already guards this and
+reports links in the dump with identical coordinates — prefer the dump's
+`links`, and wrap the call if you must make it yourself.
+
+### 3.18 Vertical rhythm, emphasis roles, and two whole-token repairs
+
+Everything above is about what a line *says*. This is about what the space
+between lines and the weight inside them *mean* — the two signals a designed
+document uses to mark a paragraph, a caption and a quotation, neither of which
+survives the flat page `text`.
+
+**(a) Pitch is measured top-to-top, along the column.** The gap that segments
+paragraphs is the distance between the top of a line and the top of its
+successor, not the gap between one line's bottom and the next line's top: a
+descender or a superscript moves the bottom, and a document set **solid**
+(line pitch equal to the point size) has no bottom-to-top gap to find at all —
+measured 13.0/13.0 on one 30-page document. And the successor is the nearest
+line *below whose x extent overlaps this one by ≥50 %*, **not the next line in
+page order**. Two parallel columns offset by 6 pt from a shared baseline grid
+make a page-order pass report a pitch of 6.0 with full mass instead of 12.0,
+and taking the mode does not rescue it. Take two numbers per point size — the
+modal line pitch and the modal pitch strictly greater than `1.15 ×` it — and
+the paragraph threshold is between them. Measured: an 8 pt body gave line
+pitch 9.6 (835 pairs) and paragraph pitch 17.6 (123), ratio 1.20; a 13 pt body
+gave 13.0 (1165) and 26.0 (49), ratio 1.00. *(Honest caveat: the page-order
+failure has no observed instance in the corpus — it was reproduced on a
+synthetic page. That is why it lives here as a fact rather than in the dump as
+a key. A profiler probe that prints both numbers per size is backlog
+`pdf-17`; until it lands you measure them yourself.)*
+
+**(b) A solid-set document has no leading signal — look for the indent.** When
+the ratio of line pitch to point size is 1.0, the paragraph is marked by a
+first-line indent, and hunting for extra leading is hunting for something the
+document does not contain. The geometry is **already printed**, and in a place
+prose work does not look: the profiler's `## Lists` line. One measured
+document prints `marker x: [183.8, 183.9, 219.8]  indent step: 35.9` — the
+body's left edge, the indent's left edge and the +36 pt step between them,
+which is exactly the information a composer otherwise hard-codes as magic x
+windows. Say it plainly: **that line is not only about bullets, and it is
+worth reading on a document that has no bullets at all.**
+
+**(c) Caption, pull-quote and heading are three shares of one measurement.**
+Take the share of characters carrying each `(bold, italic)` combination across
+a block's runs — a share over the block, never a test over every run, and
+never a fixed threshold. The threshold belongs to the document: nine captions
+in one document measured 0.613…0.969 bold-italic, so a 0.70 cut-off drops
+Figure 5. What worked was the *dominant* style plus the block's geometry
+(where it sits relative to the figure it labels). `--lines` hands you the raw
+`font` / `size` / `style` per run and decides nothing, which is what lets you
+hang the caption test on the actual family name the document uses.
+
+**Rejoining a URL broken across a line is a whole-token repair, and the stage
+it runs at is the whole trick.** Join **tight**, never with a space. Detect
+it by the last token of a line matching `(?:https?://|www\.)\S*$` with the
+first token of the next line continuing it — and the continuation must admit
+**any** non-space character, not `[a-z0-9%]`: a measured run lost
+`https://doi.org/10.21437/ Interspeech.2022-11219.` because the regex refused
+a capital `I`. Where the break fell after a hyphen the join is ambiguous, so
+**report the site, do not decide it** (`hyphen_verdict` returns `'report'`,
+§3.16). Guard it: a URL that simply *ended* must not be glued to the next
+line — 17 of 33 lines ending in a URL on one document were finished URLs
+followed by an author's name — and do not generalise the rule to "join tight
+when both fragments look technical", which is the §3.16 defect that
+concatenated a cell holding a list of identifiers. **The stage matters more
+than the regex.** This is a **final pass over the assembled Markdown**, after
+list continuation, after bibliography joining and after page stitching — not a
+step inside paragraph rendering. A second measured miss,
+`https://doi.org/10.1016/j. neunet.2021.03.017.`, was invisible to a correct
+regex purely because bibliography continuation ran *after* rendering. Measured
+on that document: 40 lines *ending* in a URL (37 clean, 3 after a hyphen) —
+sites to adjudicate, not breaks, since most of them are finished URLs — and 2
+URLs that shipped with a space inside them, the two named above.
+
+**Do not add a punctuation-space cleanup.** `re.sub(r"\s+([,.;:!?»”’)\]])",
+r"\1")` over assembled prose trades visible wins for silent losses and must
+not exist as a public helper under any name. Measured with that exact pattern over the two documents'
+`--lines` rebuilds: 23 sites where it would fire, 20 and 3 — and they are not
+all repairs: one of the three on the second document is `late. ’Tis`, a correct
+opening quote the rule welds onto the preceding word. Against that it eats the
+four Chicago-spaced ellipses (`. . .`) the same two rebuilds carry — **none of
+the four survived** as `. . .` into the shipped Markdown even with no such
+helper in the pipeline. So the count runs about four to one in the cleanup's
+favour, and that is the wrong way to read it: the wins are cosmetic and visible
+in the diff, the losses are silent and change what a quotation says. If a
+composer needs it, it applies **only to whitespace the composer itself
+introduced** around emphasis marks, and it exempts a period with a space on
+both sides.
 
 ---
 
@@ -570,6 +1085,11 @@ The composition step (§2 step 3) is **never scripted**:
 - No bundled OCR. Scanned PDFs are *detected* and you are *pointed at* OCR; OCR
   is not part of this skill.
 - No auto-inference of heading hierarchy, reading order, or table stitching.
+- No two-axis region spec. Column cuts are an x-axis argument you supply; a
+  region grid naming bands in both x and y will not be added, because a band
+  grid is a page template, a page template is a converter, it gets rewritten
+  per document, and it misses invisibly on the first page that breaks the
+  grid.
 
 Why does `.docx` get a `docx-to-md` script but PDF does not? A `.docx` has a
 real semantic model — headings, lists, and tables are tagged in the XML, so a
@@ -731,7 +1251,97 @@ actively points you at it ("read those visually"). Two consequences:
 
 ---
 
-## 8. See also
+## 8. Verifying the conversion — `pdf_verify_md.py`
+
+"Convert this PDF" has no natural acceptance test, so the usual one is reading
+a few pages and hoping. That misses precisely the failures that matter,
+because the dangerous ones are silent and structural. Two shipped in a
+measured 1206-page conversion and neither was visible in a spot check:
+
+* a furniture filter keyed on point size deleted a whole chapter (§3.13);
+* an over-eager cell join glued a column of identifiers into one token,
+  losing 48 of a page's 72 words (§3.16).
+
+Both were found by comparing tokens, in seconds:
+
+```bash
+python3 scripts/pdf_verify_md.py dump.json out.md          # or INPUT.pdf
+python3 scripts/pdf_verify_md.py in.pdf out.md --max-loss 3   # exit 1 if worse
+```
+
+**`3` is a measured gate value, not a round number.** The smallest integer both
+measured editorial documents pass on their honest floors — 1.03 % and 0.27 % —
+is `2`, and `3` is that plus a point of headroom: `--max-loss 1` exits 1 on the
+1.03 % document, `--max-loss 2` exits 0 on both. In the other direction the `5`
+this page used to publish exited 1 on a conversion at `loss_pct 8.08`
+whose verified real loss was **29 tokens out of 10 678 (0.27 %)** — a gate
+any team would have switched off within a day. Pick your own number the same
+way: run the verifier, read the remainder, and set the threshold above the
+loss you have confirmed is correct behaviour.
+
+The check is one-directional and coarse — every word the PDF holds should
+appear at least as often in the Markdown — and it normalises both sides first,
+or the real findings drown: Markdown syntax and escapes are stripped, both
+sides are de-hyphenated (so a converter that correctly rejoins `Orchestra-` /
+`tion` is not *penalised* for the repair), running furniture is detected by
+repetition and excluded — rotated text is not, and the two sides disagree
+about it: the line builder drops it, the reference side keeps it — and
+dotted-leader contents pages are skipped.
+
+**One class of defect this check cannot see, by construction.** Word coverage
+tokenises on `\w{3,}`, which does not match a hyphen, so a space left inside
+a hyphenated compound is invisible to it: `V.tokens('a two‑\ndimensional
+plane')` and `V.tokens('a two‑ dimensional plane')` return identical
+counters. A conversion that ships `o‑ end` or `m‑ mechanical` scores exactly
+as well as one that ships `o-end` and `m-mechanical`. Grep the output for
+`\w[\u2010-\u2012-]\s+\w` yourself; the verifier will never raise it.
+
+**Read the output, not just the number.** Some loss is correct behaviour:
+
+| Reported as missing | Verdict |
+|---|---|
+| A handful of column names, tens of times each | A stitched table's repeated header (§3.14) — expected |
+| Words that are fragments (`tion`, `aggre`, `gated`) | De-hyphenation working — expected |
+| One page of a narrow column, ~35 %, fragments like `MarketingPermis` / `sions` | A cell wrapped mid-token and correctly rejoined (§3.16). The reference side cannot rejoin it — there is no hyphen to key on — so the repair scores as loss |
+| One page at 30-70 % with real content words | A bug. Go look at that page. |
+| Tokens that read backwards (`tfarcecaps`, `yraurbef`, `snagennif`) | Rotated furniture — a cover spine or a sideways running head. `--lines` drops it on `char['upright']`; the verifier reads the flat page `text`, which keeps it, and reads it in x order, hence the reversal. Confirm it and subtract it before walking the pages — **but rotated text that carries CONTENT (a landscape table, a rotated caption) is still owed to the reader, so print the strings and look at them.** |
+
+Take a census of the rotated text rather than a verdict on it — four lines,
+per page:
+
+```python
+rot = "".join(c["text"] for c in page.chars if not c["upright"])
+toks = re.findall(r"\w{3,}", rot.lower())
+print(len(toks), len(set(toks)))
+print(sorted(set(toks)))
+```
+
+Measured on a 30-page document: 2706 rotated characters, 301 rotated tokens, 15
+distinct strings — five of which repeat 44 times each. Do **not** read that as
+the explanation of your percentage: 301 rotated tokens are not 301 missing
+ones. They reach `top_missing` reversed and **once each** — 13 of the 15
+strings (`tfarcecaps`, `snagennif`, `yraurbef`, …) plus the year as `6202`,
+which is **14 of that document's 29 missing tokens**; the remaining two
+(`latent`, `spacecraft`) are in the verifier's furniture vocabulary in their
+upright form. That 14 is the whole cost of rotated text there — 15 missing with
+a rotation filter against 29 without — and it is **0** on a second document.
+`pdf_profile.py` already prints the character count
+(`2706 rotated character(s): sideways cover spines or table headers. Filter on
+char['upright'].`); read that line before writing a page-by-page differ.
+
+`worst_pages` is the field that localises a defect; `pages_over_25pct` is the
+one to watch across a corpus. **`--top` takes a large number** — pass
+`--top 200` and read the remainder whole. Once furniture and hyphenation are
+normalised the remainder is small enough for that — 153 and 29 tokens, the
+numbers the verifier prints on the two measured documents (the second falls to
+15 once the 14 rotated-furniture tokens above are subtracted, which no flag
+does for you) — and it is dominated by de-hyphenation fragments the
+converter repaired *correctly* and by column leakage on the reference side.
+Read those tokens before you believe the percentage.
+
+---
+
+## 9. See also
 
 - [library-selection.md](library-selection.md) — which PDF library for which
   task; the `is_encrypted` check for inline extraction code.

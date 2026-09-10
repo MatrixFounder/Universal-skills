@@ -609,7 +609,6 @@ def batch_main(
 
 
 def main(argv: list[str] | None = None) -> int:
-    install_human_channel()
     """Orchestration entry point.
 
     Order of operations (each step's failure mode bubbles through the
@@ -627,6 +626,7 @@ def main(argv: list[str] | None = None) -> int:
     7. date resolution — Q5: --date overrides; default UTC now ISO-Z.
     8. dispatch        — single_cell_main (--cell) or batch_main (--batch).
     """
+    install_human_channel()
     parser = build_parser()
     args = parser.parse_args(argv)
     je = args.json_errors

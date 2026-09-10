@@ -2136,7 +2136,7 @@ class TestImageExtraction(unittest.TestCase):
         # The dump echoes the EFFECTIVE dpi, not the default.
         self.assertEqual(low_dump["image_dpi"], 72)
         self.assertEqual(dump["image_dpi"], 150)
-        # The raster is copied as stored, so dpi cannot touch it.
+        # The raster is written at its own native resolution, so dpi cannot touch it.
         self.assertEqual(dump["pages"][1]["images"][0]["sha1"],
                          low_dump["pages"][1]["images"][0]["sha1"])
 
@@ -2912,12 +2912,28 @@ class TestColumnGutters(unittest.TestCase):
 
     def test_the_probe_measures_the_crop_before_advising_it(self):
         """Same contract as the y-tolerance probe: cropping at the gutter has
-        to be shown to help on THIS document before it is recommended."""
+        to be shown to help on THIS document before it is recommended.
+
+        What is measured is the DAMAGE -- lines that carry both columns' text
+        and no character of their own across the cut -- and not a raw line
+        count. The raw count is blind to exactly the thing the probe exists
+        to see: on a 30-page magazine cropping took it from 169 lines to 155,
+        a DROP, because a crop both splits lines the other column contributes
+        nothing to and re-joins short fragments, so the hint announced that
+        the gutter was "layout, not damage" about a cut 54 of that document's
+        lines straddle. A number that can fall when the repair works cannot
+        be read in either direction.
+        """
         dump, stderr = self._run("columns.pdf")
         probe = dump["layout_hints"]["column_probe"]
-        self.assertEqual(probe["lines_before"], fixtures.COLUMNS_ROWS)
-        self.assertEqual(probe["lines_after"], 2 * fixtures.COLUMNS_ROWS)
-        self.assertIn("Cropping at the gutter took 30 line(s) to 60", stderr)
+        self.assertEqual(probe["straddling_before"], fixtures.COLUMNS_ROWS)
+        self.assertEqual(probe["straddling_after"], 0)
+        # Asserting the old pair is ABSENT is what stops it being re-added
+        # alongside the new one, with the hint reading from whichever.
+        self.assertNotIn("lines_before", probe)
+        self.assertNotIn("lines_after", probe)
+        self.assertIn("30 line(s) glue two columns together and 0 still do "
+                      "after the crop", stderr)
         self.assertIn("--layout does NOT separate them", stderr)
 
     def test_a_document_with_one_column_gets_no_hint(self):
@@ -2992,6 +3008,247 @@ class TestColumnGutters(unittest.TestCase):
         signal is about a page of body text."""
         self.assertEqual(
             pdf_extract._page_gutters(self._synthetic_page(6)), [])
+
+
+class TestColumnProbeResidual(unittest.TestCase):
+    """`straddling_after` must be a measurement, not a constant.
+
+    `page.crop()` clips every character to the region's bbox, so re-counting
+    the ORIGINAL cuts inside a region returns 0 whatever the crop achieved —
+    the predicate needs a char with `x0 >= cut` (or `x1 <= cut`) on the wrong
+    side and can never get one. Counted that way the field was 0 by
+    construction and the third hint branch was unreachable dead code, while the
+    docstring argued at length that it was "not a tautology dressed as a
+    measurement".
+
+    What is counted instead is the damage the crop did NOT repair:
+    `_page_gutters` is re-run INSIDE each cropped region and the lines gluing
+    two columns across THOSE gutters are counted. This class holds the page
+    that separates the two — a three-column sheet whose first column is narrow,
+    so the full-page detector finds only the right-hand gutter.
+    """
+
+    PAGE_WIDTH, PAGE_HEIGHT = 612.0, 792.0
+    ROWS = 40
+
+    @classmethod
+    def setUpClass(cls):
+        _ensure_fixtures()
+        cls.tmp = tempfile.TemporaryDirectory()
+        cls.pdf = Path(cls.tmp.name) / "narrow_first_column.pdf"
+        cls.pdf.write_bytes(cls._three_columns())
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.tmp.cleanup()
+
+    @classmethod
+    def _three_columns(cls) -> bytes:
+        """Columns at x = 40 (six characters wide), 130 and 350.
+
+        The left gutter then sits at x ~ 98, which is 0.13 of the PAGE's text
+        span — under `_COLUMN_EDGE_MARGIN`, so the full page yields the single
+        cut near x = 303. Inside the left crop the same gutter sits at 0.27 of
+        that region's span and IS found: the region still holds two interleaved
+        columns, which is exactly the state "the crop is not the whole repair"
+        names.
+        """
+        import io
+
+        from reportlab.pdfgen import canvas
+
+        buf = io.BytesIO()
+        c = canvas.Canvas(buf, pagesize=(cls.PAGE_WIDTH, cls.PAGE_HEIGHT))
+        c.setFont("Helvetica", 9)
+        for row in range(cls.ROWS):
+            y = 740 - row * 18
+            c.drawString(40, y, "c1 xyz")
+            c.drawString(130, y, "middle column row %02d text here" % row)
+            c.drawString(350, y, "right column row %02d text here" % row)
+        c.showPage()
+        c.save()
+        return buf.getvalue()
+
+    @staticmethod
+    def _word_kwargs():
+        return {k: v for k, v
+                in pdf_extract._text_kwargs(False, None, None).items()
+                if k != "layout"}
+
+    def test_the_page_carries_a_second_gutter_the_full_page_scan_misses(self):
+        """Without this the probe assertions below could pass on a page that
+        simply has one gutter, testing nothing."""
+        import pdfplumber  # type: ignore
+
+        with pdfplumber.open(str(self.pdf)) as pdf:
+            page = pdf.pages[0]
+            cuts = pdf_extract._page_gutters(page)
+            self.assertEqual(len(cuts), 1, cuts)
+            left, top, _, bottom = (float(v) for v in page.bbox)
+            crop = page.crop((left, top, cuts[0], bottom), strict=False)
+            residual = pdf_extract._page_gutters(crop)
+            self.assertEqual(len(residual), 1, residual)
+            self.assertLess(residual[0], cuts[0])
+
+    def test_the_probe_reports_the_damage_the_crop_leaves(self):
+        proc = _run_cli([str(self.pdf)])
+        self.assertEqual(proc.returncode, 0, proc.stderr[-400:])
+        probe = json.loads(proc.stdout)["layout_hints"]["column_probe"]
+        self.assertEqual(probe["pages"], [1])
+        self.assertEqual(len(probe["gutters"][0]), 1)
+        self.assertEqual(probe["straddling_before"], self.ROWS)
+        self.assertEqual(probe["straddling_after"], self.ROWS)
+        self.assertIn("still glued by a FURTHER gutter", proc.stderr)
+        self.assertIn("not the whole repair", proc.stderr)
+
+    def test_the_ordinary_case_still_reports_a_finished_repair(self):
+        """The control. On `columns.pdf` the crop DOES finish the job, so the
+        residual is an honest 0 and the first hint branch is the one that
+        prints — a field that is always 0 and a field that is 0 here must not
+        be confusable."""
+        proc = _run_cli([str(FIXTURES_DIR / "columns.pdf")])
+        self.assertEqual(proc.returncode, 0, proc.stderr[-400:])
+        probe = json.loads(proc.stdout)["layout_hints"]["column_probe"]
+        self.assertGreater(probe["straddling_before"], 0)
+        self.assertEqual(probe["straddling_after"], 0)
+        self.assertNotIn("still glued by a FURTHER gutter", proc.stderr)
+
+    def test_recounting_the_original_cuts_inside_a_crop_is_always_zero(self):
+        """The docstring's central factual claim, on both documents at once:
+        the metric the probe does NOT use reads 0 where the crop works and 0
+        where it demonstrably does not, while the metric it DOES use tells them
+        apart."""
+        import pdfplumber  # type: ignore
+
+        expected = {"columns.pdf": 0, "narrow_first_column.pdf": self.ROWS}
+        for path in (FIXTURES_DIR / "columns.pdf", self.pdf):
+            with self.subTest(document=path.name):
+                with pdfplumber.open(str(path)) as pdf:
+                    page = pdf.pages[0]
+                    cuts = sorted(pdf_extract._page_gutters(page))
+                    self.assertTrue(cuts, "no gutter to crop at")
+                    left, top, right, bottom = (float(v) for v in page.bbox)
+                    edges = [left, *cuts, right]
+                    original = residual = 0
+                    for start, end in zip(edges, edges[1:]):
+                        if end - start <= 0:
+                            continue
+                        column = page.crop((start, top, end, bottom),
+                                           strict=False)
+                        original += pdf_extract._straddling_lines(
+                            column, cuts, self._word_kwargs())
+                        inner = pdf_extract._page_gutters(column)
+                        if inner:
+                            residual += pdf_extract._straddling_lines(
+                                column, sorted(inner), self._word_kwargs())
+                self.assertEqual(original, 0)
+                self.assertEqual(residual, expected[path.name])
+
+    def test_crop_is_additive_and_within_bbox_is_subtractive(self):
+        """The convention §3.1 tells a caller to verify a cut with: count the
+        upright non-space characters and expect the crops to preserve them.
+
+        `crop` clips a straddling character into BOTH regions (+1 here, the
+        full-width heading's character on the cut); `within_bbox` drops it
+        (-1). Which one the caller uses is the difference between a verified
+        cut and a silently lossy one, and the paragraph is only meaningful
+        while this holds."""
+        import io
+
+        import pdfplumber  # type: ignore
+        from reportlab.pdfgen import canvas
+
+        buf = io.BytesIO()
+        c = canvas.Canvas(buf, pagesize=(612, 792))
+        c.setFont("Helvetica", 14)
+        c.drawString(80, 720, "A FULL WIDTH HEADING THAT CROSSES THE CUT LINE")
+        c.setFont("Helvetica", 9)
+        for i in range(20):
+            c.drawString(80, 690 - i * 20, "left column row %02d" % i)
+            c.drawString(340, 690 - i * 20, "right column row %02d" % i)
+        c.showPage()
+        c.save()
+
+        def census(obj):
+            return sum(1 for ch in pdf_extract._tl.upright(obj.chars)
+                       if (ch.get("text") or "").strip())
+
+        with pdfplumber.open(io.BytesIO(buf.getvalue())) as pdf:
+            page = pdf.pages[0]
+            left, top, right, bottom = (float(v) for v in page.bbox)
+            cut = 300.0
+            regions = ((left, cut), (cut, right))
+            flat = census(page)
+            cropped = sum(census(page.crop((a, top, b, bottom), strict=False))
+                          for a, b in regions)
+            inside = sum(census(page.within_bbox((a, top, b, bottom),
+                                                 strict=False))
+                         for a, b in regions)
+        self.assertGreater(cropped, flat)
+        self.assertLess(inside, flat)
+        self.assertEqual(cropped - flat, 1)
+        self.assertEqual(flat - inside, 1)
+
+
+class TestLineReconstructionFailure(unittest.TestCase):
+    """`--lines` swallowed every exception and wrote `lines: [] / rects: [] /
+    rules: []` with no counter and nothing on stderr, which is the opposite of
+    the neighbouring `images` branch. `--lines` is what the composition step
+    reads, so a page whose line reconstruction died was indistinguishable there
+    from a page with no text: a silently dropped page."""
+
+    @classmethod
+    def setUpClass(cls):
+        _ensure_fixtures()
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.out = Path(self.tmp.name) / "dump.json"
+        self.addCleanup(self.tmp.cleanup)
+
+    def _main(self, *args):
+        with _silence_fd_stderr() as sink:
+            rc = pdf_extract.main([*map(str, args)])
+            sink.seek(0)
+            stderr = sink.read()
+        return rc, stderr, json.loads(self.out.read_text(encoding="utf-8"))
+
+    def test_a_failure_is_counted_named_and_still_exits_zero(self):
+        """The text and the tables ARE the contract; the line view is an
+        extra, so this is a warning and not a failure — but it is a warning,
+        and it says what the empty list does not mean."""
+        def boom(*args, **kwargs):
+            raise RuntimeError("line reconstruction exploded")
+
+        with mock.patch.object(pdf_extract._tl, "page_lines", boom):
+            rc, stderr, dump = self._main(
+                FIXTURES_DIR / "columns.pdf", "--lines", "-o", self.out)
+        self.assertEqual(rc, 0)
+        self.assertEqual(dump["lines_failed_pages"],
+                         [page["n"] for page in dump["pages"]])
+        for page in dump["pages"]:
+            with self.subTest(page=page["n"]):
+                self.assertIs(page["lines_failed"], True)
+                self.assertEqual(page["lines"], [])
+                self.assertEqual(page["rects"], [])
+                self.assertEqual(page["rules"], [])
+                self.assertGreater(page["char_count"], 0,
+                                   "an empty page would make the flag moot")
+        self.assertIn("line reconstruction failed on 3 page(s)", stderr)
+        self.assertIn("NOT a statement that the page(s) hold no text", stderr)
+        self.assertIn("char_count", stderr)
+
+    def test_the_happy_path_dump_carries_no_counter(self):
+        """The shape contract `--lines` keeps: a dump that differs from the
+        one before this fix by nothing but an empty counter would break it."""
+        rc, stderr, dump = self._main(
+            FIXTURES_DIR / "columns.pdf", "--lines", "-o", self.out)
+        self.assertEqual(rc, 0)
+        self.assertNotIn("lines_failed_pages", dump)
+        for page in dump["pages"]:
+            self.assertNotIn("lines_failed", page)
+        self.assertTrue(dump["pages"][0]["lines"])
+        self.assertNotIn("line reconstruction failed", stderr)
 
 
 class TestInlineGlyphs(unittest.TestCase):
