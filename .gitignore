@@ -111,7 +111,6 @@ System
 /.claude/agents/*
 /.claude/hooks
 /.claude/settings.json
-/.claude/settings.local.json
 
 # Claude bridge files (gitignored — they import the framework).
 /CLAUDE.agentic.md
@@ -122,6 +121,7 @@ System
 
 # Project-local entries (kept in version control).
 !/.agent/skills/brainstorming
+!/.agent/skills/design-md
 !/.agent/skills/docx
 !/.agent/skills/hooks-creator
 !/.agent/skills/marp-slide
@@ -150,6 +150,7 @@ System
 !/.claude/skills/pdf
 !/.claude/skills/post-writing
 !/.claude/skills/pptx
+!/.claude/skills/skill-auto-improve
 !/.claude/skills/skill-creator
 !/.claude/skills/skill-enhancer
 !/.claude/skills/skill-validator
