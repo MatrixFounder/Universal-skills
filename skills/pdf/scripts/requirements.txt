@@ -1,6 +1,6 @@
 pypdf>=4.0.0
 pdfplumber>=0.11.0
-weasyprint>=61.0
+weasyprint>=70.0  # 70.0 current stable, checked 2026-10-03; URLFetcher-class API (default_url_fetcher removed)
 markdown2>=2.5.0
 reportlab>=4.0.0
 Pillow>=10.0.0

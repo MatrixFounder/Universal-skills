@@ -2,10 +2,10 @@
   "API Reference - Documentation - Discord.webarchive": {
     "platform": "discord",
     "regular": {
-      "min_pages": 28,
-      "max_pages": 30,
-      "min_size_kb": 283,
-      "max_size_kb": 347,
+      "min_pages": 25,
+      "max_pages": 27,
+      "min_size_kb": 328,
+      "max_size_kb": 402,
       "required_needles": [
         "The file upload size limit applies to each file in a request.",
         "ignore rate limits will have their API keys revoked, and be blocked",
@@ -526,8 +526,8 @@
     "regular": {
       "min_pages": 1,
       "max_pages": 2,
-      "min_size_kb": 55,
-      "max_size_kb": 67,
+      "min_size_kb": 63,
+      "max_size_kb": 77,
       "required_needles": [
         "Circle introduces cirBTC to expand BTC's DeFi role",
         "Разрешите уведомления Gmail на рабочем столе."

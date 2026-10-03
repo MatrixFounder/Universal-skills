@@ -14,7 +14,7 @@ from pathlib import Path
 from urllib.parse import urlparse
 from urllib.request import url2pathname
 
-from weasyprint import CSS, HTML, default_url_fetcher  # type: ignore
+from weasyprint import CSS, HTML, URLFetcher  # type: ignore
 
 # `md2pdf` is a sibling module in `skills/pdf/scripts/`, not part of this
 # package. It's on sys.path because the CLI is run from that directory.
@@ -26,23 +26,33 @@ from .reader_mode import reader_mode_html
 SUPPORTED_EXTENSIONS = (".html", ".htm", ".mhtml", ".mht", ".webarchive")
 
 
-def _offline_url_fetcher(url: str) -> dict:
+class _OfflineURLFetcher(URLFetcher):
     """weasyprint URL fetcher that refuses remote (http/https) URLs.
 
-    Default weasyprint behaviour is to fetch any external URL with no timeout
-    (urllib's blocking call). On real-world web pages with dozens of CDN
-    references (fonts, analytics pixels, social-media badges) this hangs the
-    whole conversion for 10+ minutes per stalled request.
+    Default weasyprint behaviour is to fetch any external URL (10 s timeout per
+    request since 68.0, none before). On real-world web pages with dozens of CDN
+    references (fonts, analytics pixels, social-media badges) this stalls the
+    whole conversion for minutes.
 
     Local schemes (`file://`, `data:`) fall through to weasyprint's default —
     we explicitly raise to force weasyprint to skip the remote resource and
     continue rendering. Skipped resources produce an "Failed to load X"
     weasyprint warning to stderr but the PDF still renders with whatever
     fonts / images were resolvable locally.
+
+    A `URLFetcher` subclass, not a plain function: weasyprint 70 removed
+    `default_url_fetcher` and requires `url_fetcher` to be a `URLFetcher`
+    instance returning `URLFetcherResponse`. Overriding `fetch` also covers
+    redirects, which re-enter through `open()` → `fetch()`.
     """
-    if url.startswith(("file://", "data:")):
-        return default_url_fetcher(url)
-    raise ValueError(f"remote fetch refused (offline mode): {url}")
+
+    def fetch(self, url, headers=None):
+        if url.startswith(("file://", "data:")):
+            return super().fetch(url, headers)
+        raise ValueError(f"remote fetch refused (offline mode): {url}")
+
+
+_offline_url_fetcher = _OfflineURLFetcher()
 
 
 # A bounded cap on inline data: URIs accepted in --untrusted mode (a self-contained blob
@@ -79,23 +89,29 @@ def _make_untrusted_url_fetcher(base_url: str):
     renderer decodes HTML/CSS escapes before calling the fetcher, this also neutralizes any
     entity-encoded ``file://`` ref that slipped past the fetch-time sanitizer.
     """
-    base_dir = _base_dir_of(base_url)
+    return _UntrustedURLFetcher(_base_dir_of(base_url))
 
-    def _fetch(url: str) -> dict:
+
+class _UntrustedURLFetcher(URLFetcher):
+    """See `_make_untrusted_url_fetcher`; `base_dir` None refuses every file://."""
+
+    def __init__(self, base_dir: "Path | None", **kwargs):
+        super().__init__(**kwargs)
+        self._base_dir = base_dir
+
+    def fetch(self, url, headers=None):
         if url.startswith("data:"):
             if len(url) > _UNTRUSTED_DATA_MAX:
                 raise ValueError("untrusted mode: data: URI exceeds the size cap")
-            return default_url_fetcher(url)
-        if url.startswith("file://") and base_dir is not None:
+            return super().fetch(url, headers)
+        if url.startswith("file://") and self._base_dir is not None:
             try:
                 target = Path(url2pathname(urlparse(url).path)).resolve()
-                target.relative_to(base_dir)          # ValueError if outside base_dir
+                target.relative_to(self._base_dir)    # ValueError if outside base_dir
             except (OSError, ValueError):
                 raise ValueError(f"untrusted mode: file:// outside base dir refused: {url}")
-            return default_url_fetcher(url)
+            return super().fetch(url, headers)
         raise ValueError(f"untrusted mode: refused non-data / out-of-base resource: {url}")
-
-    return _fetch
 
 
 # Back-compat / no-base default (refuses all file://; only bounded data:).
@@ -264,7 +280,7 @@ def convert(
             string=html_text,
             base_url=base_url,
             url_fetcher=(_make_untrusted_url_fetcher(base_url) if untrusted
-                        else _offline_url_fetcher),
+                        else _OfflineURLFetcher()),
         ).write_pdf(str(output_path), stylesheets=stylesheets)
     finally:
         _clear_render_watchdog(prev_handler)

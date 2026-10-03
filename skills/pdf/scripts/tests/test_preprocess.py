@@ -2564,6 +2564,37 @@ class _FakeReq:
         self.url = url
 
 
+class TestFetcherWeasyprintContract(unittest.TestCase):
+    """weasyprint 70 removed `default_url_fetcher` and accepts only `URLFetcher`
+    instances returning `URLFetcherResponse` (it reads `url_fetcher._fail_on_errors`).
+    Plain-function fetchers passed every unit test above on 68.x yet broke every render
+    on 70 — so pin the type AND run one real render through each fetcher."""
+
+    _PNG = ("data:image/png;base64,"
+            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR4nGNgAAIAAAUAAen63NgAAAAASUVORK5CYII=")
+
+    def test_fetchers_are_urlfetcher_instances(self):
+        from weasyprint.urls import URLFetcher, URLFetcherResponse
+        for f in (_offline_url_fetcher, _untrusted_url_fetcher, _make_untrusted_url_fetcher("/tmp")):
+            self.assertIsInstance(f, URLFetcher)
+            resp = f(self._PNG)
+            try:
+                self.assertIsInstance(resp, URLFetcherResponse)
+            finally:
+                resp.close()
+
+    def test_real_render_through_each_fetcher(self):
+        from weasyprint import HTML
+        with tempfile.TemporaryDirectory() as d:
+            base = Path(d).resolve()
+            (base / "a.png").write_bytes(__import__("base64").b64decode(self._PNG.split(",", 1)[1]))
+            html = (f'<p>x</p><img src="{self._PNG}"><img src="a.png">'
+                    '<img src="https://example.invalid/r.png">')
+            for fetcher in (_offline_url_fetcher, _make_untrusted_url_fetcher(str(base))):
+                pdf = HTML(string=html, base_url=str(base) + "/", url_fetcher=fetcher).write_pdf()
+                self.assertTrue(pdf.startswith(b"%PDF"), type(fetcher).__name__)
+
+
 # ── --untrusted hardening (TASK 027: html fetch → pdf) ───────────────────────
 class TestUntrustedFetcher(unittest.TestCase):
     """The --untrusted weasyprint fetcher refuses file:// (CWE-22) and remote; only
