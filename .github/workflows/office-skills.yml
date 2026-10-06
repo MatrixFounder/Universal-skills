@@ -48,6 +48,7 @@ jobs:
       - uses: actions/checkout@v5
 
       - uses: actions/setup-python@v6
+        id: setup-python
         with:
           python-version: "3.11"
 
@@ -67,12 +68,18 @@ jobs:
             imagemagick
 
       - name: Cache per-skill venv + node_modules
+        # The full Python patch version is part of the key: a venv's
+        # bin/python3 is a symlink into /opt/hostedtoolcache/Python/<X.Y.Z>/,
+        # so a venv cached on 3.11.16 restored onto a 3.11.17 runner is dead
+        # on arrival (install.sh then dies in `python3 -m venv` with ENOENT on
+        # .venv/bin/python3). Runner images roll a new patch out gradually,
+        # so the same run can mix both versions across matrix jobs.
         uses: actions/cache@v5
         with:
           path: |
             skills/${{ matrix.skill }}/scripts/.venv
             skills/${{ matrix.skill }}/scripts/node_modules
-          key: ${{ runner.os }}-skill-${{ matrix.skill }}-${{ hashFiles(format('skills/{0}/scripts/requirements.txt', matrix.skill), format('skills/{0}/scripts/package.json', matrix.skill)) }}
+          key: ${{ runner.os }}-py${{ steps.setup-python.outputs.python-version }}-skill-${{ matrix.skill }}-${{ hashFiles(format('skills/{0}/scripts/requirements.txt', matrix.skill), format('skills/{0}/scripts/package.json', matrix.skill)) }}
 
       - name: install.sh
         run: bash skills/${{ matrix.skill }}/scripts/install.sh

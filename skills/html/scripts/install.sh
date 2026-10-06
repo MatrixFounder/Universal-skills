@@ -7,8 +7,12 @@ set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$HERE"
 
-echo "[html] creating .venv ..."
-python3 -m venv .venv
+if [ ! -x ".venv/bin/python" ]; then
+  echo "[html] creating .venv ..."
+  # --clear: a .venv whose interpreter symlink dangles (Python upgraded or
+  # moved) fails the -x test above, and a plain `venv` over it dies with ENOENT.
+  python3 -m venv --clear .venv
+fi
 ./.venv/bin/python -m pip install --quiet --upgrade pip
 
 # requirements.txt may be comment-only in early beads — only run if it has a real line.

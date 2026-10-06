@@ -65,7 +65,9 @@ say "python3: $PY_VER"
 # --- Python venv ---
 if [ ! -x ".venv/bin/python" ]; then
     say "Creating Python venv at scripts/.venv/..."
-    python3 -m venv .venv
+    # --clear: a .venv whose interpreter symlink dangles (Python upgraded or
+    # moved) fails the -x test above, and a plain `venv` over it dies with ENOENT.
+    python3 -m venv --clear .venv
 else
     say "Python venv already exists."
 fi

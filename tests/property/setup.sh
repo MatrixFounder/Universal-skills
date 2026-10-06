@@ -11,7 +11,9 @@ set -euo pipefail
 cd "$(dirname "$0")"
 
 if [ ! -x ".venv/bin/python" ]; then
-    python3 -m venv .venv
+    # --clear: a .venv whose interpreter symlink dangles (Python upgraded or
+    # moved) fails the -x test above, and a plain `venv` over it dies with ENOENT.
+    python3 -m venv --clear .venv
 fi
 
 ./.venv/bin/python -m pip install --quiet --upgrade pip
