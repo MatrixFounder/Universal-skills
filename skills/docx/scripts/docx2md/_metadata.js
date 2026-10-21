@@ -63,6 +63,7 @@ async function loadDocxParts(zip) {
     return {
         zip,
         documentXml:         await readOpt("word/document.xml"),
+        stylesXml:           await readOpt("word/styles.xml"),
         commentsXml:         await readOpt("word/comments.xml"),
         commentsExtendedXml: await readOpt("word/commentsExtended.xml"),
         footnotesXml:        await readOpt("word/footnotes.xml"),

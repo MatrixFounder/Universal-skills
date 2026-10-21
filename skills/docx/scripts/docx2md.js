@@ -5,8 +5,9 @@
 //   1. Probe external tools (soffice, poppler) and load npm deps.
 //   2. Create output assets dir (refusing symlinks).
 //   3. Build shared ctx (paths, counters, dedup maps, tool handles).
-//   4. Read .docx into a JSZip; pull metadata sidecar (comments + revisions)
-//      and footnote/endnote definitions; rewrite footnote/endnote references
+//   4. Read .docx into a JSZip; pull metadata sidecar (comments + revisions);
+//      drop hidden runs (<w:vanish/>, unless --keep-hidden-text);
+//      pull footnote/endnote definitions; rewrite footnote/endnote references
 //      in document.xml to ⟦FN:N⟧ / ⟦EN:N⟧ sentinels (docx-4 + docx-5).
 //   5. Mammoth: modified docx buffer → HTML (with image callback).
 //   6. Turndown: HTML → markdown with custom table rules.
@@ -41,6 +42,7 @@ const {
     dropTinyImageRefs,
 } = require("./docx2md/_markdown");
 const metadataMod = require("./docx2md/_metadata");
+const hiddenMod = require("./docx2md/_hidden");
 
 // ---- CLI args ------------------------------------------------------------
 //
@@ -49,6 +51,7 @@ const metadataMod = require("./docx2md/_metadata");
 //   --metadata-json PATH   override sidecar path (default: <output.md base>.docx2md.json)
 //   --no-metadata          skip comment/revision extraction; do not write sidecar
 //   --no-footnotes         skip footnote/endnote conversion; behave like pre-docx-5
+//   --keep-hidden-text     keep runs Word hides (<w:vanish/>); dropped by default
 //   --json-errors          emit single-line JSON envelope on stderr for top-level failures
 
 const argv = process.argv.slice(2);
@@ -56,6 +59,7 @@ let inputDocx, outputMd;
 let metadataJsonPath = null;
 let extractMetadataFlag = true;
 let convertFootnotesFlag = true;
+let dropHiddenTextFlag = true;
 let jsonErrors = false;
 {
     const positional = [];
@@ -76,6 +80,7 @@ let jsonErrors = false;
         }
         else if (a === "--no-metadata")  extractMetadataFlag = false;
         else if (a === "--no-footnotes") convertFootnotesFlag = false;
+        else if (a === "--keep-hidden-text") dropHiddenTextFlag = false;
         else if (a === "--json-errors")  jsonErrors = true;
         else positional.push(a);
     }
@@ -103,7 +108,7 @@ function reportError(msg, code, type, details) {
 
 if (!inputDocx || !outputMd) {
     reportError(
-        "Usage: node docx2md.js <input.docx> <output.md> [--metadata-json PATH] [--no-metadata] [--no-footnotes] [--json-errors]",
+        "Usage: node docx2md.js <input.docx> <output.md> [--metadata-json PATH] [--no-metadata] [--no-footnotes] [--keep-hidden-text] [--json-errors]",
         2, "UsageError",
     );
 }
@@ -186,46 +191,6 @@ if (fs.existsSync(imagesDirPath)) {
 }
 fs.mkdirSync(imagesDirPath, { recursive: true });
 
-// ---- Mammoth document transform: collapse duplicate adjacent runs --------
-//
-// Some docx authoring tools (and human copy/paste) leave a paragraph with
-// adjacent <w:r> runs that have identical short text — e.g. a numbering
-// cell with two runs both containing "2", which mammoth concatenates to
-// "22". Collapse such runs in the AST so the converter sees the visible
-// value once. Universal: applies to every paragraph, no per-doc hacks.
-function getRunPlainText(run) {
-    if (!run.children) return null;
-    let text = "";
-    for (const c of run.children) {
-        if (c.type !== "text") return null;
-        text += c.value;
-    }
-    return text;
-}
-
-function collapseDuplicateAdjacentRuns(paragraph) {
-    const kids = paragraph.children;
-    if (!kids || kids.length < 2) return paragraph;
-    const out = [];
-    for (const child of kids) {
-        const last = out[out.length - 1];
-        if (last && last.type === "run" && child.type === "run") {
-            const t1 = getRunPlainText(last);
-            const t2 = getRunPlainText(child);
-            // Only collapse short, identical, non-empty plain-text runs.
-            // Length cap keeps the heuristic safe — duplicating a long
-            // identical phrase across two runs would be a real authoring
-            // intent, not a stutter artefact.
-            if (t1 && t2 && t1 === t2 && t1.length <= 3) {
-                continue;
-            }
-        }
-        out.push(child);
-    }
-    paragraph.children = out;
-    return paragraph;
-}
-
 // ---- Mammoth image convertor (routes through _assets/storeOrDedup) -------
 
 const mammothOptions = {
@@ -245,7 +210,6 @@ const mammothOptions = {
         "p[style-name='Heading 6'] => h6:fresh",
         "p[style-name='Code'] => pre > code:fresh",
     ],
-    transformDocument: mammoth.transforms.paragraph(collapseDuplicateAdjacentRuns),
 };
 
 // ---- Turndown (HTML → markdown) with merge-aware table rules ------------
@@ -304,19 +268,32 @@ console.log(`Converting:\n  Input:  ${inputDocx}\n  Output: ${outputMd}`);
         sidecar = metadataMod.buildSidecar(parts, path.basename(inputDocx));
     }
 
+    // Hidden text: Word shows none of it, mammoth would emit all of it. Runs
+    // after the sidecar (the audit trail keeps the source text) and before
+    // footnote extraction (note definitions lose their hidden runs too).
+    let partsModified = false;
+    if (dropHiddenTextFlag) {
+        const hiddenRuns = hiddenMod.stripHiddenText(parts);
+        if (hiddenRuns > 0) {
+            partsModified = true;
+            console.log(`[docx-to-md] Dropped ${hiddenRuns} hidden run(s) (<w:vanish/>); --keep-hidden-text keeps them.`);
+        }
+    }
+
     // docx-5: extract footnote/endnote definitions BEFORE mutating XML
     // (the strip pass blanks bodies). Inject sentinels into document.xml
     // and silence mammoth's own footnote rendering.
     let notes = { footnotes: [], endnotes: [] };
-    let mammothInput = { path: inputDocx };
     if (convertFootnotesFlag) {
         notes = metadataMod.extractFootnotesAndEndnotes(parts);
         if (notes.footnotes.length > 0 || notes.endnotes.length > 0) {
             metadataMod.injectFootnoteSentinels(parts, notes);
-            const modBuf = await metadataMod.repackToBuffer(parts);
-            mammothInput = { buffer: modBuf };
+            partsModified = true;
         }
     }
+    const mammothInput = partsModified
+        ? { buffer: await metadataMod.repackToBuffer(parts) }
+        : { path: inputDocx };
 
     let result;
     try {
