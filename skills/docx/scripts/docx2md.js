@@ -186,46 +186,6 @@ if (fs.existsSync(imagesDirPath)) {
 }
 fs.mkdirSync(imagesDirPath, { recursive: true });
 
-// ---- Mammoth document transform: collapse duplicate adjacent runs --------
-//
-// Some docx authoring tools (and human copy/paste) leave a paragraph with
-// adjacent <w:r> runs that have identical short text — e.g. a numbering
-// cell with two runs both containing "2", which mammoth concatenates to
-// "22". Collapse such runs in the AST so the converter sees the visible
-// value once. Universal: applies to every paragraph, no per-doc hacks.
-function getRunPlainText(run) {
-    if (!run.children) return null;
-    let text = "";
-    for (const c of run.children) {
-        if (c.type !== "text") return null;
-        text += c.value;
-    }
-    return text;
-}
-
-function collapseDuplicateAdjacentRuns(paragraph) {
-    const kids = paragraph.children;
-    if (!kids || kids.length < 2) return paragraph;
-    const out = [];
-    for (const child of kids) {
-        const last = out[out.length - 1];
-        if (last && last.type === "run" && child.type === "run") {
-            const t1 = getRunPlainText(last);
-            const t2 = getRunPlainText(child);
-            // Only collapse short, identical, non-empty plain-text runs.
-            // Length cap keeps the heuristic safe — duplicating a long
-            // identical phrase across two runs would be a real authoring
-            // intent, not a stutter artefact.
-            if (t1 && t2 && t1 === t2 && t1.length <= 3) {
-                continue;
-            }
-        }
-        out.push(child);
-    }
-    paragraph.children = out;
-    return paragraph;
-}
-
 // ---- Mammoth image convertor (routes through _assets/storeOrDedup) -------
 
 const mammothOptions = {
@@ -245,7 +205,6 @@ const mammothOptions = {
         "p[style-name='Heading 6'] => h6:fresh",
         "p[style-name='Code'] => pre > code:fresh",
     ],
-    transformDocument: mammoth.transforms.paragraph(collapseDuplicateAdjacentRuns),
 };
 
 // ---- Turndown (HTML → markdown) with merge-aware table rules ------------

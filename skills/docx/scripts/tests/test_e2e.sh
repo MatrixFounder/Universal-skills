@@ -1900,6 +1900,20 @@ else
     nok "fixture-math.md" "missing"
 fi
 
+# ---------- docx2md: identical adjacent runs survive ----------
+# Word stores "11" as run "1" + run "1"; both are visible, so "BR-11" must not become "BR-1".
+echo "docx2md identical adjacent runs:"
+runs_rc=0
+runs_out=$("$PY" -m unittest tests.test_docx2md_runs 2>&1) || runs_rc=$?
+runs_ran=$(echo "$runs_out" | grep -oE 'Ran [0-9]+ tests?' | grep -oE '[0-9]+' | tail -1)
+runs_ran=${runs_ran:-0}
+if [ "$runs_rc" -eq 0 ] && [ "$runs_ran" -gt 0 ]; then
+    ok "docx2md_runs: $runs_ran tests passed"
+else
+    nok "docx2md_runs" "rc=$runs_rc ran=$runs_ran"
+    echo "$runs_out" | tail -25
+fi
+
 echo
 echo "$pass passed, $fail failed"
 
