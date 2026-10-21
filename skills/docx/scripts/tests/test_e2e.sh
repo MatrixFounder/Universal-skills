@@ -1900,9 +1900,10 @@ else
     nok "fixture-math.md" "missing"
 fi
 
-# ---------- docx2md: identical adjacent runs survive ----------
+# ---------- docx2md: run-level text fidelity ----------
 # Word stores "11" as run "1" + run "1"; both are visible, so "BR-11" must not become "BR-1".
-echo "docx2md identical adjacent runs:"
+# Runs Word hides (<w:vanish/>) are dropped unless --keep-hidden-text.
+echo "docx2md run-level text fidelity:"
 runs_rc=0
 runs_out=$("$PY" -m unittest tests.test_docx2md_runs 2>&1) || runs_rc=$?
 runs_ran=$(echo "$runs_out" | grep -oE 'Ran [0-9]+ tests?' | grep -oE '[0-9]+' | tail -1)
