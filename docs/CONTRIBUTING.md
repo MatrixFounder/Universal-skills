@@ -52,7 +52,9 @@ skills/<skill>/
 
 1. **Edit only inside the target skill folder.** Do not touch sibling
    skills unless your change is explicitly cross-cutting (see §3 for
-   the office-skills replication exception).
+   the office-skills replication exception). A skill copied from
+   agentic-development is edited there, not here: see `CLAUDE.md`,
+   "Framework copies".
 2. **Use the local `.venv` and `node_modules`** that `install.sh`
    creates. Never `pip install` or `npm install -g` globally.
 3. **Add or update tests** for any non-trivial logic. Tests live next

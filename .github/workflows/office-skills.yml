@@ -15,6 +15,7 @@ on:
       # workflow or that guard is unreachable for it.
       - "skills/design-md/**"
       - "scripts/sync-plugins.sh"
+      - "scripts/check_framework_copies.py"
       - "tests/**"
       - ".github/workflows/office-skills.yml"
   workflow_dispatch:
@@ -139,7 +140,7 @@ jobs:
         run: bash skills/${{ matrix.skill }}/scripts/tests/test_e2e.sh
 
   harness:
-    # Guards four repo-wide classes of defect that the matrix job structurally
+    # Guards five repo-wide classes of defect that the matrix job structurally
     # cannot see. Pure stdlib: no venv, no system deps.
     #
     # 1. Symlinked invocation. The matrix always runs the suites from the repo
@@ -159,6 +160,10 @@ jobs:
     #    import from the other -- a skill must run in isolation) and must not
     #    return contradictory verdicts on one SKILL.md. WI-033 was filed
     #    because they did.
+    # 5. The copy check itself. scripts/check_framework_copies.py compares the
+    #    skills copied from agentic-development with canonical; CI has no
+    #    sibling repository, so this step tests the script on fixtures and
+    #    reports the real comparison as skipped.
     name: test harness
     runs-on: ubuntu-22.04
     steps:
@@ -171,6 +176,8 @@ jobs:
         run: python3 tests/test_file_codec.py
       - name: skill-gate agreement guard
         run: python3 tests/test_shared_gate_logic.py
+      - name: framework-copy check
+        run: python3 tests/test_framework_copies.py
 
   property:
     name: property fuzz

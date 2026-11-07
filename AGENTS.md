@@ -224,6 +224,29 @@ Guards (non-negotiable):
   mirror the office four, `THIRD_PARTY_NOTICES.md` re-points to it, and it is never
   published under Apache-2.0 (see §3 License hygiene).
 
+### Framework copies — agentic-development is the master
+
+Some skills of `skills/` are full copies of skills that
+[agentic-development](https://github.com/MatrixFounder/Agentic-development) maintains. A
+directory of `skills/` is such a copy when `.agentic-development/.agent/skills/<name>` is a
+directory; on 2026-11-07 there were six: `brainstorming`, `hooks-creator`, `skill-creator`,
+`skill-enhancer`, `vdd-adversarial`, `vdd-sarcastic`.
+
+1. **Edit the canonical skill** in agentic-development. An edit made here first goes to
+   canonical in the same change.
+2. **Copy** the changed files: `cp <agentic-development>/.agent/skills/<name>/<file>
+   skills/<name>/<file>`.
+3. **Check** with `python3 scripts/check_framework_copies.py`: exit 0, every copy `ok`. A
+   `DRIFT` line names each file that differs or exists on one side only. Without the sibling
+   repository the script prints `SKIPPED`; CI runs only its own test
+   (`tests/test_framework_copies.py`).
+4. **A copy works outside the framework.** It names no path, command or role that only
+   agentic-development resolves. It may name a framework skill together with what to do
+   without it, as `brainstorming` does for `mermaid-authoring-guidelines`. Open exceptions:
+   `skill-creator` and `skill-enhancer` still name framework paths such as `.agent/` and
+   `docs/issues/` (agentic-development TASK 142, §5); `vdd-sarcastic` still names
+   `docs/reviews/…` and `audit-NNN` IDs (agentic-development TASK 141, §5).
+
 ### Anti-patterns — DO NOT
 
 - ❌ Edit `skills/xlsx/scripts/office/foo.py` directly.
