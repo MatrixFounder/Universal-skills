@@ -1,6 +1,7 @@
 # Backend adapter — Claude Code (validated)
 
-**Status**: validated. `available=True` when `run_eval.py` is locatable.
+**Status**: validated. `available=True` when `run_eval.py` is locatable AND the
+`claude` CLI is on PATH.
 
 ## What it does
 Implements skill-trigger evaluation (capability B) by wrapping skill-creator's
@@ -12,8 +13,13 @@ by parsing `tool_use` stream events for `Skill`/`Read`.
 1. `AUTO_IMPROVE_RUN_EVAL` env var (explicit path)
 2. sibling skill-creator: `<skill-auto-improve>/../skill-creator/scripts/run_eval.py`
 
-If neither resolves, `available=False` → the orchestrator falls back to LLM-only
-grading (generic artifacts) and cannot run skill-trigger eval.
+If neither resolves (or `claude` is not on PATH), `available=False` → a `skill` /
+`full-skill` run exits 2 before the baseline with the reason. There is no
+substitute measurement; prompt/workflow/dataset/text runs do not need a backend.
+
+## Not metered
+`run_eval.py` does not report the token usage of its `claude -p` runs, so
+`--max-tokens` cannot see them. Skill runs default to `--max-duration 60m`.
 
 ## Interface
 ```

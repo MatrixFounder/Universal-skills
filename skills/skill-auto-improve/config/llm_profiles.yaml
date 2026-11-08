@@ -24,8 +24,11 @@ profiles:
     max_output_tokens: 16384
     json_mode: true
 
-  # Grades a generic artifact's output against a rubric (subjective eval).
-  # Lower temperature for consistency; json_mode for a parseable verdict.
+  # Grades against a rubric: prompt/workflow cases, the text rubric, the
+  # pairwise judge, the large-tier review. Lower temperature for consistency;
+  # json_mode for a parseable verdict. Prefer a DIFFERENT model family than the
+  # proposer (--grader-provider / --grader-model): a model rates its own style
+  # higher (self-preference bias, arXiv:2404.13076).
   grader:
     model:
       gemini: "gemini-2.5-pro"
@@ -34,6 +37,20 @@ profiles:
     temperature: 0.0
     max_output_tokens: 4096
     json_mode: true
+
+  # Runs a PROMPT artifact (--prompt-eval executed, the default for prompts):
+  # the artifact is the system prompt, each eval case's `prompt`/`input` is the
+  # user turn. The grader then judges only the response, never the artifact.
+  # Free-text output, so json_mode is off. Temperature 0 keeps the measured
+  # noise down; the run still calibrates the noise band (--calibrate-noise).
+  executor:
+    model:
+      gemini: "gemini-2.5-pro"
+      anthropic: "claude-sonnet-4-6"
+      openai: "gpt-5.2"
+    temperature: 0.0
+    max_output_tokens: 4096
+    json_mode: false
 
   # Text-quality mutator: proposes surgical find/replace edits for prose.
   # Higher temperature for diverse best-of-N draws (paired with the temp-0

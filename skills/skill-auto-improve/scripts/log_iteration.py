@@ -2,9 +2,12 @@
 """Append one row to improvement_history.tsv (modeled on autoresearch results.tsv).
 
 Columns (tab-separated):
-  iter  score  delta  status  tier  change_summary  snapshot_ref
+  iter  score  delta  status  tier  change_summary  snapshot_ref  secondary
 
 `delta` is printed with a sign (e.g. +0.050) or "—" for the baseline row.
+`secondary` is the guard metric (1.000 = guard holds, 0.000 = guard broken) or
+empty when the run has no guard. It is the LAST column so that readers which
+index the older seven columns by position keep working.
 The header is written automatically when the file does not yet exist.
 """
 
@@ -13,7 +16,8 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
-COLUMNS = ["iter", "score", "delta", "status", "tier", "change_summary", "snapshot_ref"]
+COLUMNS = ["iter", "score", "delta", "status", "tier", "change_summary", "snapshot_ref",
+           "secondary"]
 
 
 def _fmt_delta(delta: float | None) -> str:
@@ -35,6 +39,7 @@ def log_iteration(
     tier: str = "",
     change_summary: str = "",
     snapshot_ref: str = "",
+    secondary: float | None = None,
 ) -> Path:
     workspace = Path(workspace)
     workspace.mkdir(parents=True, exist_ok=True)
@@ -48,6 +53,7 @@ def log_iteration(
         _sanitize(tier),
         _sanitize(change_summary),
         _sanitize(snapshot_ref),
+        "" if secondary is None else f"{secondary:.3f}",
     ]
     with tsv.open("a", encoding="utf-8") as f:
         if new_file:
@@ -66,6 +72,7 @@ def main() -> int:
     parser.add_argument("--tier", default="")
     parser.add_argument("--summary", default="")
     parser.add_argument("--snapshot-ref", default="")
+    parser.add_argument("--secondary", type=float, default=None)
     args = parser.parse_args()
     path = log_iteration(
         Path(args.workspace),
@@ -76,6 +83,7 @@ def main() -> int:
         tier=args.tier,
         change_summary=args.summary,
         snapshot_ref=args.snapshot_ref,
+        secondary=args.secondary,
     )
     print(str(path))
     return 0

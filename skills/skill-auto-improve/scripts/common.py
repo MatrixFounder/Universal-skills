@@ -18,6 +18,7 @@ import atexit
 import codecs
 import json
 import os
+import random
 import re
 import sys
 from pathlib import Path
@@ -32,7 +33,9 @@ STATUS_REVERT = "revert"
 STATUS_NO_SIGNAL = "no-signal"          # |Δ| <= σ → treated as REVERT (no drift)
 STATUS_NO_CHANGE = "no-change"          # Proposer produced empty/invalid diff
 STATUS_IMMUTABILITY = "immutability-violation"
-STATUS_ERROR = "error"
+STATUS_SHRINK = "shrink-guard"          # edit deletes too much / drops MUST|NEVER lines
+STATUS_DUPLICATE = "duplicate"          # verbatim repeat of a rejected attempt; never evaluated
+STATUS_ERROR = "error"                  # proposer/apply/evaluator/decider failure; no decision
 
 # Artifact types
 ARTIFACT_SKILL = "skill"
@@ -88,6 +91,80 @@ def resolve_dataset_items(data):
             if isinstance(data.get(key), list):
                 return data[key], key
     return [], None
+
+
+def is_negative_case(item: dict) -> bool:
+    """True for a case that must NOT trigger / must NOT produce something.
+
+    Shared by the dataset scorer and the holdout split so both agree on what a
+    negative case is: `should_trigger: false`, or any `forbidden_expectations`.
+    """
+    if item.get("should_trigger") is False:
+        return True
+    return bool(item.get("forbidden_expectations"))
+
+
+def split_eval_set(cases: list[dict], holdout: float, seed: int = 42) -> tuple[list[dict], list[dict]]:
+    """Stratified train/holdout split of an eval set. Returns (train, holdout).
+
+    Stratified by `is_negative_case`, so both parts keep the positive/negative
+    mix. Uses a LOCAL `random.Random(seed)`: the split is reproducible and never
+    reseeds the process-global RNG. Each non-empty stratum contributes at least
+    one holdout case and keeps at least one train case when it has two or more.
+    Behaviourally equivalent to skill-creator's `run_loop.split_eval_set`, but
+    vendored (this skill imports nothing from sibling skills) and not limited
+    to trigger-style `{query, should_trigger}` cases.
+    """
+    if not 0.0 < holdout < 1.0:
+        return list(cases), []
+    rng = random.Random(seed)
+    train: list[dict] = []
+    test: list[dict] = []
+    for stratum in ([c for c in cases if not is_negative_case(c)],
+                    [c for c in cases if is_negative_case(c)]):
+        if not stratum:
+            continue
+        group = list(stratum)
+        rng.shuffle(group)
+        n_test = max(1, int(len(group) * holdout))
+        if len(group) >= 2:
+            n_test = min(n_test, len(group) - 1)
+        test.extend(group[:n_test])
+        train.extend(group[n_test:])
+    return train, test
+
+
+def noise_band(sd: float, z: float) -> float:
+    """Keep threshold for a DIFFERENCE of two single measurements.
+
+    A delta is the difference of two noisy measurements, so its spread is
+    sqrt(2) times the spread `sd` of one measurement. A one-sided test at
+    `z` (1.64 ~ 5 % false-keep rate) therefore needs `z * sqrt(2) * sd`.
+    """
+    return z * (2 ** 0.5) * max(sd, 0.0)
+
+
+def bootstrap_diff_ci(base: list[float], cand: list[float], *, n_boot: int = 2000,
+                      alpha: float = 0.05, seed: int = 0) -> tuple[float, float, float]:
+    """Percentile bootstrap CI of mean(cand) - mean(base).
+
+    Returns (mean_diff, low, high). Both groups are resampled independently
+    with replacement; a local seeded RNG keeps the interval reproducible.
+    """
+    if not base or not cand:
+        raise ValueError("bootstrap needs at least one value per group")
+    rng = random.Random(seed)
+    mean = lambda xs: sum(xs) / len(xs)  # noqa: E731
+    diffs = []
+    for _ in range(n_boot):
+        b = [base[rng.randrange(len(base))] for _ in base]
+        c = [cand[rng.randrange(len(cand))] for _ in cand]
+        diffs.append(mean(c) - mean(b))
+    diffs.sort()
+    lo = diffs[int((alpha / 2) * (n_boot - 1))]
+    hi = diffs[int((1 - alpha / 2) * (n_boot - 1))]
+    return mean(cand) - mean(base), lo, hi
+
 
 # Tiers (deterministically derived from change size; NOT chosen by the Proposer)
 TIER_TRIVIAL = "trivial"

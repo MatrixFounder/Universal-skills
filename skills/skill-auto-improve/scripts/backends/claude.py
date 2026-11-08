@@ -7,8 +7,11 @@ stream-json` trigger detector — as a subprocess. We locate run_eval.py via:
     2. the sibling skill-creator in the same repo:
        <skill-auto-improve>/../skill-creator/scripts/run_eval.py
 
-If run_eval.py is not found, `available` is False and the orchestrator falls
-back to LLM-only grading for generic artifacts (and skips skill-trigger eval).
+`available` is True only when run_eval.py is found AND the `claude` CLI is on
+PATH. When it is False, a `skill` / `full-skill` run stops before the baseline
+with exit code 2: there is no substitute measurement of trigger accuracy, and
+the orchestrator never swaps in an LLM estimate silently. Prompt, workflow,
+dataset and text runs do not use this backend.
 
 The eval set for trigger evaluation is a JSON list of {query, should_trigger}.
 """
@@ -17,6 +20,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -51,7 +55,13 @@ class ClaudeBackend:
 
     @property
     def available(self) -> bool:
-        return self._run_eval is not None
+        return self._run_eval is not None and shutil.which("claude") is not None
+
+    def unavailable_reason(self) -> str:
+        if self._run_eval is None:
+            return ("skill-creator/scripts/run_eval.py not found (set "
+                    "AUTO_IMPROVE_RUN_EVAL to its path)")
+        return "the `claude` CLI is not on PATH"
 
     def trigger_eval(
         self,

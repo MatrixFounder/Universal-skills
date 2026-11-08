@@ -1,8 +1,9 @@
 # Backend adapter — Gemini CLI (STUB, unvalidated)
 
 **Status**: stub. `GeminiBackend.available = False`. Until implemented and
-validated on a real Gemini CLI runtime, the orchestrator degrades to LLM-only
-grading rather than emitting unverified skill-trigger numbers.
+validated on a real Gemini CLI runtime, a `skill` / `full-skill` run under this
+vendor exits 2 before the baseline rather than emitting unverified
+skill-trigger numbers. Prompt/workflow/dataset/text runs are unaffected.
 
 ## To implement
 1. For each `{query, should_trigger}`, invoke Gemini CLI in headless/print mode

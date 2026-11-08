@@ -64,7 +64,8 @@ def pairwise_decision(
     }
 
 
-def build_pairwise_judge(*, model: str | None = None, usage_sink: dict | None = None):
+def build_pairwise_judge(*, model: str | None = None, usage_sink: dict | None = None,
+                         provider: str | None = None):
     """Real LLM judge (vendor-agnostic, temp-0 `grader` profile).
 
     Artifact versions are stripped of injection markup (HTML comments / control
@@ -78,7 +79,7 @@ def build_pairwise_judge(*, model: str | None = None, usage_sink: dict | None = 
     except ImportError:
         from llm_config import LLMConfigManager
         from common import strip_injection_markup
-    manager = LLMConfigManager("grader")
+    manager = LLMConfigManager("grader", **({"provider": provider} if provider else {}))
     if model:
         manager.model_name = model
         manager.model_candidates = [model, *manager.fallback_models]
@@ -103,7 +104,8 @@ def build_pairwise_judge(*, model: str | None = None, usage_sink: dict | None = 
     return judge_fn
 
 
-def build_pairwise_decider(criteria_text: str, *, model: str | None = None):
+def build_pairwise_decider(criteria_text: str, *, model: str | None = None,
+                           provider: str | None = None):
     """Return a decider(champ_path, cand_path) -> {"decision","usage"} for the loop.
 
     The two judge calls (both orderings) are the heaviest LLM calls in the text
@@ -111,7 +113,7 @@ def build_pairwise_decider(criteria_text: str, *, model: str | None = None):
     against --max-tokens.
     """
     sink = {"total_tokens": 0}
-    judge_fn = build_pairwise_judge(model=model, usage_sink=sink)
+    judge_fn = build_pairwise_judge(model=model, usage_sink=sink, provider=provider)
 
     def decider(champ_path: Path, cand_path: Path) -> dict:
         before = sink["total_tokens"]

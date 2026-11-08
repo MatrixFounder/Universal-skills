@@ -32,10 +32,13 @@ class FallbackBackend:
     name = VENDOR_FALLBACK
     available = False
 
+    def unavailable_reason(self) -> str:
+        return "no agentic CLI was detected: claude, gemini or codex"
+
     def trigger_eval(self, *args, **kwargs) -> dict:
         raise NotImplementedError(
-            "No agentic backend available — skill-trigger eval requires a vendor "
-            "CLI (claude/gemini/codex). Generic LLM grading still works."
+            "No agentic backend available — skill-trigger eval requires the "
+            "claude CLI. Prompt/workflow/dataset/text runs do not need one."
         )
 
 

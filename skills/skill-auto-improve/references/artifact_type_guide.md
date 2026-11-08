@@ -35,6 +35,21 @@ escape the artifact scope and tamper with the immutable eval harness.)
   flexible, so a fuzzy match can span a blank-line/heading boundary — the
   pairwise gate is the backstop against a bad splice.
 
+## Protected sections and the deletion guard
+
+- **`--protect "## Header"`** (repeatable) adds the full text of that section to
+  the immutable signatures. A `section-replace` aimed at it is rejected before
+  apply; any other edit that changes it (e.g. a `text-replace`) fails the
+  post-apply subset check and is reverted. A header the artifact does not
+  contain aborts the run (exit 2). Not for datasets.
+- **Deletion guard** (`check_immutability.shrink_violation`, on unless
+  `--allow-deletions`): an edit is rejected as `shrink-guard` when it removes a
+  whole section (or the preamble), cuts more than 50 % of a section's non-blank
+  lines, or lowers the number of lines containing MUST / NEVER. Rewording such a
+  line is allowed. A document without `##` sections is treated as one section.
+  Why: an eval case protects only what it measures; content no case touches can
+  be cut without the score moving.
+
 ## Why immutability is a subset check
 A plain hash-equality check would flag legitimate dataset additions (a new
 case adds a new signature) as violations. The subset rule (`immutable_preserved`)

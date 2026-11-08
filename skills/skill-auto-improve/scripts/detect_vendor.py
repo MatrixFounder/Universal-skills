@@ -7,11 +7,12 @@ but with no dependency on it). Detection order, most reliable first:
   1. Explicit override:  AUTO_IMPROVE_VENDOR env var
   2. Tool-fingerprint:    a CLI binary on PATH (claude / gemini / codex)
   3. Repo markers:        CLAUDE.md → claude, GEMINI.md → gemini
-  4. Fallback:            "fallback" (orchestrator degrades to LLM-only grading)
+  4. Fallback:            "fallback" (no agentic CLI)
 
-The returned vendor selects an adapter from scripts/backends/. "fallback" means
-no agentic CLI is available — skill-trigger eval cannot run, generic LLM
-grading still works.
+The returned vendor selects an adapter from scripts/backends/. Only the claude
+adapter can run skill-trigger eval; with any other vendor a `skill` /
+`full-skill` run stops before the baseline with exit code 2 (no LLM-grading
+substitute). Prompt, workflow, dataset and text runs need no agentic CLI.
 """
 
 from __future__ import annotations
@@ -21,6 +22,11 @@ import os
 import shutil
 import sys
 from pathlib import Path
+
+try:
+    from scripts.common import install_human_channel  # type: ignore
+except ImportError:
+    from common import install_human_channel
 
 VENDOR_CLAUDE = "claude"
 VENDOR_GEMINI = "gemini"
@@ -67,6 +73,7 @@ def detect_vendor(cwd: Path | None = None) -> str:
 
 
 def main() -> int:
+    install_human_channel()
     parser = argparse.ArgumentParser(description="Detect host agent vendor")
     parser.add_argument("--cwd", default=None, help="directory to detect from")
     args = parser.parse_args()

@@ -20,7 +20,9 @@ meta-skill improves such text *automatically and honestly*: it freezes a
 measures it against that frozen ruler, and keeps the change only if the score
 truly went up — otherwise it reverts.** You can't game the score by editing the
 ruler, and within-noise wiggles are thrown away, so every surviving change is an
-*earned* win. Run it like this:
+*earned* win. At the end it measures the winner against the original several
+times, on eval cases the loop never tuned on, and reports whether the gain is
+`confirmed`. Run it like this:
 
 ```bash
 # improve an eval dataset (fully offline scorer — best first run)
@@ -81,24 +83,31 @@ The loop runs one tiny change at a time — *propose one thing, measure, decide,
 | **Eval harness / "the ruler"** | The frozen thing that scores the artifact (rubric, eval set, dataset grader). | The grading rubric the teacher won't let you rewrite. |
 | **Autoresearch invariant** | "Harness frozen, artifact free, keep-only-if-it-truly-improves." | The rule that you may rewrite your essay but not your own grade. |
 | **Snapshot** | A saved copy of the artifact taken *just before* a change, so a bad change can be undone exactly. | A "save point" in a video game. |
-| **Delta (Δ)** | The change in score: new score minus the best score so far. | "Did the needle actually move, and which way?" |
-| **Noise (σ, sigma)** | The natural jitter in a score from run to run (LLMs aren't perfectly repeatable). | Static on a radio — movement smaller than the static means nothing. |
+| **Delta (Δ)** | The change in score: new score minus the champion (current best) score. | "Did the needle actually move, and which way?" |
+| **Noise band (σ, sigma)** | The keep threshold for a delta. One measurement jitters by `sd` (LLMs aren't perfectly repeatable); a delta compares two measurements, so σ = 1.64·√2·sd ≈ 2.3·sd, calibrated from repeated baseline runs. | Static on a radio — movement smaller than the static means nothing. |
 
 ### One iteration, step by step
 
-Each turn of the loop does the same seven things. The two **immutability checks** are the heart of the safety story: one *before* the change is applied (cheap structural veto) and one *after* (defense-in-depth re-check). Both must pass, or the change never survives.
+Each turn of the loop runs the same sequence. The two **immutability checks** are the heart of the safety story: one *before* the change is applied (cheap structural veto) and one *after* (defense-in-depth re-check). Both must pass, and so must the **deletion guard**, or the change never survives.
 
 ```mermaid
 flowchart TD
-    P["Proposer suggests<br/>ONE structured edit"] --> V{"validate_proposal<br/>(BEFORE apply):<br/>does it touch an<br/>immutable part?"}
+    P["Proposer suggests<br/>ONE structured edit"] --> DUP{"repeat of a<br/>rejected attempt?"}
+    DUP -- "same summary or same edit" --> DU["log duplicate<br/>· not evaluated"]
+    DUP -- "new" --> V{"validate_proposal<br/>(BEFORE apply):<br/>does it touch an immutable<br/>or protected part?"}
     V -- "touches harness" --> RJ["log immutability-violation<br/>· no change made"]
     V -- "clean" --> SNAP["snapshot<br/>(save a restore point)"]
     SNAP --> APP["apply_proposal<br/>(surgical edit on disk)"]
     APP --> RE{"immutable subset re-check<br/>(AFTER apply):<br/>before ⊆ after?"}
     RE -- "an immutable part changed" --> AR["restore snapshot<br/>· log immutability-violation"]
-    RE -- "preserved" --> EV["evaluate<br/>(score the candidate)"]
-    EV --> D{"DECIDE<br/>Δ vs noise σ"}
-    D -- "Δ > σ AND secondary not regressed" --> K["KEEP<br/>(new best score)"]
+    RE -- "preserved" --> SG{"deletion guard:<br/>section gutted or<br/>MUST/NEVER line removed?"}
+    SG -- "yes" --> SH["restore snapshot<br/>· log shrink-guard"]
+    SG -- "no" --> EV["evaluate + guard metric<br/>(score the candidate)"]
+    EV -- "evaluator / guard failed" --> ER["restore snapshot<br/>· log error"]
+    EV --> D{"DECIDE<br/>Δ vs noise band σ"}
+    D -- "Δ > σ AND guard not regressed" --> RM{"re-measure K times:<br/>mean − champion > σ/√K?"}
+    RM -- "yes" --> K["KEEP<br/>(champion := re-measured mean)"]
+    RM -- "no: not confirmed" --> NS
     D -- "|Δ| ≤ σ" --> NS["NO_SIGNAL<br/>→ restore snapshot"]
     D -- "Δ < −σ / regressed" --> RV["REVERT<br/>→ restore snapshot"]
     K --> LOG["log a row to<br/>improvement_history.tsv"]
@@ -106,29 +115,35 @@ flowchart TD
     RV --> LOG
     RJ --> LOG
     AR --> LOG
+    DU --> LOG
+    SH --> LOG
+    ER --> LOG
     LOG --> C{"converged?<br/>budget left?"}
     C -- "keep going" --> P
-    C -- "done" --> REP["write improvement_report.md"]
+    C -- "done" --> FC["final confirmation<br/>(winner vs baseline snapshot)"]
+    FC --> REP["write improvement_report.md"]
 
     classDef gate fill:#e8f0ff,stroke:#5577cc;
     classDef good fill:#dfd,stroke:#6c6;
     classDef bad fill:#fdd,stroke:#c66;
     classDef io fill:#fff5e6,stroke:#e0a050;
-    class V,RE,D gate;
+    class DUP,V,RE,SG,D,RM gate;
     class K good;
-    class RJ,AR,NS,RV bad;
-    class SNAP,LOG,REP io;
+    class DU,RJ,AR,SH,ER,NS,RV bad;
+    class SNAP,LOG,FC,REP io;
 ```
 
-**Four subtleties that are easy to miss:**
+**Five subtleties that are easy to miss:**
 
-- **There are two immutability checks, not one — and they ask different questions.** The *before* check (`validate_proposal`) is a structural veto: it reads the proposal and rejects it on paper if it would, say, rename a section, set the frozen `name`/`tier`, or remove an existing dataset case — *before* anything is written. The *after* check is a **subset** check (`before ⊆ after`): it re-fingerprints the immutable parts on disk and confirms none were changed or removed. The subset shape is deliberate — it *allows additions* (a brand-new dataset case is fine) while still catching any edit to, or deletion of, something that was already frozen. A plain "must be byte-identical" check would wrongly flag a legitimate addition as a violation.
+- **There are two immutability checks, not one — and they ask different questions.** The *before* check (`validate_proposal`) is a structural veto: it reads the proposal and rejects it on paper if it would, say, rename a section, rewrite a section you froze with `--protect`, set the frozen `name`/`tier`, or remove an existing dataset case — *before* anything is written. The *after* check is a **subset** check (`before ⊆ after`): it re-fingerprints the immutable parts on disk and confirms none were changed or removed. The subset shape is deliberate — it *allows additions* (a brand-new dataset case is fine) while still catching any edit to, or deletion of, something that was already frozen. A plain "must be byte-identical" check would wrongly flag a legitimate addition as a violation.
 
-- **NO_SIGNAL is reverted on purpose — noise is never banked as progress.** If the score barely moves (`|Δ| ≤ σ`, where σ is the `--noise-sigma` you set for jittery metrics), the change is *not* kept "just in case." It's reverted. This is the single most important discipline in the loop: if you keep tiny within-noise wiggles, they accumulate into **drift** — a pile of changes that look like progress but are really just random jitter. A change earns KEEP only when Δ clears the noise band by a real margin (`Δ > σ`, plus a hair of float-epsilon so an exactly-equal score never sneaks through).
+- **NO_SIGNAL is reverted on purpose — noise is never banked as progress.** If the score barely moves (`|Δ| ≤ σ`, where σ is the noise band calibrated from repeated baseline runs, or the `--noise-sigma` you set), the change is *not* kept "just in case." It's reverted. This is the single most important discipline in the loop: if you keep tiny within-noise wiggles, they accumulate into **drift** — a pile of changes that look like progress but are really just random jitter. A change earns KEEP only when Δ clears the noise band by a real margin (`Δ > σ`, plus a hair of float-epsilon so an exactly-equal score never sneaks through) **and** the re-measurement confirms it: the candidate is measured `K` more times, and it stays only if the mean still beats the champion by σ/√K. Otherwise it is logged `no-signal` with the note `not confirmed`.
 
-- **A KEEP also needs the *secondary* metric not to regress.** It's not enough for the main score to rise — if the change quietly made a secondary metric worse (beyond the noise band), it's reverted. This stops the loop from "winning" on one axis by silently breaking another.
+- **A KEEP also needs the *guard* (secondary) metric not to regress.** It's not enough for the main score to rise. The guard is a cheap deterministic check: for a skill, `validate_skill.py` must still exit 0 and `SKILL.md` must stay within 500 lines; for text, the length must stay within ±50 % of the baseline (`--length-guard`). A KEEP that breaks the guard is reverted. This stops the loop from "winning" on one axis by silently breaking another.
 
-- **The snapshot is what makes REVERT exact and cheap.** Before every apply, the artifact is copied to a save point. A revert isn't a clever "undo the edit" — it's a literal restore of that copy, so the artifact returns to *byte-for-byte* what it was. (Snapshots are pruned to the newest two — they're scratch space for single-step undo, not an archive.)
+- **The snapshot is what makes REVERT exact and cheap.** Before every apply, the artifact is copied to a save point. A revert isn't a clever "undo the edit" — it's a literal restore of that copy, so the artifact returns to *byte-for-byte* what it was. (Iteration snapshots are pruned to the newest two — they're scratch space for single-step undo, not an archive. The `snapshots/baseline/` copy is kept for the whole run, because the final confirmation measures it against the winner.)
+
+- **A failure never leaves an unverified edit on disk.** If the evaluator, the guard or the pairwise judge fails after the edit was applied, the iteration is logged as an `error` row, the artifact is restored from the snapshot, and the loop continues. A grader that returns an unusable verdict is retried once; a broken verdict never becomes a score of 0. A verbatim repeat of a rejected idea (same summary or same edit) is logged as `duplicate` and never evaluated.
 
 ### The roles: who proposes, who measures, who decides
 
@@ -138,19 +153,19 @@ The orchestrator is a plain Python program that owns the loop and the rulebook. 
 |---|---|---|---|
 | **Orchestrator** | Runs the loop, enforces the rules, makes the keep/revert call, writes the log. It owns the budget and the decision — never the LLM. | `scripts/auto_improve.py` (a Python CLI; the decision logic in `run_improvement_loop` takes *injectable* proposer/evaluator/decider so it's fully testable offline, no API keys). | A referee with a stopwatch and a rulebook — doesn't play, just enforces and keeps score. |
 | **Proposer** | Suggests **exactly one** focused, structured edit per turn (never a whole-file rewrite). | An LLM call (via `LLMConfigManager`) returning one "proposal." | A contractor who hands in one change order at a time. |
-| **Evaluator** | Produces the score the decision rests on. *How* it scores depends on the artifact. | One of three: a **deterministic script** (`grade_dataset.py` for datasets — no LLM, no API), a **skill-trigger eval** (`run_eval.py` via `claude -p` for skills), or an **LLM rubric grader** (for prompts/workflows/text). | The examiner — sometimes a strict automated checker, sometimes a human-like reader. |
+| **Evaluator** | Produces the score the decision rests on. *How* it scores depends on the artifact. | One of four: a **deterministic script** (`grade_dataset.py` for datasets — no LLM, no API), a **skill-trigger eval** (`run_eval.py` via `claude -p` for skills), an **executed prompt eval** (the `executor` profile runs the prompt on each case; the grader sees only the inputs and responses), or an **LLM grader** that reads the text (workflows, `--prompt-eval static`, and the rubric judge for text). The grading roles can use another model or provider (`--grader-model`, `--grader-provider`). | The examiner — sometimes a strict automated checker, sometimes a human-like reader. |
 | **Decider** *(text mode only)* | For subjective prose, replaces the plain "did the number rise?" test with a **debiased pairwise gate**. | `pairwise.py`. | Two blind taste-tests instead of trusting one scorecard. |
 
 **Two tricks hidden in the roles:**
 
-- **The author never grades its own work.** The Proposer suggests a change but has *no say* in whether it's kept — the Orchestrator decides purely from the Evaluator's number. This is the same anti-cheat principle as the immutable ruler, applied to people instead of files: the one who wants the change accepted is not the one who measures it.
+- **The author never grades its own work.** The Proposer suggests a change but has *no say* in whether it's kept — the Orchestrator decides purely from the Evaluator's number. This is the same anti-cheat principle as the immutable ruler, applied to people instead of files: the one who wants the change accepted is not the one who measures it. By default the Proposer and the grader are still the same model; an LLM judge tends to rate text in its own model's style higher (self-preference bias, [arXiv:2404.13076](https://arxiv.org/abs/2404.13076)), so prefer a grader from another model family (`--grader-provider`, `--grader-model`). The report lists the model used for each role.
 
 - **For prose, the decider votes — it doesn't just read the score.** Plain prose ("is this email better?") is too subjective and too noisy for a single number to settle. So in `text` mode the decider shows an LLM judge the champion (the pre-change snapshot) and the candidate **in both orderings** — champion-first, then candidate-first — and KEEPs the candidate only if it nets *more wins* across both runs (ties keep the champion). Running both orderings cancels **position bias** (the judge's tendency to favor whatever it sees first). The rubric score is still logged and still drives the `--threshold` early-stop, but it is *not* the keep decision — the head-to-head vote is.
 
 > ✅ **Key takeaways**
 > - The whole method is one rule: **the harness (ruler) is frozen; the artifact is free to change; KEEP only if the score truly improves beyond noise, else REVERT.** You can't cheat by editing the ruler.
-> - Each iteration is seven steps: **propose one edit → validate (before apply) → snapshot → apply → immutability re-check (after apply, subset) → evaluate → KEEP / REVERT / NO_SIGNAL → log.**
-> - **NO_SIGNAL is reverted on purpose** — within-noise wiggles are never banked, so random jitter can't accumulate into fake progress. KEEP requires Δ to clear the noise band *and* the secondary metric not to regress.
+> - Each iteration runs the same steps: **propose one edit → duplicate check → validate (before apply) → snapshot → apply → immutability re-check (after apply, subset) → deletion guard → evaluate → KEEP (re-measured) / REVERT / NO_SIGNAL → log.** After the loop, a **final confirmation** measures the winner against the baseline snapshot.
+> - **NO_SIGNAL is reverted on purpose** — within-noise wiggles are never banked, so random jitter can't accumulate into fake progress. KEEP requires Δ to clear the noise band, the guard metric not to regress, *and* a re-measurement that still clears σ/√K.
 > - **Roles are separated so nobody grades their own work:** the Orchestrator (Python) runs the loop and decides; the Proposer (LLM) suggests one change; the Evaluator scores; and for subjective prose a **pairwise Decider** votes in both orderings to cancel position bias.
 
 ---
@@ -168,8 +183,10 @@ Think of it like a chef perfecting a recipe. A chef who tastes nothing and just 
 > - **Proposer** — the agent that suggests one change.
 > - **Evaluator** — the agent or script that scores it.
 > - **Champion** — the current best version. **Candidate** — the proposed new version.
-> - **σ (sigma)** — "noise," the natural jitter in a score (≈ 0.05–0.10 for LLM judges).
+> - **sd** — the natural jitter of ONE measurement, its standard deviation (≈ 0.05–0.10 for LLM judges).
+> - **σ (sigma)** — the noise band: the keep threshold for a *difference* of two measurements, σ = 1.64·√2·sd ≈ 2.3·sd.
 > - **delta (Δ)** — candidate score minus champion score.
+> - **Train / holdout** — the part of the eval set the loop tunes on, and the part it never sees until the final confirmation.
 
 ---
 
@@ -179,12 +196,13 @@ You cannot automatically improve what you cannot automatically measure. If the o
 
 | Artifact type | What the metric is | Who measures it |
 |---|---|---|
-| `skill` (trigger text) | trigger pass-rate — did the skill fire on "should-fire" queries and stay quiet on "should-not"? | tool-enabled agent (`run_eval.py`) |
-| `prompt` / `workflow` | rubric pass-rate from the eval cases | LLM grader |
+| `skill` / `full-skill` (description or body) | trigger pass-rate — did the skill fire on "should-fire" queries and stay quiet on "should-not"? | tool-enabled agent (`run_eval.py` via `claude -p`); Claude only |
+| `prompt` (default `--prompt-eval executed`) | pass-rate of the **responses**: the prompt runs on each case, the grader judges the outputs | `executor` profile + LLM grader (never sees the prompt) |
+| `prompt` (`--prompt-eval static`) / `workflow` | *predicted* pass-rate: the grader reads the text and predicts | LLM grader |
 | `dataset` (evals.json) | a deterministic dataset-quality score | a plain script (`grade_dataset.py`) — no LLM, no cost |
 | `text` (prose: emails, READMEs, copy) | a weighted rubric score **plus** a head-to-head verdict | LLM rubric judge + pairwise judge |
 
-The practical consequence: for a skill, prompt, or workflow you **must** supply `--eval-set`; for `text` you **must** supply `--criteria` (a rubric). Without one, the run aborts — on purpose. **No ruler, no run.**
+The practical consequence: for a skill, prompt, or workflow you **must** supply `--eval-set`; for `text` you **must** supply `--criteria` (a rubric). Without one, the run stops with exit code 2 before the baseline — on purpose. **No ruler, no run.** The same holds when the ruler cannot be used: a `skill` / `full-skill` run without the `claude` CLI and skill-creator's `run_eval.py` (or on a non-Claude vendor) exits 2 before the baseline, and so does a run whose provider key or SDK is missing. The report's `Metric:` line names the mode that produced the number.
 
 ---
 
@@ -207,6 +225,8 @@ Analogy: it's a ratchet. A ratchet wrench only turns one way — tighten, click,
 If the same agent both *writes* the change and *decides* it's good, you get **slop**: confident, plausible-sounding rewrites that aren't actually better. Authors are biased toward their own work — humans and LLMs alike.
 
 So the skill **separates the Proposer from the Evaluator.** The Proposer suggests; it never gets a vote on whether its suggestion is kept. That decision belongs to the orchestrator, reading the Evaluator's number.
+
+Separate roles are not yet separate models. Unless you say otherwise, one model proposes and grades, and an LLM judge rates its own model's style higher (self-preference bias, [arXiv:2404.13076](https://arxiv.org/abs/2404.13076)). `--grader-provider` and `--grader-model` move every grading role (grader, rubric judge, pairwise judge, large-tier review) to another model; prefer another model family. For prompts, the default executed metric adds a second protection: the grader sees the inputs and the responses, never the prompt that produced them, so a prompt cannot earn points by describing what a good answer would contain.
 
 For **subjective prose** there's an extra trap: a single judge has a **position bias** — it tends to prefer whichever version it reads *first*, regardless of quality. So `text` mode uses a **debiased pairwise gate**:
 
@@ -235,29 +255,44 @@ The skill blocks this structurally by making the **harness immutable**. The Prop
 - a skill's frontmatter `name` and `tier`;
 - the entire `evals/` directory (its contents are hashed);
 - a dataset's `id` / `skill_name` / `grader` and the file references of existing cases;
-- a prompt's `{{placeholders}}` and a workflow's YAML keys + tool names.
+- a prompt's `{{placeholders}}` and a workflow's YAML keys + tool names;
+- every section you name with `--protect "## Header"` (repeatable; a header the artifact does not contain stops the run with exit 2; not for datasets).
 
-Datasets are the one nuanced case: you may **add** new eval cases (more coverage is good), but you may never **change or remove** an existing one. Immutability there is a *subset* check — additions pass, edits/deletions are rejected. Editing the ruler to fit the result is, as the skill itself puts it, "the cardinal sin of measurement."
+Datasets are the one nuanced case: you may **add** new eval cases (more coverage is good), but you may never **change or remove** an existing one's immutable fields, and you may never remove a case. Immutability there is a *subset* check — additions pass, edits/deletions of frozen parts are rejected. Editing the ruler to fit the result is, as the skill itself puts it, "the cardinal sin of measurement."
+
+There is a quieter version of the same failure: **deleting what the ruler does not measure.** An eval case protects only the content it tests. A paragraph no case touches can be cut without the score moving, and a loop that optimizes the score will eventually cut it. The **deletion guard** therefore rejects, as `shrink-guard`, any edit that removes a whole `##` section (or the preamble), removes more than 50 % of a section's non-blank lines, or lowers the number of lines that contain MUST or NEVER (rewording such a line is allowed). A document without `##` sections counts as one section. Pass `--allow-deletions` only when a deletion is the point of the run.
 
 ---
 
 ### 5. Respect the noise — KEEP only beyond the noise band
 
-LLM and agent scores **jitter**. Run the exact same evaluation twice and you'll get slightly different numbers — typically σ ≈ 0.05–0.10. This is the single most common way naive auto-tuning fools itself: a change scores +0.02, you keep it, and the +0.02 was *pure luck*. Do that fifty times and you've accumulated a pile of "improvements" that are really just noise dressed up as signal — a slow random drift.
+LLM and agent scores **jitter**. Run the exact same evaluation twice and you'll get slightly different numbers: the standard deviation `sd` of one measurement is typically 0.05–0.10. This is the single most common way naive auto-tuning fools itself: a change scores +0.02, you keep it, and the +0.02 was *pure luck*. Do that fifty times and you've accumulated a pile of "improvements" that are really just noise dressed up as signal — a slow random drift.
 
-The defense is a **noise band**. A change is only KEPT when it beats the champion by **more than σ**; a change within ±σ of the champion isn't an improvement *or* a regression — it's a coin flip, so it's reverted as `NO_SIGNAL`. The exact rule the orchestrator runs:
+The defense is a **noise band** σ, and σ is a threshold for a *difference*, not the noise of one run. A delta compares two noisy measurements (candidate and champion), so its spread is √2 times the spread of one measurement. A one-sided test at z = 1.64 then needs:
+
+```text
+σ = z · √2 · sd,   z = 1.64      (≈ 2.3 · sd; about 5 % of no-effect deltas clear it)
+```
+
+**Where `sd` comes from: calibration.** Before the first iteration the loop measures the baseline `K` times (`--calibrate-noise K`; default 3 for skill/prompt/workflow, 0 for dataset, which is deterministic, and for text, whose KEEP is the pairwise gate). The mean of those runs is the champion score; their `sd` gives σ. Both appear in the report and in the TSV baseline row (`baseline (mean of 3; sd=…; sigma=… calibrated)`). `--noise-sigma` sets σ directly and wins over the calibration. If σ ends up 0 for a non-deterministic evaluator (for example, three identical baseline scores), the run prints a warning: every positive delta, noise included, can then be kept.
+
+A change within ±σ of the champion isn't an improvement *or* a regression — it's a coin flip, so it's reverted as `NO_SIGNAL`. The exact rule the orchestrator runs:
 
 | Condition | Verdict | What happens |
 |---|---|---|
-| `delta > sigma` (beyond ε) **and** secondary metric didn't regress | **KEEP** | new champion; commit on the isolation branch |
+| `delta > sigma` (beyond ε) **and** the guard metric didn't regress | candidate **KEEP** | re-measured `K` times (see below) |
+| … and the re-measured mean beats the champion by more than `sigma/√K` | **KEEP** | new champion score = the re-measured mean; commit on the isolation branch |
+| … but the re-measured mean does not | **NO_SIGNAL** (`not confirmed`) | **REVERT** |
 | `|delta| <= sigma` | **NO_SIGNAL** | **REVERT** — inside the noise, prove nothing |
-| `delta < -sigma`, or the secondary metric regressed | **REVERT** | restore the pre-change snapshot |
+| `delta < -sigma`, or the guard metric regressed | **REVERT** | restore the pre-change snapshot |
+
+**Why a KEEP is re-measured.** The measurement that cleared σ was *selected* for being high: out of many noisy tries, the lucky ones pass the gate (the winner's curse). So a candidate KEEP is measured `K` more times by independent calls. It stands only if their mean still beats the champion by σ/√K (the band for a mean of `K` runs), and the **champion score becomes that mean**. One lucky measurement can neither keep an edit nor raise the bar for the next one. In text mode a KEEP is re-measured once by an independent rubric call, because the best-of-N score is the maximum of N noisy scores.
+
+Measured on no-effect edits (evaluator sd 0.05, 10 iterations, default window): without calibration 74 % of runs kept at least one null edit and `best_score` was inflated by ≈ +0.06; with `--calibrate-noise 3`, 7–8 % of runs and ≈ +0.005.
 
 Because within-noise moves are reverted, **noise can never accumulate as drift** — only changes that clear the band survive.
 
-> **⚠️ The band is opt-in — set it for noisy metrics.** `--noise-sigma` **defaults to `0.0`**. That default is correct for the *deterministic* dataset scorer (it has no jitter), but it means that for any **LLM/agent metric** the band is effectively off out of the box: any positive delta is kept (only an exactly-flat score is caught by the epsilon). So for `prompt`/`workflow`/`text` and skill evals, **pass `--noise-sigma 0.05`–`0.10`** — otherwise §5's whole discipline is a no-op and you're back to the "KEEP on any positive delta" antipattern. (Text mode is less exposed: the *keep* decision there is the pairwise gate, not the delta — but the σ band still governs the `--threshold` early-stop.)
-
-There's an honest caveat baked in. The fast inner loop (about 3 runs per query) is cheap and noisy; it's good enough to tell you the *direction* of a change — "this looks like an improvement worth keeping." It is **not** a publication-grade measurement. The trustworthy number comes from a final, heavier pass (5 runs + bootstrap) plus the σ threshold. **Inner loop = direction; final pass + threshold = the reliable number.** Don't over-trust a single inner-loop score.
+**The reliable number comes after the loop.** The inner loop tunes on the *train* part of the eval set and tells you the *direction* of a change. When at least one change was kept, the **final confirmation** measures the baseline snapshot (`snapshots/baseline/`) and the winner alternately, `--final-runs N` times each (default 5; 0 for dataset), on the **holdout** cases when there are any (§7), otherwise in-sample — on the cases / rubric the loop tuned on (only when N ≥ 2; a weaker check, since that set is what the loop optimized). The report gives both means, the delta, a percentile **bootstrap 95 % CI** of the delta, and a verdict: `confirmed` (the CI's low end is above 0) or `not confirmed`. With a holdout it also gives the train delta and `overfit_warning` (holdout delta ≤ 0 while the train delta > σ). **Inner loop = direction; final confirmation = the number you report.** A `not confirmed` verdict or an `overfit_warning` means: do not merge.
 
 ---
 
@@ -271,7 +306,7 @@ Not every artifact needs an expensive, noisy LLM to grade it. The rule of thumb 
 | **subjective prose** (an email, a README, marketing copy) | an **LLM rubric judge** + the **pairwise gate** | meaning and tone can't be checked by `if/else`; you need something that reads for substance. |
 | **a skill's trigger** (did it fire?) | a **tool-enabled agent** running real queries | the only honest test of "would this fire in the wild" is to actually try. |
 
-Use a script wherever you can — it's free, instant, and never lies. Reserve the LLM judge for the genuinely subjective cases where there's no other option. (For trigger evals, only the Claude backend is validated today; Gemini/Codex are stubs and fall back to LLM grading.)
+Use a script wherever you can — it's free, instant, and never lies. Reserve the LLM judge for the genuinely subjective cases where there's no other option. (For trigger evals, only the Claude backend is validated today. Gemini/Codex are stubs: a `skill` / `full-skill` run on those vendors stops with exit 2 before the baseline. An LLM's guess of trigger accuracy is a different quantity, so it is never substituted.)
 
 ---
 
@@ -281,10 +316,15 @@ The loop is only as honest as its harness. A perfect ratchet that's bolted to a 
 
 Two practices carry over directly from the [Skill Evals Guide](skill-evals_guide.md):
 
-- **Diverse, realistic eval cases.** A handful of similar, tidy test cases gives **false confidence** — the "mirage" lesson (Evals Guide §7.3): a change that scored a glorious result on a few toy cases turned out to be far more modest on a diverse set, *and* the diversity exposed real regressions the small set never saw. A small, uniform test set doesn't measure quality; it measures how well you fit your tiny set.
+- **Diverse, realistic eval cases.** A handful of similar, tidy test cases gives **false confidence** — the "mirage" lesson (Evals Guide §7.3): a change that scored a glorious result on a few toy cases turned out to be far more modest on a diverse set, *and* the diversity exposed real regressions the small set never saw. A small, uniform test set doesn't measure quality; it measures how well you fit your tiny set. The dataset scorer (`grade_dataset.py`) encodes this advice: it targets 20 cases (`--target-n`), gives full negative-coverage credit only at a 0.4–0.6 negative share for trigger sets, and rewards *near-miss* negatives that share a content word with a positive. 4 positives + 1 unrelated negative score 0.60, not 1.0.
 - **A weighted rubric whose dimensions sum to 100.** For `text` mode, the rubric isn't a vague "make it good." It's named dimensions with explicit weights (e.g. clarity 30, persuasiveness 25, …) totaling 100, so the judge and the Proposer both know *what* counts and *how much*. The Proposer is even fed the weakest-dimension feedback so it targets the right weak point next.
 
-> **The mirage rule, said plainly:** if a "win" came from one run of a tiny, uniform test set, it is probably not a win. Diversify first, then trust the number.
+Two more practices come from the same problem: a loop that is judged on the cases it tunes on will fit those cases.
+
+- **Hold out part of the eval set.** For a skill/prompt/workflow eval set of ≥ 10 cases, `--holdout` defaults to 0.4: 40 % of the cases are set aside, stratified by negative cases (`should_trigger: false` or `forbidden_expectations`), with a fixed seed (42). Iterations see only the train part; the Proposer never sees a holdout failure; the holdout is measured only in the final confirmation, never per iteration, or it would be tuned too. Below 10 cases the default is 0 and every case is a train case. Dataset and text runs have no holdout (a dataset is its own measure; text uses a rubric).
+- **Measure behaviour, not a prediction.** For a prompt, the default `--prompt-eval executed` runs the prompt as the system prompt on each case's `prompt` / `input` (the `executor` profile) and grades the responses; every case needs one of the two fields, otherwise the run exits 2. `--prompt-eval static` lets the grader read the prompt and *predict* whether a model following it would pass. A prompt that recites its expectations scores well statically even when the model does not meet them (the `reciting-prompt` fixture in `evals/fixtures/` is the test case for this). Workflows are always graded statically, because no backend executes them.
+
+> **The mirage rule, said plainly:** if a "win" came from one run of a tiny, uniform test set, it is probably not a win. Diversify first, hold part of the set out, then trust the number from the final confirmation.
 
 ---
 
@@ -297,10 +337,14 @@ Two practices carry over directly from the [Skill Evals Guide](skill-evals_guide
 | Flag | Bounds |
 |---|---|
 | `--max-iterations` (default 10) | how many propose→evaluate cycles |
-| `--max-tokens` | total LLM spend; checked *before* the expensive evaluator call so one iteration can't blow the cap |
-| `--max-duration` (e.g. `30m`) | wall-clock time |
+| `--max-tokens` | total measured LLM spend (Proposer, graders, executor, pairwise judge, failed grader attempts); checked *before* the expensive evaluator call so one iteration can't blow the cap |
+| `--max-duration` (e.g. `30m`; skill runs default to `60m`) | wall-clock time, counted from before the baseline |
 
-On top of these, **convergence detection** stops early when several iterations in a row produce no kept improvement (stagnation) — no point grinding once the climb has flattened.
+The `claude -p` runs of a skill-trigger eval are **not** counted in `--max-tokens`: skill-creator's `run_eval.py` does not report their tokens. That is why skill runs default to `--max-duration 60m`, and the report says that its token total excludes them.
+
+Once a change has been kept, the budget check leaves room for the final confirmation (2·N evaluations, costed from the time and tokens of the baseline measurements), so the loop stops early enough to confirm what it found. The confirmation itself stops when the real budget runs out and reports the runs it completed.
+
+On top of these, **convergence detection** stops early when `--convergence-window` (default 3) iterations in a row produce no kept improvement of at least `--min-improvement` (default 0.01) — `stagnation`; no point grinding once the climb has flattened. A KEEP smaller than `--min-improvement` stands, but it does not reset the counter. When the whole window (or every iteration) is `error` rows, the exit reason is `errors` and the exit code is 1.
 
 ---
 
@@ -308,29 +352,32 @@ On top of these, **convergence detection** stops early when several iterations i
 
 ```mermaid
 flowchart TD
-    M["MEASURE baseline<br/>(bind artifact → metric)"] --> P
+    M["MEASURE baseline K times<br/>(bind artifact → metric;<br/>sd → noise band σ)"] --> P
     P["PROPOSE one surgical change<br/>(Proposer; best-of-N optional)"] --> IMM
-    IMM{"Touches the<br/>immutable harness?"}
+    IMM{"Touches the immutable harness,<br/>a protected section,<br/>or deletes too much?"}
     IMM -- "Yes" --> REJ["REJECT + REVERT<br/>(ruler stays sacred)"]
     IMM -- "No" --> V["VERIFY: snapshot → apply → score<br/>(separate Evaluator / pairwise judge)"]
     V --> D{"Beat champion<br/>BEYOND noise (Δ>σ)?"}
-    D -- "Yes" --> K["KEEP — new champion<br/>(an EARNED win)"]
+    D -- "Yes" --> RM{"Still ahead on<br/>K re-measurements?"}
+    RM -- "Yes" --> K["KEEP — new champion<br/>(an EARNED win)"]
+    RM -- "No: not confirmed" --> R
     D -- "No / within ±σ" --> R["REVERT to snapshot<br/>(noise never accumulates)"]
     K --> C{"Converged or<br/>budget spent?"}
     R --> C
     REJ --> C
     C -- "No" --> P
-    C -- "Yes" --> OUT["Near-monotonic climb<br/>→ verified winner"]
+    C -- "Yes" --> FC["FINAL CONFIRMATION<br/>winner vs baseline, N runs each,<br/>on the holdout → bootstrap 95% CI"]
+    FC --> OUT["confirmed / not confirmed<br/>→ you decide whether to merge"]
 
     classDef good fill:#dfd,stroke:#6c6;
     classDef bad fill:#fdd,stroke:#c66;
     classDef key fill:#e8f0ff,stroke:#5577cc;
     class K,OUT good;
     class REJ,R bad;
-    class IMM,D key;
+    class IMM,D,RM,FC key;
 ```
 
-- The two diamonds are the whole methodology: the **immutability gate** (you can't game the ruler) and the **noise gate** (you can't keep a lucky wobble).
+- The gates are the whole methodology: the **immutability gate** (you can't game the ruler or delete what it doesn't measure), the **noise gate** with its re-measurement (you can't keep a lucky wobble), and the **final confirmation** (you can't report the tuning-set score as the result).
 - Every path that isn't a verified win loops back to a *clean* champion — that's why the climb is near-monotonic rather than a random walk.
 - The Proposer and Evaluator are different boxes on purpose: the author never grades its own work.
 
@@ -339,14 +386,15 @@ flowchart TD
 ### Methodology checklist
 
 - [ ] The artifact is bound to an **objective metric** before any change (eval set or rubric present).
-- [ ] **Proposer and Evaluator are separate** — the author never decides if its own change is kept.
-- [ ] KEEP requires **`delta > σ`** *and* no regression in the secondary metric; within-±σ moves are reverted as `NO_SIGNAL`.
+- [ ] **Proposer and Evaluator are separate** — the author never decides if its own change is kept; the grading roles use **another model family** where possible (`--grader-provider`, `--grader-model`).
+- [ ] σ is **calibrated** (`--calibrate-noise K`, default 3) or set as a threshold for a *difference* (`--noise-sigma`); no σ = 0 warning for a non-deterministic evaluator.
+- [ ] KEEP requires **`delta > σ`**, no regression in the guard metric, and a **re-measurement** that still clears σ/√K; within-±σ moves are reverted as `NO_SIGNAL`.
 - [ ] For prose, the keep decision is the **debiased pairwise gate** (both orderings); ties keep the champion.
-- [ ] The **harness is immutable** — eval set, frontmatter `name`/`tier`, dataset `id`/`grader`/refs, placeholders — checked before *and* after apply.
-- [ ] The grader matches the output: **script for structured**, LLM/pairwise for subjective.
-- [ ] The eval set is **diverse and realistic**; rubric dimensions are **weighted and sum to 100**.
+- [ ] The **harness is immutable** — eval set, frontmatter `name`/`tier`, dataset `id`/`grader`/refs, placeholders, `--protect` sections — checked before *and* after apply; the **deletion guard** is on.
+- [ ] The grader matches the output: **script for structured**, LLM/pairwise for subjective; prompts are graded **executed**, not predicted.
+- [ ] The eval set is **diverse and realistic** (≥ 10 cases, so a holdout exists); rubric dimensions are **weighted and sum to 100**.
 - [ ] A **budget** is set (`--max-iterations` / `--max-tokens` / `--max-duration`) and the run is **git-isolated** on a clean tree.
-- [ ] The **final number** comes from a multi-run pass, not a single noisy inner-loop score.
+- [ ] The **final number** is the final confirmation on the holdout (`confirmed`, no `overfit_warning`), not a single noisy inner-loop score.
 
 ### Antipatterns
 
@@ -354,13 +402,17 @@ flowchart TD
 |---|---|---|
 | Edit the eval set / rubric to lift the score | Goodhart's law — the number rises, quality doesn't (a mirage) | Keep the harness immutable; improve the artifact |
 | KEEP on any positive delta | The +0.02 was probably noise; drift accumulates | Require `delta > σ`; revert within-band moves |
-| Trust one noisy score as proof | A single run can't separate signal from jitter | Inner loop for direction; multi-run + threshold for the verdict |
-| Optimize against a tiny, uniform test set | False confidence — the win doesn't reproduce | Diversify cases first; then believe the number |
+| Set `--noise-sigma` to the jitter of one run | A delta is a difference of two runs; σ = sd is too low by ≈ 2.3× | Let the calibration derive σ = 1.64·√2·sd, or pass that value |
+| Trust one noisy score as proof | A single run can't separate signal from jitter; the gate picks lucky runs | Re-measure each KEEP; report the final confirmation (bootstrap CI) |
+| Report the inner-loop score as the result | It is the score on the set the loop tuned on | Report the final confirmation on the holdout |
+| Optimize against a tiny, uniform test set | False confidence — the win doesn't reproduce | Diversify cases first (≥ 10, with near misses); then believe the number |
 | Let the Proposer judge its own change | Authors are biased toward their own slop | Separate Evaluator; pairwise debias for prose |
-| Full-file rewrite "to clean it up" | Good content silently disappears, unmeasured | Surgical one-section / one-edit changes |
+| Grade with the model that proposes | A judge prefers its own model's style | `--grader-provider` / `--grader-model` from another model family |
+| Trust a static prompt score | The grader predicts from the text; a prompt that recites its expectations scores well | `--prompt-eval executed` (the default) |
+| Full-file rewrite "to clean it up" | Good content silently disappears, unmeasured | Surgical one-section / one-edit changes; keep the deletion guard on |
 | Run on `main` with a dirty tree | Improvements and your own edits get tangled | `--git-isolation` on a clean tree; merge the winner explicitly |
 
-> **✅ Key takeaways.** Reliable automatic improvement rests on a few hard rules: **measure first** (no metric, no run); **keep only verified wins** so the artifact ratchets upward and never drifts down; **never let the author grade itself** (separate Evaluator; pairwise debias cancels position bias for prose); **never edit the ruler** (immutable harness — Goodhart's law); **respect the noise** (KEEP only beyond σ, so jitter can't masquerade as progress); and **match the judge to the output** (free deterministic scripts for structured data, LLM judges only for the genuinely subjective). Best-of-N raises the quality of each candidate; budgets and convergence bound the search. Get those right and "improvement" stops being a vibe and becomes a number you can defend.
+> **✅ Key takeaways.** Reliable automatic improvement rests on a few hard rules: **measure first** (no metric, no run); **keep only verified wins** so the artifact ratchets upward and never drifts down; **never let the author grade itself** (separate Evaluator, ideally another model family; pairwise debias cancels position bias for prose); **never edit the ruler** (immutable harness — Goodhart's law) and never delete what it does not measure (deletion guard); **respect the noise** (σ is calibrated for a difference of two runs, and every KEEP is re-measured, so jitter can't masquerade as progress); **report the final confirmation**, measured on a holdout the loop never saw; and **match the judge to the output** (free deterministic scripts for structured data, executed prompts, LLM judges only for the genuinely subjective). Best-of-N raises the quality of each candidate; budgets and convergence bound the search. Get those right and "improvement" stops being a vibe and becomes a number you can defend.
 
 ---
 
@@ -397,13 +449,19 @@ allowed to make). Pick the right mode and the rest is automatic.
 
 - **What it improves:** the *body* of a `SKILL.md` — the actual how-to instructions an agent reads
   after the skill has already fired.
-- **Metric:** `pass_rate` from a behavioral eval set (you pass it with `--eval-set evals.json`),
-  graded against your rubric.
+- **Metric:** the same skill-trigger pass rate as mode 2: the `--eval-set` queries run through
+  `claude -p` (skill-creator's `run_eval.py`). There is no other evaluator for skills, so this
+  mode needs the `claude` CLI too; without it, or on a non-Claude vendor, the run exits 2 before
+  the baseline. A body edit is therefore scored only by its effect on triggering.
 - **Keep decision:** the default **absolute-delta** rule — KEEP only if the new score beats the
-  best score by more than the noise band (`--noise-sigma`), else REVERT.
+  champion by more than the calibrated noise band σ and the re-measurement confirms it, else
+  REVERT. The guard metric must hold: `validate_skill.py` exits 0 and `SKILL.md` stays within
+  500 lines.
 - **Edit format:** `section-replace` — the Proposer rewrites exactly one `## Header` section and
-  must keep that same header (no renames, frontmatter untouched).
-- **Use this when…** the skill *fires* correctly but does the job badly once it does.
+  must keep that same header (no renames, frontmatter untouched). The deletion guard and any
+  `--protect` sections apply.
+- **Use this when…** the skill *fires* correctly but does the job badly once it does — and keep
+  in mind that the metric sees triggering, not task quality, so review the winner yourself.
 
 #### 2. Skill description (`--target description`)
 
@@ -411,8 +469,9 @@ allowed to make). Pick the right mode and the rest is automatic.
   that decides whether the skill fires at all (the [trigger](skill-evals_guide.md#3-two-kinds)).
 - **Metric:** **trigger accuracy** — the skill is run against labelled queries via `claude -p`
   (`--runs-per-query`, default 3) and scored on how often it fires when it *should* and stays
-  quiet when it *should not*.
-- **Keep decision:** absolute-delta, same as mode 1.
+  quiet when it *should not*. With ≥ 10 queries, 40 % are held out for the final confirmation
+  and the optimizer never sees their failures.
+- **Keep decision:** absolute-delta, same as mode 1 (calibrated σ, re-measured KEEP, guard).
 - **Edit format:** `frontmatter-field` setting `description` (a single-shot **CSO** optimizer that
   generalizes from the failed/false triggers; `name` and `tier` are rejected as immutable).
   *CSO = the **trigger text** — the description Claude reads to decide whether to use the skill at all.*
@@ -423,18 +482,25 @@ allowed to make). Pick the right mode and the rest is automatic.
 #### 3. Prompt (`--artifact-type prompt`)
 
 - **What it improves:** a standalone `.md`/`.txt` prompt file.
-- **Metric:** rubric `pass_rate` from an **LLM grader** (your `--eval-set` cases are the rubric).
-- **Keep decision:** absolute-delta.
-- **Edit format:** `section-replace`.
+- **Metric:** by default (`--prompt-eval executed`) the **pass rate of the responses**: the prompt
+  is sent as the system prompt with each case's `prompt` / `input` as the user turn (the
+  `executor` profile), and an **LLM grader** judges the responses against the case's
+  `expectations` / `forbidden_expectations` without seeing the prompt. Every case needs a
+  `prompt` or `input`, otherwise the run exits 2. `--prompt-eval static` is the older metric: the
+  grader reads the prompt and predicts the pass rate; nothing is executed.
+- **Keep decision:** absolute-delta (calibrated σ, re-measured KEEP).
+- **Edit format:** `section-replace`. `{{placeholders}}` must all survive.
 - **Use this when…** you have a reusable prompt and a set of cases that say what "good" output looks
-  like. Note the LLM grader is itself a little noisy — set `--noise-sigma > 0` so jitter is never
-  banked as a real win.
+  like. The grader and the executor are both a little noisy; the baseline calibration (3 runs by
+  default) measures that noise, so jitter is never banked as a real win.
 
-#### 4. Workflow (`--agent/workflows/*.md`, `--artifact-type workflow`)
+#### 4. Workflow (`.agent/workflows/*.md`, `--artifact-type workflow`)
 
 - **What it improves:** a workflow/command file (the step-by-step recipe a slash-command runs).
-- **Metric:** task-completion / trigger, LLM-graded against `--eval-set`.
-- **Keep decision:** absolute-delta.
+- **Metric:** a *predicted* pass rate (always static): the LLM grader reads the workflow and the
+  `--eval-set` cases and predicts whether an agent following it would pass. No backend executes
+  workflows, and the report's `Metric:` line says so.
+- **Keep decision:** absolute-delta (calibrated σ, re-measured KEEP).
 - **Edit format:** `section-replace`. (Its YAML keys and the tool names it invokes are fingerprinted
   as immutable, so an edit can't quietly drop a tool call.)
 - **Use this when…** the recipe's wording is letting agents skip or misorder steps.
@@ -445,11 +511,15 @@ allowed to make). Pick the right mode and the rest is automatic.
   being measured.
 - **Metric:** a **quality score computed by `grade_dataset.py`** — pure deterministic Python, **no
   LLM, no API key, no network**. This is the one mode whose Evaluator costs zero tokens.
-- **Keep decision:** absolute-delta on a deterministic number (so it's rock-steady — no noise band
-  needed).
+- **Keep decision:** absolute-delta on a deterministic number (so it's rock-steady — σ = 0 is
+  correct, the baseline is measured once, a KEEP is not re-measured, and there is no final
+  confirmation by default).
 - **Edit format:** `dataset-op` with `add` / `modify` only. It **cannot** touch a case's
   `id`, `skill_name`, `grader`, or file references, and **removals are flatly rejected** — you can
   enrich the set but never quietly delete coverage.
+- **What the score rewards:** about 20 cases (`grade_dataset.py --target-n`), a negative share of
+  0.4–0.6 for trigger sets, near-miss negatives, unique and diverse prompts — so a thin set keeps
+  growing instead of stopping as `optimal` after a few cases.
 - **Use this when…** your test set is thin or uneven and you want it stronger. Because grading is
   offline, only the *Proposer* needs an API key — the cheapest, safest way to try the tool.
 
@@ -462,7 +532,9 @@ allowed to make). Pick the right mode and the rest is automatic.
 - **Keep decision:** the **debiased pairwise gate** (`pairwise.py`). An LLM judge compares the
   champion (pre-change snapshot) against the candidate in **both orderings**; KEEP only if the
   candidate nets *more* wins than the champion — ties keep the champion. Running both orderings
-  cancels the judge's bias toward whatever it reads first.
+  cancels the judge's bias toward whatever it reads first. A KEEP also needs the length guard
+  (length within ±`--length-guard`, default 0.5, of the baseline) and is re-measured once by an
+  independent rubric call; that value becomes the champion score.
 - **Edit format:** `text-replace` — a scoped, verbatim find/replace inside the prose itself (exact
   first, then whitespace-tolerant; `find` capped at 4096 chars). No headers needed.
 - **Best-of-N:** with `--candidates N` the Proposer drafts N edits, scores each, and only the best
@@ -476,28 +548,30 @@ allowed to make). Pick the right mode and the rest is automatic.
 flowchart TD
     START["You run auto_improve.py<br/>on a path"] --> TEXT{"--artifact-type text<br/>given explicitly?"}
     TEXT -- Yes --> RUBRIC{"--criteria rubric.md<br/>provided?"}
-    RUBRIC -- No --> ABORT["ABORT:<br/>text mode needs a rubric"]
+    RUBRIC -- No --> ABORT["ABORT (exit 2):<br/>text mode needs a rubric"]
     RUBRIC -- Yes --> M6["MODE 6 · text-quality<br/>rubric score + best-of-N<br/>PAIRWISE keep · text-replace"]
 
     TEXT -- No --> DETECT["Auto-detect type<br/>(or use --artifact-type)"]
     DETECT --> ISSKILL{"dir with a<br/>SKILL.md?"}
-    ISSKILL -- Yes --> TGT{"--target<br/>description?"}
+    ISSKILL -- Yes --> CL{"claude CLI +<br/>run_eval.py available?"}
+    CL -- No --> ABORT2["ABORT (exit 2):<br/>no agentic backend"]
+    CL -- Yes --> TGT{"--target<br/>description?"}
     TGT -- Yes --> M2["MODE 2 · skill description<br/>trigger accuracy via claude -p<br/>frontmatter-field"]
-    TGT -- "No (generic/auto)" --> M1["MODE 1 · skill instructions<br/>pass_rate · absolute-delta<br/>section-replace"]
+    TGT -- "No (generic/auto)" --> M1["MODE 1 · skill instructions<br/>trigger pass rate via claude -p<br/>section-replace"]
 
     ISSKILL -- No --> ISDS{"evals.json /<br/>JSON list of cases?"}
     ISDS -- Yes --> M5["MODE 5 · dataset<br/>DETERMINISTIC score (offline)<br/>dataset-op add/modify"]
 
     ISDS -- No --> ISWF{"under workflows/<br/>or commands/?"}
-    ISWF -- Yes --> M4["MODE 4 · workflow<br/>LLM-graded · absolute-delta<br/>section-replace"]
-    ISWF -- "No (.md/.txt)" --> M3["MODE 3 · prompt<br/>LLM rubric pass_rate<br/>section-replace"]
+    ISWF -- Yes --> M4["MODE 4 · workflow<br/>static LLM prediction<br/>section-replace"]
+    ISWF -- "No (.md/.txt)" --> M3["MODE 3 · prompt<br/>executed pass rate (default)<br/>section-replace"]
 
     classDef mode fill:#e8f0ff,stroke:#5577cc;
     classDef stop fill:#fdd,stroke:#c66;
     classDef gate fill:#ffe9cc,stroke:#e08a00;
     class M1,M2,M3,M4,M5,M6 mode;
-    class ABORT stop;
-    class TEXT,RUBRIC,TGT gate;
+    class ABORT,ABORT2 stop;
+    class TEXT,RUBRIC,CL,TGT gate;
 ```
 
 Three subtleties that are easy to miss:
@@ -511,19 +585,25 @@ Three subtleties that are easy to miss:
 - **The diamond order is the detection order** (`SKILL.md` → `evals.json` → `workflows/` → plain
   `.md`/`.txt`), first match wins. Naming a dataset file `notes.md` would slip it into the prompt
   branch — keep the `evals.json` / `*.evals.json` name so it lands in the deterministic mode.
+- **Configuration problems stop the run before the baseline, with exit code 2.** Besides the two
+  ABORT boxes: a missing `--eval-set` for skill/prompt/workflow, a missing provider key or SDK,
+  an executed prompt eval with a case that has no `prompt` / `input`, a `--protect` header the
+  artifact does not contain, and `--git-isolation` outside git or on a dirty tree. The artifact
+  is never touched in these cases.
 
 > **✅ Key takeaways from this section.** A *mode* is `artifact-type` + `target`, and it locks in the
 > metric, the keep rule, and the edit format together. Five of the six modes use the
 > noise-aware **absolute-delta** decision; only **text** uses the **pairwise** gate (its rubric score
-> just drives early-stop). Only **dataset** scores offline (deterministic, zero tokens). And `text`
+> just drives early-stop). Only **dataset** scores offline (deterministic, zero tokens). Both
+> **skill** modes are measured by `claude -p` and stop with exit 2 without it. And `text`
 > is the only mode you must request by hand — the rest are inferred from the path.
 
 | Mode | Metric | Keep decision | Offline? |
 |---|---|---|---|
-| 1 · skill instructions | `pass_rate` (LLM-graded eval set) | absolute-delta | No |
+| 1 · skill instructions | trigger pass rate (`claude -p`) | absolute-delta | No |
 | 2 · skill description | trigger accuracy (`claude -p`) | absolute-delta | No |
-| 3 · prompt | rubric `pass_rate` (LLM grader) | absolute-delta | No |
-| 4 · workflow | completion / trigger (LLM grader) | absolute-delta | No |
+| 3 · prompt | pass rate of executed responses (default) or static prediction | absolute-delta | No |
+| 4 · workflow | static prediction (LLM grader) | absolute-delta | No |
 | 5 · dataset | quality score (`grade_dataset.py`) | absolute-delta | **Yes** (Evaluator) |
 | 6 · text-quality | rubric score (0–1, logged) | **pairwise** gate | No |
 
@@ -554,6 +634,9 @@ DEFAULT_PROVIDER=anthropic
 ANTHROPIC_API_KEY=sk-ant-...
 ```
 
+The key and the provider's SDK are checked before the baseline. If either is missing, the run
+prints one `ABORT: LLM provider not usable: …` line and exits with code 2; nothing is changed.
+
 > **One term up front — the "harness."** Throughout this guide the *harness* is
 > the thing that does the **grading**: an eval set, a dataset's built-in scorer,
 > or a rubric file. The golden rule of the whole skill: **the harness is
@@ -570,14 +653,21 @@ all**: the score comes from `grade_dataset.py`, a pure deterministic function
 the provider. That makes it cheap, fast, and impossible to "cheat by editing the
 ruler" — so it is the ideal way to confirm your setup works.
 
-**The command:**
+The fixture `evals/fixtures/thin-dataset.json` has only 3 positive cases and no negatives.
+`grade_dataset.py` scores it 0.480: `forbidden` 0.0 (no negatives), `near_miss` 0.0, `count`
+0.15 (3 of the 20-case target).
+
+**The command** (from the skill directory):
 
 ```bash
 python3 scripts/auto_improve.py \
-  --artifact-path ../evals/fixtures/thin-dataset.json \
+  --artifact-path evals/fixtures/thin-dataset.json \
   --artifact-type dataset \
   --workspace /tmp/ds-run --max-iterations 5
 ```
+
+The scorer is deterministic, so σ = 0 is correct here: the baseline is measured once, a KEEP is
+not re-measured, and there is no final confirmation (`--final-runs` defaults to 0 for datasets).
 
 **What happens, step by step (one iteration):**
 
@@ -597,11 +687,13 @@ flowchart LR
     class V,IC cool;
 ```
 
-- **The Proposer only ever ADDS cases** (`dataset-op` with `op: add`). It cannot
-  modify or remove an existing case — removals are rejected outright, and the
-  `id`/`skill_name`/`grader`/file-ref fields of existing cases are immutable.
-  "Improving" a dataset here means *broadening coverage* (e.g. adding a negative
-  case), not deleting the awkward ones.
+- **The Proposer mostly ADDS cases** (`dataset-op` with `op: add`). It may
+  `modify` the mutable fields of an existing case, but never remove one —
+  removals are rejected outright, and the `id`/`skill_name`/`grader`/file-ref
+  fields of existing cases are immutable. "Improving" a dataset here means
+  *broadening coverage* (e.g. adding a near-miss negative case), not deleting
+  the awkward ones. A verbatim repeat of a rejected proposal is logged as
+  `duplicate` and not scored.
 - **Two immutability checks, not one.** `validate_proposal` runs *before* the
   edit lands; a content-hash *subset* check runs *after*. Additions are allowed
   precisely because it is a subset check (`before ⊆ after`) — but changing or
@@ -609,16 +701,29 @@ flowchart LR
 - **`grade_dataset.py` is the whole evaluator.** No API key is consumed scoring;
   the only LLM cost is the Proposer drafting each candidate case.
 
-**Illustrative `improvement_history.tsv`:**
+**`improvement_history.tsv`** (scores computed with `grade_dataset.py`; the
+`secondary` column is empty because datasets have no guard metric):
 
 ```text
-iter	score	delta	status	tier	change_summary	snapshot_ref
-0	0.835	—	baseline		baseline	
-1	0.980	+0.145	keep	trivial	add negative case (Rust server)	.../iter-1/thin-dataset.json
-2	1.000	+0.020	keep	trivial	add negative case (PDF summary)	.../iter-2/thin-dataset.json
+iter	score	delta	status	tier	change_summary	snapshot_ref	secondary
+0	0.480	—	baseline		baseline		
+1	0.763	+0.283	keep	trivial	add near-miss negative (JSON to YAML)	.../iter-1/thin-dataset.json	
+2	0.849	+0.086	keep	trivial	add near-miss negative (JSON schema validation)	.../iter-2/thin-dataset.json	
+3	0.804	-0.045	revert	large	add 3 positives	.../iter-3/thin-dataset.json	
+4	0.868	+0.019	keep	large	add a positive and a near-miss negative (minify)	.../iter-4/thin-dataset.json	
+5	0.852	-0.017	revert	large	add a positive and an unrelated negative (web scraper)	.../iter-5/thin-dataset.json	
 ```
 
-Quality climbed 0.835 → 1.000 and the run stopped with `exit_reason=optimal`.
+Quality climbed 0.480 → 0.868 and the run stopped with
+`exit_reason=budget_iterations`. Iteration 3 is reverted because it drops the
+negative share to 0.25, below the 0.4–0.6 band that earns full `forbidden`
+credit. Iteration 5 adds a negative that shares no content word with any
+positive, so `near_miss` falls from 1.0 to 0.75 and outweighs the `count` gain:
+an unrelated negative does not test the trigger boundary. The scorer keeps
+rewarding growth toward 20 balanced cases with near misses, so a thin set no
+longer exits as `optimal` after two additions (4 positives + 1 unrelated
+negative score 0.60). Iterations with two or more ops are tier `large`, so
+`adversarial_review.md` is written at the end.
 
 ---
 
@@ -630,9 +735,15 @@ This mode tunes exactly that line and nothing else.
 
 It is selected by `--target description` on a `skill` artifact. The score is
 **trigger accuracy** (did the skill fire on the queries that should fire, and
-stay quiet on the ones that should not). This is the one mode whose evaluator
-runs a real `claude -p` agent — so it needs the Claude CLI installed; on other
-vendors the agent-eval backend is a stub.
+stay quiet on the ones that should not). Like every skill run, its evaluator
+runs a real `claude -p` agent — so it needs the Claude CLI installed.
+
+**Preflight** (exit 2 before anything changes): the `claude` CLI and
+skill-creator's `run_eval.py` must be present (there is no LLM-grading
+substitute; on other vendors the agent-eval backend is a stub), the provider
+key and SDK must be set, and with `--git-isolation` the artifact must be in a
+git repository with a clean tree. The run defaults to `--max-duration 60m`,
+because the `claude -p` tokens are not metered.
 
 **The command:**
 
@@ -652,16 +763,19 @@ sequenceDiagram
     participant O as Orchestrator
     participant E as Trigger evaluator<br/>(claude -p per query)
     participant P as Description optimizer
-    Note over O,E: Baseline — run the eval set with the CURRENT description
-    O->>E: run each query x3
+    Note over O,E: Baseline — run the eval set with the CURRENT description, 3 times
+    O->>E: run each query x3 (repeated for each baseline run)
     E-->>O: trigger accuracy + raw failed/false-trigger detail (stashed)
+    Note over O: mean = champion score, sd -> sigma = 1.64*sqrt(2)*sd
     Note over O,P: Each iteration — ONE new description
-    O->>P: failures + current description
+    O->>P: failures + current description + rejected ideas
     P-->>O: frontmatter-field edit (field=description)
-    Note over O: validate (name/tier rejected) -> snapshot -> apply -> re-check
+    Note over O: duplicate check -> validate (name/tier rejected) -> snapshot -> apply -> re-check
     O->>E: re-run the eval set
     E-->>O: new trigger accuracy
-    Note over O: KEEP if delta>sigma, else REVERT/no-signal -> log
+    Note over O: delta>sigma and guard holds -> re-measure x3 -> KEEP if mean clears sigma/sqrt(3)
+    Note over O: else REVERT / no-signal -> log
+    Note over O,E: After the loop — final confirmation, baseline snapshot vs winner, 5 runs each
 ```
 
 - **The optimizer is single-shot, not a nested loop.** It reuses the
@@ -672,22 +786,35 @@ sequenceDiagram
 - **`name` and `tier` are immutable; only `description`/`version` are writable.**
   A `frontmatter-field` proposal that tries to set `name` or `tier` is rejected
   at validation, before it can touch the file.
-- **`--git-isolation` is the safe default here.** Each KEEP commits to a
-  throwaway `auto-improve/*` branch; a dirty working tree aborts the run (exit
-  code 2) so you never optimize on top of uncommitted work.
+- **Noise, holdout and guard.** The baseline is measured 3 times
+  (`--calibrate-noise 3`); σ = 1.64·√2·sd. Each KEEP is re-measured 3 times and
+  must still clear σ/√3. The 6-case fixture is below the 10-case holdout
+  minimum, so all cases are train cases. `validate_skill.py` must keep passing;
+  a KEEP that breaks it is reverted.
+- **`--git-isolation` is the safe default here.** Each run creates a fresh
+  branch `auto-improve/<name>/<UTC timestamp>` (for example
+  `auto-improve/test-skill-broken/20261108T191943Z`), and each KEEP commits only
+  the artifact path to it. Outside a git repository, on a dirty working tree
+  (untracked files included), or when the branch cannot be created, the run
+  exits 2 — it never continues on your current branch.
 
 **Illustrative `improvement_history.tsv`:**
 
 ```text
-iter	score	delta	status	tier	change_summary	snapshot_ref
-0	0.500	—	baseline		baseline	
-1	0.833	+0.333	keep	trivial	intent-focused JSON-formatting description	.../iter-1/...
-2	0.833	+0.000	no-signal	trivial	reworded again	.../iter-2/...
+iter	score	delta	status	tier	change_summary	snapshot_ref	secondary
+0	0.556	—	baseline		baseline (mean of 3; sd=0.0962; sigma=0.2231 calibrated)		1.000
+1	0.889	+0.333	keep	trivial	intent-focused JSON-formatting description [gate 0.833, re-measured 0.889 x3]	.../iter-1/...	1.000
+2	0.833	-0.056	no-signal	trivial	reworded again	.../iter-2/...	1.000
 ```
 
-Trigger accuracy 0.50 → 0.83. Note iteration 2: a reword that moved the metric
-by nothing is logged `no-signal` and **reverted** — noise is never banked as
-progress.
+Iteration 1: the gate delta 0.833 − 0.556 = 0.277 clears σ = 0.223, and the
+re-measured mean (0.889) clears σ/√3 = 0.129, so the KEEP stands and 0.889
+becomes the champion score. Trigger accuracy 0.56 → 0.89. Note iteration 2: a
+reword that moved the metric by less than σ is logged `no-signal` and
+**reverted** — noise is never banked as progress. The report then gives the
+final confirmation: the winner and the baseline snapshot measured 5 times each,
+with a bootstrap 95 % CI of the difference and a `confirmed` / `not confirmed`
+verdict. Merge the branch only when the verdict is `confirmed`.
 
 > ⚠ No Claude CLI / API key handy? Run the **dataset** example instead — it
 > needs no agent and proves your install end-to-end offline.
@@ -726,8 +853,9 @@ flowchart TD
     SC --> B["best-of-N: pick the<br/>highest-scoring candidate"]
     B --> AP["snapshot -> apply the winner"]
     AP --> GATE["PAIRWISE GATE (the real keep decision):<br/>judge compares champion vs candidate<br/>in BOTH orderings"]
-    GATE --> Q{"candidate nets MORE wins<br/>than the champion?"}
-    Q -- yes --> K["KEEP (commit) + log"]
+    GATE --> Q{"candidate nets MORE wins<br/>AND length guard holds?"}
+    Q -- yes --> RM["re-measure once<br/>(independent rubric call)<br/>= new champion score"]
+    RM --> K["KEEP (commit) + log"]
     Q -- "no / tie" --> R["REVERT to champion + log"]
     classDef hot fill:#ffe9cc,stroke:#e08a00;
     class GATE,Q hot;
@@ -743,24 +871,38 @@ flowchart TD
   logged in the TSV `score` column and drives the `--threshold` early stop (which
   defaults to **0.9** in text mode). So a candidate can KEEP on a pairwise win
   while its logged score barely moves — and the loop honestly records *that*
-  candidate's score, not an inflated high-water mark.
+  candidate's score, not an inflated high-water mark. On a KEEP the logged score
+  is an independent re-measurement: the best-of-N score is the maximum of N
+  noisy scores (+0.85·sd at N = 3), so it is neither the champion score nor the
+  input to the `--threshold` check.
+- **The length guard stops "improvement by cutting".** Rubrics often reward
+  brevity. A KEEP needs the text length to stay within ±50 % of the baseline
+  (`--length-guard 0.5`; `0` turns it off); the TSV `secondary` column shows
+  1.000 while the guard holds.
 - **The rubric file is the harness and is never edited.** Unlike skills or
   datasets, a `text` artifact has *no internal immutable parts* — the only thing
-  off-limits is the separate `--criteria` file.
+  off-limits is the separate `--criteria` file. Sections you freeze with
+  `--protect` and the deletion guard still apply to the prose.
 
 **Illustrative `improvement_history.tsv`:**
 
 ```text
-iter	score	delta	status	tier	change_summary	snapshot_ref
-0	0.480	—	baseline		baseline	
-1	0.620	+0.140	keep	trivial	specific opener beats generic "Hi"	.../iter-1/cold-email.txt
-2	0.620	+0.000	revert	trivial	reworded CTA (lost pairwise both orderings)	.../iter-2/cold-email.txt
-3	0.910	+0.290	keep	small	concrete outcome + single ask	.../iter-3/cold-email.txt
+iter	score	delta	status	tier	change_summary	snapshot_ref	secondary
+0	0.480	—	baseline		baseline		1.000
+1	0.620	+0.140	keep	trivial	specific opener beats generic "Hi" [gate 0.650, re-measured 0.620 x1]	.../iter-1/cold-email.txt	1.000
+2	0.620	+0.000	revert	trivial	reworded CTA	.../iter-2/cold-email.txt	1.000
+3	0.910	+0.290	keep	small	concrete outcome + single ask [gate 0.930, re-measured 0.910 x1]	.../iter-3/cold-email.txt	1.000
 ```
 
-Quality 0.48 → 0.91. Iteration 2 is the instructive one: a tidy reword that the
-pairwise judge declined in both orderings is **reverted** even though it didn't
-hurt the rubric score — a non-win is not a win.
+Quality 0.48 → 0.91; the re-measured 0.910 clears `--threshold 0.9`, so the run
+stops with `exit_reason=optimal`. Iteration 2 is the instructive one: a tidy
+reword that the pairwise judge did not prefer in both orderings is **reverted**
+even though it didn't hurt the rubric score — a non-win is not a win. The
+report's final confirmation then re-scores the winner and the baseline snapshot
+5 times each with the rubric judge and gives the bootstrap 95 % CI of the
+difference. Grade with another model family than the mutator
+(`--grader-provider`, `--grader-model`): a judge rates its own model's style
+higher.
 
 ---
 
@@ -786,15 +928,16 @@ dataset run:
 
 ```bash
 python3 scripts/auto_improve.py \
-  --artifact-path ../evals/fixtures/thin-dataset.json \
+  --artifact-path evals/fixtures/thin-dataset.json \
   --artifact-type dataset \
   --workspace /tmp/ds-run --max-iterations 5
 ```
 
 - **`OPENAI_MODEL_OVERRIDE` is the "model link."** It sets the same OpenRouter
-  model id for every profile (proposer, grader, text_mutator). To use a
+  model id for every profile (proposer, grader, executor, text_mutator). To use a
   *different* model per profile, edit each profile's `openai:` model in
-  `config/llm_profiles.yaml` instead.
+  `config/llm_profiles.yaml` instead. To grade with another model for one run,
+  pass `--grader-model` (and `--grader-provider` for another provider).
 - **A non-default base URL prints a WARNING on purpose.** It is reminding you
   that every prompt — including your artifact's text — is being sent to that
   endpoint. Treat the gateway as you would any third party seeing your data.
@@ -808,42 +951,59 @@ python3 scripts/auto_improve.py \
 
 Every run writes to your `--workspace`. The two files you actually read are
 `improvement_history.tsv` (one row per iteration) and `improvement_report.md`
-(the human summary with the before/after and score trajectory). The TSV is a
-flight recorder modeled on autoresearch's `results.tsv` — seven tab-separated
-columns:
+(the human summary). The TSV is a flight recorder modeled on autoresearch's
+`results.tsv` — eight tab-separated columns (`secondary` was added as the LAST
+column, so readers that index the older seven by position keep working):
 
 | Column | In plain words |
 |---|---|
-| `iter` | Iteration number; **0 is always the baseline** (the score before any change). |
-| `score` | The metric on this iteration (0-1). For text mode this is the rubric score, even though the *gate* decides KEEP. |
-| `delta` | `score − best_score`, signed to 3 decimals (`+0.145`); the baseline shows `—`. |
+| `iter` | Iteration number; **0 is always the baseline** (the score before any change; with calibration, the mean of K runs). |
+| `score` | The metric on this iteration (0-1). On a KEEP it is the re-measured mean. For text mode this is the rubric score, even though the *gate* decides KEEP. Rejected rows repeat the champion score. |
+| `delta` | `score − champion score`, signed to 3 decimals (`+0.145`); the baseline shows `—`; rows that were never evaluated show `+0.000`. |
 | `status` | The verdict for this row (see below). |
 | `tier` | Change size — `trivial`/`small`/`medium`/`large` — computed deterministically, never chosen by the Proposer. |
-| `change_summary` | One-line description of what was proposed. |
+| `change_summary` | One-line description of what was proposed. Evaluated rows may carry a bracketed note: `[gate 0.833, re-measured 0.889 x3]` on a KEEP, `[not confirmed: …]` on a failed re-measurement, `[guard regressed]`. Rejected rows and evaluator errors append the reason after a `\|`; Proposer and apply errors hold only the error text. The baseline row holds the noise band (`baseline (mean of 3; sd=…; sigma=… calibrated)`). |
 | `snapshot_ref` | Path to the saved pre-change copy (kept only for the newest 2 iterations). |
+| `secondary` | The guard metric: `1.000` = holds, `0.000` = broken, empty when the run has no guard (dataset, prompt, workflow) or the row was not evaluated. |
 
 The `status` column is the verdict vocabulary:
 
 | Status | Meaning |
 |---|---|
 | `baseline` | The iteration-0 starting measurement. |
-| `keep` | The change beat noise (or won the pairwise gate) and stayed. |
-| `revert` | The change lost — metric dropped, secondary regressed, or pairwise non-win — and was rolled back. |
-| `no-signal` | The change moved the metric within the noise band (`|delta| ≤ σ`) → reverted, so noise never accumulates as drift. |
+| `keep` | The change beat noise (or won the pairwise gate), held the guard, was confirmed on re-measurement, and stayed. |
+| `revert` | The change lost — metric dropped, guard regressed, or pairwise non-win — and was rolled back. |
+| `no-signal` | The change moved the metric within the noise band (`|delta| ≤ σ`), or cleared σ once but not on re-measurement (`not confirmed`) → reverted, so noise never accumulates as drift. |
 | `no-change` | The Proposer returned an empty or invalid edit; nothing was applied. |
-| `immutability-violation` | The edit tried to touch a frozen part (caught before *or* after apply) → reverted. |
-| `error` | The Proposer or apply step raised; logged, and the loop continues (it never crashes on one bad iteration). |
+| `duplicate` | The proposal repeats the summary or the exact edit of an attempt that was already reverted or rejected → not applied, not evaluated. |
+| `immutability-violation` | The edit tried to touch a frozen part or a `--protect` section (caught before *or* after apply) → reverted. |
+| `shrink-guard` | The edit removed a whole section, more than half of a section's non-blank lines, or a MUST/NEVER line → reverted (`--allow-deletions` turns this off). |
+| `error` | The Proposer, the apply step, the evaluator, the guard or the pairwise judge failed (a grader verdict that stays unusable after one retry counts too); the artifact is restored from the snapshot and the loop continues. |
 
 When the loop stops it records an `exit_reason` in the report and the printed
 summary: `optimal` (hit the threshold) or `already_optimal` (was there at
-baseline), `stagnation` (too many non-productive iterations in a row), or one of
-the three budget caps — `budget_iterations`, `budget_tokens`, `budget_duration`.
+baseline), `stagnation` (no improvement of at least `--min-improvement` for
+`--convergence-window` iterations in a row), `errors` (that window, or every
+iteration, was `error` rows; exit code 1), or one of the three budget caps —
+`budget_iterations`, `budget_tokens`, `budget_duration`.
+
+`improvement_report.md` lists, in this order: artifact type, agent-eval vendor,
+exit reason, baseline score, best score (inner loop; "train part" when there is a split), number of
+KEEPs, measured tokens, the `Metric:` mode, the eval split (`train 12 / holdout
+8 (seed 42)`), the noise band line (σ, its source, baseline runs, sd, z, and how
+often each KEEP is re-measured), a budget note for skill runs (`claude -p`
+tokens are not counted), the git branch, then the sections **Models by role**,
+**Final confirmation** (verdict, means, delta, bootstrap 95 % CI, train vs
+holdout delta, `overfit_warning`), **Warnings** (for example σ = 0 for a
+non-deterministic evaluator) and the **Score trajectory** table with a
+`secondary` column.
 
 > **The winner stays put — merging is your call.** The loop leaves the winning
 > artifact in place on disk and **never merges for you**. Under `--git-isolation`
-> the kept changes live on a throwaway `auto-improve/<name>/run` branch; read the
-> report (and `adversarial_review.md` if a large-tier change landed), then merge
-> that branch yourself when you're satisfied.
+> the kept changes live on a fresh `auto-improve/<name>/<UTC timestamp>` branch;
+> read the report (and `adversarial_review.md` if a large-tier change landed),
+> then merge that branch yourself when the final confirmation says `confirmed`
+> and there is no `overfit_warning`.
 
 > ✅ **Key takeaways.** Install with `install.sh`, drop one provider + key into
 > `.env`, and start with the **dataset** mode — it scores offline with no API, so
@@ -852,8 +1012,9 @@ the three budget caps — `budget_iterations`, `budget_tokens`, `budget_duration
 > improves prose where the **pairwise gate**, not the rubric number, decides
 > KEEP. Any OpenAI-compatible gateway is a matter of three env vars, no command
 > change. Read the run in `improvement_history.tsv` (baseline = iter 0, `keep`
-> = banked, `no-signal`/`revert` = rolled back) and remember the winner is left
-> in place for **you** to merge.
+> = banked, `no-signal`/`revert`/`shrink-guard`/`duplicate` = not kept), trust the
+> report's **final confirmation** over the inner-loop score, and remember the
+> winner is left in place for **you** to merge.
 
 ---
 
@@ -869,7 +1030,8 @@ gate** — the lock that stops the loop from cheating by editing the ruler.
 > that suggests ONE edit; **Evaluator** = whatever produces the score (a script for datasets, a
 > `claude -p` agent run for skill triggers, or an LLM grader for prose); **Decider** = the extra
 > pairwise judge used *only* in text mode. A **snapshot** is a saved copy of the artifact so a bad
-> change can be undone. **σ (sigma)** is the noise band — how much the score "jitters" by chance.
+> change can be undone. **σ (sigma)** is the noise band — the keep threshold for a score
+> *difference*, σ = 1.64·√2·sd, where sd is how much one measurement "jitters" by chance.
 
 ### 1. The full loop — who does what
 
@@ -885,35 +1047,46 @@ sequenceDiagram
     participant D as Decider<br/>(pairwise judge,<br/>text mode ONLY)
 
     H->>O: run with --artifact-path, --workspace, budget
-    Note over O: Baseline FIRST — score the artifact<br/>unchanged, so there is something to beat
-    O->>E: score the current artifact
-    E-->>O: baseline score
+    Note over O: Preflight — eval set, provider key + SDK,<br/>agentic backend, git. Any problem = exit 2
+    Note over O: Baseline FIRST — score the artifact<br/>unchanged, K times, so there is something to beat
+    O->>E: score the current artifact (K times)
+    E-->>O: baseline scores -> mean, sd, sigma
     loop each iteration (until budget / convergence / optimal)
-        O->>P: "propose ONE change" + current artifact + history
+        O->>P: "propose ONE change" + current artifact<br/>+ last 5 attempts + rejected ideas
         P-->>O: one structured edit (a "proposal")
-        Note over O: validate BEFORE apply (immutability)<br/>then snapshot, then apply
-        O->>O: snapshot -> apply -> subset re-check
-        O->>E: score the CHANGED artifact
+        Note over O: duplicate check, validate BEFORE apply (immutability)<br/>then snapshot, then apply
+        O->>O: snapshot -> apply -> subset re-check -> deletion guard
+        O->>E: score the CHANGED artifact (+ guard metric)
         E-->>O: candidate score
         alt text mode
             O->>D: champion vs candidate, BOTH orderings
             D-->>O: keep / revert (who won more)
         else default mode
-            Note over O: delta = score - best_score;<br/>compare against sigma
+            Note over O: delta = score - champion,<br/>compare against sigma
         end
-        Note over O: KEEP (best_score := score) or REVERT (restore snapshot);<br/>log one row to improvement_history.tsv
+        opt candidate KEEP
+            O->>E: re-measure (K times, once in text mode)
+            E-->>O: re-measured scores
+        end
+        Note over O: KEEP (champion := re-measured mean) or REVERT (restore snapshot),<br/>log one row to improvement_history.tsv
+    end
+    opt something was kept
+        O->>E: final confirmation: baseline snapshot vs winner,<br/>N runs each, alternating, on the holdout
+        E-->>O: means -> delta, bootstrap 95% CI, verdict
     end
     O->>H: improvement_report.md + the winning artifact left in place
 ```
 
 **Three subtleties that are easy to miss:**
 
-- **The baseline is scored before any change** (step 3-4). Without a "before" number there is no
-  honest "after" — the very first thing the loop does is measure the untouched artifact. If that
-  baseline already meets `--threshold`, the loop exits immediately with `already_optimal`.
+- **The baseline is scored before any change** (step 4-5). Without a "before" number there is no
+  honest "after" — the very first thing the loop does is measure the untouched artifact, `K`
+  times when the evaluator is noisy, so the noise band comes from real data. If that baseline
+  already meets `--threshold`, the loop exits immediately with `already_optimal`. If the baseline
+  cannot be measured, the run exits 2 and the artifact is left untouched.
 - **Validation happens BEFORE the apply, not after.** The Orchestrator checks the proposal would not
-  touch an immutable part *first* (cheaper and safer), then snapshots, then applies, then re-checks
-  (belt and suspenders — diagram 4 unpacks this).
+  touch an immutable or protected part *first* (cheaper and safer), then snapshots, then applies,
+  then re-checks and runs the deletion guard (belt and suspenders — diagram 4 unpacks this).
 - **The Decider only exists in text mode.** For datasets, skills, prompts, and workflows there is no
   pairwise judge at all — the keep/revert call is made straight from the Evaluator's number using
   sigma. The Decider is an *extra* gate layered on for subjective prose, where a raw score is too
@@ -927,22 +1100,24 @@ depends on the artifact type. Think of it as two judges with different rulebooks
 ```mermaid
 %% After the candidate is scored, ONE of these two paths decides its fate.
 flowchart TD
-    START["Candidate scored<br/>delta = score - best_score"] --> MODE{"text mode?"}
+    START["Candidate scored<br/>delta = score - champion"] --> MODE{"text mode?"}
 
-    MODE -- "No (dataset / skill /<br/>prompt / workflow)" --> ABS["DEFAULT path: absolute-delta<br/>sigma = --noise-sigma"]
-    ABS --> D1{"delta > sigma<br/>AND secondary<br/>not regressed?"}
-    D1 -- Yes --> KEEP1["KEEP<br/>best_score := score"]
+    MODE -- "No (dataset / skill /<br/>prompt / workflow)" --> ABS["DEFAULT path: absolute-delta<br/>sigma = calibrated 1.64·√2·sd<br/>or --noise-sigma"]
+    ABS --> D1{"delta > sigma<br/>AND guard<br/>not regressed?"}
+    D1 -- Yes --> RM{"re-measure K times:<br/>mean - champion<br/>> sigma/√K?"}
+    RM -- Yes --> KEEP1["KEEP<br/>champion := re-measured mean"]
+    RM -- "No (not confirmed)" --> NS
     D1 -- No --> D2{"|delta| <= sigma?"}
     D2 -- "Yes (inside the noise band)" --> NS["NO_SIGNAL -> REVERT<br/>noise is never kept as drift"]
-    D2 -- "No (delta below -sigma,<br/>or secondary regressed)" --> REV1["REVERT<br/>restore snapshot"]
+    D2 -- "No (delta below -sigma,<br/>or guard regressed)" --> REV1["REVERT<br/>restore snapshot"]
 
     MODE -- "Yes (text)" --> PW["PAIRWISE path: ask the judge twice"]
     PW --> O1["Ordering 1: champion = A, candidate = B"]
     PW --> O2["Ordering 2: candidate = A, champion = B"]
     O1 --> TALLY["Tally the wins"]
     O2 --> TALLY
-    TALLY --> D3{"candidate wins<br/>MORE than champion?"}
-    D3 -- Yes --> KEEP2["KEEP the candidate"]
+    TALLY --> D3{"candidate wins<br/>MORE than champion<br/>AND length guard holds?"}
+    D3 -- Yes --> KEEP2["KEEP the candidate<br/>champion := one rubric re-measure"]
     D3 -- "No (incl. a tie)" --> REV2["REVERT<br/>keep the champion"]
 
     classDef keep fill:#dfd,stroke:#6c6;
@@ -950,16 +1125,21 @@ flowchart TD
     classDef noise fill:#ffe9cc,stroke:#e08a00;
     class KEEP1,KEEP2 keep;
     class REV1,REV2 rev;
-    class NS noise;
+    class NS,RM noise;
 ```
 
-**Two tricks hidden here:**
+**Three tricks hidden here:**
 
 - **"A tiny positive delta" is not enough — and the noise band is symmetric.** On the default path a
   change is kept only when `delta > sigma` (beyond a hair-thin epsilon). Anything *inside* the band
   (`|delta| <= sigma`) is **NO_SIGNAL** and gets reverted, exactly like a real regression. That is
   deliberate: if you banked every within-noise wiggle, random jitter would slowly accumulate as
   "drift" and the artifact would rot. A score that merely treads water is thrown back.
+- **Clearing σ once is not enough either.** The measurement that cleared the gate was picked for
+  being high, so the candidate is measured `K` more times (`--calibrate-noise`, default 3) and
+  stays only if the mean still beats the champion by σ/√K. The mean, not the lucky gate value,
+  becomes the champion score. For the deterministic dataset scorer, `K` = 0 and σ = 0: one
+  measurement is exact.
 - **The pairwise path ignores the rubric number when deciding.** In text mode the LLM rubric *score*
   is still computed and logged — and it drives the `--threshold` early-stop — but it does **not**
   decide KEEP. The keep decision is the head-to-head vote. The judge reads champion vs candidate in
@@ -976,12 +1156,12 @@ flowchart TB
     O["auto_improve.py<br/>ORCHESTRATOR + CLI<br/>(owns the loop & budget)"]
 
     subgraph LLM["LLM side (vendor-agnostic)"]
-        CFG["llm_config.py<br/>LLMConfigManager:<br/>anthropic / openai / gemini /<br/>OpenAI-compatible gateways"]
+        CFG["llm_config.py<br/>LLMConfigManager:<br/>anthropic / openai / gemini /<br/>OpenAI-compatible gateways<br/>(roles: proposer, grader,<br/>executor, text_mutator)"]
         PW["pairwise.py<br/>debiased two-ordering<br/>judge (text mode)"]
     end
 
     subgraph DET["Deterministic utilities (no LLM, offline-testable)"]
-        IMM["check_immutability.py<br/>validate before + subset after"]
+        IMM["check_immutability.py<br/>validate before + subset after<br/>+ --protect + deletion guard"]
         APP["apply_proposal.py<br/>surgical section / frontmatter /<br/>dataset-op / text-replace"]
         SNAP["snapshot.py<br/>save / restore / git branch<br/>(prunes to newest 2)"]
         GD["grade_dataset.py<br/>deterministic dataset score"]
@@ -1024,8 +1204,9 @@ flowchart TB
   tested offline with no API key: the LLM pieces are injectable fakes (`run_improvement_loop` takes a
   `proposer`/`evaluator`/`decider` you can supply).
 - **Skill-trigger eval is the one vendor-locked corner.** Only the `claude` backend is real (it shells
-  out to `claude -p`); `gemini` and `codex` are stubs that report `available=False`. On those vendors a
-  skill artifact falls back to LLM grading instead of true trigger measurement. The dashed arrow is the
+  out to `claude -p`); `gemini` and `codex` are stubs that report `available=False`. On those vendors
+  a `skill` / `full-skill` run stops with exit 2 before the baseline, in one line; an LLM estimate of
+  trigger accuracy would be a different quantity, so none is substituted. The dashed arrow is the
   whole point of the safety story: `check_immutability.py` only *reads* the harness, never writes it.
 
 ### 4. The immutability gate — the lock on the ruler
@@ -1037,17 +1218,19 @@ thing that measures it.** Here is the exact sequence around one apply.
 %% Every applied change passes through this gate. A violation auto-reverts.
 flowchart TD
     P["Proposal arrives<br/>(one structured edit)"] --> V{"validate_proposal<br/>BEFORE apply"}
-    V -- "touches an immutable part<br/>(or malformed)" --> REJ["REJECT<br/>log 'immutability-violation'<br/>(nothing applied)"]
+    V -- "touches an immutable part<br/>or a protected section<br/>(or malformed)" --> REJ["REJECT<br/>log 'immutability-violation'<br/>(nothing applied)"]
     V -- ok --> SNAP["save_snapshot<br/>(copy artifact aside)"]
     SNAP --> APPLY["apply_proposal<br/>(surgical edit)"]
     APPLY --> SUB{"subset re-check<br/>before-set subseteq after-set?"}
     SUB -- "an existing immutable<br/>signature changed/removed" --> RESTORE["restore_snapshot<br/>auto-REVERT<br/>log 'immutability-violation'"]
-    SUB -- "yes (additions are fine)" --> EVAL["proceed to EVALUATE<br/>(diagram 2 decides keep/revert)"]
+    SUB -- "yes (additions are fine)" --> SHR{"deletion guard<br/>(unless --allow-deletions)"}
+    SHR -- "whole section removed,<br/>over half of its lines cut,<br/>or a MUST/NEVER line dropped" --> RESTORE2["restore_snapshot<br/>auto-REVERT<br/>log 'shrink-guard'"]
+    SHR -- ok --> EVAL["proceed to EVALUATE<br/>(diagram 2 decides keep/revert)"]
 
     classDef bad fill:#fdd,stroke:#c66;
     classDef ok fill:#dfd,stroke:#6c6;
     classDef step fill:#e8f0ff,stroke:#5577cc;
-    class REJ,RESTORE bad;
+    class REJ,RESTORE,RESTORE2 bad;
     class EVAL ok;
     class SNAP,APPLY step;
 ```
@@ -1067,18 +1250,26 @@ flowchart TD
   legitimate addition.
 - **"text" artifacts have no internal immutable parts.** For prose, the ruler (the `--criteria`
   rubric) is a *separate file* the loop never edits, so there is nothing inside the text itself to
-  lock — `immutable_signatures` returns an empty set. The gate is still there; it simply has nothing
-  to guard within the artifact, which is why text mode leans on the pairwise Decider instead.
+  lock — `immutable_signatures` returns an empty set unless you `--protect` a section. The gate is
+  still there; it simply has nothing to guard within the artifact, which is why text mode leans on
+  the pairwise Decider instead.
+- **The deletion guard protects what the ruler does not see.** An eval case protects only the
+  content it measures, so the gate also rejects edits that delete a lot (`shrink-guard`): a whole
+  section, more than half of a section's non-blank lines, or any line containing MUST / NEVER.
+  Rewording such a line is fine. `--allow-deletions` turns the guard off for a run whose goal is to
+  cut.
 
 > ✅ **Key takeaways.** The loop is a conversation between a Python orchestrator and a few LLM/agent
-> helpers, wrapped around one unbreakable rule. **Diagram 1**: baseline first, then propose → validate
-> → snapshot → apply → evaluate → decide → log, every iteration. **Diagram 2**: two decision rules —
-> the default path keeps only when `delta > σ` (within-noise moves are reverted as NO_SIGNAL), while
-> text mode keeps only when the candidate wins *both-ordering* pairwise voting. **Diagram 3**: one
-> orchestrator, a vendor-agnostic LLM layer, and a box of pure-deterministic utilities (so the logic
-> is offline-testable); only the `claude` trigger backend is real. **Diagram 4**: the immutability gate
-> validates before apply and re-checks after with a *subset* test — additions are fine, changing or
-> removing the ruler auto-reverts.
+> helpers, wrapped around one unbreakable rule. **Diagram 1**: preflight and a K-run baseline first,
+> then propose → validate → snapshot → apply → evaluate → decide → re-measure a KEEP → log, every
+> iteration, and a final confirmation at the end. **Diagram 2**: two decision rules — the default
+> path keeps only when `delta > σ` and the re-measured mean still clears σ/√K (within-noise moves are
+> reverted as NO_SIGNAL), while text mode keeps only when the candidate wins *both-ordering* pairwise
+> voting and holds the length guard. **Diagram 3**: one orchestrator, a vendor-agnostic LLM layer,
+> and a box of pure-deterministic utilities (so the logic is offline-testable); only the `claude`
+> trigger backend is real. **Diagram 4**: the immutability gate validates before apply and re-checks
+> after with a *subset* test — additions are fine, changing or removing the ruler auto-reverts — and
+> the deletion guard rejects edits that cut unmeasured content.
 
 ---
 
@@ -1097,24 +1288,41 @@ python3 scripts/auto_improve.py --artifact-path <path> --workspace <dir> [option
 | `--workspace` | (required) | where logs / snapshots / report are written |
 | `--artifact-type` | `auto` | `skill`/`prompt`/`workflow`/`dataset`/`full-skill`/`text` |
 | `--target` | `auto` | `description` (single-shot CSO optimizer) else generic |
-| `--eval-set` | — | `evals.json` for skill/prompt/workflow (JSON list, ≤1000) |
+| `--eval-set` | — | `evals.json` (JSON list, ≤1000); **required** for skill/prompt/workflow (else exit 2) |
 | `--criteria` | — | markdown rubric, **required** for `--artifact-type text` |
 | `--candidates` | `1` | best-of-N candidates per iteration (text mode) |
 | `--threshold` | `1.0` (text `0.9`) | score (0-1) early-stop |
 | `--provider` | `auto` | `auto`/`gemini`/`anthropic`/`openai` (sets `DEFAULT_PROVIDER`) |
-| `--model` | — | one-off model override for this run |
+| `--model` | — | model for the proposer, mutator and executor roles (and the grader unless `--grader-model` is given) |
+| `--grader-model` | — (= `--model`) | model for every grading role: grader, rubric judge, pairwise judge, large-tier review |
+| `--grader-provider` | the run's provider | provider for the grading roles (`gemini`/`anthropic`/`openai`); prefer another model family |
 | `--max-output-tokens` | — | per-call output cap for ALL profiles (else `llm_profiles.yaml`) |
 | `--max-iterations` | `10` | budget axis |
-| `--max-tokens` | — | budget axis (sums measured `usage.total_tokens`) |
-| `--max-duration` | — | budget axis, e.g. `30m`, `1800s`, `1h` |
-| `--noise-sigma` | `0.0` | noise band for the absolute-delta decision |
+| `--max-tokens` | — | budget axis (sums measured `usage.total_tokens`; `claude -p` tokens are not included) |
+| `--max-duration` | — (skill/full-skill: `60m`) | budget axis, e.g. `30m`, `1800s`, `1h` |
+| `--noise-sigma` | unset (derived from calibration) | keep threshold for a score DIFFERENCE; overrides the calibrated σ = 1.64·√2·sd |
+| `--calibrate-noise K` | `3` for skill/prompt/workflow; `0` for dataset and text | measure the baseline K times (sd → σ) and re-measure every KEEP K times |
+| `--min-improvement` | `0.01` | a KEEP below this delta does not reset the stagnation counter |
+| `--convergence-window` | `3` | stop after this many consecutive non-improving iterations |
+| `--holdout F` | `0.4` when the eval set has ≥ 10 cases, else `0` | hold out this fraction (stratified, seed 42) for the final confirmation; not for dataset/text |
+| `--final-runs N` | `5` (dataset `0`) | final confirmation: winner and baseline snapshot N times each, bootstrap 95 % CI |
+| `--prompt-eval` | `executed` | `executed` runs the prompt on each case and grades the responses; `static` lets the grader predict from the text (workflows are always static) |
+| `--protect HEADER` | — | make a `## Header` section immutable (repeatable; header must exist; not for datasets) |
+| `--allow-deletions` | off | turn off the deletion guard (`shrink-guard`) |
+| `--length-guard F` | `0.5` | text: revert edits that move the length more than F (fraction) from the baseline; `0` = off |
 | `--runs-per-query` | `3` | trigger-eval runs |
 | `--num-workers` | `min(10, cpus)` | parallel `claude -p` workers (skill-trigger eval) |
-| `--git-isolation` | off | run on a throwaway `auto-improve/*` branch (requires clean tree) |
+| `--git-isolation` | off | run on a fresh `auto-improve/<name>/<UTC timestamp>` branch; outside git, on a dirty tree, or if the branch is not created → exit 2 |
 | `--verbose` | off | print the summary to stderr |
 
 **Exit reasons** (in `summary.exit_reason`): `optimal`, `already_optimal`,
-`stagnation`, `budget_iterations`, `budget_tokens`, `budget_duration`.
+`stagnation`, `errors`, `budget_iterations`, `budget_tokens`, `budget_duration`.
+
+**Exit codes**: `0` — the run finished (any exit reason except `errors`); `1` —
+`exit_reason=errors`; `2` — a configuration problem or a baseline failure,
+reported as one `ABORT: …` line on stderr; the artifact is not changed. (A
+baseline failure under `--git-isolation` happens after the isolation branch was
+created, so you are left on that branch.)
 
 ---
 
@@ -1123,34 +1331,45 @@ python3 scripts/auto_improve.py --artifact-path <path> --workspace <dir> [option
 ```
 auto_improve.py (orchestrator, vendor-neutral)
 ├─ Setup     detect type + vendor → set provider env → validate --eval-set
-│            (JSON list, ≤1000) → git hygiene (clean tree? create isolation branch)
+│            (JSON list, ≤1000; required for skill/prompt/workflow) → mode defaults
+│            (K, N, holdout split) → preflight (agentic backend for skills, provider
+│            key + SDK, --protect headers, prompt inputs) → git hygiene (repo? clean
+│            tree? create a fresh isolation branch) — any failure: exit 2
 ├─ Baseline  capture the immutable signature ONCE → score the starting artifact
-├─ Loop      Proposer → validate-before-apply → snapshot → apply →
-│            immutability subset-check → evaluate → KEEP/REVERT/NO_SIGNAL → log
-├─ Finalize  convergence/budget exit; on a large-tier change, an adversarial review
+│            K times (mean, sd, σ) → save snapshots/baseline/
+├─ Loop      Proposer → duplicate check → validate-before-apply → snapshot →
+│            apply → immutability subset-check → deletion guard → evaluate + guard
+│            → KEEP (re-measured) / REVERT / NO_SIGNAL / error → log
+├─ Finalize  convergence/budget exit; final confirmation (baseline snapshot vs
+│            winner, on the holdout); on a large-tier change, an adversarial review
 └─ Report    improvement_report.md  (merge winner = explicit user action)
 ```
 
 **Components** (`scripts/`):
-- `llm_config.py` — `LLMConfigManager`: vendor-agnostic completion over native SDKs, profile-driven, fallback chains, usage→budget, gateway `base_url`/headers.
+- `llm_config.py` — `LLMConfigManager`: vendor-agnostic completion over native SDKs, profile-driven, fallback chains, usage→budget, gateway `base_url`/headers; `preflight_provider` checks the key and SDK without a network call.
 - `pairwise.py` — debiased pairwise gate for `text` (champion vs candidate, both orderings).
-- `check_immutability.py` — `validate_proposal` (pre-apply) + `immutable_signatures` (subset check).
+- `check_immutability.py` — `validate_proposal` (pre-apply) + `immutable_signatures` (subset check) + `--protect` sections + `shrink_violation` (the deletion guard).
+- `common.py` — shared constants and helpers, including `noise_band` (σ = z·√2·sd), `split_eval_set` (stratified holdout split) and `bootstrap_diff_ci` (percentile bootstrap CI of a difference).
 - `apply_proposal.py` — surgical apply (section / frontmatter / dataset / text-replace).
 - `measure_change_size.py` — deterministic tier (trivial/small/medium/large).
 - `snapshot.py` — file snapshot/restore + git isolation helpers; prunes to the newest 2.
-- `grade_dataset.py` — deterministic dataset quality scorer.
+- `grade_dataset.py` — deterministic dataset quality scorer: `schema 0.20 · forbidden 0.20 · near_miss 0.15 · uniqueness 0.15 · diversity 0.10 · count 0.20`, target 20 cases (`--target-n`); `near_miss` is defined for trigger sets only, and the other weights are renormalized for functional sets.
 - `detect_artifact_type.py`, `detect_vendor.py`, `log_iteration.py`.
 - `backends/` — agent-eval registry: `claude` (validated, wraps skill-creator `run_eval.py`), `gemini`/`codex` (stubs, `available=False`).
 
-**Profiles** (`config/llm_profiles.yaml`): `proposer`, `text_mutator`, `grader` are active; `eval_bootstrap` is **reserved** (defined for a future auto-generate-eval-set step, not yet wired). Each maps all three providers + sampling params.
+**Profiles** (`config/llm_profiles.yaml`): `proposer`, `text_mutator`, `grader` and `executor` (runs a prompt artifact for `--prompt-eval executed`) are active; `eval_bootstrap` is **reserved** (defined for a future auto-generate-eval-set step, not yet wired). Each maps all three providers + sampling params. `--model` overrides the proposer, text_mutator and executor models, and the grading roles too unless `--grader-model` is given; `--grader-model` / `--grader-provider` override every grading role.
 
 ---
 
 ## 🌐 Providers, Gateways & OpenRouter
 
 Select the backend with `DEFAULT_PROVIDER` (or `--provider`); set the matching
-`{PROVIDER}_API_KEY`. Per-profile models live in `config/llm_profiles.yaml`;
-override at runtime with `{PROVIDER}_MODEL_OVERRIDE` / `--model`.
+`{PROVIDER}_API_KEY`. The key and the provider's SDK are checked before the
+baseline (exit 2 when either is missing). Per-profile models live in
+`config/llm_profiles.yaml`; override at runtime with `{PROVIDER}_MODEL_OVERRIDE` /
+`--model`. To grade with another model family, add `--grader-provider` (its key
+and SDK are checked too, for prompt, workflow and text runs) and optionally
+`--grader-model`.
 
 **OpenRouter** (OpenAI-compatible — the model "link" is `OPENAI_MODEL_OVERRIDE`):
 ```bash
@@ -1177,10 +1396,22 @@ Two distinct axes:
    `config/llm_profiles.yaml`; override run-wide with `--max-output-tokens`
    (env `LLM_MAX_OUTPUT_TOKENS`).
 2. **Whole-run budget** — `--max-tokens` (sums measured `usage.total_tokens`
-   from Proposer + grader + pairwise judge), plus `--max-iterations` and
-   `--max-duration`. **Known limitation**: `claude -p` skill-trigger tokens are
-   not counted toward `--max-tokens`; bound those with `--max-duration` (the
+   from Proposer + graders + executor + pairwise judge, failed grader attempts
+   included), plus `--max-iterations` and `--max-duration` (counted from before
+   the baseline). **Known limitation**: `claude -p` skill-trigger tokens are
+   not counted toward `--max-tokens`, because skill-creator's `run_eval.py` does
+   not report them. Skill runs therefore default to `--max-duration 60m`, and
+   the report's `Budget:` line says that the token total excludes them (the
    subprocess also has its own wall-clock timeout).
+3. **Room for the final confirmation** — once a change is kept, the budget
+   check reserves 2·N evaluations (`--final-runs N`), costed from the time and
+   tokens of the baseline measurements, so the loop stops early enough to
+   confirm the winner. The confirmation itself stops when the real budget is
+   exhausted and reports the runs it completed.
+
+Calibration and re-measurement cost evaluations too: with the default `K = 3`
+the baseline costs 3 evaluations and every candidate KEEP costs 3 more. A
+duplicate proposal costs no evaluation.
 
 Defaults are named constants in `llm_config.py` (`DEFAULT_MAX_OUTPUT_TOKENS`,
 `DEFAULT_TIMEOUT_SECONDS`, …) — no magic literals.
@@ -1189,12 +1420,16 @@ Defaults are named constants in `llm_config.py` (`DEFAULT_MAX_OUTPUT_TOKENS`,
 
 ## 🔒 Safety, Immutability & Trust Boundaries
 
-- **Immutable harness**: skill frontmatter `name`/`tier` + `evals/` (content-hashed); dataset `id`/`skill_name`/`grader`/file-refs; prompt `{{placeholders}}`. Validated **before** apply and re-checked **after** (subset check: additions allowed, changes/removals rejected → auto-revert).
+- **Immutable harness**: skill frontmatter `name`/`tier` + `evals/` (content-hashed); dataset `id`/`skill_name`/`grader`/file-refs; prompt `{{placeholders}}`; workflow YAML keys + tool names; every `--protect "## Header"` section. Validated **before** apply and re-checked **after** (subset check: additions allowed, changes/removals rejected → auto-revert).
+- **Deletion guard**: an edit that removes a whole section, more than 50 % of a section's non-blank lines, or a line containing MUST/NEVER is rejected as `shrink-guard` unless `--allow-deletions`. Content no eval case measures would otherwise be free to vanish.
 - **Scoped edits only**: no raw diffs / file paths in proposals; an edit can only mutate the artifact's own content.
-- **Git isolation**: `--git-isolation` runs on a throwaway branch; merge the winner explicitly. A dirty working tree aborts.
+- **Git isolation**: `--git-isolation` creates a fresh branch per run, `auto-improve/<name>/<UTC timestamp>`, and each KEEP commits only the artifact path. Outside a git repository, on a dirty working tree (untracked files included), or when the branch cannot be created, the run exits 2 — it never continues on your current branch. Merge the winner explicitly.
+- **Failures restore the artifact**: an evaluator, guard or pairwise-judge failure after apply is an `error` row with the artifact restored from its snapshot; an interrupt (Ctrl-C) during an iteration also restores the snapshot before it propagates. A baseline failure exits 2 with the file untouched.
+- **Statistical honesty**: the inner-loop score is the train-set score. The report's final confirmation (winner vs baseline snapshot, on the holdout, bootstrap 95 % CI) is the number to act on; `not confirmed` or `overfit_warning` means do not merge.
 - **Trust boundaries** (run on trusted artifacts):
   - Skill-trigger eval spawns a tool-enabled `claude -p` seeded with the artifact's text; the `description` is sanitized + framed as untrusted data at the sink (`run_eval.py`).
   - `text` mode feeds artifact prose to the rubric + pairwise judges (which are the keep gate). Prose is stripped of injection markup and judges are told to treat it as data, but a plaintext-imperative injection cannot be fully neutralized while judging prose — review the winner before merging.
+  - `--prompt-eval executed` sends the artifact as a system prompt to the `executor` model with each case's input. The responses are stripped of injection markup before they reach the grader, which is told to treat them as untrusted data; the grader never sees the prompt.
   - The process environment (`{PROVIDER}_API_KEY`, `OPENAI_BASE_URL`, `AUTO_IMPROVE_*`) and a CWD `.env` are **trusted input**.
 
 ---
@@ -1202,43 +1437,78 @@ Defaults are named constants in `llm_config.py` (`DEFAULT_MAX_OUTPUT_TOKENS`,
 ## 📤 Outputs
 
 Written to `--workspace`:
-- `improvement_history.tsv` — `iter · score · delta · status · tier · change_summary · snapshot_ref` (modeled on autoresearch `results.tsv`). Statuses: `baseline`, `keep`, `revert`, `no-signal`, `no-change`, `immutability-violation`, `error`.
-- `improvement_report.md` — before/after, score trajectory, exit reason, git branch.
+- `improvement_history.tsv` — `iter · score · delta · status · tier · change_summary · snapshot_ref · secondary` (modeled on autoresearch `results.tsv`; `secondary`, the guard metric, is the LAST column). Statuses: `baseline`, `keep`, `revert`, `no-signal`, `no-change`, `duplicate`, `immutability-violation`, `shrink-guard`, `error`.
+- `improvement_report.md` — baseline score, best (train) score, exit reason, metric mode, eval split, noise band, budget note, git branch, **Models by role**, **Final confirmation** (verdict, means, delta, bootstrap 95 % CI, train vs holdout delta, `overfit_warning`), **Warnings**, and the score trajectory with a `secondary` column.
+- `snapshots/baseline/` — the starting artifact, kept for the whole run (the final confirmation measures it against the winner).
 - `snapshots/iter-*/` — pruned to the newest 2 (revert scratch space).
 - `adversarial_review.md` — only for large-tier changes (advisory).
 
+On stdout the run prints one JSON object, `{"summary": …, "report": "<path>"}`;
+`summary` includes `baseline_score`, `best_score`, `exit_reason`, `noise`,
+`final` and `warnings`. Warnings are also printed to stderr as `WARNING: …`
+lines.
+
 The winning artifact is left in place; under `--git-isolation` it lives on the
-`auto-improve/*` branch for you to merge.
+`auto-improve/<name>/<UTC timestamp>` branch for you to merge.
 
 ---
 
 ## ✅ Verification & Testing
 
 ```bash
-# Structure / CSO
-python3 ../skill-creator/scripts/validate_skill.py .         # exit 0
+# From the skill directory (skills/skill-auto-improve)
+# Structure / CSO. Pass the absolute path: with "." the validator compares the
+# frontmatter name with the literal directory name "." and fails.
+python3 ../skill-creator/scripts/validate_skill.py "$PWD"   # exit 0
 # Offline unit suite (no API keys): decision logic, immutability, apply, pairwise,
 # text-replace, dataset, gateway/token config — all injected fakes
-cd scripts && python3 -m unittest discover -s tests          # all pass
+cd scripts && python3 -m unittest discover -s tests         # all pass
 ```
 
-The orchestrator's KEEP/REVERT/NO_SIGNAL/convergence/budget/immutability and the
-pairwise/best-of-N paths are covered by injected-fake tests — no network needed.
-`evals/evals.json` defines behavioral scenarios; fixtures live in `evals/fixtures/`.
+The suite has four files under `scripts/tests/`:
+
+| File | Covers |
+|---|---|
+| `test_auto_improve.py` | the deterministic utilities, the loop's KEEP/REVERT/NO_SIGNAL/convergence/budget/immutability paths, text quality (pairwise gate, best-of-N), LLM config defaults |
+| `test_improvement_spec.py` | the error, git-isolation, no-agentic-backend, documented-flags, noise-band, holdout, final-confirmation, winner's-curse, executed-prompt, broken-grader, grader-model, dataset-grader, protection, guard, skill-budget, preflight and rejected-ideas contracts; it also checks that every command-line flag named in the docs (this manual included) exists in a CLI of the skill, and that no doc promises an LLM-grading substitute for trigger eval |
+| `test_human_channel.py` | reports and `--help` of every command under a non-UTF-8 locale |
+| `test_stdout_broken_pipe.py` | the exit status of `auto_improve.py` when the reader of its stdout closes the pipe early |
+
+All paths use injected fakes — no network needed. `evals/evals.json` defines
+behavioral scenarios; fixtures live in `evals/fixtures/` (`thin-dataset.json`,
+`test-skill-broken/`, and `reciting-prompt.md` + `reciting-prompt.evals.json`
+for the executed-vs-static prompt metric).
 
 ---
 
 ## ❓ Troubleshooting
 
+Every `ABORT: …` line below ends the run with exit code 2 before the first
+iteration (the artifact is not changed); fix the cause and run again.
+
 | Symptom | Cause → Fix |
 |---|---|
 | `ABORT: --artifact-type text requires --criteria` | text mode needs a rubric → pass `--criteria rubric.md` |
-| `ABORT: uncommitted changes` | `--git-isolation` needs a clean tree → commit/stash first |
-| `vendor '...' has no agentic backend` | skill-trigger eval needs the `claude` CLI / `run_eval.py` → install Claude Code, or improve a `prompt`/`text`/`dataset` artifact (LLM-graded) instead |
-| `WARNING: API key for provider ... not found` | set `{PROVIDER}_API_KEY` in `.env` (matching `DEFAULT_PROVIDER`) |
+| `ABORT: --artifact-type … needs a non-empty --eval-set` | skill/prompt/workflow have no metric without an eval set → pass `--eval-set evals.json` |
+| `ABORT: skill-trigger eval needs an agentic backend; vendor '…' has none` | a `skill`/`full-skill` run needs the `claude` CLI on `PATH` and skill-creator's `scripts/run_eval.py`; there is no LLM-grading substitute → install Claude Code / skill-creator, or improve a `prompt`/`text`/`dataset` artifact instead |
+| `ABORT: LLM provider not usable: … has no API key` | set `{PROVIDER}_API_KEY` in `.env` or the environment (matching `DEFAULT_PROVIDER`, or `--grader-provider`) |
+| `ABORT: LLM provider not usable: … needs the '…' package` | the provider SDK is missing → install `scripts/requirements.txt` into the skill venv |
+| `ABORT: uncommitted changes. Stash or commit before --git-isolation.` | `--git-isolation` needs a clean tree (untracked files count) → commit/stash first |
+| `ABORT: --git-isolation: … is not inside a git repository` / `could not create branch …` | run without `--git-isolation`, or on a copy inside a repository; the run never falls back to the current branch |
+| `ABORT: --prompt-eval executed needs a 'prompt' or 'input' on every case` | add the input the prompt should answer to each case, or pass `--prompt-eval static` (a prediction, not a measurement) |
+| `ABORT: --protect: section(s) not found in the artifact` | the header text must match a `## Header` of the artifact; `--protect` does not apply to datasets |
+| `ABORT: --holdout needs an --eval-set and a skill/prompt/workflow artifact` / `leaves an empty part` | drop `--holdout` for dataset/text, or lower it for a small eval set |
+| `ABORT: baseline evaluation failed: … (the artifact was not changed)` | the evaluator, the grader or the guard failed on the unchanged artifact → fix the provider/backend configuration first; the loop never starts without a baseline |
+| exit code 1, `exit_reason=errors` | every iteration, or the whole convergence window, was an `error` row → read the `change_summary` of the `error` rows (Proposer, apply, evaluator, guard or judge failures; a grader verdict that stayed unusable after one retry) |
+| `WARNING: noise band sigma is 0 for a non-deterministic evaluator` | the K baseline runs gave identical scores, or `--calibrate-noise` is below 2 → raise K, or pass `--noise-sigma` (a threshold for a difference, ≈ 2.3·sd) |
+| final confirmation `not confirmed` | the bootstrap 95 % CI of winner − baseline includes 0: the inner-loop gain did not reproduce → do not merge; grow the eval set, raise `--final-runs`, or rerun |
+| `overfit_warning` | the train score rose beyond σ but the holdout did not improve → do not merge; the edits fit the train cases — diversify the eval set |
+| many `no-signal` rows with `not confirmed` | the gate measurement was luck; the re-measured mean did not clear σ/√K → expected behaviour; the edit is not a real gain |
+| many `shrink-guard` rows | the Proposer keeps cutting sections or MUST/NEVER lines → if deletion is the goal, pass `--allow-deletions`; to freeze a section, `--protect` it |
+| many `duplicate` rows | the Proposer repeats ideas it was told were rejected (it receives them as `rejected_ideas`) → the loop stops by `stagnation`; try another `--model` or accept that it has converged |
 | `WARNING: routing ... to non-default base_url` | expected when using a gateway (`OPENAI_BASE_URL`/`ANTHROPIC_BASE_URL`) |
-| loop exits `stagnation` immediately | Proposer keeps returning unapplyable/no-change edits → check the artifact has the sections/text the Proposer targets; raise `--candidates` for text |
-| `--max-tokens` overshoots | `claude -p` tokens aren't metered → bound with `--max-duration` |
+| loop exits `stagnation` immediately | Proposer keeps returning empty/no-change proposals (`no-change` rows) → check the artifact has the sections/text the Proposer targets; raise `--candidates` for text. Unapplyable edits (a missing section, a `find` that is not in the text) are `apply error` rows instead and end the run as `errors` |
+| `--max-tokens` overshoots | `claude -p` tokens aren't metered → bound with `--max-duration` (skill runs default to `60m`) |
 
 See also: [Skill Writing Manual](skill-writing_manual.md), [Skill Evals Guide](skill-evals_guide.md).
 
@@ -1260,19 +1530,23 @@ This is the heartbeat of the whole skill: **the eval harness is frozen; the arti
 | **Proposer** | An LLM call that suggests **one** structured edit per iteration (a "proposal"). It never grades its own work. | The writer who suggests one edit at a time. |
 | **Evaluator** | Whatever produces the score for the current artifact — a deterministic script, a skill-trigger run, or an LLM grader, depending on artifact type. | The examiner who hands back a mark. |
 | **Decider** | A special gate used **only in text mode**: the debiased pairwise judge that picks champion vs candidate (see A.3). For everything else the orchestrator decides by the delta rule. | The referee who only shows up for the prose matches. |
-| **Iteration** | One full lap of the loop: propose → validate → snapshot → apply → re-check immutability → evaluate → decide → log a row. | One round of "edit, mark, keep-or-toss." |
-| **Convergence** | The loop's check that it should stop — either it hit the score `--threshold` (optimal) or it stopped improving for a few rounds in a row. | Knowing when to put the pen down. |
-| **Stagnation** | An exit reason: too many iterations in a row produced no real improvement (the no-improve streak filled a 3-iteration window). | Diminishing returns — you keep editing but nothing gets better. |
+| **Iteration** | One full lap of the loop: propose → duplicate check → validate → snapshot → apply → re-check immutability → deletion guard → evaluate → decide (re-measure a KEEP) → log a row. | One round of "edit, mark, keep-or-toss." |
+| **Convergence** | The loop's check that it should stop — it hit the score `--threshold` (optimal), it stopped improving for a few rounds in a row (stagnation), the rounds kept failing (errors), or a budget ran out. | Knowing when to put the pen down. |
+| **Stagnation** | An exit reason: `--convergence-window` (default 3) iterations in a row produced no improvement of at least `--min-improvement` (default 0.01). | Diminishing returns — you keep editing but nothing gets better. |
+| **Errors** (exit reason) | The whole convergence window, or every iteration, was `error` rows; the run exits with code 1. | The instrument is broken, not the essay. |
+| **Preflight** | The checks before the baseline: eval set present, provider key + SDK, agentic backend for skills, `--protect` headers, prompt inputs, git state. Any failure is exit code 2 with one `ABORT:` line. | Checking the car before the drive, not on the motorway. |
 
 ```mermaid
 flowchart LR
     P["Proposer<br/>one edit"] --> VB["validate<br/>(before apply)"]
     VB --> SN["snapshot"]
     SN --> AP["apply"]
-    AP --> IM["immutability<br/>subset re-check"]
+    AP --> IM["immutability<br/>subset re-check<br/>+ deletion guard"]
     IM --> EV["Evaluator<br/>= score"]
     EV --> DE{"DECIDE"}
-    DE -->|"delta &gt; sigma"| K["KEEP"]
+    DE -->|"delta &gt; sigma"| RM{"re-measure<br/>K times"}
+    RM -->|"mean still ahead"| K["KEEP"]
+    RM -->|"not confirmed"| N
     DE -->|"|delta| ≤ sigma"| N["NO_SIGNAL → revert"]
     DE -->|"else"| R["REVERT"]
     K --> LOG["log a row"]
@@ -1281,7 +1555,7 @@ flowchart LR
     classDef harness fill:#e8f0ff,stroke:#5577cc;
     classDef good fill:#dfd,stroke:#6c6;
     classDef bad fill:#fdd,stroke:#c66;
-    class EV harness;
+    class EV,RM harness;
     class K good;
     class N,R bad;
 ```
@@ -1298,19 +1572,27 @@ How the orchestrator turns a *number* into a *keep-or-revert* verdict.
 
 | Term | In plain words | Analogy |
 |---|---|---|
-| **Baseline** | The very first score, measured before any edits — the bar every change must clear. Logged as iteration 0. | Your starting weight before the diet. |
-| **Champion** | The current best version — the pre-change snapshot the candidate is measured against (the term is used in text mode). | The reigning title-holder. |
+| **Baseline** | The very first score, measured before any edits — the bar every change must clear. Logged as iteration 0; with calibration it is the mean of K runs. | Your starting weight before the diet. |
+| **Champion** | The current best version — the pre-change snapshot the candidate is measured against. Its score is the baseline mean, then the re-measured mean of the last KEEP. | The reigning title-holder. |
 | **Candidate** | The just-edited version being tested this round; it must beat the champion to be kept. | The challenger in the ring. |
 | **Score / metric** | The single number (0–1) the Evaluator returns — e.g. trigger accuracy, pass_rate, or a rubric score. Higher is better. | The exam mark. |
-| **Delta** | `score − best_score`: how much this change moved the number, up or down. | The change on the scale since last week. |
-| **Noise sigma** (`--noise-sigma`) | The "jitter band." LLM scores wobble run-to-run (σ ≈ 0.05–0.10); a delta smaller than sigma is treated as noise, not progress. | The ±0.3 kg that a bathroom scale wobbles by — don't celebrate it. |
-| **KEEP** | The verdict when `delta > sigma` (beyond a tiny epsilon) **and** the secondary metric didn't regress. The change stays. | "Real progress — lock it in." |
-| **NO_SIGNAL** | The verdict when `|delta| ≤ sigma`: the move is within noise, so it is **reverted** — noise is never kept, or it would silently accumulate as drift. | "Could be the scale wobbling — ignore it." |
-| **REVERT** | The verdict for anything else (delta went negative, or the secondary metric regressed): undo the change back to the snapshot. | "Worse — put it back." |
-| **Secondary metric** | An optional second number (e.g. don't let speed collapse while accuracy rises); a regression here blocks a KEEP even if the main score went up. | A side-effect check: the diet worked but did your energy crash? |
+| **Delta** | `score − champion score`: how much this change moved the number, up or down. | The change on the scale since last week. |
+| **sd** | The standard deviation of ONE measurement: how much the same artifact's score wobbles from run to run (≈ 0.05–0.10 for LLM judges). Estimated from the K baseline runs. | The ±0.3 kg that a bathroom scale wobbles by. |
+| **Noise sigma** (σ, `--noise-sigma`) | The keep threshold for a delta, which is a difference of TWO measurements: σ = 1.64·√2·sd ≈ 2.3·sd (about 5 % of no-effect deltas clear it). Calibrated by default; `--noise-sigma` sets it explicitly. A delta within ±σ is treated as noise, not progress. | Two weigh-ins on that scale can differ by more than one wobble — don't celebrate it. |
+| **Calibration** (`--calibrate-noise K`) | Measuring the baseline K times (default 3 for skill/prompt/workflow; 0 for dataset and text) to get the champion mean, sd and σ. | Weighing yourself three times before the diet starts. |
+| **Re-measure** | A candidate KEEP is measured K more times (once in text mode); it stays only if the mean beats the champion by σ/√K, and that mean becomes the champion score. Protects against the winner's curse: the gate picks measurements that happened to be high. | A personal best counts only if you can repeat it. |
+| **KEEP** | The verdict when `delta > sigma` (beyond a tiny epsilon), the guard metric didn't regress, **and** the re-measurement confirms it. The change stays. | "Real progress — lock it in." |
+| **NO_SIGNAL** | The verdict when `|delta| ≤ sigma`, or when a candidate KEEP is `not confirmed` on re-measurement: the move is within noise, so it is **reverted** — noise is never kept, or it would silently accumulate as drift. | "Could be the scale wobbling — ignore it." |
+| **REVERT** | The verdict for anything else (delta went negative, or the guard metric regressed): undo the change back to the snapshot. | "Worse — put it back." |
+| **Secondary (guard) metric** | A cheap deterministic check, 1.0 = holds, 0.0 = broken; a regression blocks a KEEP even if the main score went up. Skill: `validate_skill.py` exits 0 and `SKILL.md` ≤ 500 lines. Text: length within ±`--length-guard` (default 0.5) of the baseline. Other types: none. Shown in the TSV `secondary` column. | A side-effect check: the diet worked but did your energy crash? |
 | **Threshold** (`--threshold`) | The score at which the loop declares victory and stops early (default `1.0`; text mode `0.9`). | The passing grade that ends the exam. |
+| **Holdout** (`--holdout F`) | The part of the eval set the loop never tunes on (default 40 % of a ≥ 10-case skill/prompt/workflow set; stratified by negative cases; seed 42). The Proposer never sees its failures; it is measured only in the final confirmation. | The exam questions you did not practise on. |
+| **Final confirmation** (`--final-runs N`) | After the loop, if something was kept: the baseline snapshot and the winner measured alternately, N times each (default 5; 0 for dataset), on the holdout when there is one. | The official weigh-in at the end, on a calibrated scale. |
+| **Bootstrap 95 % CI** | The interval for winner − baseline obtained by resampling the final-confirmation runs. Its low end decides the verdict. | "How sure are we that the gain is not zero?" |
+| **Verdict** (`confirmed` / `not confirmed`) | `confirmed` when the CI's low end is above 0, else `not confirmed`. Merge only on `confirmed`. | Pass / fail of the official weigh-in. |
+| **overfit_warning** | Raised when the train delta exceeds σ but the holdout delta is ≤ 0: the edits fit the cases the loop saw. | You memorized the practice questions. |
 
-> ✅ **Key takeaways (decision).** KEEP needs a delta bigger than the noise band *and* no regression on the side metric. A within-noise move (`NO_SIGNAL`) is reverted on purpose — so random luck never sneaks into the artifact and pretends to be improvement.
+> ✅ **Key takeaways (decision).** KEEP needs a delta bigger than the noise band, no regression on the guard metric, *and* a re-measurement that still clears σ/√K. A within-noise move (`NO_SIGNAL`) is reverted on purpose — so random luck never sneaks into the artifact and pretends to be improvement. The number to report is the final confirmation on the holdout, not the inner-loop score.
 
 ### A.3. Text mode & the pairwise gate
 
@@ -1319,7 +1601,8 @@ Prose has no objective number, so text mode swaps the delta rule for a head-to-h
 | Term | In plain words | Analogy |
 |---|---|---|
 | **Debiased pairwise gate** | The keep-decision for text: an LLM judge compares champion vs candidate in **both orderings** (champ-first, then cand-first) and the candidate is kept only if it nets **more wins** than the champion (ties → keep champion). | Two blind taste-tests with the cups swapped, so you can't tell which is which by position. |
-| **Best-of-N** (`--candidates N`) | Draft N different edits in one iteration, score each, and send only the best one through the pairwise gate. | Sketch three options, submit your strongest. |
+| **Best-of-N** (`--candidates N`) | Draft N different edits in one iteration, score each, and send only the best one through the pairwise gate. The winner's score is the maximum of N noisy scores, so a KEEP is re-measured by one independent rubric call. | Sketch three options, submit your strongest. |
+| **Length guard** (`--length-guard F`) | The text-mode guard metric: a KEEP needs the length to stay within ±F (default 0.5) of the baseline; `0` turns it off. Stops the loop from cutting its way to a rubric score. | A word limit with a lower bound too. |
 | **Rubric** (`--criteria`) | A markdown file of weighted dimensions summing to 100 that defines "good" for the prose. In text mode it is the **immutable harness** — the loop never edits it. | The grading rubric handed out before the essay. |
 
 ```mermaid
@@ -1358,8 +1641,9 @@ There are six artifact types, and every edit is **scoped and structured** — th
 
 | Artifact term | In plain words |
 |---|---|
-| **Trigger accuracy** | The metric for tuning a skill's `description`: of the labeled queries, how many fired (or didn't) correctly — the score for the `--target description` CSO optimizer. |
-| **pass_rate** | The metric for skill/prompt/workflow bodies: the fraction of eval expectations that passed. |
+| **Trigger accuracy** | The metric for every skill run: of the labeled queries, how many fired (or didn't) correctly, measured by `claude -p` — the score for the `--target description` CSO optimizer and for body edits alike. |
+| **pass_rate** | The metric for prompt/workflow artifacts: the fraction of eval cases that passed. |
+| **Executed / static** (`--prompt-eval`) | How a prompt's pass_rate is obtained. `executed` (default): the `executor` model runs the prompt on each case's `prompt`/`input`, and the grader judges the responses without seeing the prompt. `static`: the grader reads the prompt and predicts. Workflows are always static. |
 | **Edit format** | The structured "shape" an edit must take; the Proposer must return one of the four above, never a free-form file rewrite. |
 
 - **Datasets are additive-only.** You can add or modify cases, but you can never delete one or change its grader/id — so the loop can't quietly weaken its own test set.
@@ -1377,14 +1661,17 @@ The harness is protected by a two-point check so nobody can "improve the score" 
 | **Immutability** | The rule that certain parts can never change: skill frontmatter `name`/`tier` + the whole `evals/` dir (content-hashed); dataset `id`/`skill_name`/`grader`/file-refs; prompt `{{placeholders}}`. | The parts of the contract that are notarized — alter them and the deal is void. |
 | **validate_proposal** | The **before-apply** gate: rejects an illegal edit *before* it ever lands. | The bouncer who checks your ID at the door. |
 | **Subset check** | The **after-apply** re-check: additions are fine, but **changing or removing** an existing immutable part triggers an auto-revert. | A roll-call: new faces welcome, but no one who was on the list may go missing or be swapped. |
-| **Snapshot** | A saved copy of the artifact taken before each edit; a REVERT just restores it. The loop keeps only the newest 2 to save space. | A save-point in a game you can reload to. |
+| **Snapshot** | A saved copy of the artifact taken before each edit; a REVERT just restores it. The loop keeps only the newest 2 iteration snapshots to save space, plus `snapshots/baseline/` for the final confirmation. | A save-point in a game you can reload to. |
+| **Protected section** (`--protect "## Header"`) | A section you add to the immutable parts for this run (repeatable). An edit aimed at it is rejected before apply; any other edit that changes it fails the after-apply check and is reverted. | A paragraph the editor is told not to touch. |
+| **Deletion guard** (`shrink-guard`) | Rejects an edit that removes a whole section, more than half of a section's non-blank lines, or a line containing MUST/NEVER; `--allow-deletions` turns it off. An eval case protects only what it measures, so unmeasured content needs this guard. | A rule that the editor may tighten a chapter, not tear it out. |
+| **Duplicate** | A proposal that repeats the summary or the exact edit of an attempt already reverted or rejected. Logged as `duplicate` and not evaluated. The Proposer receives every rejected summary (`rejected_ideas`) and the last 5 attempts. | Pitching the idea the meeting already turned down. |
 | **Tier** | A deterministic size label for a change — `trivial` / `small` / `medium` / `large` — computed by `measure_change_size.py`, never by the Proposer. `large` (≥2 sections or ≥50 changed lines) also triggers an advisory adversarial review. | T-shirt sizing the edit — the bigger it is, the more scrutiny it earns. |
 
 - **"Additions allowed" is why adding dataset cases is legal** even though it changes the directory — the subset check only forbids *altering or deleting* what was already immutable, not *adding* alongside it.
 - **`text` artifacts have no internal immutable parts** — the rubric is a separate file, so there's nothing inside the prose to protect.
 - **Tier is computed, not chosen.** The author can't downgrade its own large rewrite to dodge the adversarial review.
 
-> ✅ **Key takeaways (immutability).** Checked before *and* after every edit. Additions pass; changing or removing a protected part auto-reverts. Snapshots make every revert exact, and the change's size (tier) is measured deterministically.
+> ✅ **Key takeaways (immutability).** Checked before *and* after every edit. Additions pass; changing or removing a protected part auto-reverts; large deletions are rejected by the deletion guard; repeats of rejected ideas are not even evaluated. Snapshots make every revert exact, and the change's size (tier) is measured deterministically.
 
 ### A.6. Providers, gateways & backends
 
@@ -1393,12 +1680,13 @@ The skill is vendor-agnostic — the same loop runs on different LLMs.
 | Term | In plain words | Analogy |
 |---|---|---|
 | **Provider** | Which LLM vendor runs the calls — `anthropic`, `openai`, or `gemini` — chosen by `DEFAULT_PROVIDER` (or `--provider`). | The electricity supplier — the appliances run the same either way. |
-| **Profile** | A named role-to-model mapping in `config/llm_profiles.yaml`: `proposer`, `text_mutator`, `grader` (active) + `eval_bootstrap` (reserved, not yet wired) — each maps all three providers + sampling params. | Job titles that each pick a person — and the person can be from any agency. |
+| **Profile** | A named role-to-model mapping in `config/llm_profiles.yaml`: `proposer`, `text_mutator`, `grader`, `executor` (active) + `eval_bootstrap` (reserved, not yet wired) — each maps all three providers + sampling params. | Job titles that each pick a person — and the person can be from any agency. |
+| **Grader model / provider** (`--grader-model`, `--grader-provider`) | The model and provider for every grading role (grader, rubric judge, pairwise judge, large-tier review). Default: the run's model and provider. Prefer another model family, because a judge rates its own model's style higher (self-preference bias). The report lists models by role. | An external examiner instead of the teacher who wrote the course. |
 | **Gateway** (e.g. **OpenRouter**) | An OpenAI-compatible endpoint you point at via `OPENAI_BASE_URL` + `OPENAI_MODEL_OVERRIDE` (also Ollama / vLLM / etc.). Sends prompts there instead of the vendor's own API. | A power adapter that lets you plug into a different outlet — same plug shape, different wall. |
-| **Backend** (`claude`/`gemini`/`codex`) | The agent-eval adapter used for **skill-trigger** evaluation. Only `claude` is validated (it wraps skill-creator's `run_eval.py` via `claude -p`); `gemini` and `codex` are stubs (`available=False`) that fall back to LLM grading. | Three sockets on the wall — only one is actually wired up. |
+| **Backend** (`claude`/`gemini`/`codex`) | The agent-eval adapter used for **skill-trigger** evaluation. Only `claude` is validated (it wraps skill-creator's `run_eval.py` via `claude -p`); `gemini` and `codex` are stubs (`available=False`): a `skill`/`full-skill` run on those vendors exits 2 before the baseline, with no substitute metric. | Three sockets on the wall — only one is actually wired up. |
 
 - **"Provider" and "backend" are not the same thing.** The provider picks which LLM writes the proposals and grades prose; the backend is specifically the agent that runs the skill-trigger eval (only `claude` works there today).
 - **A non-default base URL prints a WARNING** — because your prompts are now leaving for that endpoint, which you should trust.
-- **`claude -p` tokens are not metered** against `--max-tokens`; bound the skill-trigger eval with `--max-duration` instead.
+- **`claude -p` tokens are not metered** against `--max-tokens`; skill runs default to `--max-duration 60m` to bound the skill-trigger eval instead, and the report says the token total excludes them.
 
-> ✅ **Key takeaways (providers).** One loop, any vendor. Profiles map roles to models per provider; gateways reroute via an OpenAI-compatible URL; and the *backend* (only `claude` validated) is a separate concept used only for skill-trigger evals.
+> ✅ **Key takeaways (providers).** One loop, any vendor. Profiles map roles to models per provider; the grading roles can use another provider and model; gateways reroute via an OpenAI-compatible URL; and the *backend* (only `claude` validated) is a separate concept used only for skill-trigger evals — without it a skill run stops with exit 2.

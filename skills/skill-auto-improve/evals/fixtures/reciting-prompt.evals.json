@@ -1,0 +1,6 @@
+[
+  {"id": "r1", "prompt": "Customer Ana asks where her refund is.",
+   "expectations": ["greets Ana by name", "gives the refund timeline in business days", "ends with -- Support Team"]},
+  {"id": "r2", "prompt": "Customer Bo says the parcel arrived broken.",
+   "expectations": ["greets Bo by name", "apologizes exactly once", "ends with -- Support Team"]}
+]

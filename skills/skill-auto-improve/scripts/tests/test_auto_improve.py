@@ -337,9 +337,11 @@ class TestOrchestratorLoop(unittest.TestCase):
         self.assertEqual(res["kept"], 0)
         self.assertEqual(res["best_score"], 0.5)
 
-    def test_apply_error_triggers_stagnation(self):
+    def test_apply_error_triggers_errors_exit(self):
         # Proposer keeps emitting a valid-but-unapplyable proposal (missing
-        # section) → apply raises every time → must stagnate, not loop forever.
+        # section) → apply raises every time → must stop, not loop forever.
+        # A window of nothing but error rows is exit_reason "errors" (R16), so
+        # the CLI exits non-zero instead of reporting a clean stagnation.
         def bad_apply_proposer(ctx):
             return {"proposal": {"diff_format": "section-replace",
                                  "target_section": "## Ghost",
@@ -350,7 +352,7 @@ class TestOrchestratorLoop(unittest.TestCase):
             self.sk, "skill", ws, proposer=bad_apply_proposer,
             evaluator=_fake_evaluator([0.5] + [0.9] * 10),
             config=ai.LoopConfig(max_iterations=20, convergence_window=3))
-        self.assertEqual(res["exit_reason"], "stagnation")
+        self.assertEqual(res["exit_reason"], "errors")
         self.assertIn("\nold\n", (self.sk / "SKILL.md").read_text())
 
     def test_rejected_iterations_appear_in_summary(self):
@@ -550,7 +552,9 @@ class TestTextQuality(unittest.TestCase):
     def test_text_loop_keep_until_threshold(self):
         art = self.tmp / "email.txt"
         art.write_text("Hi. Buy my thing.")
-        scores = iter([0.5, 0.7, 0.95])
+        # baseline, then (gate, re-measure) per KEEP: the pairwise path
+        # re-measures every KEEP once (R8) before it becomes the champion.
+        scores = iter([0.5, 0.7, 0.7, 0.95, 0.95])
         res = ai.run_improvement_loop(
             art, "text", self.tmp / "ws1",
             proposer=self._text_proposer([("Hi.", "Hi Sarah,"), ("Buy my thing.", "Here is real value.")]),
@@ -660,13 +664,16 @@ class TestTextQualityVddFixes(unittest.TestCase):
     def test_decider_keep_sets_best_score_to_candidate(self):
         # Pairwise keeps a candidate whose rubric score is LOWER than baseline →
         # best_score must reflect the kept candidate (honest), not a stale max.
+        # The best-of-N rank score (0.4) is reused for the gate, so there is no
+        # redundant post-apply score; the KEEP is then re-measured ONCE by an
+        # independent call (R8), and that value is the champion score.
         art = self.tmp / "n.txt"
         art.write_text("original here")
         eval_calls = {"n": 0}
 
-        def evaluator(p):  # baseline only; must NOT be called after (score reused)
+        def evaluator(p):  # baseline (0.8), then the one post-KEEP re-measure (0.45)
             eval_calls["n"] += 1
-            return {"score": 0.8, "secondary": None, "usage": {}}
+            return {"score": 0.8 if eval_calls["n"] == 1 else 0.45, "secondary": None, "usage": {}}
 
         res = ai.run_improvement_loop(
             art, "text", self.tmp / "ws1",
@@ -675,8 +682,8 @@ class TestTextQualityVddFixes(unittest.TestCase):
             config=ai.LoopConfig(max_iterations=1, score_threshold=0.99, convergence_window=9),
             decider=lambda champ, cand: {"decision": "keep", "usage": {"total_tokens": 30}})
         self.assertEqual(res["kept"], 1)
-        self.assertEqual(res["best_score"], 0.4)        # honest: the kept candidate's score
-        self.assertEqual(eval_calls["n"], 1)            # only baseline; post-apply reused
+        self.assertEqual(res["best_score"], 0.45)       # honest: the kept candidate, re-measured
+        self.assertEqual(eval_calls["n"], 2)            # baseline + one re-measure; gate reused
         self.assertGreaterEqual(res["spent_tokens"], 30)  # decider usage counted
 
     def test_decider_revert_high_score_no_false_optimal(self):

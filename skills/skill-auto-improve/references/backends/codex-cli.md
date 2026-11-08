@@ -1,7 +1,8 @@
 # Backend adapter — Codex CLI (STUB, unvalidated)
 
-**Status**: stub. `CodexBackend.available = False`. Degrades to LLM-only grading
-until implemented and validated.
+**Status**: stub. `CodexBackend.available = False`. A `skill` / `full-skill` run
+under this vendor exits 2 before the baseline until the backend is implemented
+and validated. Prompt/workflow/dataset/text runs are unaffected.
 
 ## To implement
 1. Run `codex exec` (headless) per `{query, should_trigger}` with the skill

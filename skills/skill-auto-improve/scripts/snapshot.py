@@ -8,7 +8,8 @@ Two layers:
     This is the revert mechanism and does not depend on git.
 
   * Git isolation (when the artifact is inside a git repo): run the whole loop
-    on a dedicated branch `auto-improve/<slug>/<ts>` so intermediate commits
+    on a dedicated branch `auto-improve/<slug>/<UTC timestamp>` (a fresh name
+    per run, so a second run never collides with the first) so intermediate commits
     never land on the user's working branch. KEEP advances the branch with a
     commit; the user merges the winner explicitly. Phase 0 refuses to start on
     a dirty working tree.
@@ -32,10 +33,17 @@ _SNAPSHOT_IGNORE = shutil.ignore_patterns(
 )
 
 
-def save_snapshot(artifact_path: Path, workspace: Path, iteration: int) -> str:
-    """Copy artifact into workspace/snapshots/iter-<n>/ and return the ref path."""
+def save_snapshot(artifact_path: Path, workspace: Path, iteration: int,
+                  label: str | None = None) -> str:
+    """Copy artifact into workspace/snapshots/iter-<n>/ and return the ref path.
+
+    `label` replaces the `iter-<n>` directory name. The orchestrator stores the
+    untouched artifact as `snapshots/baseline/` for the whole run: the final
+    confirmation measures it against the winner, and the iteration-snapshot
+    pruning only ever deletes `iter-*` directories.
+    """
     artifact_path = Path(artifact_path)
-    dest = Path(workspace) / "snapshots" / f"iter-{iteration}" / artifact_path.name
+    dest = Path(workspace) / "snapshots" / (label or f"iter-{iteration}") / artifact_path.name
     dest.parent.mkdir(parents=True, exist_ok=True)
     if artifact_path.is_dir():
         if dest.exists():

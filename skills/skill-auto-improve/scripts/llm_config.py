@@ -58,10 +58,49 @@ DEFAULT_MAX_OUTPUT_TOKENS = 8192
 DEFAULT_TIMEOUT_SECONDS = 180
 DEFAULT_OPENAI_CLIENT_RETRIES = 1
 
+# Provider -> the env var holding its API key, and the SDK module it needs.
+PROVIDER_KEY_ENV = {
+    "gemini": "GEMINI_API_KEY",
+    "anthropic": "ANTHROPIC_API_KEY",
+    "openai": "OPENAI_API_KEY",
+}
+PROVIDER_SDK_PACKAGE = {
+    "gemini": "google-genai",
+    "anthropic": "anthropic",
+    "openai": "openai",
+}
+
 
 def find_skill_root() -> Path:
     """Skill root = parent of the scripts/ directory holding this file."""
     return Path(__file__).resolve().parent.parent
+
+
+def _sdk_present(provider: str) -> bool:
+    return {"gemini": genai, "anthropic": anthropic, "openai": openai}.get(provider) is not None
+
+
+def preflight_provider(provider: str | None = None, profile_name: str = "proposer") -> str | None:
+    """Check, without any network call, that an LLM call can be attempted.
+
+    Returns None when the provider is known, its API key is set (process env or
+    .env) and its SDK is importable; otherwise a one-line description of what is
+    missing. The orchestrator runs this BEFORE the baseline, so a misconfigured
+    run stops with exit code 2 instead of logging one `proposer error` row per
+    iteration and exiting 0.
+    """
+    try:
+        manager = LLMConfigManager(profile_name, provider=provider, warn_missing_key=False)
+    except (KeyError, ValueError, FileNotFoundError) as exc:
+        return str(exc)
+    if not _sdk_present(manager.provider):
+        return (f"provider '{manager.provider}' needs the "
+                f"'{PROVIDER_SDK_PACKAGE[manager.provider]}' package; install "
+                f"scripts/requirements.txt into the skill venv")
+    if not manager.api_key:
+        return (f"provider '{manager.provider}' has no API key: set "
+                f"{PROVIDER_KEY_ENV[manager.provider]} in the environment or .env")
+    return None
 
 
 class LLMRetryableError(RuntimeError):
@@ -75,7 +114,8 @@ class LLMConfigManager:
     Supports an optional fallback model chain per provider.
     """
 
-    def __init__(self, profile_name: str, config_path: str | None = None):
+    def __init__(self, profile_name: str, config_path: str | None = None, *,
+                 provider: str | None = None, warn_missing_key: bool = True):
         # Trust boundary: secrets come from the process env and from .env at the
         # skill root or CWD. A CWD .env is therefore TRUSTED input — do not run
         # this from an attacker-controlled working directory (we deliberately do
@@ -109,20 +149,17 @@ class LLMConfigManager:
 
         self.profile = self.profiles[profile_name] or {}
 
-        self.provider = os.environ.get(
+        # `provider` (e.g. --grader-provider) overrides DEFAULT_PROVIDER for this
+        # one manager, so one role can run on a different vendor than the rest.
+        self.provider = provider or os.environ.get(
             "DEFAULT_PROVIDER",
             self.global_settings.get("default_provider", FALLBACK_PROVIDER),
         )
 
-        key_env = {
-            "gemini": "GEMINI_API_KEY",
-            "anthropic": "ANTHROPIC_API_KEY",
-            "openai": "OPENAI_API_KEY",
-        }
-        if self.provider not in key_env:
+        if self.provider not in PROVIDER_KEY_ENV:
             raise ValueError(f"Unknown LLM provider: {self.provider}")
-        self.api_key = os.environ.get(key_env[self.provider])
-        if not self.api_key:
+        self.api_key = os.environ.get(PROVIDER_KEY_ENV[self.provider])
+        if not self.api_key and warn_missing_key:
             print(
                 f"WARNING: API key for provider '{self.provider}' not found in .env / env.",
                 file=sys.stderr,

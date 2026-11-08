@@ -1,8 +1,9 @@
 """Codex CLI agent-eval backend — STUB (not yet validated on a real runtime).
 
 Mirrors ClaudeBackend's shape. Trigger detection for Codex CLI's output format
-is unimplemented; `available` is False so the orchestrator degrades to LLM-only
-grading rather than emitting unverified skill-trigger numbers.
+is unimplemented; `available` is False, so a `skill` / `full-skill` run under
+this vendor stops before the baseline with exit code 2 rather than emitting
+unverified skill-trigger numbers. There is no LLM-grading fallback.
 
 To implement: run `codex exec` (headless) per query with the skill exposed,
 parse the transcript for a skill/file load event, validate on a real runtime,
@@ -17,6 +18,9 @@ from pathlib import Path
 class CodexBackend:
     name = "codex"
     available = False
+
+    def unavailable_reason(self) -> str:
+        return "the codex backend is a stub: trigger detection is not implemented"
 
     def trigger_eval(self, skill_path: Path, eval_set: list[dict], **kwargs) -> dict:
         raise NotImplementedError(
